@@ -15,7 +15,7 @@ None (custom application, no pre-existing domain skills)
 - Decimal phases (X.1, X.2): Urgent insertions (marked with INSERTED)
 
 ### Foundation
-- [ ] **Phase 1: Scaffolding** - Create all directories and stub files from ARCHITECTURE.md
+- [x] **Phase 1: Scaffolding** - Create all directories and stub files from ARCHITECTURE.md
 
 ### Domain Layer
 - [ ] **Phase 2: Domain Core Entities** - User, Message, Channel, Attachment, IDs
@@ -108,7 +108,7 @@ None (custom application, no pre-existing domain skills)
 **Goal**: Create complete directory structure and stub files from ARCHITECTURE.md
 **Depends on**: Nothing (first phase)
 **Research**: Unlikely (following documented architecture)
-**Plans**: TBD
+**Plans**: 1-1-PLAN.md (13 tasks)
 
 ### Phase 2: Domain Core Entities
 **Goal**: Implement User, Message, Channel, Attachment structs and strongly-typed IDs
@@ -525,7 +525,7 @@ None (custom application, no pre-existing domain skills)
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
-| 1 | Scaffolding | TBD | Not started | - |
+| 1 | Scaffolding | 1 | Done | 2026-02-03 |
 | 2 | Domain Core Entities | TBD | Not started | - |
 | 3 | Domain Supporting Entities | TBD | Not started | - |
 | 4 | Domain Privacy Entities | TBD | Not started | - |

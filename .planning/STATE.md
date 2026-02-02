@@ -5,33 +5,33 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 1 — Scaffolding
+**Current focus:** Phase 2 — Domain Core Entities
 
 ## Current Position
 
-Phase: 1 of 66 (Scaffolding)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-02-03 — Project initialized
+Phase: 2 of 66 (Domain Core Entities)
+Plan: TBD (not yet created)
+Status: Ready for planning
+Last activity: 2026-02-03 — Phase 1 scaffolding completed
 
-Progress: ░░░░░░░░░░ 0%
+Progress: [x]░░░░░░░░░ 1.5%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: 0 hours
+- Total plans completed: 1
+- Average duration: ~30 min
+- Total execution time: ~30 min
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| — | — | — | — |
+| 1 | 1 | ~30m | ~30m |
 
 **Recent Trend:**
-- Last 5 plans: —
-- Trend: —
+- Last 5 plans: 1-1 (~30m)
+- Trend: First plan, baseline established
 
 ## Accumulated Context
 
@@ -44,18 +44,18 @@ Recent decisions affecting current work:
 - libsignal-client for Signal Protocol
 - SQLCipher for encrypted storage
 - Bottom-up build order (storage → crypto → network → services → UI)
-- Start fresh on UI (existing .slint files to be redone)
+- Stub file pattern: doc comment + empty struct/trait
 
 ### Deferred Issues
 
-None yet.
+None.
 
 ### Blockers/Concerns
 
-None yet.
+None.
 
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Project initialization complete
+Stopped at: Phase 1 scaffolding completed (258 Rust files, 19 Slint files)
 Resume file: None
