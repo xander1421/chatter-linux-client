@@ -55,7 +55,12 @@ macro_rules! impl_uuid_id {
         $(
             impl $ty {
                 /// Generate a new random ID.
+                ///
+                /// Note: We intentionally do not implement Default for IDs.
+                /// IDs should always be explicitly created to avoid accidental
+                /// use of uninitialized/default identifiers.
                 #[must_use]
+                #[allow(clippy::new_without_default)]
                 pub fn new() -> Self {
                     Self(Uuid::new_v4())
                 }
