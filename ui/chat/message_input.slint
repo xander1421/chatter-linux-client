@@ -1,0 +1,26 @@
+// Message input/composer component
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Input } from "../components/input.slint";
+
+export component MessageInput inherits Rectangle {
+    in-out property <string> text: "";
+
+    callback send(string);
+
+    height: 56px;
+    background: Colors.surface;
+
+    Input {
+        x: Spacing.md;
+        y: Spacing.sm;
+        width: parent.width - Spacing.md * 2;
+        placeholder: "Type a message...";
+        text <=> root.text;
+
+        accepted(t) => {
+            root.send(t);
+        }
+    }
+}

@@ -1,0 +1,15 @@
+// Single message item component
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component MessageItem inherits Rectangle {
+    in property <string> sender: "";
+    in property <string> content: "";
+    in property <string> timestamp: "";
+    in property <bool> is-own: false;
+
+    height: 60px;
+    background: is-own ? Colors.primary : Colors.surface;
+    border-radius: Spacing.radius-md;
+}

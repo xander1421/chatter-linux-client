@@ -1,0 +1,25 @@
+// Avatar component
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component Avatar inherits Rectangle {
+    in property <image> source;
+    in property <string> fallback-text: "";
+    in property <length> size: Spacing.avatar-md;
+    in property <bool> show-presence: false;
+    in property <color> presence-color: Colors.offline;
+
+    width: size;
+    height: size;
+    border-radius: size / 2;
+    background: Colors.surface;
+
+    // Fallback text when no image
+    Text {
+        text: fallback-text;
+        color: Colors.text-primary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

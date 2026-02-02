@@ -1,0 +1,34 @@
+// Button component
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component Button inherits Rectangle {
+    in property <string> text: "";
+    in property <bool> primary: true;
+    in property <bool> disabled: false;
+
+    callback clicked();
+
+    min-width: 80px;
+    height: 36px;
+    border-radius: Spacing.radius-md;
+    background: primary ? Colors.primary : Colors.surface;
+
+    Text {
+        text: root.text;
+        color: Colors.text-primary;
+        font-size: Typography.sm;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    TouchArea {
+        clicked => {
+            if (!disabled) {
+                root.clicked();
+            }
+        }
+    }
+}

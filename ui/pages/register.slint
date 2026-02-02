@@ -1,0 +1,53 @@
+// Register page component
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+
+export component RegisterPage inherits Rectangle {
+    in-out property <string> username: "";
+    in-out property <string> password: "";
+    in-out property <string> display-name: "";
+
+    callback register(string, string, string);
+    callback go-to-login();
+
+    background: Colors.background;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: Spacing.lg;
+        padding: Spacing.xl;
+
+        Text {
+            text: "Create Account";
+            color: Colors.text-primary;
+            font-size: 24px;
+            horizontal-alignment: center;
+        }
+
+        Input {
+            placeholder: "Display Name";
+            text <=> root.display-name;
+        }
+
+        Input {
+            placeholder: "Username";
+            text <=> root.username;
+        }
+
+        Input {
+            placeholder: "Password";
+            password: true;
+            text <=> root.password;
+        }
+
+        Button {
+            text: "Register";
+            clicked => {
+                root.register(root.username, root.password, root.display-name);
+            }
+        }
+    }
+}

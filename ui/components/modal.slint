@@ -1,0 +1,33 @@
+// Modal component
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component Modal inherits Rectangle {
+    in property <bool> visible: false;
+    in property <string> title: "";
+
+    callback close();
+
+    // Backdrop
+    background: #00000080;
+
+    // Modal content
+    Rectangle {
+        width: 480px;
+        height: 320px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+
+        // Title
+        Text {
+            x: Spacing.lg;
+            y: Spacing.lg;
+            text: root.title;
+            color: Colors.text-primary;
+            font-size: 18px;
+        }
+    }
+}

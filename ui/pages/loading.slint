@@ -1,0 +1,17 @@
+// Loading page component
+
+import { Colors } from "../theme/colors.slint";
+
+export component LoadingPage inherits Rectangle {
+    in property <string> message: "Loading...";
+
+    background: Colors.background;
+
+    Text {
+        text: root.message;
+        color: Colors.text-primary;
+        font-size: 18px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
