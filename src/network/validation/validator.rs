@@ -4,6 +4,8 @@
 
 use thiserror::Error;
 
+use super::deduplicator::{DeduplicatorStats, MessageDeduplicator};
+use super::orderer::{MessageOrderer, OrdererStats, OrderingResult};
 use crate::proto::chat_v1::Message;
 
 /// Validation errors for message content.
@@ -226,8 +228,146 @@ impl Default for ContentValidator {
     }
 }
 
-/// Message validation pipeline (placeholder for future expansion).
-pub struct MessageValidationPipeline;
+/// Result of pipeline processing.
+#[derive(Debug)]
+pub enum PipelineResult {
+    /// Message passed validation and is ready for processing.
+    Ready(Message),
+    /// Message is valid but buffered (out of order).
+    Buffered,
+    /// Message was a duplicate, already processed.
+    Duplicate,
+    /// Message failed validation.
+    Invalid(ValidationError),
+    /// Message was dropped (buffer full).
+    Dropped,
+}
+
+/// Combined statistics from all pipeline stages.
+#[derive(Debug, Clone, Copy)]
+pub struct PipelineStats {
+    /// Deduplicator statistics.
+    pub deduplicator: DeduplicatorStats,
+    /// Orderer statistics.
+    pub orderer: OrdererStats,
+}
+
+/// Unified validation pipeline for incoming messages.
+///
+/// Processing order:
+/// 1. Deduplication check (by message ID)
+/// 2. Content validation (format, size, timestamp)
+/// 3. Ordering (per-channel sequence)
+///
+/// # Thread Safety
+///
+/// All internal components use appropriate locking for thread-safe access.
+pub struct MessageValidationPipeline {
+    deduplicator: MessageDeduplicator,
+    validator: ContentValidator,
+    orderer: MessageOrderer,
+}
+
+impl MessageValidationPipeline {
+    /// Create a new pipeline with default configuration.
+    pub fn new() -> Self {
+        Self {
+            deduplicator: MessageDeduplicator::with_default_capacity(),
+            validator: ContentValidator::with_defaults(),
+            orderer: MessageOrderer::new(),
+        }
+    }
+
+    /// Create a pipeline with custom configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `dedup_capacity` - Maximum number of message IDs to track for deduplication
+    /// * `validation_limits` - Content validation limits
+    /// * `orderer_buffer_size` - Maximum out-of-order messages to buffer per channel
+    pub fn with_config(
+        dedup_capacity: usize,
+        validation_limits: ValidationLimits,
+        orderer_buffer_size: usize,
+    ) -> Self {
+        Self {
+            deduplicator: MessageDeduplicator::new(dedup_capacity),
+            validator: ContentValidator::new(validation_limits),
+            orderer: MessageOrderer::with_buffer_size(orderer_buffer_size),
+        }
+    }
+
+    /// Process a message through the full validation pipeline.
+    ///
+    /// Processing order:
+    /// 1. Check for duplicate by message ID
+    /// 2. Validate content (format, size, timestamp)
+    /// 3. Order the message per channel
+    ///
+    /// Returns the appropriate `PipelineResult` based on processing outcome.
+    pub fn process(&self, message: Message) -> PipelineResult {
+        // 1. Check for duplicate by message ID
+        if self.deduplicator.is_duplicate(&message.id) {
+            return PipelineResult::Duplicate;
+        }
+
+        // 2. Validate content
+        if let Err(e) = self.validator.validate(&message) {
+            return PipelineResult::Invalid(e);
+        }
+
+        // 3. Order the message
+        match self.orderer.order(message) {
+            OrderingResult::Ready(msg) => {
+                // Mark as processed only when ready
+                self.deduplicator.mark_processed(&msg.id);
+                PipelineResult::Ready(msg)
+            }
+            OrderingResult::Buffered => PipelineResult::Buffered,
+            OrderingResult::Duplicate => PipelineResult::Duplicate,
+            OrderingResult::Dropped => PipelineResult::Dropped,
+        }
+    }
+
+    /// Get messages that are now ready after processing.
+    ///
+    /// Call this after processing a `Ready` message to get buffered messages
+    /// that are now in sequence.
+    pub fn get_ready(&self, channel_id: &str) -> Vec<Message> {
+        let ready = self.orderer.get_ready(channel_id);
+        // Mark newly ready messages as processed
+        for msg in &ready {
+            self.deduplicator.mark_processed(&msg.id);
+        }
+        ready
+    }
+
+    /// Flush stale buffered messages.
+    ///
+    /// Returns messages that were flushed so they can be logged or processed anyway.
+    /// Call this periodically to prevent indefinite buffering.
+    pub fn flush_stale(&self) -> Vec<Message> {
+        let stale = self.orderer.flush_stale();
+        for msg in &stale {
+            self.deduplicator.mark_processed(&msg.id);
+        }
+        stale
+    }
+
+    /// Get combined statistics from all pipeline stages.
+    pub fn stats(&self) -> PipelineStats {
+        PipelineStats {
+            deduplicator: self.deduplicator.stats(),
+            orderer: self.orderer.stats(),
+        }
+    }
+}
+
+impl Default for MessageValidationPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 #[cfg(test)]
 mod tests {
