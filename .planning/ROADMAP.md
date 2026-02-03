@@ -144,7 +144,7 @@ None (custom application, no pre-existing domain skills)
 **Goal**: AttachmentRepo, ReactionRepo, DraftRepo, SettingsRepo
 **Depends on**: Phase 6
 **Research**: Unlikely (standard repository pattern)
-**Plans**: TBD
+**Plans**: 4 (07-01: Attachments, 07-02: Reactions, 07-03: Drafts, 07-04: Settings)
 
 ### Phase 8: Storage Search Index
 **Goal**: FTS5 full-text search index for messages
@@ -531,7 +531,7 @@ None (custom application, no pre-existing domain skills)
 | 4 | Domain Privacy Entities | 2 | Done | 2026-02-03 |
 | 5 | Storage Database Setup | 2 | Done | 2026-02-03 |
 | 6 | Storage Core Repositories | 3 | Done | 2026-02-03 |
-| 7 | Storage Supporting Repositories | TBD | Not started | - |
+| 7 | Storage Supporting Repositories | 4 | In progress (1/4) | - |
 | 8 | Storage Search Index | TBD | Not started | - |
 | 9 | Storage Key Store | TBD | Not started | - |
 | 10 | Crypto Signal Store | TBD | Not started | - |
