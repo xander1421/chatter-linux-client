@@ -10,8 +10,9 @@ use tonic::transport::Channel;
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    user_service_client::UserServiceClient, GetUserProfileRequest, UpdateUserProfileRequest,
-    UserEvent, UserProfile, UserSearchRequest, UserSearchResponse,
+    user_service_client::UserServiceClient, GetUserProfileRequest, PresenceUpdate,
+    StreamPresenceRequest, UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent,
+    UserPresence, UserProfile, UserSearchRequest, UserSearchResponse,
 };
 
 /// User service client wrapper.
@@ -98,5 +99,40 @@ impl UserClient {
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Presence RPCs ====================
+
+    /// Update current user's presence status.
+    pub async fn update_presence(&mut self, presence: UserPresence) -> Result<(), NetworkError> {
+        let request = UpdatePresenceRequest {
+            presence: presence.into(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .update_presence(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Stream presence updates for all friends.
+    ///
+    /// Returns a long-lived stream of presence changes.
+    pub async fn stream_presence(
+        &mut self,
+    ) -> Result<impl Stream<Item = Result<PresenceUpdate, NetworkError>>, NetworkError> {
+        let request = StreamPresenceRequest {};
+
+        let response = self
+            .inner
+            .stream_presence(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
 }
