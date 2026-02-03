@@ -3,15 +3,16 @@
 //! Client for authentication service operations including login, registration,
 //! session management, and device management.
 
+use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    auth_service_client::AuthServiceClient,
-    AuthResponse, CheckUsernameRequest, CheckUsernameResponse, LoginRequest, LogoutRequest,
-    ResendVerificationEmailRequest, VerifyEmailRequest,
+    auth_event, auth_service_client::AuthServiceClient, AuthEvent, AuthResponse,
+    CheckUsernameRequest, CheckUsernameResponse, LoginRequest, LogoutRequest, RegisterRequest,
+    ResendVerificationEmailRequest, Session, VerifyEmailRequest,
 };
 
 /// Auth service client wrapper.
@@ -140,5 +141,95 @@ impl AuthClient {
             .await
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Register a new user, returning stream of progress events.
+    ///
+    /// The stream yields AuthEvent messages with status updates:
+    /// - AccountCreating
+    /// - AuthzRelationsInitialized
+    /// - RegistrationCompleted (with session)
+    /// - RegistrationFailed (with error)
+    pub async fn register(
+        &mut self,
+        username: &str,
+        password_hash: &[u8],
+        display_name: &str,
+        public_key: &[u8],
+        device_info: &str,
+        device_auth_token: &[u8],
+        unidentified_access_key: &[u8; 16],
+    ) -> Result<impl Stream<Item = Result<AuthEvent, NetworkError>>, NetworkError> {
+        let request = RegisterRequest {
+            username: username.to_string(),
+            password_hash: password_hash.to_vec(),
+            public_key: public_key.to_vec(),
+            display_name: display_name.to_string(),
+            avatar_url: String::new(),
+            device_info: device_info.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            device_auth_token: device_auth_token.to_vec(),
+            unidentified_access_key: unidentified_access_key.to_vec(),
+            prekey_bundle: None,
+            initial_one_time_prekeys: Vec::new(),
+        };
+
+        let response = self
+            .inner
+            .register(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    /// Register and wait for completion.
+    ///
+    /// Convenience method that consumes the event stream and returns
+    /// the final session on success.
+    pub async fn register_and_wait(
+        &mut self,
+        username: &str,
+        password_hash: &[u8],
+        display_name: &str,
+        public_key: &[u8],
+        device_info: &str,
+        device_auth_token: &[u8],
+        unidentified_access_key: &[u8; 16],
+    ) -> Result<Session, NetworkError> {
+        let stream = self
+            .register(
+                username,
+                password_hash,
+                display_name,
+                public_key,
+                device_info,
+                device_auth_token,
+                unidentified_access_key,
+            )
+            .await?;
+
+        tokio::pin!(stream);
+
+        while let Some(result) = stream.next().await {
+            let event = result?;
+            if let Some(payload) = event.payload {
+                match payload {
+                    auth_event::Payload::SessionCreated(session) => {
+                        return Ok(session);
+                    }
+                    auth_event::Payload::RegistrationError(error) => {
+                        return Err(NetworkError::ServerError(error.message));
+                    }
+                    _ => {} // Progress events, ignore
+                }
+            }
+        }
+
+        Err(NetworkError::Unknown(
+            "registration stream ended without result".to_string(),
+        ))
     }
 }
