@@ -3,6 +3,7 @@
 //! Queue operations when offline, retry when reconnected.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 
 use parking_lot::RwLock;
@@ -348,6 +349,175 @@ impl OfflineQueue {
     /// Get the maximum queue size.
     pub fn max_size(&self) -> usize {
         self.max_size
+    }
+
+    // ==================== Persistence Methods ====================
+
+    /// Save queue to persistent storage.
+    ///
+    /// Serializes queue to JSON and writes to the given path.
+    /// Uses atomic rename pattern (write to .tmp, then rename) for safety.
+    /// Called periodically and on app shutdown.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to save the queue data
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if writing fails.
+    pub async fn save(&self, path: &Path) -> std::io::Result<()> {
+        // Clone operations while holding lock briefly
+        let ops: Vec<QueuedOperation> = self.operations.read().clone();
+
+        // Serialize to JSON
+        let json = serde_json::to_string_pretty(&ops)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        // Write to temporary file first
+        let tmp_path = path.with_extension("tmp");
+        tokio::fs::write(&tmp_path, json).await?;
+
+        // Atomic rename
+        tokio::fs::rename(&tmp_path, path).await?;
+
+        Ok(())
+    }
+
+    /// Load queue from persistent storage.
+    ///
+    /// Reads and deserializes queue from the given path.
+    /// Called on app startup.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to load the queue data from
+    ///
+    /// # Returns
+    ///
+    /// Number of operations loaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if reading fails (except for missing file,
+    /// which returns Ok(0)).
+    pub async fn load(&self, path: &Path) -> std::io::Result<usize> {
+        // Handle missing file gracefully
+        if !path.exists() {
+            return Ok(0);
+        }
+
+        let json = tokio::fs::read_to_string(path).await?;
+
+        let loaded_ops: Vec<QueuedOperation> = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        let count = loaded_ops.len();
+
+        // Replace current operations
+        let mut ops = self.operations.write();
+        *ops = loaded_ops;
+
+        // Sort to ensure correct order (by priority, then queued_at)
+        ops.sort_by(|a, b| {
+            a.priority
+                .cmp(&b.priority)
+                .then_with(|| a.queued_at.cmp(&b.queued_at))
+        });
+
+        Ok(count)
+    }
+
+    // ==================== Replay Support Methods ====================
+
+    /// Get all operations ready for replay.
+    ///
+    /// Returns operations sorted by priority and queue time.
+    /// Does not remove them from the queue.
+    pub fn pending_operations(&self) -> Vec<QueuedOperation> {
+        self.operations.read().clone()
+    }
+
+    /// Mark an operation as attempted.
+    ///
+    /// Increments attempt count. Returns false if max attempts exceeded
+    /// (operation should be removed by caller).
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The operation ID to mark as attempted
+    ///
+    /// # Returns
+    ///
+    /// `true` if operation can still be retried, `false` if max attempts
+    /// exceeded (caller should remove the operation).
+    pub fn mark_attempted(&self, id: Uuid) -> bool {
+        let mut ops = self.operations.write();
+        if let Some(op) = ops.iter_mut().find(|op| op.id == id) {
+            op.attempts += 1;
+
+            // Check if max attempts exceeded
+            if let Some(max) = op.max_attempts {
+                if op.attempts >= max {
+                    return false;
+                }
+            }
+            true
+        } else {
+            // Operation not found, return false
+            false
+        }
+    }
+
+    /// Get queue statistics.
+    ///
+    /// Returns statistics about the queue including total operations,
+    /// age of oldest operation, and counts by operation type.
+    pub fn stats(&self) -> QueueStats {
+        let ops = self.operations.read();
+
+        let total_operations = ops.len();
+
+        // Calculate oldest operation age
+        let now_millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let oldest_operation_age = ops.first().map(|op| {
+            let age_millis = now_millis.saturating_sub(op.queued_at);
+            Duration::from_millis(age_millis)
+        });
+
+        // Count operations by type
+        let mut operations_by_type: HashMap<String, usize> = HashMap::new();
+        for op in ops.iter() {
+            *operations_by_type
+                .entry(op.operation.type_name().to_string())
+                .or_insert(0) += 1;
+        }
+
+        QueueStats {
+            total_operations,
+            oldest_operation_age,
+            operations_by_type,
+        }
+    }
+
+    /// Emit a replay started event.
+    ///
+    /// Called when beginning to replay queued operations.
+    pub fn emit_replay_started(&self, count: usize) {
+        let _ = self.events.send(QueueEvent::ReplayStarted { count });
+    }
+
+    /// Emit a replay completed event.
+    ///
+    /// Called when replay finishes with success/failure counts.
+    pub fn emit_replay_completed(&self, succeeded: usize, failed: usize) {
+        let _ = self
+            .events
+            .send(QueueEvent::ReplayCompleted { succeeded, failed });
     }
 }
 
