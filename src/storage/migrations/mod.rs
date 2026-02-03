@@ -9,6 +9,7 @@ pub mod v004_messages;
 pub mod v005_attachments;
 pub mod v006_reactions;
 pub mod v007_drafts;
+pub mod v008_settings;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -21,6 +22,7 @@ pub use v004_messages::V004Messages;
 pub use v005_attachments::V005Attachments;
 pub use v006_reactions::V006Reactions;
 pub use v007_drafts::V007Drafts;
+pub use v008_settings::V008Settings;
 
 /// Trait for database migrations.
 ///
@@ -148,4 +150,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V005Attachments)
         .register(V006Reactions)
         .register(V007Drafts)
+        .register(V008Settings)
 }
