@@ -540,7 +540,7 @@ None (custom application, no pre-existing domain skills)
 | 13 | Crypto Sender Keys | 1 | Done | 2026-02-03 |
 | 14 | Crypto Sealed Sender | 1 | Done | 2026-02-03 |
 | 15 | Crypto Attachments | 1 | Done | 2026-02-03 |
-| 16 | Network gRPC Foundation | TBD | Not started | - |
+| 16 | Network gRPC Foundation | 1+ | In progress | - |
 | 17 | Network Auth & User Clients | TBD | Not started | - |
 | 18 | Network Channel & Message Clients | TBD | Not started | - |
 | 19 | Network Supporting Clients | TBD | Not started | - |
