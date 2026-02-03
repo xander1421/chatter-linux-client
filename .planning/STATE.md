@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 6 — Storage Core Repositories — In progress
+**Current focus:** Phase 6 complete — Ready for Phase 7
 
 ## Current Position
 
-Phase: 6 of 66 (Storage Core Repositories)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-03 — Completed 06-02-PLAN.md
+Phase: 6 of 66 (Storage Core Repositories) — COMPLETE
+Plan: 3 of 3 in current phase — DONE
+Status: Phase complete
+Last activity: 2026-02-03 — Completed 06-03-PLAN.md (final plan of Phase 6)
 
-Progress: [xxxxxxxxxxx]░ 16.7%
+Progress: [xxxxxxxxxxxxx]░ 18.2%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 9
-- Average duration: ~5 min
-- Total execution time: ~54 min
+- Total plans completed: 12
+- Average duration: ~4 min
+- Total execution time: ~58 min
 
 **By Phase:**
 
@@ -32,10 +32,11 @@ Progress: [xxxxxxxxxxx]░ 16.7%
 | 3 | 2 | ~12m | ~6m |
 | 4 | 2 | ~10m | ~5m |
 | 5 | 2 | ~4m | ~2m |
+| 6 | 3 | ~11m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 4-1 (~4m), 4-2 (~6m), 5-1 (~2m), 5-2 (~2m)
-- Trend: Storage setup fast with established patterns
+- Last 5 plans: 5-1 (~2m), 5-2 (~2m), 6-1 (~4m), 6-2 (~4m), 6-3 (~3m)
+- Trend: Repository pattern fast with established patterns
 
 ## Accumulated Context
 
@@ -81,6 +82,9 @@ Recent decisions affecting current work:
 - Flatten ChannelConfig in database (no JSON blobs)
 - JOIN query for list_for_user (channels via memberships)
 - row_to_X helper functions for complex struct reconstruction
+- JSON TEXT columns for MessageContent (complex nested type)
+- content_type discriminant for filtering without JSON parsing
+- Cursor-based pagination using (created_at, id) tuple
 
 ### Deferred Issues
 
@@ -93,5 +97,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 06-02-PLAN.md
+Stopped at: Completed Phase 6 (06-03-PLAN.md)
 Resume file: None
+Next action: Plan Phase 7 (Storage Supporting Repositories)
