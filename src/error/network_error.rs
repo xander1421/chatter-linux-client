@@ -6,7 +6,7 @@ use thiserror::Error;
 use tonic::{Code, Status};
 
 /// Network error with gRPC status code classification.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum NetworkError {
     /// Connection to server failed.
     #[error("connection failed: {0}")]
