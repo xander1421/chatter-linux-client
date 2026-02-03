@@ -227,7 +227,7 @@ None (custom application, no pre-existing domain skills)
 **Goal**: StreamManager for message, presence, typing, reaction streams
 **Depends on**: Phase 18
 **Research**: Unlikely (tonic streaming documented)
-**Plans**: TBD
+**Plans**: 4 (20-01: StreamManager, 20-02: MessageStream, 20-03: PresenceStream, 20-04: Specialized Handlers)
 
 ### Phase 21: Network Resilience
 **Goal**: Connection recovery, exponential backoff, offline queue
@@ -544,7 +544,7 @@ None (custom application, no pre-existing domain skills)
 | 17 | Network Auth & User Clients | 3 | Done | 2026-02-03 |
 | 18 | Network Channel & Message Clients | 2 | Done | 2026-02-03 |
 | 19 | Network Supporting Clients | 4 | Done | 2026-02-03 |
-| 20 | Network Streaming | TBD | Not started | - |
+| 20 | Network Streaming | 4 | In progress (1/4) | - |
 | 21 | Network Resilience | TBD | Not started | - |
 | 22 | Network Validation | TBD | Not started | - |
 | 23 | Inbox Provider & Poller | TBD | Not started | - |

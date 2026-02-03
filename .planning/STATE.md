@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 19 complete — Ready for Phase 20 (Network Streaming)
+**Current focus:** Phase 20 in progress — StreamManager complete, MessageStream next
 
 ## Current Position
 
-Phase: 19 of 66 (Network Supporting Clients)
-Plan: 4 of 4 in current phase
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 19-04-PLAN.md (MailboxClient)
+Phase: 20 of 66 (Network Streaming)
+Plan: 1 of 4 in current phase
+Status: In progress
+Last activity: 2026-02-03 — Completed 20-01-PLAN.md
 
-Progress: █████████████████████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░ 49.2%
+Progress: ██████████████████████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░ 50.8%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 30
+- Total plans completed: 31
 - Average duration: ~4.3 min
-- Total execution time: ~130 min
+- Total execution time: ~133 min
 
 **By Phase:**
 
@@ -46,10 +46,11 @@ Progress: ███████████████████████�
 | 17 | 3 | ~14m | ~5m |
 | 18 | 2 | ~6m | ~3m |
 | 19 | 4 | ~11m | ~3m |
+| 20 | 1/4 | ~3m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 19-1 (~3m), 19-2 (~3m), 19-3 (~3m), 19-4 (~2m)
-- Trend: Network client wrappers consistently fast at ~3m per plan
+- Last 5 plans: 19-2 (~3m), 19-3 (~3m), 19-4 (~2m), 20-1 (~3m)
+- Trend: Streaming infrastructure maintains ~3m average
 
 ## Accumulated Context
 
@@ -111,6 +112,8 @@ Recent decisions affecting current work:
 - parking_lot::RwLock for sync interceptors (tonic needs sync)
 - broadcast channel capacity 16 for connection events
 - Panic on channel() if not connected (explicit contract)
+- StreamManager uses broadcast (capacity 4) for coordinated shutdown
+- StreamHandle uses oneshot for individual stream control
 
 ### Deferred Issues
 
@@ -123,6 +126,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 19-04-PLAN.md (MailboxClient) - Phase 19 complete
+Stopped at: Completed 20-01-PLAN.md (StreamManager and Core Infrastructure)
 Resume file: None
-Next action: Plan Phase 20 (Network Streaming)
+Next action: Execute 20-02-PLAN.md (MessageStream specialized handlers)
