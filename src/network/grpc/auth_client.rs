@@ -10,13 +10,13 @@ use tonic::transport::Channel;
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    auth_event, auth_service_client::AuthServiceClient, AuthEvent, AuthResponse,
-    ChangePasswordRequest, CheckUsernameRequest, CheckUsernameResponse,
-    CompletePasswordResetRequest, GetActiveSessionsRequest, GetActiveSessionsResponse,
-    InvalidateAllSessionsRequest, InvalidateSessionRequest, ListDevicesRequest,
-    ListDevicesResponse, LoginRequest, LogoutRequest, RegisterRequest, RenameDeviceRequest,
-    RequestPasswordResetRequest, ResendVerificationEmailRequest, RevokeDeviceRequest, Session,
-    VerifyEmailRequest,
+    auth_event, auth_service_client::AuthServiceClient, AccountDeletionEvent, AuthEvent,
+    AuthResponse, ChangePasswordRequest, CheckUsernameRequest, CheckUsernameResponse,
+    CompletePasswordResetRequest, DeleteAccountRequest, GetActiveSessionsRequest,
+    GetActiveSessionsResponse, InvalidateAllSessionsRequest, InvalidateSessionRequest,
+    ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest, RegisterRequest,
+    RenameDeviceRequest, RequestPasswordResetRequest, ResendVerificationEmailRequest,
+    RevokeDeviceRequest, Session, VerifyEmailRequest,
 };
 
 /// Auth service client wrapper.
@@ -397,5 +397,32 @@ impl AuthClient {
             .await
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Delete account, returning stream of deletion events.
+    ///
+    /// This is an irreversible operation that streams progress updates.
+    ///
+    /// # Arguments
+    ///
+    /// * `password_hash` - Password for confirmation
+    pub async fn delete_account(
+        &mut self,
+        password_hash: &[u8],
+    ) -> Result<impl Stream<Item = Result<AccountDeletionEvent, NetworkError>>, NetworkError> {
+        let request = DeleteAccountRequest {
+            password_hash: password_hash.to_vec(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        let response = self
+            .inner
+            .delete_account(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
 }
