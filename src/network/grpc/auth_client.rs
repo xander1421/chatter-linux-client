@@ -426,3 +426,29 @@ impl AuthClient {
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Note: Full integration tests require a running server.
+    // These tests verify compilation and basic structure.
+
+    #[test]
+    fn test_auth_client_construction_types() {
+        // This test verifies the type signatures compile correctly.
+        // We can't actually create a client without a real channel,
+        // but we verify the wrapper pattern is correct.
+        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+            let _client = AuthClient::new(channel, interceptor);
+        }
+    }
+
+    #[test]
+    fn test_request_id_generation() {
+        // Verify we can generate valid request IDs
+        let id = uuid::Uuid::new_v4().to_string();
+        assert!(!id.is_empty());
+        assert!(id.len() == 36); // UUID v4 string format
+    }
+}
