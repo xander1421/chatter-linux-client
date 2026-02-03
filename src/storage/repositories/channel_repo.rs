@@ -75,7 +75,7 @@ impl ChannelRepository {
              FROM channels WHERE id = ?1",
         )?;
 
-        let result = stmt.query_row(params![id.to_string()], |row| row_to_channel(row));
+        let result = stmt.query_row(params![id.to_string()], row_to_channel);
 
         match result {
             Ok(channel) => Ok(Some(channel)),
@@ -255,7 +255,7 @@ impl ChannelRepository {
 
         let result = stmt.query_row(
             params![channel_id.to_string(), user_id.to_string()],
-            |row| row_to_membership(row),
+            row_to_membership,
         );
 
         match result {
