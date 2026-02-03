@@ -18,4 +18,5 @@ pub use auth_client::AuthClient;
 pub use channel_client::ChannelClient;
 pub use client_pool::GrpcClientPool;
 pub use interceptors::{AuthInterceptor, AuthMode};
+pub use message_client::MessageClient;
 pub use user_client::UserClient;

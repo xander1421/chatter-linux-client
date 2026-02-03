@@ -458,4 +458,332 @@ impl MessageClient {
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
     }
+
+    // ==================== Pin/Unpin RPCs ====================
+
+    /// Pin a message in a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_id` - Message to pin
+    /// * `channel_id` - Channel containing the message
+    pub async fn pin_message(
+        &mut self,
+        message_id: &str,
+        channel_id: &str,
+    ) -> Result<Message, NetworkError> {
+        let request = MessageUpdate {
+            message_id: message_id.to_string(),
+            channel_id: channel_id.to_string(),
+            update: Some(crate::proto::chat_v1::message_update::Update::Pinned(true)),
+            updated_at: 0, // Server will set this
+        };
+
+        self.inner
+            .pin_message(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Unpin a message from a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_id` - Message to unpin
+    /// * `channel_id` - Channel containing the message
+    pub async fn unpin_message(
+        &mut self,
+        message_id: &str,
+        channel_id: &str,
+    ) -> Result<(), NetworkError> {
+        let request = MessageUpdate {
+            message_id: message_id.to_string(),
+            channel_id: channel_id.to_string(),
+            update: Some(crate::proto::chat_v1::message_update::Update::Pinned(false)),
+            updated_at: 0, // Server will set this
+        };
+
+        self.inner
+            .unpin_message(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// List pinned messages in a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel to get pinned messages from
+    /// * `limit` - Max pinned messages to return
+    pub async fn list_pinned_messages(
+        &mut self,
+        channel_id: &str,
+        limit: i32,
+    ) -> Result<ListPinnedMessagesResponse, NetworkError> {
+        let request = GetMessagesRequest {
+            channel_id: channel_id.to_string(),
+            limit,
+            thread_root_id: String::new(),
+            page_token: String::new(),
+            sort_direction: MessageSortDirection::SortUnspecified.into(),
+            reference_point: None,
+        };
+
+        self.inner
+            .list_pinned_messages(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Search RPCs ====================
+
+    /// Search messages by content.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Optional channel to search in (empty for global)
+    /// * `query` - Search query
+    /// * `limit` - Max results to return
+    /// * `offset` - Pagination offset
+    /// * `from` - Optional start timestamp (Unix milliseconds)
+    /// * `to` - Optional end timestamp (Unix milliseconds)
+    #[allow(clippy::too_many_arguments)]
+    pub async fn search(
+        &mut self,
+        channel_id: Option<&str>,
+        query: &str,
+        limit: i32,
+        offset: i32,
+        from: Option<u64>,
+        to: Option<u64>,
+    ) -> Result<MessageSearchResponse, NetworkError> {
+        let request = MessageSearchRequest {
+            channel_id: channel_id.unwrap_or("").to_string(),
+            query: query.to_string(),
+            limit,
+            offset,
+            from: from.unwrap_or(0),
+            to: to.unwrap_or(0),
+        };
+
+        self.inner
+            .search(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Event Streaming RPCs ====================
+
+    /// Stream message events for a single channel.
+    ///
+    /// Returns a long-lived stream of message events (sent, edited, deleted, reactions, etc.).
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel to stream events from
+    /// * `resume_from` - Optional event ID to resume from
+    pub async fn stream_message_events(
+        &mut self,
+        channel_id: &str,
+        resume_from: Option<&str>,
+    ) -> Result<impl Stream<Item = Result<MessageEvent, NetworkError>>, NetworkError> {
+        let request = StreamMessageEventsRequest {
+            channel_id: channel_id.to_string(),
+            resume_from_event_id: resume_from.unwrap_or("").to_string(),
+        };
+
+        let response = self
+            .inner
+            .stream_message_events(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    /// Stream global message events across multiple channels.
+    ///
+    /// Returns a long-lived stream of message events from all specified channels
+    /// (or all user's channels if none specified).
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_ids` - Channels to stream from (empty for all user's channels)
+    /// * `resume_from` - Optional event ID to resume from
+    pub async fn stream_global_events(
+        &mut self,
+        channel_ids: Vec<String>,
+        resume_from: Option<&str>,
+    ) -> Result<impl Stream<Item = Result<MessageEvent, NetworkError>>, NetworkError> {
+        let request = StreamGlobalEventsRequest {
+            channel_ids,
+            resume_from_event_id: resume_from.unwrap_or("").to_string(),
+        };
+
+        let response = self
+            .inner
+            .stream_global_events(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Note: Full integration tests require a running server.
+    // These tests verify compilation and basic structure.
+
+    #[test]
+    fn test_message_client_construction_types() {
+        // This test verifies the type signatures compile correctly.
+        // We can't actually create a client without a real channel,
+        // but we verify the wrapper pattern is correct.
+        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+            let _client = MessageClient::new(channel, interceptor);
+        }
+    }
+
+    #[test]
+    fn test_message_sort_direction_values() {
+        // Verify MessageSortDirection enum is accessible and has expected values
+        assert_eq!(MessageSortDirection::SortUnspecified as i32, 0);
+        assert_eq!(MessageSortDirection::SortNewestFirst as i32, 1);
+        assert_eq!(MessageSortDirection::SortOldestFirst as i32, 2);
+    }
+
+    #[test]
+    fn test_message_construction() {
+        // Verify Message struct can be constructed
+        let message = Message {
+            id: "msg-123".to_string(),
+            channel_id: "channel-456".to_string(),
+            author_id: "user-789".to_string(),
+            parent_id: String::new(),
+            content: None,
+            timestamp: 1234567890000,
+            signature: vec![0u8; 64],
+            ephemeral: false,
+            ephemeral_ttl: None,
+            pinned: false,
+            reply_count: 0,
+            reaction_counts: vec![],
+            current_user_reactions: vec![],
+            crypto_status: None,
+            updated_at: 0,
+            edited: false,
+            edited_at: 0,
+            mentioned_integrations: vec![],
+            targets_ai_bot: false,
+        };
+
+        assert_eq!(message.id, "msg-123");
+        assert_eq!(message.channel_id, "channel-456");
+        assert_eq!(message.author_id, "user-789");
+        assert!(!message.ephemeral);
+    }
+
+    #[test]
+    fn test_message_content_variants() {
+        use crate::proto::chat_v1::message::content::Type;
+
+        // Verify Message.Content oneof types can be constructed
+        let text_content = crate::proto::chat_v1::message::Content {
+            r#type: Some(Type::Text("Hello, world!".to_string())),
+        };
+
+        match text_content.r#type {
+            Some(Type::Text(t)) => assert_eq!(t, "Hello, world!"),
+            _ => panic!("Expected Text variant"),
+        }
+
+        // Test encrypted variant
+        let encrypted_content = crate::proto::chat_v1::message::Content {
+            r#type: Some(Type::Encrypted(crate::proto::chat_v1::EncryptedData {
+                version: crate::proto::chat_v1::CryptoVersion::SignalProtocol as i32,
+                nonce: vec![0u8; 12],
+                ciphertext: vec![1, 2, 3, 4],
+                auth_tag: vec![0u8; 16],
+                associated_data: vec![],
+                signature: vec![0u8; 64],
+                device_id: "device-123".to_string(),
+            })),
+        };
+
+        match encrypted_content.r#type {
+            Some(Type::Encrypted(e)) => {
+                assert_eq!(
+                    e.version,
+                    crate::proto::chat_v1::CryptoVersion::SignalProtocol as i32
+                );
+            }
+            _ => panic!("Expected Encrypted variant"),
+        }
+    }
+
+    #[test]
+    fn test_reaction_construction() {
+        // Verify Reaction struct can be constructed
+        use crate::proto::chat_v1::Reaction;
+
+        let reaction = Reaction {
+            user_id: "user-123".to_string(),
+            emoji: "👍".to_string(),
+            timestamp: 1234567890000,
+        };
+
+        assert_eq!(reaction.user_id, "user-123");
+        assert_eq!(reaction.emoji, "👍");
+        assert_eq!(reaction.timestamp, 1234567890000);
+    }
+
+    #[test]
+    fn test_message_event_variants() {
+        // Verify MessageEvent struct and its event variants
+        use crate::proto::chat_v1::message_event::Event;
+
+        let msg = Message {
+            id: "msg-123".to_string(),
+            channel_id: "channel-456".to_string(),
+            author_id: "user-789".to_string(),
+            parent_id: String::new(),
+            content: None,
+            timestamp: 1234567890000,
+            signature: vec![],
+            ephemeral: false,
+            ephemeral_ttl: None,
+            pinned: false,
+            reply_count: 0,
+            reaction_counts: vec![],
+            current_user_reactions: vec![],
+            crypto_status: None,
+            updated_at: 0,
+            edited: false,
+            edited_at: 0,
+            mentioned_integrations: vec![],
+            targets_ai_bot: false,
+        };
+
+        let event = MessageEvent {
+            event_id: "event-001".to_string(),
+            timestamp: 1234567890000,
+            channel_id: "channel-456".to_string(),
+            event: Some(Event::MessageSent(msg)),
+        };
+
+        assert_eq!(event.event_id, "event-001");
+        assert_eq!(event.channel_id, "channel-456");
+        assert!(matches!(event.event, Some(Event::MessageSent(_))));
+    }
 }
