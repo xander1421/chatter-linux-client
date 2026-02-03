@@ -41,8 +41,11 @@ use std::sync::Arc;
 // Re-export handlers
 pub use attachment::AttachmentHandler;
 pub use chat::ChatHandler;
+pub use key_exchange::KeyExchangeHandler;
+pub use pin::PinHandler;
 pub use reaction::ReactionHandler;
 pub use receipt::ReceiptHandler;
+pub use sender_key::SenderKeyHandler;
 pub use typing::TypingHandler;
 
 // ============================================================================
@@ -341,6 +344,28 @@ pub enum DomainEvent {
         /// Channel context.
         channel_id: ChannelId,
     },
+    /// Key exchange received (mailbox DM encryption setup).
+    KeyExchangeReceived {
+        /// User who sent the key exchange.
+        sender_id: UserId,
+        /// Conversation/channel this key applies to.
+        conversation_id: ChannelId,
+        /// Sender's ephemeral public key (32 bytes Ed25519).
+        ephemeral_public_key: [u8; 32],
+        /// When the key exchange was initiated (ms since epoch).
+        timestamp: u64,
+    },
+    /// Sender key distribution received (group encryption setup).
+    SenderKeyReceived {
+        /// User who distributed the sender key.
+        sender_id: UserId,
+        /// Channel this key is for.
+        channel_id: ChannelId,
+        /// Serialized sender key distribution message (libsignal format).
+        distribution_message: Vec<u8>,
+        /// When the distribution was sent (ms since epoch).
+        timestamp: u64,
+    },
 }
 
 impl DomainEvent {
@@ -360,6 +385,8 @@ impl DomainEvent {
             DomainEvent::ReactionRemoved { .. } => None, // Reactions now use message lookup, not channel
             DomainEvent::MessagePinned { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageUnpinned { channel_id, .. } => Some(*channel_id),
+            DomainEvent::KeyExchangeReceived { conversation_id, .. } => Some(*conversation_id),
+            DomainEvent::SenderKeyReceived { channel_id, .. } => Some(*channel_id),
         }
     }
 
