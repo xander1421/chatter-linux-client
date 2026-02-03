@@ -35,7 +35,7 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 12: Crypto Prekeys** - PreKey bundles, signed prekeys, OTPKs
 - [x] **Phase 13: Crypto Sender Keys** - Group sender key distribution
 - [x] **Phase 14: Crypto Sealed Sender** - Anonymous messaging, certificates
-- [ ] **Phase 15: Crypto Attachments** - File encryption/decryption
+- [x] **Phase 15: Crypto Attachments** - File encryption/decryption
 
 ### Network Layer
 - [ ] **Phase 16: Network gRPC Foundation** - Client pool, interceptors, connection
@@ -539,7 +539,7 @@ None (custom application, no pre-existing domain skills)
 | 12 | Crypto Prekeys | 1 | Done | 2026-02-03 |
 | 13 | Crypto Sender Keys | 1 | Done | 2026-02-03 |
 | 14 | Crypto Sealed Sender | 1 | Done | 2026-02-03 |
-| 15 | Crypto Attachments | TBD | Not started | - |
+| 15 | Crypto Attachments | 1 | Done | 2026-02-03 |
 | 16 | Network gRPC Foundation | TBD | Not started | - |
 | 17 | Network Auth & User Clients | TBD | Not started | - |
 | 18 | Network Channel & Message Clients | TBD | Not started | - |

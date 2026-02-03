@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 14 complete — Ready for Phase 15
+**Current focus:** Phase 15 complete — Crypto layer done, ready for Network layer
 
 ## Current Position
 
-Phase: 14 of 66 (Crypto Sealed Sender)
+Phase: 15 of 66 (Crypto Attachments)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-03 — Completed 14-01-PLAN.md
+Last activity: 2026-02-03 — Completed 15-01-PLAN.md
 
-Progress: ████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 31.8%
+Progress: █████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 33.3%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 21
-- Average duration: ~4 min
-- Total execution time: ~87 min
+- Total plans completed: 22
+- Average duration: ~4.5 min
+- Total execution time: ~99 min
 
 **By Phase:**
 
@@ -41,10 +41,11 @@ Progress: ███████████████████████�
 | 12 | 1 | ~3m | ~3m |
 | 13 | 1 | ~3m | ~3m |
 | 14 | 1 | ~4m | ~4m |
+| 15 | 1 | ~12m | ~12m |
 
 **Recent Trend:**
-- Last 5 plans: 11-1 (~4m), 12-1 (~3m), 13-1 (~3m), 14-1 (~4m)
-- Trend: Crypto layer patterns consistent
+- Last 5 plans: 12-1 (~3m), 13-1 (~3m), 14-1 (~4m), 15-1 (~12m)
+- Trend: Crypto layer complete; 15-01 longer due to comprehensive attachment encryption
 
 ## Accumulated Context
 
@@ -100,6 +101,9 @@ Recent decisions affecting current work:
 - Kyber1024 for PQXDH post-quantum prekeys
 - DeviceId uses TryFrom (NonZeroU8 range 1-127)
 - Optional one-time prekey in PreKeyBundle (fallback support)
+- AES-256-CBC + HMAC-SHA256 for attachments (matches Signal, not AES-GCM)
+- Log-bucketing padding to prevent file size inference
+- Constant-time comparison for digest and HMAC verification
 
 ### Deferred Issues
 
@@ -112,6 +116,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 14-01-PLAN.md
+Stopped at: Completed 15-01-PLAN.md
 Resume file: None
-Next action: Plan Phase 15 (Crypto Attachments)
+Next action: Plan Phase 16 (Network gRPC Foundation)
