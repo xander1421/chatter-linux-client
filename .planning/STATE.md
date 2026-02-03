@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 21 complete — Network Resilience fully implemented, ready for Phase 22
+**Current focus:** Phase 22 in progress — Network Validation (deduplicator and validator complete)
 
 ## Current Position
 
-Phase: 21 of 66 (Network Resilience) - COMPLETE
-Plan: 3 of 3 in current phase - COMPLETE
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 21-03-PLAN.md
+Phase: 22 of 66 (Network Validation)
+Plan: 1 of TBD in current phase
+Status: In progress
+Last activity: 2026-02-03 — Completed 22-01-PLAN.md
 
-Progress: ██████████████████████████████████████████████████████████░░░░░░░░░░░░░░ 58.8%
+Progress: ██████████████████████████████████████████████████████████░░░░░░░░░░░░░░ 60.0%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 35
-- Average duration: ~4.2 min
-- Total execution time: ~142 min
+- Total plans completed: 36
+- Average duration: ~4.1 min
+- Total execution time: ~146 min
 
 **By Phase:**
 
@@ -48,9 +48,10 @@ Progress: ███████████████████████�
 | 19 | 4 | ~11m | ~3m |
 | 20 | 4 | ~11m | ~3m |
 | 21 | 3 | ~12m | ~4m |
+| 22 | 1 | ~4m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 20-4 (~3m), 21-1 (~3m), 21-2 (~4m), 21-3 (~5m)
+- Last 5 plans: 21-1 (~3m), 21-2 (~4m), 21-3 (~5m), 22-1 (~4m)
 - Trend: Consistent ~3-5m per plan
 
 ## Accumulated Context
@@ -121,6 +122,8 @@ Recent decisions affecting current work:
 - TypingAggregator uses HashMap<channel, HashMap<user, Instant>> with 10s timeout
 - ReactionEvent wraps proto ReactionUpdate with user_id from stream context
 - ReadReceiptAggregator uses high-water mark (only update if newer timestamp)
+- FIFO eviction over LRU for BoundedHashSet (simpler, sufficient for 'recently seen')
+- Empty author_id allowed in validation (sealed sender per Signal protocol)
 
 ### Deferred Issues
 
@@ -133,6 +136,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 21-03-PLAN.md (Connection Manager) - Phase 21 complete
+Stopped at: Completed 22-01-PLAN.md (Deduplicator & Validator)
 Resume file: None
-Next action: Start Phase 22 (Network Validation)
+Next action: Continue Phase 22 if more plans exist, or proceed to Phase 23
