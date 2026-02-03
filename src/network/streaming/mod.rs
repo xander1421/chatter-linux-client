@@ -14,4 +14,5 @@ pub mod read_receipt_stream;
 pub mod stream_manager;
 pub mod typing_stream;
 
+pub use message_stream::{MessageDeleted, MessageEventRouter, MessageStream, SubscriberCounts};
 pub use stream_manager::{StreamConfig, StreamHandle, StreamManager};
