@@ -543,4 +543,160 @@ mod tests {
         let err = ValidationError::InvalidTimestamp(12345);
         assert_eq!(err.to_string(), "timestamp out of range: 12345");
     }
+
+    // ==========================================================================
+    // Pipeline tests
+    // ==========================================================================
+
+    fn make_test_message(id: &str, channel_id: &str, timestamp: u64) -> Message {
+        Message {
+            id: id.to_string(),
+            channel_id: channel_id.to_string(),
+            author_id: "user-123".to_string(),
+            timestamp,
+            content: None,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_pipeline_dedup_then_validate() {
+        let pipeline = MessageValidationPipeline::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // First message should be ready
+        let msg1 = make_test_message("msg-1", "channel-1", now);
+        assert!(matches!(pipeline.process(msg1), PipelineResult::Ready(_)));
+
+        // Same message ID should be duplicate
+        let msg1_dup = make_test_message("msg-1", "channel-1", now + 100);
+        assert!(matches!(pipeline.process(msg1_dup), PipelineResult::Duplicate));
+    }
+
+    #[test]
+    fn test_pipeline_invalid_message() {
+        let pipeline = MessageValidationPipeline::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // Message with empty ID should fail validation
+        let mut msg = make_test_message("", "channel-1", now);
+        msg.id = String::new();
+        match pipeline.process(msg) {
+            PipelineResult::Invalid(ValidationError::MissingField(f)) => {
+                assert_eq!(f, "message_id");
+            }
+            other => panic!("Expected Invalid result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pipeline_ready_message() {
+        let pipeline = MessageValidationPipeline::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // Valid message should be ready
+        let msg = make_test_message("msg-1", "channel-1", now);
+        match pipeline.process(msg) {
+            PipelineResult::Ready(m) => {
+                assert_eq!(m.id, "msg-1");
+                assert_eq!(m.channel_id, "channel-1");
+            }
+            other => panic!("Expected Ready result, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pipeline_buffered_then_ready() {
+        let pipeline = MessageValidationPipeline::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // First message at now + 1000
+        let msg1 = make_test_message("msg-1", "channel-1", now + 1000);
+        assert!(matches!(pipeline.process(msg1), PipelineResult::Ready(_)));
+
+        // Message at now (older) should be buffered
+        let msg2 = make_test_message("msg-2", "channel-1", now);
+        assert!(matches!(pipeline.process(msg2), PipelineResult::Buffered));
+
+        // Stats should show one buffered
+        let stats = pipeline.stats();
+        assert_eq!(stats.orderer.total_buffered, 1);
+    }
+
+    #[test]
+    fn test_pipeline_with_config() {
+        let limits = ValidationLimits {
+            max_content_size: 1024,
+            max_timestamp_drift_secs: 60,
+            min_timestamp: 1609459200000,
+            max_id_length: 32,
+        };
+        let pipeline = MessageValidationPipeline::with_config(100, limits, 10);
+
+        let stats = pipeline.stats();
+        assert_eq!(stats.deduplicator.capacity, 100);
+    }
+
+    #[test]
+    fn test_pipeline_stats() {
+        let pipeline = MessageValidationPipeline::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // Initial stats
+        let stats = pipeline.stats();
+        assert_eq!(stats.deduplicator.tracked_count, 0);
+        assert_eq!(stats.orderer.channels_tracked, 0);
+
+        // Process a message
+        let msg = make_test_message("msg-1", "channel-1", now);
+        pipeline.process(msg);
+
+        let stats = pipeline.stats();
+        assert_eq!(stats.deduplicator.tracked_count, 1);
+        assert_eq!(stats.orderer.channels_tracked, 1);
+    }
+
+    #[test]
+    fn test_pipeline_get_ready() {
+        let pipeline = MessageValidationPipeline::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // First message
+        let msg1 = make_test_message("msg-1", "channel-1", now);
+        pipeline.process(msg1);
+
+        // Old message gets buffered
+        let msg2 = make_test_message("msg-2", "channel-1", now - 100);
+        pipeline.process(msg2);
+
+        // get_ready should clean up old buffered messages
+        let ready = pipeline.get_ready("channel-1");
+        // Old message is discarded, so ready should be empty
+        assert!(ready.is_empty());
+    }
+
+    #[test]
+    fn test_pipeline_default() {
+        let pipeline = MessageValidationPipeline::default();
+        let stats = pipeline.stats();
+        assert_eq!(stats.deduplicator.capacity, 10_000); // Default capacity
+    }
 }
