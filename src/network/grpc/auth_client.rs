@@ -13,8 +13,9 @@ use crate::proto::chat_v1::{
     auth_event, auth_service_client::AuthServiceClient, AuthEvent, AuthResponse,
     ChangePasswordRequest, CheckUsernameRequest, CheckUsernameResponse,
     CompletePasswordResetRequest, GetActiveSessionsRequest, GetActiveSessionsResponse,
-    InvalidateAllSessionsRequest, InvalidateSessionRequest, LoginRequest, LogoutRequest,
-    RegisterRequest, RequestPasswordResetRequest, ResendVerificationEmailRequest, Session,
+    InvalidateAllSessionsRequest, InvalidateSessionRequest, ListDevicesRequest,
+    ListDevicesResponse, LoginRequest, LogoutRequest, RegisterRequest, RenameDeviceRequest,
+    RequestPasswordResetRequest, ResendVerificationEmailRequest, RevokeDeviceRequest, Session,
     VerifyEmailRequest,
 };
 
@@ -340,6 +341,59 @@ impl AuthClient {
 
         self.inner
             .revoke_all_sessions(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// List all devices for current user.
+    pub async fn list_devices(&mut self) -> Result<ListDevicesResponse, NetworkError> {
+        let request = ListDevicesRequest {};
+
+        self.inner
+            .list_devices(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Rename a device.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - Signal device ID to rename
+    /// * `device_name` - New name for the device
+    pub async fn rename_device(
+        &mut self,
+        device_id: u32,
+        device_name: &str,
+    ) -> Result<(), NetworkError> {
+        let request = RenameDeviceRequest {
+            device_id,
+            device_name: device_name.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .rename_device(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Revoke a device (unlink from account).
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - Signal device ID to revoke
+    pub async fn revoke_device(&mut self, device_id: u32) -> Result<(), NetworkError> {
+        let request = RevokeDeviceRequest {
+            device_id,
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .revoke_device(request)
             .await
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
