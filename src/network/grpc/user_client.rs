@@ -10,10 +10,11 @@ use tonic::transport::Channel;
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    friend_requests_filter, user_service_client::UserServiceClient, FriendRequest,
-    FriendRequestsFilter, FriendResponse, FriendStatus, GetUserProfileRequest,
-    ListFriendRequestsRequest, ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse,
-    PresenceUpdate, RemoveFriendRequest, StreamPresenceRequest, UpdatePresenceRequest,
+    friend_requests_filter, user_service_client::UserServiceClient, BlockUserRequest,
+    FriendRequest, FriendRequestsFilter, FriendResponse, FriendStatus, GetUserProfileRequest,
+    ListBlockedUsersRequest, ListBlockedUsersResponse, ListFriendRequestsRequest,
+    ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse, PresenceUpdate,
+    RemoveFriendRequest, StreamPresenceRequest, UnblockUserRequest, UpdatePresenceRequest,
     UpdateUserProfileRequest, UserEvent, UserPresence, UserProfile, UserSearchRequest,
     UserSearchResponse,
 };
@@ -241,6 +242,65 @@ impl UserClient {
 
         self.inner
             .list_friend_requests(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Blocking RPCs ====================
+
+    /// Block a user (streaming response).
+    pub async fn block_user(
+        &mut self,
+        user_id: &str,
+    ) -> Result<impl Stream<Item = Result<UserEvent, NetworkError>>, NetworkError> {
+        let request = BlockUserRequest {
+            user_id: user_id.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        let response = self
+            .inner
+            .block_user(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    /// Unblock a user (streaming response).
+    pub async fn unblock_user(
+        &mut self,
+        user_id: &str,
+    ) -> Result<impl Stream<Item = Result<UserEvent, NetworkError>>, NetworkError> {
+        let request = UnblockUserRequest {
+            user_id: user_id.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        let response = self
+            .inner
+            .unblock_user(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    /// List blocked users with pagination.
+    pub async fn list_blocked_users(
+        &mut self,
+        limit: i32,
+        offset: i32,
+    ) -> Result<ListBlockedUsersResponse, NetworkError> {
+        let request = ListBlockedUsersRequest { limit, offset };
+
+        self.inner
+            .list_blocked_users(request)
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
