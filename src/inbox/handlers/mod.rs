@@ -40,6 +40,7 @@ use crate::inbox::processor::{ContentType, ProcessedMessage};
 pub use attachment::AttachmentHandler;
 pub use chat::ChatHandler;
 pub use reaction::ReactionHandler;
+pub use receipt::ReceiptHandler;
 
 // ============================================================================
 // InboxHandler Trait
@@ -449,6 +450,7 @@ mod tests {
         let read = DomainEvent::MessagesRead {
             reader_id: user_id,
             message_timestamps: vec![123],
+            receipt_timestamp: 456,
         };
         assert_eq!(read.channel_id(), None); // Cross-channel
     }
