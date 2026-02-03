@@ -114,7 +114,7 @@ None (custom application, no pre-existing domain skills)
 **Goal**: Implement User, Message, Channel, Attachment structs and strongly-typed IDs
 **Depends on**: Phase 1
 **Research**: Unlikely (standard Rust structs)
-**Plans**: 1/2 complete (02-01-PLAN.md done)
+**Plans**: 2/2 complete ✓
 
 ### Phase 3: Domain Supporting Entities
 **Goal**: Implement Reaction, Notification, Call, Moderation domain types
@@ -526,7 +526,7 @@ None (custom application, no pre-existing domain skills)
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
 | 1 | Scaffolding | 1 | Done | 2026-02-03 |
-| 2 | Domain Core Entities | 2 | In progress | - |
+| 2 | Domain Core Entities | 2 | Done | 2026-02-03 |
 | 3 | Domain Supporting Entities | TBD | Not started | - |
 | 4 | Domain Privacy Entities | TBD | Not started | - |
 | 5 | Storage Database Setup | TBD | Not started | - |
