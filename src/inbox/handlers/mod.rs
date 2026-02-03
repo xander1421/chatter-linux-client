@@ -269,37 +269,54 @@ pub enum DomainEvent {
     MessagesRead {
         /// User who read the messages.
         reader_id: UserId,
-        /// Message timestamps that were read.
+        /// Message timestamps that were read (Signal uses timestamps as message IDs).
         message_timestamps: Vec<u64>,
+        /// When the receipt was sent (ms since epoch).
+        receipt_timestamp: u64,
     },
     /// Delivery receipt received.
     MessagesDelivered {
         /// User whose device received the messages.
         recipient_id: UserId,
-        /// Message timestamps that were delivered.
+        /// Message timestamps that were delivered (Signal uses timestamps as message IDs).
         message_timestamps: Vec<u64>,
+        /// When the receipt was sent (ms since epoch).
+        receipt_timestamp: u64,
     },
     /// Reaction added to message.
     ReactionAdded {
-        /// Message that was reacted to.
+        /// Target message (identified by timestamp in Signal protocol).
         message_id: MessageId,
+        /// Message author's ID (for lookup with target_author_aci).
+        author_id: UserId,
         /// User who added the reaction.
         reactor_id: UserId,
         /// Emoji used.
         emoji: String,
-        /// Channel context.
-        channel_id: ChannelId,
+        /// When the reaction was sent (ms since epoch).
+        timestamp: u64,
     },
     /// Reaction removed from message.
     ReactionRemoved {
-        /// Message that was un-reacted.
+        /// Target message (identified by timestamp in Signal protocol).
         message_id: MessageId,
+        /// Message author's ID (for lookup with target_author_aci).
+        author_id: UserId,
         /// User who removed the reaction.
         reactor_id: UserId,
         /// Emoji that was removed.
         emoji: String,
-        /// Channel context.
-        channel_id: ChannelId,
+        /// When the reaction removal was sent (ms since epoch).
+        timestamp: u64,
+    },
+    /// View-once message was viewed (for ephemeral/disappearing messages).
+    ViewedReceipt {
+        /// The viewed message (identified by timestamp).
+        message_timestamp: u64,
+        /// User who viewed the message.
+        from_user_id: UserId,
+        /// When the view occurred (ms since epoch).
+        receipt_timestamp: u64,
     },
     /// Message was pinned.
     MessagePinned {
@@ -333,8 +350,9 @@ impl DomainEvent {
             DomainEvent::TypingStopped { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessagesRead { .. } => None, // Cross-channel
             DomainEvent::MessagesDelivered { .. } => None, // Cross-channel
-            DomainEvent::ReactionAdded { channel_id, .. } => Some(*channel_id),
-            DomainEvent::ReactionRemoved { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ViewedReceipt { .. } => None, // Cross-channel
+            DomainEvent::ReactionAdded { .. } => None, // Reactions now use message lookup, not channel
+            DomainEvent::ReactionRemoved { .. } => None, // Reactions now use message lookup, not channel
             DomainEvent::MessagePinned { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageUnpinned { channel_id, .. } => Some(*channel_id),
         }
