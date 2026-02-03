@@ -5,7 +5,10 @@
 
 use tokio::sync::broadcast;
 
-use crate::proto::chat_v1::{Message, ReactionUpdate, ReadReceipt, TypingIndicator};
+use crate::proto::chat_v1::{
+    message_event::Event as MessageEventType, Message, MessageEvent, ReactionUpdate, ReadReceipt,
+    TypingIndicator,
+};
 
 /// Capacity for event broadcast channels.
 const CHANNEL_CAPACITY: usize = 256;
@@ -108,6 +111,69 @@ impl MessageEventRouter {
     pub fn on_typing_indicator(&self) -> broadcast::Receiver<TypingIndicator> {
         self.typing_indicator.subscribe()
     }
+
+    /// Route a raw MessageEvent to the appropriate typed channel.
+    ///
+    /// Returns true if the event was successfully routed, false if no
+    /// subscribers or the event type was empty.
+    pub fn route(&self, event: MessageEvent) -> bool {
+        let channel_id = event.channel_id.clone();
+        let timestamp = event.timestamp;
+
+        match event.event {
+            Some(MessageEventType::MessageSent(msg)) => self.message_sent.send(msg).is_ok(),
+            Some(MessageEventType::MessageUpdated(msg)) => self.message_updated.send(msg).is_ok(),
+            Some(MessageEventType::MessageDeletedId(id)) => {
+                let deleted = MessageDeleted {
+                    message_id: id,
+                    channel_id,
+                    timestamp,
+                };
+                self.message_deleted.send(deleted).is_ok()
+            }
+            Some(MessageEventType::ReactionAdded(reaction)) => {
+                self.reaction_added.send(reaction).is_ok()
+            }
+            Some(MessageEventType::ReactionRemoved(reaction)) => {
+                self.reaction_removed.send(reaction).is_ok()
+            }
+            Some(MessageEventType::ReadReceipt(receipt)) => self.read_receipt.send(receipt).is_ok(),
+            Some(MessageEventType::TypingIndicator(typing)) => {
+                self.typing_indicator.send(typing).is_ok()
+            }
+            None => {
+                tracing::warn!("Empty MessageEvent received");
+                false
+            }
+        }
+    }
+
+    /// Get the number of active subscribers for each channel.
+    ///
+    /// Useful for debugging and monitoring.
+    pub fn subscriber_counts(&self) -> SubscriberCounts {
+        SubscriberCounts {
+            message_sent: self.message_sent.receiver_count(),
+            message_updated: self.message_updated.receiver_count(),
+            message_deleted: self.message_deleted.receiver_count(),
+            reaction_added: self.reaction_added.receiver_count(),
+            reaction_removed: self.reaction_removed.receiver_count(),
+            read_receipt: self.read_receipt.receiver_count(),
+            typing_indicator: self.typing_indicator.receiver_count(),
+        }
+    }
+}
+
+/// Subscriber counts for monitoring.
+#[derive(Clone, Debug, Default)]
+pub struct SubscriberCounts {
+    pub message_sent: usize,
+    pub message_updated: usize,
+    pub message_deleted: usize,
+    pub reaction_added: usize,
+    pub reaction_removed: usize,
+    pub read_receipt: usize,
+    pub typing_indicator: usize,
 }
 
 impl Default for MessageEventRouter {
