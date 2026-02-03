@@ -10,5 +10,6 @@ pub mod store;
 
 pub use identity::IdentityKeyManager;
 pub use prekey::PreKeyManager;
+pub use sender_key::SenderKeyManager;
 pub use session::SessionManager;
 pub use store::SignalStore;

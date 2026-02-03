@@ -11,4 +11,4 @@ pub mod rng;
 pub mod sealed_sender;
 pub mod signal;
 
-pub use signal::{IdentityKeyManager, PreKeyManager, SessionManager, SignalStore};
+pub use signal::{IdentityKeyManager, PreKeyManager, SenderKeyManager, SessionManager, SignalStore};
