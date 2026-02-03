@@ -11,6 +11,7 @@ pub mod v006_reactions;
 pub mod v007_drafts;
 pub mod v008_settings;
 pub mod v009_search_index;
+pub mod v010_key_store;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -25,6 +26,7 @@ pub use v006_reactions::V006Reactions;
 pub use v007_drafts::V007Drafts;
 pub use v008_settings::V008Settings;
 pub use v009_search_index::V009SearchIndex;
+pub use v010_key_store::V010KeyStore;
 
 /// Trait for database migrations.
 ///
@@ -154,4 +156,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V007Drafts)
         .register(V008Settings)
         .register(V009SearchIndex)
+        .register(V010KeyStore)
 }
