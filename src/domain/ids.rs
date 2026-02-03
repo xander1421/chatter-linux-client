@@ -51,6 +51,10 @@ pub struct NotificationId(pub Uuid);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct DraftId(pub Uuid);
 
+/// Unique identifier for a saved message in personal vault (UUID v4).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub struct SavedMessageId(pub Uuid);
+
 /// Unique identifier for a thread (same as MessageId of root message).
 pub type ThreadId = MessageId;
 
@@ -131,7 +135,8 @@ impl_uuid_id!(
     ReactionId,
     IntegrationId,
     NotificationId,
-    DraftId
+    DraftId,
+    SavedMessageId
 );
 
 // ============================================================================
