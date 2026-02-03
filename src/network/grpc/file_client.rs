@@ -11,7 +11,9 @@ use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     file_service_client::FileServiceClient, AbortUploadRequest, CompleteUploadRequest,
-    FileChunk, FileMetadata, FilePermission, FileRequest, GetFilePermissionsRequest,
+    ConfirmAttachmentUploadRequest, ConfirmAttachmentUploadResponse, FileChunk, FileMetadata,
+    FilePermission, FileRequest, GetAttachmentDownloadUrlRequest, GetAttachmentDownloadUrlResponse,
+    GetAttachmentUploadUrlRequest, GetAttachmentUploadUrlResponse, GetFilePermissionsRequest,
     GetFilePermissionsResponse, GetStorageStatsRequest, InitiateUploadRequest,
     ListChannelFilesRequest, ListChannelFilesResponse, ListSharedFilesRequest,
     ListSharedFilesResponse, RevokeFileAccessRequest, SearchFilesRequest, SearchFilesResponse,
@@ -395,5 +397,170 @@ impl FileClient {
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Attachment URL RPCs ====================
+
+    /// Get a presigned upload URL for an attachment.
+    ///
+    /// # Arguments
+    ///
+    /// * `encrypted_size` - Size of the encrypted attachment in bytes
+    pub async fn get_attachment_upload_url(
+        &mut self,
+        encrypted_size: u64,
+    ) -> Result<GetAttachmentUploadUrlResponse, NetworkError> {
+        let request = GetAttachmentUploadUrlRequest { encrypted_size };
+
+        self.inner
+            .get_attachment_upload_url(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Confirm an attachment upload completed.
+    ///
+    /// # Arguments
+    ///
+    /// * `cdn_key` - The CDN key from the upload URL response
+    pub async fn confirm_attachment_upload(
+        &mut self,
+        cdn_key: &str,
+    ) -> Result<ConfirmAttachmentUploadResponse, NetworkError> {
+        let request = ConfirmAttachmentUploadRequest {
+            cdn_key: cdn_key.to_string(),
+        };
+
+        self.inner
+            .confirm_attachment_upload(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Get a presigned download URL for an attachment.
+    ///
+    /// # Arguments
+    ///
+    /// * `cdn_key` - The CDN key of the attachment to download
+    pub async fn get_attachment_download_url(
+        &mut self,
+        cdn_key: &str,
+    ) -> Result<GetAttachmentDownloadUrlResponse, NetworkError> {
+        let request = GetAttachmentDownloadUrlRequest {
+            cdn_key: cdn_key.to_string(),
+        };
+
+        self.inner
+            .get_attachment_download_url(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Note: Full integration tests require a running server.
+    // These tests verify compilation and basic structure.
+
+    #[test]
+    fn test_file_client_construction_types() {
+        // This test verifies the type signatures compile correctly.
+        // We can't actually create a client without a real channel,
+        // but we verify the wrapper pattern is correct.
+        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+            let _client = FileClient::new(channel, interceptor);
+        }
+    }
+
+    #[test]
+    fn test_file_request_construction() {
+        // Verify FileRequest struct can be constructed
+        let request = FileRequest {
+            file_id: "file-123".to_string(),
+        };
+        assert_eq!(request.file_id, "file-123");
+    }
+
+    #[test]
+    fn test_initiate_upload_request_construction() {
+        // Verify InitiateUploadRequest struct can be constructed
+        let request = InitiateUploadRequest {
+            channel_id: "channel-123".to_string(),
+            file_name: "test.txt".to_string(),
+            mime_type: "text/plain".to_string(),
+            total_size: 1024,
+            chunk_size: 256,
+        };
+        assert_eq!(request.file_name, "test.txt");
+        assert_eq!(request.total_size, 1024);
+        assert_eq!(request.chunk_size, 256);
+    }
+
+    #[test]
+    fn test_share_file_request_construction() {
+        // Verify ShareFileRequest struct can be constructed
+        let request = ShareFileRequest {
+            file_id: "file-123".to_string(),
+            shared_with_id: "user-456".to_string(),
+            permission: FilePermission::Read.into(),
+            expires_at: 0,
+        };
+        assert_eq!(request.file_id, "file-123");
+        assert_eq!(request.shared_with_id, "user-456");
+    }
+
+    #[test]
+    fn test_get_attachment_upload_url_request_construction() {
+        // Verify GetAttachmentUploadUrlRequest struct can be constructed
+        let request = GetAttachmentUploadUrlRequest {
+            encrypted_size: 2048,
+        };
+        assert_eq!(request.encrypted_size, 2048);
+    }
+
+    #[test]
+    fn test_file_permission_values() {
+        // Verify FilePermission enum is accessible and has expected values
+        assert_eq!(FilePermission::Unspecified as i32, 0);
+        assert_eq!(FilePermission::Read as i32, 1);
+        assert_eq!(FilePermission::Write as i32, 2);
+        assert_eq!(FilePermission::Admin as i32, 3);
+    }
+
+    #[test]
+    fn test_file_chunk_construction() {
+        // Verify FileChunk struct can be constructed
+        let chunk = FileChunk {
+            transfer_id: "transfer-123".to_string(),
+            sequence: 1,
+            data: vec![0u8; 256],
+            auth_tag: vec![0u8; 16], // Poly1305 MAC
+        };
+        assert_eq!(chunk.transfer_id, "transfer-123");
+        assert_eq!(chunk.sequence, 1);
+        assert_eq!(chunk.data.len(), 256);
+    }
+
+    #[test]
+    fn test_search_files_request_construction() {
+        // Verify SearchFilesRequest struct can be constructed
+        let request = SearchFilesRequest {
+            query: "test".to_string(),
+            channel_id: "".to_string(),
+            author_id: "".to_string(),
+            mime_type: "".to_string(),
+            limit: 10,
+            offset: 0,
+            search_in_content: false,
+            content_only: false,
+            file_extensions: vec![],
+        };
+        assert_eq!(request.query, "test");
+        assert_eq!(request.limit, 10);
     }
 }
