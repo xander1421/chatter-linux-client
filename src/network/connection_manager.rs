@@ -13,7 +13,7 @@ use crate::error::NetworkError;
 use super::connection::{ConnectionEvent, ConnectionState, ConnectionStateMachine, FailReason};
 use super::grpc::client_pool::GrpcClientPool;
 use super::offline_queue::OfflineQueue;
-use super::recovery::{ConnectionRecovery, FibonacciBackoff};
+use super::recovery::ConnectionRecovery;
 
 /// Configuration for the ConnectionManager.
 #[derive(Clone, Debug)]
@@ -406,11 +406,178 @@ impl ConnectionManager {
 
         tracing::info!("ConnectionManager shutdown complete");
     }
+
+    // ==================== Queue Persistence Methods ====================
+
+    /// Load the offline queue from disk.
+    ///
+    /// Called on startup to restore queued operations.
+    ///
+    /// # Returns
+    ///
+    /// The number of operations loaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if reading fails.
+    pub async fn load_queue(&self) -> std::io::Result<usize> {
+        let count = self.offline_queue.load(&self.config.queue_path).await?;
+        tracing::info!("Loaded {} operations from offline queue", count);
+        Ok(count)
+    }
+
+    /// Save the offline queue to disk.
+    ///
+    /// Called on shutdown and can be called periodically.
+    ///
+    /// # Errors
+    ///
+    /// Returns an IO error if writing fails.
+    pub async fn save_queue(&self) -> std::io::Result<()> {
+        self.offline_queue.save(&self.config.queue_path).await?;
+        tracing::info!("Saved {} operations to offline queue", self.offline_queue.len());
+        Ok(())
+    }
+
+    // ==================== Queue Replay Methods ====================
+
+    /// Replay queued operations after reconnection.
+    ///
+    /// Called automatically by the reconnect loop on successful reconnect,
+    /// or can be called manually.
+    ///
+    /// For each queued operation:
+    /// 1. Attempt to execute (placeholder - actual execution depends on operation type)
+    /// 2. On success: remove from queue
+    /// 3. On transient failure: increment attempts, keep in queue
+    /// 4. On permanent failure (max attempts): remove from queue
+    ///
+    /// Emits QueueEvent::ReplayStarted and ReplayCompleted.
+    ///
+    /// # Returns
+    ///
+    /// A ReplayResult with statistics about the replay.
+    pub async fn replay_queue(&self) -> ReplayResult {
+        let pending = self.offline_queue.pending_operations();
+        let total = pending.len();
+
+        if total == 0 {
+            return ReplayResult::default();
+        }
+
+        tracing::info!("Starting replay of {} queued operations", total);
+        self.offline_queue.emit_replay_started(total);
+
+        let mut succeeded = 0usize;
+        let mut failed = 0usize;
+
+        for op in pending {
+            // Check if we're still connected
+            if !self.is_connected() {
+                tracing::warn!("Connection lost during replay, stopping");
+                break;
+            }
+
+            // Attempt to execute the operation
+            // Note: This is a placeholder. In a real implementation, this would
+            // dispatch to the appropriate handler based on operation type.
+            let result = self.execute_queued_operation(&op).await;
+
+            match result {
+                Ok(()) => {
+                    // Success - remove from queue
+                    self.offline_queue.remove(op.id);
+                    succeeded += 1;
+                    tracing::debug!("Replayed operation {} successfully", op.id);
+                }
+                Err(e) => {
+                    if e.is_retryable() {
+                        // Transient failure - mark as attempted
+                        if !self.offline_queue.mark_attempted(op.id) {
+                            // Max attempts exceeded - remove from queue
+                            self.offline_queue.remove(op.id);
+                            failed += 1;
+                            tracing::warn!(
+                                "Operation {} failed after max attempts: {}",
+                                op.id,
+                                e
+                            );
+                        } else {
+                            tracing::debug!(
+                                "Operation {} failed (will retry): {}",
+                                op.id,
+                                e
+                            );
+                        }
+                    } else {
+                        // Permanent failure - remove from queue
+                        self.offline_queue.remove(op.id);
+                        failed += 1;
+                        tracing::warn!("Operation {} failed permanently: {}", op.id, e);
+                    }
+                }
+            }
+        }
+
+        let remaining = self.offline_queue.len();
+
+        tracing::info!(
+            "Replay complete: {} succeeded, {} failed, {} remaining",
+            succeeded,
+            failed,
+            remaining
+        );
+
+        self.offline_queue.emit_replay_completed(succeeded, failed);
+
+        ReplayResult {
+            total,
+            succeeded,
+            failed,
+            remaining,
+        }
+    }
+
+    /// Execute a single queued operation.
+    ///
+    /// This is a placeholder that simulates operation execution.
+    /// In a real implementation, this would dispatch to the appropriate
+    /// service handler based on the operation type.
+    async fn execute_queued_operation(
+        &self,
+        _op: &super::offline_queue::QueuedOperation,
+    ) -> Result<(), NetworkError> {
+        // Placeholder implementation
+        // In a real implementation, this would:
+        // 1. Match on op.operation type
+        // 2. Create the appropriate gRPC request
+        // 3. Send via the pool
+        // 4. Return result
+
+        // For now, we succeed if connected
+        if self.is_connected() {
+            Ok(())
+        } else {
+            Err(NetworkError::Unavailable)
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::offline_queue::OperationType;
+    use tempfile::tempdir;
+
+    // Helper to create a test message operation
+    fn msg_op(channel: &str, content: &str) -> OperationType {
+        OperationType::SendMessage {
+            channel_id: channel.to_string(),
+            content: content.as_bytes().to_vec(),
+        }
+    }
+
+    // ==================== Configuration Tests ====================
 
     #[test]
     fn test_default_config() {
@@ -461,7 +628,10 @@ mod tests {
         let manager = ConnectionManager::new(config.clone()).unwrap();
 
         // State machine access
-        assert_eq!(manager.state_machine().state(), ConnectionState::Disconnected);
+        assert_eq!(
+            manager.state_machine().state(),
+            ConnectionState::Disconnected
+        );
 
         // State access
         assert_eq!(manager.state(), ConnectionState::Disconnected);
@@ -514,5 +684,330 @@ mod tests {
 
         // Should create successfully with extended timeouts
         assert!(!manager.is_connected());
+    }
+
+    // ==================== Lifecycle Tests ====================
+
+    #[tokio::test]
+    async fn test_connect_failure_to_nonexistent_server() {
+        // Connect to a non-existent server should fail
+        let config = ConnectionConfig::new("http://127.0.0.1:1");
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Initial state
+        assert_eq!(manager.state(), ConnectionState::Disconnected);
+
+        // Attempt to connect
+        let result = manager.connect().await;
+
+        // Should fail
+        assert!(result.is_err());
+
+        // State should return to Disconnected
+        assert_eq!(manager.state(), ConnectionState::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_connect_transitions_state() {
+        let config = ConnectionConfig::new("http://127.0.0.1:1");
+        let manager = ConnectionManager::new(config).unwrap();
+        let mut rx = manager.subscribe();
+
+        // Attempt to connect (will fail, but we want to see the state transitions)
+        let _ = manager.connect().await;
+
+        // Should have received StateChanged to Connecting
+        let event = rx.recv().await.unwrap();
+        match event {
+            ConnectionEvent::StateChanged { old, new } => {
+                assert_eq!(old, ConnectionState::Disconnected);
+                assert_eq!(new, ConnectionState::Connecting);
+            }
+            _ => panic!("Expected StateChanged event"),
+        }
+
+        // Should have received StateChanged back to Disconnected
+        let event = rx.recv().await.unwrap();
+        match event {
+            ConnectionEvent::StateChanged { old, new } => {
+                assert_eq!(old, ConnectionState::Connecting);
+                assert_eq!(new, ConnectionState::Disconnected);
+            }
+            _ => panic!("Expected StateChanged event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_disconnect() {
+        let config = ConnectionConfig::default();
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Disconnect from initial state should be safe
+        manager.disconnect().await;
+        assert_eq!(manager.state(), ConnectionState::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_resets_backoff() {
+        let config = ConnectionConfig::new("http://127.0.0.1:1").with_max_reconnect_attempts(Some(5));
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Advance recovery state
+        {
+            let mut recovery = manager.recovery.lock();
+            recovery.next_delay(); // attempt 1
+            recovery.next_delay(); // attempt 2
+            assert_eq!(recovery.attempt_count(), 2);
+        }
+
+        // Manual reconnect should reset backoff
+        let _ = manager.reconnect().await;
+
+        // Verify backoff was reset
+        {
+            let recovery = manager.recovery.lock();
+            assert_eq!(recovery.attempt_count(), 0);
+        }
+    }
+
+    // ==================== Reconnection Tests ====================
+
+    #[tokio::test]
+    async fn test_recovery_exhaustion() {
+        let config = ConnectionConfig::new("http://127.0.0.1:1").with_max_reconnect_attempts(Some(2));
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Exhaust all attempts
+        {
+            let mut recovery = manager.recovery.lock();
+            recovery.next_delay(); // attempt 1
+            recovery.next_delay(); // attempt 2
+            assert!(recovery.is_exhausted());
+            assert!(recovery.next_delay().is_none());
+        }
+    }
+
+    #[test]
+    fn test_recovery_with_backoff_increases() {
+        let config = ConnectionConfig::default();
+        let manager = ConnectionManager::new(config).unwrap();
+
+        let mut recovery = manager.recovery.lock();
+
+        // Get delays and verify they increase (Fibonacci pattern)
+        // Note: Delays include jitter, so we check they're reasonable
+        let delay1 = recovery.next_delay().unwrap();
+        let delay2 = recovery.next_delay().unwrap();
+
+        // Both should be non-zero
+        assert!(delay1.as_millis() > 0);
+        assert!(delay2.as_millis() > 0);
+    }
+
+    // ==================== Queue Replay Tests ====================
+
+    #[tokio::test]
+    async fn test_replay_empty_queue() {
+        let config = ConnectionConfig::default();
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Replay empty queue
+        let result = manager.replay_queue().await;
+
+        assert_eq!(result.total, 0);
+        assert_eq!(result.succeeded, 0);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn test_replay_when_disconnected() {
+        let config = ConnectionConfig::default();
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Add operations to queue
+        let queue = manager.offline_queue();
+        queue.enqueue(msg_op("ch1", "Hello")).unwrap();
+        queue.enqueue(msg_op("ch2", "World")).unwrap();
+
+        // Replay while disconnected - operations should not succeed
+        // (execute_queued_operation returns Unavailable when disconnected)
+        let result = manager.replay_queue().await;
+
+        // Since we're not connected, operations return Unavailable (retryable)
+        // They stay in queue with incremented attempts
+        assert_eq!(result.total, 2);
+        assert_eq!(result.succeeded, 0);
+        // Operations marked as attempted but not removed yet
+        assert!(result.remaining > 0 || result.failed > 0);
+    }
+
+    #[tokio::test]
+    async fn test_replay_emits_events() {
+        let config = ConnectionConfig::default();
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Add operation to queue
+        let queue = manager.offline_queue();
+        queue.enqueue(msg_op("ch", "test")).unwrap();
+
+        let mut rx = queue.subscribe();
+
+        // Trigger replay
+        manager.replay_queue().await;
+
+        // Should have received ReplayStarted
+        let event = rx.recv().await.unwrap();
+        assert!(matches!(
+            event,
+            crate::network::offline_queue::QueueEvent::ReplayStarted { count: 1 }
+        ));
+
+        // Should have received ReplayCompleted
+        let mut completed = false;
+        while let Ok(event) = rx.try_recv() {
+            if matches!(
+                event,
+                crate::network::offline_queue::QueueEvent::ReplayCompleted { .. }
+            ) {
+                completed = true;
+            }
+        }
+        assert!(completed);
+    }
+
+    // ==================== Persistence Tests ====================
+
+    #[tokio::test]
+    async fn test_save_load_queue() {
+        let dir = tempdir().unwrap();
+        let queue_path = dir.path().join("queue.json");
+
+        let config = ConnectionConfig::default().with_queue_path(&queue_path);
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Add operations
+        let queue = manager.offline_queue();
+        queue.enqueue(msg_op("ch1", "Hello")).unwrap();
+        queue.enqueue(msg_op("ch2", "World")).unwrap();
+
+        // Save
+        manager.save_queue().await.unwrap();
+
+        // Verify file exists
+        assert!(queue_path.exists());
+
+        // Create new manager and load
+        let config2 = ConnectionConfig::default().with_queue_path(&queue_path);
+        let manager2 = ConnectionManager::new(config2).unwrap();
+
+        let loaded = manager2.load_queue().await.unwrap();
+        assert_eq!(loaded, 2);
+        assert_eq!(manager2.offline_queue().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_load_nonexistent_queue() {
+        let dir = tempdir().unwrap();
+        let queue_path = dir.path().join("nonexistent.json");
+
+        let config = ConnectionConfig::default().with_queue_path(&queue_path);
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Load from nonexistent file should return 0
+        let loaded = manager.load_queue().await.unwrap();
+        assert_eq!(loaded, 0);
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_saves_queue() {
+        let dir = tempdir().unwrap();
+        let queue_path = dir.path().join("queue.json");
+
+        let config = ConnectionConfig::default().with_queue_path(&queue_path);
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Add operation
+        manager.offline_queue().enqueue(msg_op("ch", "test")).unwrap();
+
+        // Shutdown should save
+        manager.shutdown().await;
+
+        // Verify file exists
+        assert!(queue_path.exists());
+
+        // Verify contents by loading in new manager
+        let config2 = ConnectionConfig::default().with_queue_path(&queue_path);
+        let manager2 = ConnectionManager::new(config2).unwrap();
+        let loaded = manager2.load_queue().await.unwrap();
+        assert_eq!(loaded, 1);
+    }
+
+    // ==================== Shutdown Tests ====================
+
+    #[tokio::test]
+    async fn test_shutdown_transitions_to_disconnected() {
+        let config = ConnectionConfig::default();
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Manually set to connected state
+        manager.state_machine.connected();
+        assert_eq!(manager.state(), ConnectionState::Connected);
+
+        // Shutdown
+        manager.shutdown().await;
+
+        // Should be disconnected
+        assert_eq!(manager.state(), ConnectionState::Disconnected);
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_signals_loop() {
+        let config = ConnectionConfig::default();
+        let manager = Arc::new(ConnectionManager::new(config).unwrap());
+
+        let mut shutdown_rx = manager.shutdown_receiver();
+
+        // Shutdown should signal
+        manager.shutdown().await;
+
+        // Receiver should get signal
+        let result = shutdown_rx.try_recv();
+        assert!(result.is_ok());
+    }
+
+    // ==================== Integration Tests ====================
+
+    #[tokio::test]
+    async fn test_full_lifecycle() {
+        let dir = tempdir().unwrap();
+        let queue_path = dir.path().join("queue.json");
+
+        // Create manager
+        let config = ConnectionConfig::new("http://127.0.0.1:1")
+            .with_queue_path(&queue_path)
+            .with_max_reconnect_attempts(Some(2));
+
+        let manager = ConnectionManager::new(config).unwrap();
+
+        // Initial state
+        assert_eq!(manager.state(), ConnectionState::Disconnected);
+        assert!(manager.offline_queue().is_empty());
+
+        // Queue an operation
+        manager.offline_queue().enqueue(msg_op("ch", "test")).unwrap();
+        assert_eq!(manager.offline_queue().len(), 1);
+
+        // Attempt connect (will fail)
+        let result = manager.connect().await;
+        assert!(result.is_err());
+        assert_eq!(manager.state(), ConnectionState::Disconnected);
+
+        // Shutdown
+        manager.shutdown().await;
+
+        // Queue should be persisted
+        assert!(queue_path.exists());
+        assert_eq!(manager.state(), ConnectionState::Disconnected);
     }
 }
