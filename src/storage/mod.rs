@@ -10,6 +10,7 @@ pub mod migrations;
 pub mod repositories;
 
 pub use database::Database;
+pub use key_store::KeyStore;
 pub use repositories::AttachmentRepository;
 pub use repositories::ChannelRepository;
 pub use repositories::DraftRepository;
