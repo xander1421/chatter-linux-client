@@ -74,6 +74,7 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::message_client::MessageClient;
 use crate::network::grpc::user_client::UserClient;
 use crate::network::streaming::message_stream::MessageEventRouter;
+use crate::network::streaming::presence_stream::PresenceRouter;
 
 /// Container for active stream handles.
 #[derive(Default)]
@@ -114,6 +115,9 @@ pub struct StreamManager {
 
     /// Message event router for typed subscriptions.
     message_router: Arc<MessageEventRouter>,
+
+    /// Presence router for presence updates and caching.
+    presence_router: Arc<PresenceRouter>,
 }
 
 impl StreamManager {
@@ -140,12 +144,18 @@ impl StreamManager {
             handles: Mutex::new(StreamHandles::default()),
             shutdown,
             message_router: Arc::new(MessageEventRouter::new()),
+            presence_router: Arc::new(PresenceRouter::new()),
         }
     }
 
     /// Get the message event router for subscribing to events.
     pub fn message_events(&self) -> &MessageEventRouter {
         &self.message_router
+    }
+
+    /// Get the presence router for subscribing to presence updates.
+    pub fn presence(&self) -> &PresenceRouter {
+        &self.presence_router
     }
 
     /// Check if currently streaming.
@@ -302,6 +312,7 @@ impl StreamManager {
         let channel = self.pool.channel();
         let auth = self.pool.auth_clone();
         let mut shutdown_rx = self.shutdown_receiver();
+        let router = Arc::clone(&self.presence_router);
 
         let (shutdown_tx, mut shutdown_oneshot) = oneshot::channel();
 
@@ -331,7 +342,7 @@ impl StreamManager {
                     item = stream.next() => {
                         match item {
                             Some(Ok(update)) => {
-                                Self::handle_presence_update(update);
+                                router.route(update);
                             }
                             Some(Err(e)) => {
                                 tracing::warn!("Presence stream error: {}", e);
@@ -351,15 +362,6 @@ impl StreamManager {
         self.handles.lock().presence = Some(handle);
 
         Ok(())
-    }
-
-    /// Handle a presence update from the stream.
-    fn handle_presence_update(update: crate::proto::chat_v1::PresenceUpdate) {
-        tracing::debug!(
-            "Presence update: user {} -> {:?}",
-            update.user_id,
-            update.presence
-        );
     }
 }
 
