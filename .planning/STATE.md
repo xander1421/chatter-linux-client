@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 22 complete — Network Validation (deduplicator, validator, orderer, pipeline)
+**Current focus:** Phase 23 in progress — Inbox Provider & Poller (DeviceInboxProvider, InboxPoller)
 
 ## Current Position
 
-Phase: 22 of 66 (Network Validation)
-Plan: 2 of 2 in current phase
+Phase: 23 of 66 (Inbox Provider & Poller)
+Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-03 — Completed 22-02-PLAN.md
+Last activity: 2026-02-03 — Completed 23-01-PLAN.md
 
-Progress: ██████████████████████████████████████████████████████████░░░░░░░░░░░░░░ 60.6%
+Progress: ██████████████████████████████████████████████████████████░░░░░░░░░░░░░░ 61.3%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 37
+- Total plans completed: 38
 - Average duration: ~4.1 min
-- Total execution time: ~151 min
+- Total execution time: ~155 min
 
 **By Phase:**
 
@@ -49,9 +49,10 @@ Progress: ███████████████████████�
 | 20 | 4 | ~11m | ~3m |
 | 21 | 3 | ~12m | ~4m |
 | 22 | 2 | ~9m | ~4.5m |
+| 23 | 1 | ~4m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 21-2 (~4m), 21-3 (~5m), 22-1 (~4m), 22-2 (~5m)
+- Last 5 plans: 21-3 (~5m), 22-1 (~4m), 22-2 (~5m), 23-1 (~4m)
 - Trend: Consistent ~3-5m per plan
 
 ## Accumulated Context
@@ -124,6 +125,9 @@ Recent decisions affecting current work:
 - ReadReceiptAggregator uses high-water mark (only update if newer timestamp)
 - FIFO eviction over LRU for BoundedHashSet (simpler, sufficient for 'recently seen')
 - Empty author_id allowed in validation (sealed sender per Signal protocol)
+- Inbox event channel capacity 64 for message lifecycle monitoring
+- Adaptive polling: 5s active, 30s idle, 2-min activity threshold
+- Ed25519 challenge-response for mailbox authentication
 
 ### Deferred Issues
 
@@ -136,6 +140,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 22-02-PLAN.md (MessageOrderer & Pipeline)
+Stopped at: Completed 23-01-PLAN.md (DeviceInboxProvider & InboxPoller)
 Resume file: None
-Next action: Proceed to Phase 23 (Inbox Provider & Poller)
+Next action: Proceed to Phase 24 (Inbox Message Handlers)
