@@ -33,7 +33,7 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 10: Crypto Signal Store** - SignalProtocolStore trait implementation
 - [x] **Phase 11: Crypto Identity & Sessions** - Identity keys, session management
 - [x] **Phase 12: Crypto Prekeys** - PreKey bundles, signed prekeys, OTPKs
-- [ ] **Phase 13: Crypto Sender Keys** - Group sender key distribution
+- [x] **Phase 13: Crypto Sender Keys** - Group sender key distribution
 - [ ] **Phase 14: Crypto Sealed Sender** - Anonymous messaging, certificates
 - [ ] **Phase 15: Crypto Attachments** - File encryption/decryption
 
@@ -537,7 +537,7 @@ None (custom application, no pre-existing domain skills)
 | 10 | Crypto Signal Store | 1 | Done | 2026-02-03 |
 | 11 | Crypto Identity & Sessions | 1 | Done | 2026-02-03 |
 | 12 | Crypto Prekeys | 1 | Done | 2026-02-03 |
-| 13 | Crypto Sender Keys | TBD | Not started | - |
+| 13 | Crypto Sender Keys | 1 | Done | 2026-02-03 |
 | 14 | Crypto Sealed Sender | TBD | Not started | - |
 | 15 | Crypto Attachments | TBD | Not started | - |
 | 16 | Network gRPC Foundation | TBD | Not started | - |
