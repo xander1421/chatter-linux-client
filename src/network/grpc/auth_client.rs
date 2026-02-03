@@ -537,6 +537,58 @@ impl AuthClient {
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
+
+    // ==================== Sealed Sender Certificate RPCs ====================
+
+    /// Request a new sender certificate.
+    ///
+    /// Certificate is signed by server and used for sealed sender.
+    /// Valid for up to 30 days (default 7 days). Cache and refresh before expiration.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - Device ID for certificate
+    /// * `validity_duration` - Optional custom validity period
+    pub async fn request_sender_certificate(
+        &mut self,
+        device_id: u32,
+        validity_duration: Option<std::time::Duration>,
+    ) -> Result<RequestSenderCertificateResponse, NetworkError> {
+        let request = RequestSenderCertificateRequest {
+            device_id,
+            validity_period: validity_duration.map(|d| prost_types::Duration {
+                seconds: d.as_secs() as i64,
+                nanos: d.subsec_nanos() as i32,
+            }),
+        };
+
+        self.inner
+            .request_sender_certificate(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Get cached sender certificate if still valid.
+    ///
+    /// Returns certificate with `exists` and `expired` status flags.
+    /// If expired or not exists, request a new certificate.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - Device ID to get certificate for
+    pub async fn get_sender_certificate(
+        &mut self,
+        device_id: u32,
+    ) -> Result<GetSenderCertificateResponse, NetworkError> {
+        let request = GetSenderCertificateRequest { device_id };
+
+        self.inner
+            .get_sender_certificate(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
 }
 
 #[cfg(test)]
