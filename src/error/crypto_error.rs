@@ -52,4 +52,20 @@ pub enum CryptoError {
     /// Fingerprint generation failed.
     #[error("fingerprint generation failed: {0}")]
     FingerprintFailed(String),
+
+    /// Invalid or malformed sealed sender message.
+    #[error("invalid sealed sender message: {0}")]
+    InvalidSealedSenderMessage(String),
+
+    /// Attempted to decrypt own sealed sender message.
+    #[error("cannot decrypt sealed sender message from self")]
+    SealedSenderSelfSend,
+
+    /// Sender certificate validation failed.
+    #[error("invalid sender certificate: {0}")]
+    InvalidSenderCertificate(String),
+
+    /// Server certificate ID not recognized.
+    #[error("unknown server certificate: {0}")]
+    UnknownServerCertificate(u32),
 }
