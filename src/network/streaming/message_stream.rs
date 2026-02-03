@@ -73,6 +73,41 @@ impl MessageEventRouter {
             typing_indicator: broadcast::channel(CHANNEL_CAPACITY).0,
         }
     }
+
+    /// Subscribe to new message events.
+    pub fn on_message_sent(&self) -> broadcast::Receiver<Message> {
+        self.message_sent.subscribe()
+    }
+
+    /// Subscribe to message update events.
+    pub fn on_message_updated(&self) -> broadcast::Receiver<Message> {
+        self.message_updated.subscribe()
+    }
+
+    /// Subscribe to message deletion events.
+    pub fn on_message_deleted(&self) -> broadcast::Receiver<MessageDeleted> {
+        self.message_deleted.subscribe()
+    }
+
+    /// Subscribe to reaction added events.
+    pub fn on_reaction_added(&self) -> broadcast::Receiver<ReactionUpdate> {
+        self.reaction_added.subscribe()
+    }
+
+    /// Subscribe to reaction removed events.
+    pub fn on_reaction_removed(&self) -> broadcast::Receiver<ReactionUpdate> {
+        self.reaction_removed.subscribe()
+    }
+
+    /// Subscribe to read receipt events.
+    pub fn on_read_receipt(&self) -> broadcast::Receiver<ReadReceipt> {
+        self.read_receipt.subscribe()
+    }
+
+    /// Subscribe to typing indicator events.
+    pub fn on_typing_indicator(&self) -> broadcast::Receiver<TypingIndicator> {
+        self.typing_indicator.subscribe()
+    }
 }
 
 impl Default for MessageEventRouter {
