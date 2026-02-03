@@ -628,4 +628,71 @@ mod tests {
         assert!(!id.is_empty());
         assert!(id.len() == 36); // UUID v4 string format
     }
+
+    #[test]
+    fn test_prekey_types_available() {
+        // Verify Signal Protocol prekey types are accessible and constructible
+        use crate::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+
+        let signed = SignedPreKeyRecord {
+            id: 1,
+            public_key: vec![0u8; 32],
+            signature: vec![0u8; 64],
+            timestamp: 1234567890,
+        };
+        assert_eq!(signed.id, 1);
+        assert_eq!(signed.public_key.len(), 32);
+        assert_eq!(signed.signature.len(), 64);
+
+        let otp = PreKeyRecord {
+            id: 100,
+            public_key: vec![0u8; 32],
+        };
+        assert_eq!(otp.id, 100);
+        assert_eq!(otp.public_key.len(), 32);
+    }
+
+    #[test]
+    fn test_signal_prekey_bundle_construction() {
+        // Verify full SignalPreKeyBundle can be constructed
+        use crate::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+
+        let bundle = SignalPreKeyBundle {
+            identity_key: vec![0u8; 32],
+            registration_id: 12345,
+            device_id: 1,
+            signed_prekey: Some(SignedPreKeyRecord {
+                id: 1,
+                public_key: vec![0u8; 32],
+                signature: vec![0u8; 64],
+                timestamp: 1234567890,
+            }),
+            one_time_prekey: Some(PreKeyRecord {
+                id: 100,
+                public_key: vec![0u8; 32],
+            }),
+            kyber_prekey: None,
+            unidentified_access_key: Some(vec![0u8; 16]),
+            unrestricted_unidentified_access: Some(false),
+        };
+
+        assert_eq!(bundle.registration_id, 12345);
+        assert_eq!(bundle.device_id, 1);
+        assert!(bundle.signed_prekey.is_some());
+        assert!(bundle.one_time_prekey.is_some());
+    }
+
+    #[test]
+    fn test_prekey_stats_response_fields() {
+        // Verify GetPreKeyStatsResponse fields are accessible
+        let stats = GetPreKeyStatsResponse {
+            available_count: 95,
+            should_refill: false,
+            device_id: 1,
+        };
+
+        assert_eq!(stats.available_count, 95);
+        assert!(!stats.should_refill);
+        assert_eq!(stats.device_id, 1);
+    }
 }
