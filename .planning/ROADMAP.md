@@ -542,7 +542,7 @@ None (custom application, no pre-existing domain skills)
 | 15 | Crypto Attachments | 1 | Done | 2026-02-03 |
 | 16 | Network gRPC Foundation | 2 | Done | 2026-02-03 |
 | 17 | Network Auth & User Clients | 3 | Done | 2026-02-03 |
-| 18 | Network Channel & Message Clients | TBD | Not started | - |
+| 18 | Network Channel & Message Clients | 2 | In progress (1/2) | - |
 | 19 | Network Supporting Clients | TBD | Not started | - |
 | 20 | Network Streaming | TBD | Not started | - |
 | 21 | Network Resilience | TBD | Not started | - |
