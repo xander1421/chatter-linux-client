@@ -534,7 +534,7 @@ None (custom application, no pre-existing domain skills)
 | 7 | Storage Supporting Repositories | 4 | Done | 2026-02-03 |
 | 8 | Storage Search Index | 1 | Done | 2026-02-03 |
 | 9 | Storage Key Store | 1 | Done | 2026-02-03 |
-| 10 | Crypto Signal Store | TBD | Not started | - |
+| 10 | Crypto Signal Store | 1 | Done | 2026-02-03 |
 | 11 | Crypto Identity & Sessions | TBD | Not started | - |
 | 12 | Crypto Prekeys | TBD | Not started | - |
 | 13 | Crypto Sender Keys | TBD | Not started | - |
