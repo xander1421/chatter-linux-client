@@ -11,8 +11,9 @@ use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     auth_event, auth_service_client::AuthServiceClient, AuthEvent, AuthResponse,
-    CheckUsernameRequest, CheckUsernameResponse, LoginRequest, LogoutRequest, RegisterRequest,
-    ResendVerificationEmailRequest, Session, VerifyEmailRequest,
+    ChangePasswordRequest, CheckUsernameRequest, CheckUsernameResponse,
+    CompletePasswordResetRequest, LoginRequest, LogoutRequest, RegisterRequest,
+    RequestPasswordResetRequest, ResendVerificationEmailRequest, Session, VerifyEmailRequest,
 };
 
 /// Auth service client wrapper.
@@ -231,5 +232,72 @@ impl AuthClient {
         Err(NetworkError::Unknown(
             "registration stream ended without result".to_string(),
         ))
+    }
+
+    /// Change password for authenticated user.
+    pub async fn change_password(
+        &mut self,
+        current_password_hash: &[u8],
+        new_password_hash: &[u8],
+    ) -> Result<(), NetworkError> {
+        let request = ChangePasswordRequest {
+            current_password_hash: current_password_hash.to_vec(),
+            new_password_hash: new_password_hash.to_vec(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .change_password(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Request password reset email.
+    ///
+    /// # Arguments
+    ///
+    /// * `username_or_email` - Username or email to identify account
+    pub async fn initiate_password_reset(
+        &mut self,
+        username_or_email: &str,
+    ) -> Result<(), NetworkError> {
+        let request = RequestPasswordResetRequest {
+            username_or_email: username_or_email.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .initiate_password_reset(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Complete password reset with token.
+    ///
+    /// # Arguments
+    ///
+    /// * `reset_token` - Reset token from email
+    /// * `new_password_hash` - New password hash
+    /// * `new_public_key` - Optional new Ed25519 public key for key rotation
+    pub async fn complete_password_reset(
+        &mut self,
+        reset_token: &str,
+        new_password_hash: &[u8],
+        new_public_key: Option<&[u8]>,
+    ) -> Result<AuthResponse, NetworkError> {
+        let request = CompletePasswordResetRequest {
+            reset_token: reset_token.to_string(),
+            new_password_hash: new_password_hash.to_vec(),
+            new_public_key: new_public_key.map(|k| k.to_vec()).unwrap_or_default(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .complete_password_reset(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
     }
 }
