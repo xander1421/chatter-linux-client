@@ -281,6 +281,7 @@ fn timestamp_to_datetime(timestamp_ms: u64) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
     use libsignal_protocol::{DeviceId, ProtocolAddress};
     use tokio::sync::broadcast;
     use crate::proto::mailbox_v1::EnvelopeType;
