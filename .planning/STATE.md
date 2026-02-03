@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 5 — Storage Database Setup — IN PROGRESS
+**Current focus:** Phase 5 — Storage Database Setup — COMPLETE
 
 ## Current Position
 
-Phase: 5 of 66 (Storage Database Setup)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-03 — Completed 05-01-PLAN.md
+Phase: 5 of 66 (Storage Database Setup) — COMPLETE
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-03 — Completed 05-02-PLAN.md
 
-Progress: [xxxxxxxx]░░ 12.1%
+Progress: [xxxxxxxxx]░ 13.6%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 8
+- Total plans completed: 9
 - Average duration: ~5 min
-- Total execution time: ~52 min
+- Total execution time: ~54 min
 
 **By Phase:**
 
@@ -31,10 +31,10 @@ Progress: [xxxxxxxx]░░ 12.1%
 | 2 | 2 | ~10m | ~5m |
 | 3 | 2 | ~12m | ~6m |
 | 4 | 2 | ~10m | ~5m |
-| 5 | 1/2 | ~2m | ~2m |
+| 5 | 2 | ~4m | ~2m |
 
 **Recent Trend:**
-- Last 5 plans: 3-2 (~10m), 4-1 (~4m), 4-2 (~6m), 5-1 (~2m)
+- Last 5 plans: 4-1 (~4m), 4-2 (~6m), 5-1 (~2m), 5-2 (~2m)
 - Trend: Storage setup fast with established patterns
 
 ## Accumulated Context
@@ -72,6 +72,8 @@ Recent decisions affecting current work:
 - Single Mutex<Connection> for v1 (can upgrade to pool later)
 - cipher_compatibility=4 for SQLCipher 4.x mode
 - Verify encryption key on open via cipher_version query
+- schema_version managed by MigrationRunner, not individual migrations
+- Migrations sorted by version, each in own transaction
 
 ### Deferred Issues
 
@@ -84,5 +86,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 05-01-PLAN.md
-Resume file: None (ready for 05-02-PLAN.md)
+Stopped at: Phase 5 complete
+Resume file: None (ready for Phase 6)

@@ -23,7 +23,7 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 4: Domain Privacy Entities** - Draft, Ephemeral, SavedMessage, Mention, Embed
 
 ### Storage Layer
-- [ ] **Phase 5: Storage Database Setup** - SQLCipher connection, migrations infrastructure
+- [x] **Phase 5: Storage Database Setup** - SQLCipher connection, migrations infrastructure
 - [ ] **Phase 6: Storage Core Repositories** - UserRepo, MessageRepo, ChannelRepo
 - [ ] **Phase 7: Storage Supporting Repositories** - AttachmentRepo, ReactionRepo, DraftRepo, SettingsRepo
 - [ ] **Phase 8: Storage Search Index** - FTS5 full-text search
@@ -132,7 +132,7 @@ None (custom application, no pre-existing domain skills)
 **Goal**: SQLCipher database connection pool and migration infrastructure
 **Depends on**: Phase 4
 **Research**: Unlikely (rusqlite/SQLCipher documented)
-**Plans**: 1/2 complete
+**Plans**: 2/2 complete ✓
 
 ### Phase 6: Storage Core Repositories
 **Goal**: UserRepo, MessageRepo, ChannelRepo with CRUD operations
@@ -529,7 +529,7 @@ None (custom application, no pre-existing domain skills)
 | 2 | Domain Core Entities | 2 | Done | 2026-02-03 |
 | 3 | Domain Supporting Entities | 2 | Done | 2026-02-03 |
 | 4 | Domain Privacy Entities | 2 | Done | 2026-02-03 |
-| 5 | Storage Database Setup | TBD | Not started | - |
+| 5 | Storage Database Setup | 2 | Done | 2026-02-03 |
 | 6 | Storage Core Repositories | TBD | Not started | - |
 | 7 | Storage Supporting Repositories | TBD | Not started | - |
 | 8 | Storage Search Index | TBD | Not started | - |
