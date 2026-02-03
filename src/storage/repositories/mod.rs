@@ -14,6 +14,7 @@ pub mod user_repo;
 
 pub use attachment_repo::AttachmentRepository;
 pub use channel_repo::ChannelRepository;
+pub use draft_repo::DraftRepository;
 pub use message_repo::MessageRepository;
 pub use reaction_repo::ReactionRepository;
 pub use user_repo::UserRepository;
