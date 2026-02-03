@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 7 in progress — Executing plans
+**Current focus:** Phase 12 complete — Ready for Phase 13
 
 ## Current Position
 
-Phase: 11 of 66 (Crypto Identity & Sessions)
+Phase: 12 of 66 (Crypto Prekeys)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-03 — Completed 11-01-PLAN.md
+Last activity: 2026-02-03 — Completed 12-01-PLAN.md
 
-Progress: █████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 27.3%
+Progress: ███████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 28.8%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 18
+- Total plans completed: 19
 - Average duration: ~4 min
-- Total execution time: ~77 min
+- Total execution time: ~80 min
 
 **By Phase:**
 
@@ -38,9 +38,10 @@ Progress: ███████████████████████�
 | 9 | 1 | ~2m | ~2m |
 | 10 | 1 | ~4m | ~4m |
 | 11 | 1 | ~4m | ~4m |
+| 12 | 1 | ~3m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 8-1 (~3m), 9-1 (~2m), 10-1 (~4m), 11-1 (~4m)
+- Last 5 plans: 9-1 (~2m), 10-1 (~4m), 11-1 (~4m), 12-1 (~3m)
 - Trend: Crypto layer patterns consistent
 
 ## Accumulated Context
@@ -94,6 +95,9 @@ Recent decisions affecting current work:
 - Toggle pattern for add/remove operations
 - COALESCE in unique index for NULL handling (drafts)
 - Upsert instead of separate insert/update for key-based entities
+- Kyber1024 for PQXDH post-quantum prekeys
+- DeviceId uses TryFrom (NonZeroU8 range 1-127)
+- Optional one-time prekey in PreKeyBundle (fallback support)
 
 ### Deferred Issues
 
@@ -106,6 +110,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 11-01-PLAN.md
+Stopped at: Completed 12-01-PLAN.md
 Resume file: None
-Next action: Plan Phase 12 (Crypto Prekeys)
+Next action: Plan Phase 13 (Crypto Sender Keys)
