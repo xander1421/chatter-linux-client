@@ -13,4 +13,5 @@ pub use database::Database;
 pub use repositories::AttachmentRepository;
 pub use repositories::ChannelRepository;
 pub use repositories::MessageRepository;
+pub use repositories::ReactionRepository;
 pub use repositories::UserRepository;
