@@ -43,3 +43,4 @@ pub use notification::{
 pub use call::{Call, CallEndReason, CallState, CallType, Participant, VerificationBadge};
 pub use moderation::{Ban, ModerationAction, ModerationLogEntry, Mute};
 pub use draft::{Draft, DraftKey};
+pub use ephemeral::{EphemeralMessage, EphemeralState, MessageTTL};
