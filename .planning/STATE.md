@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 16 complete — Network gRPC foundation done, ready for service clients
+**Current focus:** Phase 17 in planning — AuthClient and UserClient wrappers
 
 ## Current Position
 
-Phase: 16 of 66 (Network gRPC Foundation)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 16-02-PLAN.md
+Phase: 17 of 66 (Network Auth & User Clients)
+Plan: 0 of 3 in current phase (plans created)
+Status: Planning complete, ready for execution
+Last activity: 2026-02-03 — Created 17-01, 17-02, 17-03 PLANs
 
 Progress: █████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 36.4%
 
@@ -120,6 +120,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 16-02-PLAN.md (Phase 16 complete)
+Stopped at: Created Phase 17 plans
 Resume file: None
-Next action: Start Phase 17 (Network Auth & User Clients)
+Next action: Execute 17-01-PLAN.md (AuthClient core)
