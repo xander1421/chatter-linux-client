@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 2 of 66 (Domain Core Entities) — COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 02-02-PLAN.md
+Phase: 3 of 66 (Domain Supporting Entities) — IN PROGRESS
+Plan: 1 of 2 in current phase
+Status: Plan 01 complete
+Last activity: 2026-02-03 — Completed 03-01-PLAN.md
 
-Progress: [xxx]░░░░░░░ 4.5%
+Progress: [xxxx]░░░░░░ 6%
 
 ## Performance Metrics
 
@@ -53,6 +53,9 @@ Recent decisions affecting current work:
 - ChannelType uses simple enum (no Unspecified variant)
 - Permissions uses factory methods for role mapping
 - FileCategory.from_mime_type uses liberal contains() checks
+- Emoji custom format uses :name: pattern
+- NotificationType uses struct variants for rich data
+- is_actionable limited to FriendRequest, ChannelInvite, Incoming calls
 
 ### Deferred Issues
 
@@ -65,5 +68,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Phase 2 complete (domain core entities)
-Resume file: None
+Stopped at: Completed 03-01-PLAN.md
+Resume file: .planning/phases/03-domain-supporting-entities/03-02-PLAN.md
