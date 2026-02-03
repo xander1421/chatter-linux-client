@@ -25,7 +25,7 @@ None (custom application, no pre-existing domain skills)
 ### Storage Layer
 - [x] **Phase 5: Storage Database Setup** - SQLCipher connection, migrations infrastructure
 - [x] **Phase 6: Storage Core Repositories** - UserRepo, MessageRepo, ChannelRepo
-- [ ] **Phase 7: Storage Supporting Repositories** - AttachmentRepo, ReactionRepo, DraftRepo, SettingsRepo
+- [x] **Phase 7: Storage Supporting Repositories** - AttachmentRepo, ReactionRepo, DraftRepo, SettingsRepo
 - [ ] **Phase 8: Storage Search Index** - FTS5 full-text search
 - [ ] **Phase 9: Storage Key Store** - Signal protocol key storage
 
@@ -531,7 +531,7 @@ None (custom application, no pre-existing domain skills)
 | 4 | Domain Privacy Entities | 2 | Done | 2026-02-03 |
 | 5 | Storage Database Setup | 2 | Done | 2026-02-03 |
 | 6 | Storage Core Repositories | 3 | Done | 2026-02-03 |
-| 7 | Storage Supporting Repositories | 4 | In progress (3/4) | - |
+| 7 | Storage Supporting Repositories | 4 | Done | 2026-02-03 |
 | 8 | Storage Search Index | TBD | Not started | - |
 | 9 | Storage Key Store | TBD | Not started | - |
 | 10 | Crypto Signal Store | TBD | Not started | - |
