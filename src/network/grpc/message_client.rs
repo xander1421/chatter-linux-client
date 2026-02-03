@@ -222,4 +222,240 @@ impl MessageClient {
             .into_inner()
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
+
+    // ==================== Sealed Sender RPCs ====================
+
+    /// Send a sealed sender message (anonymous to server).
+    ///
+    /// This endpoint uses UAK (Unidentified Access Key) authentication
+    /// instead of regular auth, hiding sender identity from the server.
+    ///
+    /// # Arguments
+    ///
+    /// * `destination_user_id` - Recipient user ID
+    /// * `destination_device_id` - Recipient device ID (0 for all devices)
+    /// * `sealed_message` - The sealed sender envelope
+    pub async fn send_sealed_message(
+        &mut self,
+        destination_user_id: &str,
+        destination_device_id: u32,
+        sealed_message: SealedSenderMessage,
+    ) -> Result<SendSealedMessageResponse, NetworkError> {
+        let request = SendSealedMessageRequest {
+            destination_user_id: destination_user_id.to_string(),
+            destination_device_id,
+            sealed_message: Some(sealed_message),
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .send_sealed_message(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Device Message Queue RPCs ====================
+
+    /// Get queued messages for the authenticated device (Signal-style inbox).
+    ///
+    /// # Arguments
+    ///
+    /// * `after_id` - Pagination: fetch messages with queue_id > after_id (0 for start)
+    /// * `limit` - Maximum messages to return (default 100, max 1000)
+    pub async fn get_device_messages(
+        &mut self,
+        after_id: i64,
+        limit: i32,
+    ) -> Result<GetDeviceMessagesResponse, NetworkError> {
+        let request = GetDeviceMessagesRequest { after_id, limit };
+
+        self.inner
+            .get_device_messages(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Acknowledge receipt of messages (deletes from queue).
+    ///
+    /// # Arguments
+    ///
+    /// * `message_guids` - List of message GUIDs to acknowledge
+    pub async fn acknowledge_messages(
+        &mut self,
+        message_guids: Vec<String>,
+    ) -> Result<AcknowledgeMessagesResponse, NetworkError> {
+        let request = AcknowledgeMessagesRequest { message_guids };
+
+        self.inner
+            .acknowledge_messages(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Reaction RPCs ====================
+
+    /// Add a reaction to a message.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_id` - Message to react to
+    /// * `channel_id` - Channel containing the message
+    /// * `emoji` - Emoji reaction (Unicode or custom format)
+    pub async fn add_reaction(
+        &mut self,
+        message_id: &str,
+        channel_id: &str,
+        emoji: &str,
+    ) -> Result<Message, NetworkError> {
+        let request = ReactionRequest {
+            message_id: message_id.to_string(),
+            channel_id: channel_id.to_string(),
+            emoji: emoji.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .add_reaction(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Remove a reaction from a message.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_id` - Message to remove reaction from
+    /// * `channel_id` - Channel containing the message
+    /// * `emoji` - Emoji reaction to remove
+    pub async fn remove_reaction(
+        &mut self,
+        message_id: &str,
+        channel_id: &str,
+        emoji: &str,
+    ) -> Result<Message, NetworkError> {
+        let request = ReactionRequest {
+            message_id: message_id.to_string(),
+            channel_id: channel_id.to_string(),
+            emoji: emoji.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .remove_reaction(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Get reactions for a message.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_id` - Message to get reactions for
+    /// * `channel_id` - Channel containing the message
+    /// * `limit` - Max reactions to return
+    /// * `offset` - Pagination offset
+    /// * `emoji_filter` - Optional filter by specific emoji
+    pub async fn get_message_reactions(
+        &mut self,
+        message_id: &str,
+        channel_id: &str,
+        limit: i32,
+        offset: i32,
+        emoji_filter: Option<&str>,
+    ) -> Result<GetMessageReactionsResponse, NetworkError> {
+        let request = GetMessageReactionsRequest {
+            message_id: message_id.to_string(),
+            channel_id: channel_id.to_string(),
+            limit,
+            offset,
+            emoji_filter: emoji_filter.unwrap_or("").to_string(),
+        };
+
+        self.inner
+            .get_message_reactions(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Read Receipts & Typing ====================
+
+    /// Send a read receipt for a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel being read
+    /// * `last_read_message_id` - ID of the last message read
+    pub async fn send_read_receipt(
+        &mut self,
+        channel_id: &str,
+        last_read_message_id: &str,
+    ) -> Result<(), NetworkError> {
+        let request = SendReadReceiptRequest {
+            channel_id: channel_id.to_string(),
+            last_read_message_id: last_read_message_id.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .send_read_receipt(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Get read receipts for a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel to get receipts for
+    /// * `thread_root_id` - Optional thread filter
+    /// * `limit` - Max receipts to return
+    pub async fn get_read_receipts(
+        &mut self,
+        channel_id: &str,
+        thread_root_id: Option<&str>,
+        limit: i32,
+    ) -> Result<GetReadReceiptsResponse, NetworkError> {
+        let request = GetReadReceiptsRequest {
+            channel_id: channel_id.to_string(),
+            thread_root_id: thread_root_id.unwrap_or("").to_string(),
+            limit,
+        };
+
+        self.inner
+            .get_read_receipts(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Send a typing indicator.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel where user is typing
+    /// * `is_typing` - True if user is typing, false if stopped
+    pub async fn send_typing_indicator(
+        &mut self,
+        channel_id: &str,
+        is_typing: bool,
+    ) -> Result<(), NetworkError> {
+        let request = SendTypingIndicatorRequest {
+            channel_id: channel_id.to_string(),
+            is_typing,
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .send_typing_indicator(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
 }
