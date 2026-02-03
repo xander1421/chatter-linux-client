@@ -30,8 +30,8 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 9: Storage Key Store** - Signal protocol key storage
 
 ### Crypto Layer
-- [ ] **Phase 10: Crypto Signal Store** - SignalProtocolStore trait implementation
-- [ ] **Phase 11: Crypto Identity & Sessions** - Identity keys, session management
+- [x] **Phase 10: Crypto Signal Store** - SignalProtocolStore trait implementation
+- [x] **Phase 11: Crypto Identity & Sessions** - Identity keys, session management
 - [ ] **Phase 12: Crypto Prekeys** - PreKey bundles, signed prekeys, OTPKs
 - [ ] **Phase 13: Crypto Sender Keys** - Group sender key distribution
 - [ ] **Phase 14: Crypto Sealed Sender** - Anonymous messaging, certificates
@@ -535,7 +535,7 @@ None (custom application, no pre-existing domain skills)
 | 8 | Storage Search Index | 1 | Done | 2026-02-03 |
 | 9 | Storage Key Store | 1 | Done | 2026-02-03 |
 | 10 | Crypto Signal Store | 1 | Done | 2026-02-03 |
-| 11 | Crypto Identity & Sessions | TBD | Not started | - |
+| 11 | Crypto Identity & Sessions | 1 | Done | 2026-02-03 |
 | 12 | Crypto Prekeys | TBD | Not started | - |
 | 13 | Crypto Sender Keys | TBD | Not started | - |
 | 14 | Crypto Sealed Sender | TBD | Not started | - |
