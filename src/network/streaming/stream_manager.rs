@@ -73,7 +73,7 @@ use crate::network::connection::ConnectionStateMachine;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::message_client::MessageClient;
 use crate::network::grpc::user_client::UserClient;
-use crate::proto::chat_v1::message_event::Event as MessageEventType;
+use crate::network::streaming::message_stream::MessageEventRouter;
 
 /// Container for active stream handles.
 #[derive(Default)]
@@ -111,6 +111,9 @@ pub struct StreamManager {
 
     /// Broadcast channel for shutting down all streams.
     shutdown: broadcast::Sender<()>,
+
+    /// Message event router for typed subscriptions.
+    message_router: Arc<MessageEventRouter>,
 }
 
 impl StreamManager {
@@ -136,7 +139,13 @@ impl StreamManager {
             config,
             handles: Mutex::new(StreamHandles::default()),
             shutdown,
+            message_router: Arc::new(MessageEventRouter::new()),
         }
+    }
+
+    /// Get the message event router for subscribing to events.
+    pub fn message_events(&self) -> &MessageEventRouter {
+        &self.message_router
     }
 
     /// Check if currently streaming.
@@ -229,6 +238,7 @@ impl StreamManager {
         let channel = self.pool.channel();
         let auth = self.pool.auth_clone();
         let mut shutdown_rx = self.shutdown_receiver();
+        let router = Arc::clone(&self.message_router);
 
         let (shutdown_tx, mut shutdown_oneshot) = oneshot::channel();
 
@@ -262,7 +272,7 @@ impl StreamManager {
                     item = stream.next() => {
                         match item {
                             Some(Ok(event)) => {
-                                Self::handle_message_event(event);
+                                router.route(event);
                             }
                             Some(Err(e)) => {
                                 tracing::warn!("Message events stream error: {}", e);
@@ -283,37 +293,6 @@ impl StreamManager {
         self.handles.lock().message_events = Some(handle);
 
         Ok(())
-    }
-
-    /// Handle a message event from the stream.
-    fn handle_message_event(event: crate::proto::chat_v1::MessageEvent) {
-        // Log for now - in future plans, events will be dispatched to EventBus
-        match event.event {
-            Some(MessageEventType::MessageSent(msg)) => {
-                tracing::debug!("Received message: {} in channel {}", msg.id, msg.channel_id);
-            }
-            Some(MessageEventType::MessageUpdated(msg)) => {
-                tracing::debug!("Message updated: {}", msg.id);
-            }
-            Some(MessageEventType::MessageDeletedId(id)) => {
-                tracing::debug!("Message deleted: {}", id);
-            }
-            Some(MessageEventType::ReactionAdded(reaction)) => {
-                tracing::debug!("Reaction added to message {}", reaction.message_id);
-            }
-            Some(MessageEventType::ReactionRemoved(reaction)) => {
-                tracing::debug!("Reaction removed from message {}", reaction.message_id);
-            }
-            Some(MessageEventType::ReadReceipt(receipt)) => {
-                tracing::debug!("Read receipt from user {}", receipt.user_id);
-            }
-            Some(MessageEventType::TypingIndicator(typing)) => {
-                tracing::debug!("Typing indicator from user {}", typing.user_id);
-            }
-            None => {
-                tracing::warn!("Empty message event received");
-            }
-        }
     }
 
     /// Start the presence stream.
