@@ -455,6 +455,43 @@ impl AuthClient {
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
     }
+
+    /// Fetch prekey bundle for establishing session with a user.
+    ///
+    /// Used during X3DH key agreement to encrypt first message.
+    /// Specify device_id "*" to get bundles for all user's devices.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_id` - Target user's UUID
+    /// * `device_id` - Specific device ID or "*" for all devices
+    pub async fn get_pre_key_bundle(
+        &mut self,
+        user_id: &str,
+        device_id: &str,
+    ) -> Result<GetPreKeyBundleResponse, NetworkError> {
+        let request = GetPreKeyBundleRequest {
+            user_id: user_id.to_string(),
+            device_id: device_id.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .get_pre_key_bundle(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Fetch prekey bundles for all devices of a user.
+    ///
+    /// Convenience wrapper for get_pre_key_bundle with device_id="*".
+    pub async fn get_pre_key_bundles_all_devices(
+        &mut self,
+        user_id: &str,
+    ) -> Result<GetPreKeyBundleResponse, NetworkError> {
+        self.get_pre_key_bundle(user_id, "*").await
+    }
 }
 
 #[cfg(test)]
