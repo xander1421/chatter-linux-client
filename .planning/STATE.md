@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 15 complete — Crypto layer done, ready for Network layer
+**Current focus:** Phase 16 complete — Network gRPC foundation done, ready for service clients
 
 ## Current Position
 
 Phase: 16 of 66 (Network gRPC Foundation)
-Plan: 1 of TBD in current phase
-Status: Plan complete
-Last activity: 2026-02-03 — Completed 16-01-PLAN.md
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-03 — Completed 16-02-PLAN.md
 
-Progress: █████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 34.8%
+Progress: █████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 36.4%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 23
+- Total plans completed: 24
 - Average duration: ~4.5 min
-- Total execution time: ~103 min
+- Total execution time: ~108 min
 
 **By Phase:**
 
@@ -42,11 +42,11 @@ Progress: ███████████████████████�
 | 13 | 1 | ~3m | ~3m |
 | 14 | 1 | ~4m | ~4m |
 | 15 | 1 | ~12m | ~12m |
-| 16 | 1 | ~4m | ~4m |
+| 16 | 2 | ~9m | ~4.5m |
 
 **Recent Trend:**
-- Last 5 plans: 13-1 (~3m), 14-1 (~4m), 15-1 (~12m), 16-1 (~4m)
-- Trend: Starting Network layer; 16-01 foundation types complete
+- Last 5 plans: 14-1 (~4m), 15-1 (~12m), 16-1 (~4m), 16-2 (~5m)
+- Trend: Phase 16 complete; gRPC foundation ready for service clients
 
 ## Accumulated Context
 
@@ -105,6 +105,9 @@ Recent decisions affecting current work:
 - AES-256-CBC + HMAC-SHA256 for attachments (matches Signal, not AES-GCM)
 - Log-bucketing padding to prevent file size inference
 - Constant-time comparison for digest and HMAC verification
+- parking_lot::RwLock for sync interceptors (tonic needs sync)
+- broadcast channel capacity 16 for connection events
+- Panic on channel() if not connected (explicit contract)
 
 ### Deferred Issues
 
@@ -117,6 +120,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 16-01-PLAN.md
+Stopped at: Completed 16-02-PLAN.md (Phase 16 complete)
 Resume file: None
-Next action: Execute 16-02-PLAN.md or plan remaining Phase 16 tasks
+Next action: Start Phase 17 (Network Auth & User Clients)
