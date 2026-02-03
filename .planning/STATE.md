@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 3 — Domain Supporting Entities
+**Current focus:** Phase 4 — Domain Privacy Entities
 
 ## Current Position
 
-Phase: 3 of 66 (Domain Supporting Entities) — COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 03-02-PLAN.md
+Phase: 4 of 66 (Domain Privacy Entities)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-03 — Completed 04-01-PLAN.md
 
-Progress: [xxxxx]░░░░░ 7.5%
+Progress: [xxxxxx]░░░░ 9.1%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 5
+- Total plans completed: 6
 - Average duration: ~5 min
-- Total execution time: ~40 min
+- Total execution time: ~44 min
 
 **By Phase:**
 
@@ -30,9 +30,10 @@ Progress: [xxxxx]░░░░░ 7.5%
 | 1 | 1 | ~30m | ~30m |
 | 2 | 2 | ~10m | ~5m |
 | 3 | 2 | ~12m | ~6m |
+| 4 | 1/2 | ~4m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 2-1 (~5m), 2-2 (~5m), 3-1 (~2m), 3-2 (~10m)
+- Last 5 plans: 2-2 (~5m), 3-1 (~2m), 3-2 (~10m), 4-1 (~4m)
 - Trend: Domain entities fast with subagent execution
 
 ## Accumulated Context
@@ -60,6 +61,9 @@ Recent decisions affecting current work:
 - CallState::Ended uses struct variant with reason
 - Mutes always require expiry duration (unlike permanent bans)
 - Used uuid::Uuid for moderation IDs (no special types)
+- DraftKey implements Hash/Eq for HashMap keys
+- EphemeralMessage countdown starts on read, not send (matches Signal)
+- Empty draft detection checks trimmed content AND attachments
 
 ### Deferred Issues
 
@@ -72,5 +76,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Phase 3 complete
-Resume file: None (ready for Phase 4)
+Stopped at: Completed 04-01-PLAN.md
+Resume file: None (ready for 04-02-PLAN.md)
