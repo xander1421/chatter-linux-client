@@ -1074,6 +1074,7 @@ dependencies = [
  "tokio-stream",
  "tokio-test",
  "tonic",
+ "tower 0.5.3",
  "tracing",
  "tracing-subscriber",
  "uuid",

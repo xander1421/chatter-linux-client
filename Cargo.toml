@@ -36,6 +36,7 @@ async-trait = "0.1"
 tonic = { version = "0.12", features = ["tls", "tls-roots"] }
 prost = "0.13"
 prost-types = "0.13"
+tower = "0.5"                                     # Middleware layers (retry, timeout) - used in Phase 21
 
 # ============================================================================
 # Crypto - Signal Protocol (Official libsignal)
