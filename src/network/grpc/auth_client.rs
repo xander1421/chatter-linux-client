@@ -589,6 +589,19 @@ impl AuthClient {
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
+
+    /// Get server's trust root public key.
+    ///
+    /// Used to verify sender certificate signatures.
+    /// This key should be cached as it rarely changes.
+    /// Returns the server's signing public key and key ID.
+    pub async fn get_server_trust_root(&mut self) -> Result<ServerTrustRootResponse, NetworkError> {
+        self.inner
+            .get_server_trust_root(())
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
 }
 
 #[cfg(test)]
