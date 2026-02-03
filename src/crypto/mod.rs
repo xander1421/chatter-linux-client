@@ -11,4 +11,5 @@ pub mod rng;
 pub mod sealed_sender;
 pub mod signal;
 
+pub use attachment_crypto::{AttachmentCrypto, EncryptedAttachment, KEY_SET_LENGTH};
 pub use signal::{IdentityKeyManager, PreKeyManager, SenderKeyManager, SessionManager, SignalStore};
