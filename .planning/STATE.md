@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 7 planned — Ready for execution
+**Current focus:** Phase 7 in progress — Executing plans
 
 ## Current Position
 
 Phase: 7 of 66 (Storage Supporting Repositories)
-Plan: 1 of 4 in current phase
+Plan: 2 of 4 in current phase
 Status: In progress
-Last activity: 2026-02-03 — Completed 07-01-PLAN.md
+Last activity: 2026-02-03 — Completed 07-02-PLAN.md
 
-Progress: [xxxxxxxxxxxxx]█ 19.7%
+Progress: [xxxxxxxxxxxxx]██ 19.7%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 12
+- Total plans completed: 13
 - Average duration: ~4 min
-- Total execution time: ~58 min
+- Total execution time: ~61 min
 
 **By Phase:**
 
@@ -35,7 +35,7 @@ Progress: [xxxxxxxxxxxxx]█ 19.7%
 | 6 | 3 | ~11m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 5-1 (~2m), 5-2 (~2m), 6-1 (~4m), 6-2 (~4m), 6-3 (~3m)
+- Last 5 plans: 5-2 (~2m), 6-1 (~4m), 6-2 (~4m), 6-3 (~3m), 7-1 (~3m)
 - Trend: Repository pattern fast with established patterns
 
 ## Accumulated Context
@@ -85,6 +85,8 @@ Recent decisions affecting current work:
 - JSON TEXT columns for MessageContent (complex nested type)
 - content_type discriminant for filtering without JSON parsing
 - Cursor-based pagination using (created_at, id) tuple
+- emoji_json in unique constraint (same user, different emoji allowed)
+- Toggle pattern for add/remove operations
 
 ### Deferred Issues
 
@@ -97,6 +99,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 07-01-PLAN.md
+Stopped at: Completed 07-02-PLAN.md
 Resume file: None
-Next action: Execute 07-02-PLAN.md (Reactions table + repository)
+Next action: Execute 07-03-PLAN.md (Read States table + repository)
