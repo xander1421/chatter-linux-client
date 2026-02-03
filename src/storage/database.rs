@@ -3,6 +3,7 @@
 //! Encrypted database connection pool management using SQLCipher.
 
 use crate::error::StorageError;
+use crate::storage::migrations::default_migrations;
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -107,5 +108,19 @@ impl Database {
         conn.close().map_err(|(_, e)| StorageError::Database(e))?;
 
         Ok(())
+    }
+
+    /// Run all pending database migrations.
+    ///
+    /// Creates schema_version table if needed and applies any migrations
+    /// that haven't been run yet. Safe to call multiple times.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Migration` if any migration fails.
+    pub fn run_migrations(&self) -> Result<(), StorageError> {
+        let conn = self.connection()?;
+        let runner = default_migrations();
+        runner.run(&conn)
     }
 }
