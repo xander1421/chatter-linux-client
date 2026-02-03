@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 23 in progress — Inbox Provider & Poller (DeviceInboxProvider, InboxPoller)
+**Current focus:** Phase 23 complete — Inbox Provider & Poller (DeviceInboxProvider, InboxPoller, MessageProcessor, LocalQueue)
 
 ## Current Position
 
 Phase: 23 of 66 (Inbox Provider & Poller)
-Plan: 1 of 1 in current phase
+Plan: 2 of 2 in current phase
 Status: Phase complete
-Last activity: 2026-02-03 — Completed 23-01-PLAN.md
+Last activity: 2026-02-03 — Completed 23-02-PLAN.md
 
 Progress: ██████████████████████████████████████████████████████████░░░░░░░░░░░░░░ 61.3%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 38
+- Total plans completed: 39
 - Average duration: ~4.1 min
-- Total execution time: ~155 min
+- Total execution time: ~159 min
 
 **By Phase:**
 
@@ -49,10 +49,10 @@ Progress: ███████████████████████�
 | 20 | 4 | ~11m | ~3m |
 | 21 | 3 | ~12m | ~4m |
 | 22 | 2 | ~9m | ~4.5m |
-| 23 | 1 | ~4m | ~4m |
+| 23 | 2 | ~8m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 21-3 (~5m), 22-1 (~4m), 22-2 (~5m), 23-1 (~4m)
+- Last 5 plans: 22-1 (~4m), 22-2 (~5m), 23-1 (~4m), 23-2 (~4m)
 - Trend: Consistent ~3-5m per plan
 
 ## Accumulated Context
@@ -128,6 +128,9 @@ Recent decisions affecting current work:
 - Inbox event channel capacity 64 for message lifecycle monitoring
 - Adaptive polling: 5s active, 30s idle, 2-min activity threshold
 - Ed25519 challenge-response for mailbox authentication
+- ContentType from protobuf wire format (peek first bytes)
+- ProcessingError.is_recoverable() for retry decisions
+- LocalQueue exponential backoff: base_delay * 2^attempts, capped at 5 min
 
 ### Deferred Issues
 
@@ -140,6 +143,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 23-01-PLAN.md (DeviceInboxProvider & InboxPoller)
+Stopped at: Completed 23-02-PLAN.md (MessageProcessor & LocalQueue)
 Resume file: None
 Next action: Proceed to Phase 24 (Inbox Message Handlers)

@@ -47,7 +47,7 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 22: Network Validation** - Orderer, deduplicator, validator pipeline
 
 ### Inbox & Mailbox
-- [ ] **Phase 23: Inbox Provider & Poller** - DeviceInboxProvider, polling loop
+- [x] **Phase 23: Inbox Provider & Poller** - DeviceInboxProvider, polling loop
 - [ ] **Phase 24: Inbox Message Handlers** - Chat, attachment, reaction, receipt, typing
 - [ ] **Phase 25: Inbox Sync Handlers** - Key exchange, sender key, pin, sync
 - [ ] **Phase 26: Mailbox Token Manager** - Blind signature tokens, daily quota
