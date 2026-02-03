@@ -19,7 +19,7 @@ None (custom application, no pre-existing domain skills)
 
 ### Domain Layer
 - [ ] **Phase 2: Domain Core Entities** - User, Message, Channel, Attachment, IDs
-- [ ] **Phase 3: Domain Supporting Entities** - Reaction, Notification, Call, Moderation
+- [x] **Phase 3: Domain Supporting Entities** - Reaction, Notification, Call, Moderation
 - [ ] **Phase 4: Domain Privacy Entities** - Draft, Ephemeral, SavedMessage, Mention, Embed
 
 ### Storage Layer
@@ -120,7 +120,7 @@ None (custom application, no pre-existing domain skills)
 **Goal**: Implement Reaction, Notification, Call, Moderation domain types
 **Depends on**: Phase 2
 **Research**: Unlikely (standard Rust structs)
-**Plans**: TBD
+**Plans**: 2/2 complete ✓
 
 ### Phase 4: Domain Privacy Entities
 **Goal**: Implement Draft, EphemeralMessage, SavedMessage, Mention, Embed types
@@ -527,7 +527,7 @@ None (custom application, no pre-existing domain skills)
 |-------|------|-------|--------|-----------|
 | 1 | Scaffolding | 1 | Done | 2026-02-03 |
 | 2 | Domain Core Entities | 2 | Done | 2026-02-03 |
-| 3 | Domain Supporting Entities | TBD | Not started | - |
+| 3 | Domain Supporting Entities | 2 | Done | 2026-02-03 |
 | 4 | Domain Privacy Entities | TBD | Not started | - |
 | 5 | Storage Database Setup | TBD | Not started | - |
 | 6 | Storage Core Repositories | TBD | Not started | - |
