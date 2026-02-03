@@ -6,22 +6,27 @@
 <vision>
 ## How This Should Work
 
-Signal-style attachment encryption. When a user attaches a file to a message, the client:
-1. Generates a random symmetric key
-2. Encrypts the file with AES-GCM
-3. Sends the encrypted blob separately (to storage)
-4. Includes the decryption key in the E2E encrypted message
+Signal-compatible attachment encryption using AES-256-CBC + HMAC-SHA256. When a user attaches a file to a message, the client:
+1. Generates a random 64-byte key (32 AES + 32 MAC)
+2. Pads plaintext using log-bucketing (prevents size inference)
+3. Encrypts: IV (16 bytes) || AES-CBC(padded) || HMAC-SHA256 (32 bytes)
+4. Computes digest = SHA256(ciphertext)
+5. Uploads encrypted blob to CDN (gets cdn_key)
+6. Includes encryption_key + digest + cdn_key in AttachmentPointer
+7. Embeds AttachmentPointer in E2E encrypted message
 
-On the receiving end, the client retrieves the encrypted blob, uses the key from the message to decrypt it. The server never sees the plaintext file content.
+On the receiving end, the client retrieves the encrypted blob from cdn_key, verifies digest, verifies HMAC, decrypts with AES key, removes padding. The server never sees the plaintext file content.
+
+Backend proto updated in commit 9f301fd to match this format.
 
 </vision>
 
 <essential>
 ## What Must Be Nailed
 
-- **Correct crypto** — Standard AES-GCM with proper IV/nonce handling, no vulnerabilities
-- **Memory efficiency** — Handle large files without loading everything into RAM
-- **Signal compatibility** — Match Signal's format for potential interoperability
+- **Correct crypto** — AES-256-CBC + HMAC-SHA256 with proper IV, constant-time MAC verification
+- **Memory efficiency** — Handle large files without loading everything into RAM (streaming)
+- **Signal compatibility** — Match Signal's exact format (64-byte key, log-bucketing, encrypt-then-MAC)
 
 All three are equally important for this phase.
 
