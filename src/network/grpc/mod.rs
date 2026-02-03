@@ -20,4 +20,5 @@ pub use client_pool::GrpcClientPool;
 pub use file_client::FileClient;
 pub use interceptors::{AuthInterceptor, AuthMode};
 pub use message_client::MessageClient;
+pub use notification_client::NotificationClient;
 pub use user_client::UserClient;
