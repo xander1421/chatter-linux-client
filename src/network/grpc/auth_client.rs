@@ -492,6 +492,51 @@ impl AuthClient {
     ) -> Result<GetPreKeyBundleResponse, NetworkError> {
         self.get_pre_key_bundle(user_id, "*").await
     }
+
+    /// Refresh one-time prekeys for this device.
+    ///
+    /// Called when prekey count drops below threshold.
+    /// Typically uploads a fresh batch of 100 prekeys.
+    ///
+    /// # Arguments
+    ///
+    /// * `new_prekeys` - New batch of one-time prekeys to upload
+    pub async fn refresh_pre_keys(
+        &mut self,
+        new_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
+    ) -> Result<(), NetworkError> {
+        let request = RefreshPreKeysRequest {
+            new_one_time_prekeys: new_prekeys,
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .refresh_pre_keys(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Get prekey statistics for a device.
+    ///
+    /// Returns count of remaining one-time prekeys.
+    /// Client should refresh when `should_refill` is true or count drops below ~10.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - Device ID to check stats for (0 defaults to 1)
+    pub async fn get_pre_key_stats(
+        &mut self,
+        device_id: u32,
+    ) -> Result<GetPreKeyStatsResponse, NetworkError> {
+        let request = GetPreKeyStatsRequest { device_id };
+
+        self.inner
+            .get_pre_key_stats(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
 }
 
 #[cfg(test)]
