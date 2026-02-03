@@ -1,0 +1,114 @@
+[package]
+name = "chatter-linux"
+version = "0.1.0"
+edition = "2024"
+authors = ["xander1421"]
+description = "Native Linux client for Chatter - secure messaging"
+license = "GPL-3.0"
+repository = "https://github.com/xander1421/chatter"
+rust-version = "1.85"
+
+[[bin]]
+name = "chatter-linux"
+path = "src/main.rs"
+
+[lib]
+name = "chatter_linux"
+path = "src/lib.rs"
+
+[dependencies]
+# ============================================================================
+# UI Framework - Slint (cross-platform, mobile-friendly)
+# ============================================================================
+slint = "1.9"
+
+# ============================================================================
+# Async Runtime
+# ============================================================================
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+
+# ============================================================================
+# gRPC (Generated code dependencies)
+# ============================================================================
+tonic = { version = "0.12", features = ["tls", "tls-roots"] }
+prost = "0.13"
+prost-types = "0.13"
+
+# ============================================================================
+# Crypto - Signal Protocol (Official libsignal)
+# ============================================================================
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", branch = "main" }
+libsignal-core = { git = "https://github.com/signalapp/libsignal", branch = "main" }
+rand = "0.9"
+sha2 = "0.10"
+hmac = "0.12"
+hkdf = "0.12"
+aes-gcm = "0.10"
+aes = "0.8"                                       # AES-256 block cipher (for CBC mode)
+cbc = "0.1"                                       # CBC mode wrapper (Signal-compatible attachments)
+block-padding = "0.3"                             # PKCS7/NoPadding support
+chacha20poly1305 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "pem"] }
+xeddsa = "1.0"
+curve25519-dalek = { version = "4", features = ["digest"] }
+subtle = "2.5"  # Constant-time comparison
+base64 = "0.22"
+hex = "0.4"
+
+
+# ============================================================================
+# Database (SQLite + SQLCipher)
+# ============================================================================
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher", "unlock_notify"] }
+
+# ============================================================================
+# System Integration (D-Bus)
+# ============================================================================
+zbus = "5"                            # Modern D-Bus library
+keyring = "3"                         # Cross-platform secure credential storage
+notify-rust = "4"                     # Desktop notifications
+ksni = "0.2"                          # System tray (StatusNotifierItem)
+directories = "6"                     # XDG directories
+dirs = "5"                            # Home directory detection
+
+# ============================================================================
+# Serialization
+# ============================================================================
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# ============================================================================
+# Utilities
+# ============================================================================
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+bytes = "1"
+http = "1"
+rfd = "0.15"                              # Native file dialogs
+mime_guess = "2"                          # MIME type detection
+reqwest = { version = "0.12", features = ["rustls-tls"] }  # HTTP client for presigned URLs
+open = "5.3.3"
+rodio = "0.21.1"
+image = "0.25.9"
+
+[build-dependencies]
+slint-build = "1.9"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = "z"
