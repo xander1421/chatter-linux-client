@@ -21,7 +21,7 @@ pub mod embed;
 
 // Re-export core types for convenience
 pub use ids::{
-    AttachmentId, CallId, ChannelId, DeviceId, IntegrationId, MessageId, NotificationId,
+    AttachmentId, CallId, ChannelId, DeviceId, DraftId, IntegrationId, MessageId, NotificationId,
     ReactionId, SessionId, ThreadId, UserId,
 };
 pub use user::{Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
@@ -42,3 +42,4 @@ pub use notification::{
 };
 pub use call::{Call, CallEndReason, CallState, CallType, Participant, VerificationBadge};
 pub use moderation::{Ban, ModerationAction, ModerationLogEntry, Mute};
+pub use draft::{Draft, DraftKey};
