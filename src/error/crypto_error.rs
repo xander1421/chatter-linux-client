@@ -68,4 +68,23 @@ pub enum CryptoError {
     /// Server certificate ID not recognized.
     #[error("unknown server certificate: {0}")]
     UnknownServerCertificate(u32),
+
+    // =========================================================================
+    // Attachment Encryption Errors
+    // =========================================================================
+    /// Attachment encryption operation failed.
+    #[error("attachment encryption failed: {0}")]
+    AttachmentEncryptionFailed(String),
+
+    /// Attachment decryption operation failed.
+    #[error("attachment decryption failed: {0}")]
+    AttachmentDecryptionFailed(String),
+
+    /// Attachment MAC verification failed (tampered or corrupted).
+    #[error("attachment MAC mismatch")]
+    AttachmentMacMismatch,
+
+    /// Attachment digest verification failed.
+    #[error("attachment digest mismatch")]
+    AttachmentDigestMismatch,
 }
