@@ -7,11 +7,11 @@
 <research_summary>
 ## Summary
 
-Researched Signal Desktop's attachment encryption and Chatter backend's file upload system. Critical finding: **Signal uses AES-256-CBC with HMAC-SHA256**, not AES-GCM. However, Chatter's proto currently specifies AES-256-GCM. Recommend implementing AES-256-GCM for Chatter (simpler, equally secure) unless full Signal interop is required.
+Researched Signal Desktop's attachment encryption and Chatter backend's file upload system. **Chatter proto updated to match Signal's format: AES-256-CBC with HMAC-SHA256** (commit 9f301fd).
 
 The backend provides presigned URL uploads for anonymous attachments. Client encrypts locally, uploads encrypted blob directly to RustFS (MinIO), then embeds the decryption key in the E2E encrypted message. Server never sees plaintext.
 
-**Primary recommendation:** Implement AES-256-GCM encryption with streaming support. Use the backend's presigned URL attachment system. Generate 32-byte random key per attachment, include key + digest in AttachmentPointer within E2E message.
+**Primary recommendation:** Implement Signal-compatible AES-256-CBC + HMAC-SHA256 encryption. Generate 64-byte random key per attachment (32 AES + 32 MAC), produce ciphertext as `IV || CBC-encrypted || HMAC`, include key + digest in AttachmentPointer within E2E message.
 </research_summary>
 
 <standard_stack>
@@ -20,9 +20,11 @@ The backend provides presigned URL uploads for anonymous attachments. Client enc
 ### Core Rust Crates
 | Library | Version | Purpose | Why Standard |
 |---------|---------|---------|--------------|
-| aes-gcm | 0.10 | AES-256-GCM authenticated encryption | RustCrypto standard, audited |
+| aes | 0.8 | AES-256-CBC block cipher | RustCrypto standard, audited |
+| cbc | 0.1 | CBC mode wrapper | RustCrypto standard |
+| hmac | 0.12 | HMAC-SHA256 authentication | RustCrypto standard |
+| sha2 | 0.10 | SHA-256 for digest and HMAC | Already in project (via libsignal) |
 | rand | 0.8/0.9 | Cryptographic random generation | Already in project |
-| sha2 | 0.10 | SHA-256 digest calculation | Already in project (via libsignal) |
 
 ### Supporting
 | Library | Version | Purpose | When to Use |
@@ -34,15 +36,18 @@ The backend provides presigned URL uploads for anonymous attachments. Client enc
 ### Alternatives Considered
 | Instead of | Could Use | Tradeoff |
 |------------|-----------|----------|
-| aes-gcm | chacha20poly1305 | ChaCha faster on non-AES-NI hardware, but AES-GCM is Signal standard |
-| Custom streaming | ring | Ring has streaming, but less Rust-idiomatic |
-| AES-GCM | AES-CBC + HMAC | Signal's actual format, but more complex for no benefit unless interop required |
+| AES-CBC + HMAC | AES-GCM | GCM simpler (single operation), but CBC+HMAC matches Signal exactly |
+| cbc crate | cipher crate | cipher is lower-level, cbc is ergonomic wrapper |
+| Custom HMAC | ring | ring has HMAC but RustCrypto hmac integrates better |
 
 **Installation:**
 ```toml
 [dependencies]
-aes-gcm = "0.10"
-# rand and sha2 already in project via libsignal
+aes = "0.8"
+cbc = "0.1"
+hmac = "0.12"
+sha2 = "0.10"  # May already have via libsignal
+# rand already in project
 ```
 </standard_stack>
 
@@ -225,13 +230,15 @@ pub async fn encrypt_file<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 
 | Problem | Don't Build | Use Instead | Why |
 |---------|-------------|-------------|-----|
-| AES-GCM encryption | Custom AES implementation | `aes-gcm` crate | Constant-time, audited, handles nonce correctly |
-| Random key generation | Custom PRNG | `rand::thread_rng()` | Cryptographically secure |
+| AES-CBC encryption | Custom AES implementation | `aes` + `cbc` crates | Constant-time, audited |
+| HMAC authentication | Custom MAC | `hmac` crate | Constant-time, audited |
+| MAC verification | `==` comparison | `subtle::ConstantTimeEq` | Prevents timing attacks |
+| Random key generation | Custom PRNG | `rand::rng()` | Cryptographically secure |
 | SHA-256 digest | Custom hash | `sha2::Sha256` | Standard, constant-time |
-| Nonce generation | Timestamp-based | `rand` random bytes | Timestamps can repeat, random is safe |
-| Key derivation | Simple concatenation | Just use random bytes | 32-byte random key is sufficient for AES-256 |
+| PKCS7 padding | Custom padding logic | `block_padding` crate | Edge cases handled |
+| Log-bucketing | Custom formula | Copy Signal's exact formula | Tested, interoperable |
 
-**Key insight:** Attachment encryption is well-specified. The only decisions are: algorithm (AES-GCM vs AES-CBC-HMAC), key size (32 bytes), and whether to support streaming. Don't innovate on cryptographic primitives.
+**Key insight:** Signal's CBC+HMAC format is well-specified. Use RustCrypto crates for all primitives. The format is: 64-byte random key, 16-byte random IV, PKCS7 padding, encrypt-then-MAC with constant-time verification.
 </dont_hand_roll>
 
 <common_pitfalls>
@@ -265,55 +272,98 @@ pub async fn encrypt_file<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
 <code_examples>
 ## Code Examples
 
-### AES-256-GCM Encryption
+### AES-256-CBC + HMAC-SHA256 Encryption (Signal-compatible)
 ```rust
-// Source: aes-gcm crate documentation
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Nonce, Key
-};
+use aes::Aes256;
+use cbc::{Encryptor, cipher::{BlockEncryptMut, KeyIvInit}};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use rand::RngCore;
 
-pub fn encrypt(plaintext: &[u8]) -> Result<(Vec<u8>, [u8; 32], [u8; 12]), CryptoError> {
-    // Generate random key
-    let mut key_bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut key_bytes);
+type Aes256CbcEnc = Encryptor<Aes256>;
+type HmacSha256 = Hmac<Sha256>;
 
-    // Generate random nonce (12 bytes for GCM)
-    let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
+/// Encrypt plaintext with AES-256-CBC + HMAC-SHA256
+/// Returns: (ciphertext, 64-byte key) where ciphertext = IV || encrypted || HMAC
+pub fn encrypt(plaintext: &[u8]) -> Result<(Vec<u8>, [u8; 64]), CryptoError> {
+    // Generate 64-byte key: [AES key (32)] + [MAC key (32)]
+    let mut key = [0u8; 64];
+    rand::rng().fill_bytes(&mut key);
+    let (aes_key, mac_key) = key.split_at(32);
 
-    let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    // Generate random IV (16 bytes)
+    let mut iv = [0u8; 16];
+    rand::rng().fill_bytes(&mut iv);
 
-    let ciphertext = cipher.encrypt(nonce, plaintext)
+    // Pad plaintext to AES block size (PKCS7)
+    let padded = pkcs7_pad(plaintext);
+
+    // Encrypt with AES-256-CBC
+    let cipher = Aes256CbcEnc::new_from_slices(aes_key, &iv)
         .map_err(|e| CryptoError::AttachmentEncryptionFailed(e.to_string()))?;
+    let encrypted = cipher.encrypt_padded_vec_mut::<block_padding::NoPadding>(&padded);
 
-    // Prepend nonce to ciphertext
-    let mut result = nonce_bytes.to_vec();
-    result.extend(ciphertext);
+    // Compute HMAC-SHA256 over IV + ciphertext
+    let mut mac = HmacSha256::new_from_slice(mac_key)
+        .map_err(|e| CryptoError::AttachmentEncryptionFailed(e.to_string()))?;
+    mac.update(&iv);
+    mac.update(&encrypted);
+    let hmac_result = mac.finalize().into_bytes();
 
-    Ok((result, key_bytes, nonce_bytes))
+    // Assemble: IV || ciphertext || HMAC
+    let mut result = Vec::with_capacity(16 + encrypted.len() + 32);
+    result.extend_from_slice(&iv);
+    result.extend_from_slice(&encrypted);
+    result.extend_from_slice(&hmac_result);
+
+    Ok((result, key))
 }
 ```
 
-### AES-256-GCM Decryption
+### AES-256-CBC + HMAC-SHA256 Decryption
 ```rust
-pub fn decrypt(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
-    if data.len() < 12 + 16 {
+use aes::Aes256;
+use cbc::{Decryptor, cipher::{BlockDecryptMut, KeyIvInit}};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
+
+type Aes256CbcDec = Decryptor<Aes256>;
+type HmacSha256 = Hmac<Sha256>;
+
+/// Decrypt ciphertext with 64-byte key
+/// Ciphertext format: IV (16) || encrypted || HMAC (32)
+pub fn decrypt(ciphertext: &[u8], key: &[u8; 64]) -> Result<Vec<u8>, CryptoError> {
+    if ciphertext.len() < 16 + 16 + 32 {  // IV + min block + HMAC
         return Err(CryptoError::InvalidAttachmentData("too short".into()));
     }
 
-    // Extract nonce (first 12 bytes)
-    let (nonce_bytes, ciphertext) = data.split_at(12);
+    let (aes_key, mac_key) = key.split_at(32);
 
-    let key = Key::<Aes256Gcm>::from_slice(key);
-    let cipher = Aes256Gcm::new(key);
-    let nonce = Nonce::from_slice(nonce_bytes);
+    // Split ciphertext
+    let iv = &ciphertext[..16];
+    let encrypted = &ciphertext[16..ciphertext.len() - 32];
+    let expected_hmac = &ciphertext[ciphertext.len() - 32..];
 
-    cipher.decrypt(nonce, ciphertext)
-        .map_err(|e| CryptoError::AttachmentDecryptionFailed(e.to_string()))
+    // Verify HMAC first (constant-time comparison)
+    let mut mac = HmacSha256::new_from_slice(mac_key)
+        .map_err(|e| CryptoError::AttachmentDecryptionFailed(e.to_string()))?;
+    mac.update(iv);
+    mac.update(encrypted);
+    let computed_hmac = mac.finalize().into_bytes();
+
+    if computed_hmac.ct_eq(expected_hmac).unwrap_u8() != 1 {
+        return Err(CryptoError::AttachmentMacMismatch);
+    }
+
+    // Decrypt with AES-256-CBC
+    let cipher = Aes256CbcDec::new_from_slices(aes_key, iv)
+        .map_err(|e| CryptoError::AttachmentDecryptionFailed(e.to_string()))?;
+    let decrypted = cipher.decrypt_padded_vec_mut::<block_padding::NoPadding>(encrypted)
+        .map_err(|e| CryptoError::AttachmentDecryptionFailed(e.to_string()))?;
+
+    // Remove PKCS7 padding
+    pkcs7_unpad(&decrypted)
 }
 ```
 
@@ -321,10 +371,31 @@ pub fn decrypt(data: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
 ```rust
 use sha2::{Sha256, Digest};
 
-pub fn compute_digest(data: &[u8]) -> [u8; 32] {
+/// SHA-256 of entire ciphertext (IV || encrypted || HMAC)
+pub fn compute_digest(ciphertext: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(data);
+    hasher.update(ciphertext);
     hasher.finalize().into()
+}
+```
+
+### Log-Bucketing Padding (Signal-compatible)
+```rust
+/// Compute padded size using Signal's log-bucketing algorithm
+/// Prevents file size leakage while minimizing overhead
+pub fn padded_size(original_size: usize) -> usize {
+    const MIN_SIZE: usize = 541;
+    const BUCKET_BASE: f64 = 1.05;
+
+    if original_size == 0 {
+        return MIN_SIZE;
+    }
+
+    let bucket = (original_size as f64).ln() / BUCKET_BASE.ln();
+    let rounded = bucket.ceil();
+    let padded = BUCKET_BASE.powf(rounded) as usize;
+
+    padded.max(MIN_SIZE)
 }
 ```
 
@@ -369,37 +440,41 @@ async fn upload_attachment(file: &Path, channel: &ChannelId) -> Result<Attachmen
 
 | Old Approach | Current Approach | When Changed | Impact |
 |--------------|------------------|--------------|--------|
-| AES-CBC + HMAC | AES-GCM | ~2015 | GCM combines encryption + auth in one operation |
-| Separate MAC | AEAD | ~2015 | Single primitive, harder to misuse |
+| AES-CBC + HMAC | AES-GCM (general) | ~2015 | GCM simpler, but Signal kept CBC+HMAC |
 | 128-bit AES | 256-bit AES | Always preferred | Signal uses 256-bit for future-proofing |
+| Fixed file sizes | Log-bucketing | Signal design | Prevents size-based content inference |
 
-**New patterns to consider:**
-- **AEAD streaming:** AES-GCM with streaming for large files (aead crate supports this)
-- **Post-quantum:** Not yet needed for attachment encryption (symmetric crypto is PQ-resistant)
+**Why Signal uses CBC+HMAC instead of GCM:**
+- **Streaming:** HMAC can be computed independently in single pass
+- **Padding control:** Log-bucketing prevents metadata leakage
+- **Resumable downloads:** Incremental MAC enables partial verification
+- **Double encryption:** Cleaner layering for backup tier
+
+**Chatter decision:** Match Signal's CBC+HMAC for compatibility and proven security.
 
 **Still valid:**
-- Signal's CBC+HMAC format (if interop needed)
-- 32-byte random keys
+- Signal's CBC+HMAC format (what we're using)
+- 64-byte random keys (32 AES + 32 MAC)
 - SHA-256 for digests
+- Log-bucketing for padding
 </sota_updates>
 
 <open_questions>
 ## Open Questions
 
-1. **Should we match Signal's CBC+HMAC exactly?**
-   - What we know: Signal uses CBC+HMAC with log-bucketing padding
-   - What's unclear: Whether Chatter needs Signal interoperability
-   - Recommendation: Use AES-GCM (simpler, equally secure) unless interop required
+1. **~~Should we match Signal's CBC+HMAC exactly?~~** RESOLVED
+   - Decision: Yes, backend proto updated to Signal-compatible format (commit 9f301fd)
+   - Using: AES-256-CBC + HMAC-SHA256, 64-byte key, log-bucketing padding
 
 2. **Streaming threshold?**
    - What we know: Signal streams everything, our backend has 100MB limit
    - What's unclear: What file sizes are common in practice
    - Recommendation: Stream for files >1MB, load smaller files into memory
 
-3. **Padding for metadata protection?**
-   - What we know: Signal uses log-bucketing, Chatter doesn't require it
-   - What's unclear: Privacy requirements for Chatter
-   - Recommendation: Optional v2 feature, not v1 requirement
+3. **Incremental MAC implementation?**
+   - What we know: Signal computes per-chunk MACs for files >50KB
+   - What's unclear: Exact libsignal API for incremental MAC
+   - Recommendation: v1 uses simple HMAC, add incremental MAC in v2 for large file streaming
 </open_questions>
 
 <sources>
