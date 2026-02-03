@@ -18,3 +18,21 @@ pub mod draft;
 pub mod ephemeral;
 pub mod mention;
 pub mod embed;
+
+// Re-export core types for convenience
+pub use ids::{
+    AttachmentId, CallId, ChannelId, DeviceId, IntegrationId, MessageId, ReactionId, SessionId,
+    ThreadId, UserId,
+};
+pub use user::{Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
+pub use message::{
+    AIMessage, CallMessage, CallMessageType, EncryptedContent, EncryptedMessageType, Message,
+    MessageContent, MixedContent, ReactionCount, SealedSenderContent, SystemMessage, Thread,
+};
+pub use channel::{
+    Channel, ChannelConfig, ChannelType, MemberRole, Membership, MessagePersistence,
+    NotificationPreference, Permissions, Template,
+};
+pub use attachment::{
+    Attachment, AttachmentStatus, FileCategory, FileMetadata, GifMetadata, GifProvider, Thumbnail,
+};
