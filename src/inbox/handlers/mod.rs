@@ -36,6 +36,8 @@ use crate::domain::{
 };
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 
+use std::sync::Arc;
+
 // Re-export handlers
 pub use attachment::AttachmentHandler;
 pub use chat::ChatHandler;
@@ -377,6 +379,129 @@ impl DomainEvent {
             self,
             DomainEvent::TypingStarted { .. } | DomainEvent::TypingStopped { .. }
         )
+    }
+}
+
+// ============================================================================
+// Handler Registry
+// ============================================================================
+
+/// Registry for routing messages to appropriate handlers.
+///
+/// The registry maintains a collection of handlers and routes incoming
+/// `ProcessedMessage` objects to the handler that supports their content type.
+///
+/// # Example
+///
+/// ```ignore
+/// let (event_tx, event_rx) = broadcast::channel(64);
+/// let registry = HandlerRegistry::new(local_user_id, event_tx);
+///
+/// // Route an incoming message
+/// let result = registry.route(&processed_message).await;
+///
+/// // Subscribe to domain events
+/// let mut rx = registry.subscribe();
+/// while let Ok(event) = rx.recv().await {
+///     match event {
+///         DomainEvent::MessageReceived { message } => { ... }
+///         DomainEvent::TypingStarted { user_id, channel_id } => { ... }
+///         _ => {}
+///     }
+/// }
+/// ```
+///
+/// # Adding Custom Handlers
+///
+/// Use `register()` to add custom handlers:
+///
+/// ```ignore
+/// registry.register(Arc::new(MyCustomHandler::new()));
+/// ```
+pub struct HandlerRegistry {
+    handlers: Vec<Arc<dyn InboxHandler>>,
+    context: HandlerContext,
+}
+
+impl HandlerRegistry {
+    /// Create a new handler registry with default handlers.
+    ///
+    /// # Arguments
+    ///
+    /// * `local_user_id` - The current user's ID (for sender detection, ownership checks)
+    /// * `event_tx` - Broadcast channel for domain events
+    ///
+    /// # Default Handlers
+    ///
+    /// - `ChatHandler` - DataMessage content (text, media, edits, deletes)
+    /// - `AttachmentHandler` - Attachment metadata from pointers
+    /// - `ReactionHandler` - Emoji reactions on messages
+    /// - `ReceiptHandler` - Delivery/read/viewed receipts
+    /// - `TypingHandler` - Typing indicators
+    pub fn new(local_user_id: UserId, event_tx: broadcast::Sender<DomainEvent>) -> Self {
+        let context = HandlerContext::new(local_user_id, event_tx);
+
+        let handlers: Vec<Arc<dyn InboxHandler>> = vec![
+            Arc::new(ChatHandler::new()),
+            Arc::new(AttachmentHandler::new()),
+            Arc::new(ReactionHandler::new()),
+            Arc::new(ReceiptHandler::new()),
+            Arc::new(TypingHandler::new()),
+        ];
+
+        Self { handlers, context }
+    }
+
+    /// Route a processed message to the appropriate handler.
+    ///
+    /// Finds the first handler that supports the message's content type
+    /// and delegates processing to it.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(HandlerOutcome::Processed)` - Message was successfully handled
+    /// - `Ok(HandlerOutcome::Ignored)` - No handler for this content type
+    /// - `Ok(HandlerOutcome::Deferred { reason })` - Handler needs retry
+    /// - `Err(HandlerError)` - Handler encountered an error
+    pub async fn route(&self, message: &ProcessedMessage) -> HandlerResult {
+        // Find handler that supports this content type
+        for handler in &self.handlers {
+            if handler.content_types().contains(&message.content_type) {
+                return handler.handle(message, &self.context).await;
+            }
+        }
+
+        // No handler found for content type
+        tracing::debug!(
+            content_type = %message.content_type,
+            "No handler registered for content type"
+        );
+        Ok(HandlerOutcome::Ignored)
+    }
+
+    /// Register an additional handler.
+    ///
+    /// Custom handlers are appended to the handler list. The first handler
+    /// that supports a content type wins, so built-in handlers take precedence.
+    ///
+    /// # Arguments
+    ///
+    /// * `handler` - The handler to register
+    pub fn register(&mut self, handler: Arc<dyn InboxHandler>) {
+        self.handlers.push(handler);
+    }
+
+    /// Subscribe to domain events.
+    ///
+    /// Returns a receiver that will receive all domain events emitted by handlers.
+    /// Multiple subscribers can exist simultaneously.
+    pub fn subscribe(&self) -> broadcast::Receiver<DomainEvent> {
+        self.context.event_tx.subscribe()
+    }
+
+    /// Get the number of registered handlers.
+    pub fn handler_count(&self) -> usize {
+        self.handlers.len()
     }
 }
 
