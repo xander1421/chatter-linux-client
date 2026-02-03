@@ -203,6 +203,209 @@ impl ConnectionManager {
     pub fn shutdown_receiver(&self) -> broadcast::Receiver<()> {
         self.shutdown.subscribe()
     }
+
+    // ==================== Connection Lifecycle Methods ====================
+
+    /// Connect to the server.
+    ///
+    /// Transitions state: Disconnected -> Connecting -> Connected
+    /// On failure: Disconnected -> Connecting -> Disconnected
+    ///
+    /// # Errors
+    ///
+    /// Returns `NetworkError::ConnectionFailed` if connection fails.
+    pub async fn connect(&self) -> Result<(), NetworkError> {
+        // Transition to connecting
+        self.state_machine.connecting();
+
+        // Attempt connection
+        match self.pool.connect().await {
+            Ok(()) => {
+                // Success - transition to connected
+                self.state_machine.connected();
+
+                // Reset recovery on successful connection
+                self.recovery.lock().reset();
+
+                Ok(())
+            }
+            Err(e) => {
+                // Failure - transition back to disconnected
+                self.state_machine.disconnected();
+                Err(e)
+            }
+        }
+    }
+
+    /// Disconnect from the server.
+    ///
+    /// Gracefully disconnects and transitions to Disconnected state.
+    pub async fn disconnect(&self) {
+        self.pool.disconnect();
+        self.state_machine.disconnected();
+    }
+
+    /// Trigger a manual reconnection attempt.
+    ///
+    /// Useful after user action (e.g., clicking "Retry" button).
+    /// Resets the backoff timer before attempting.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NetworkError::ConnectionFailed` if connection fails.
+    pub async fn reconnect(&self) -> Result<(), NetworkError> {
+        // Reset backoff for manual reconnection
+        self.recovery.lock().reset();
+
+        // Attempt connection
+        self.connect().await
+    }
+
+    /// Start the automatic reconnection loop.
+    ///
+    /// Spawns a background task that:
+    /// 1. Listens for Offline events from state machine
+    /// 2. On Offline, begins reconnection attempts with backoff
+    /// 3. On successful reconnect, emits Online event
+    /// 4. On max attempts exceeded, transitions to Failed(MaxRetriesExceeded)
+    ///
+    /// The loop runs until shutdown() is called.
+    ///
+    /// # Returns
+    ///
+    /// A JoinHandle for the spawned task.
+    pub fn start_reconnect_loop(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let manager = Arc::clone(self);
+        let mut event_rx = manager.subscribe();
+        let mut shutdown_rx = manager.shutdown.subscribe();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    // Check for shutdown signal
+                    _ = shutdown_rx.recv() => {
+                        tracing::info!("Reconnection loop received shutdown signal");
+                        break;
+                    }
+
+                    // Listen for connection events
+                    event = event_rx.recv() => {
+                        match event {
+                            Ok(ConnectionEvent::Offline) => {
+                                tracing::info!("Connection lost, starting reconnection attempts");
+                                manager.run_reconnection_sequence().await;
+                            }
+                            Ok(_) => {
+                                // Ignore other events
+                            }
+                            Err(broadcast::error::RecvError::Closed) => {
+                                tracing::info!("Event channel closed, stopping reconnection loop");
+                                break;
+                            }
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                tracing::warn!("Reconnection loop lagged by {} events", n);
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Run the reconnection sequence with backoff.
+    ///
+    /// Internal method called by the reconnection loop.
+    async fn run_reconnection_sequence(&self) {
+        let mut attempt: u32 = 0;
+
+        loop {
+            // Get next delay from recovery
+            let delay = {
+                let mut recovery = self.recovery.lock();
+                recovery.next_delay()
+            };
+
+            match delay {
+                Some(duration) => {
+                    attempt += 1;
+
+                    // Transition to reconnecting state
+                    self.state_machine.reconnecting(attempt);
+
+                    tracing::info!(
+                        "Reconnection attempt {} in {:?}",
+                        attempt,
+                        duration
+                    );
+
+                    // Wait for backoff duration
+                    tokio::time::sleep(duration).await;
+
+                    // Check if shutdown was requested during sleep
+                    if self.shutdown.receiver_count() == 0 {
+                        tracing::info!("Shutdown requested, aborting reconnection");
+                        return;
+                    }
+
+                    // Attempt reconnection
+                    match self.pool.connect().await {
+                        Ok(()) => {
+                            tracing::info!("Reconnection successful after {} attempts", attempt);
+
+                            // Reset recovery on success
+                            self.recovery.lock().reset();
+
+                            // Transition to connected
+                            self.state_machine.connected();
+
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Reconnection attempt {} failed: {}", attempt, e);
+
+                            // Check for auth errors
+                            if e.is_auth_error() {
+                                tracing::error!("Authentication error during reconnection");
+                                self.state_machine.failed(FailReason::AuthExpired);
+                                return;
+                            }
+
+                            // Continue to next attempt
+                        }
+                    }
+                }
+                None => {
+                    // Max attempts exceeded
+                    tracing::error!("Maximum reconnection attempts exceeded");
+                    self.state_machine.failed(FailReason::MaxRetriesExceeded);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Shutdown the manager gracefully.
+    ///
+    /// - Saves offline queue to disk
+    /// - Stops reconnection loop
+    /// - Disconnects from server
+    pub async fn shutdown(&self) {
+        tracing::info!("ConnectionManager shutting down");
+
+        // Save the offline queue
+        if let Err(e) = self.offline_queue.save(&self.config.queue_path).await {
+            tracing::error!("Failed to save offline queue: {}", e);
+        }
+
+        // Signal shutdown to reconnection loop
+        let _ = self.shutdown.send(());
+
+        // Disconnect
+        self.pool.disconnect();
+        self.state_machine.disconnected();
+
+        tracing::info!("ConnectionManager shutdown complete");
+    }
 }
 
 #[cfg(test)]
