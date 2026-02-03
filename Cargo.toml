@@ -44,6 +44,8 @@ tower = "0.5"                                     # Middleware layers (retry, ti
 libsignal-protocol = { git = "https://github.com/signalapp/libsignal", branch = "main" }
 libsignal-core = { git = "https://github.com/signalapp/libsignal", branch = "main" }
 rand = "0.9"
+blind-rsa-signatures = "0.14"                     # Chaum RSA blind signatures (RFC 9474)
+rsa = "0.7"                                       # RSA public key parsing (matches blind-rsa-signatures 0.14)
 sha2 = "0.10"
 hmac = "0.12"
 hkdf = "0.12"
