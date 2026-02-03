@@ -7,3 +7,4 @@ pub mod orderer;
 pub mod validator;
 
 pub use deduplicator::{DeduplicatorStats, MessageDeduplicator};
+pub use validator::{ContentValidator, ValidationError, ValidationLimits};
