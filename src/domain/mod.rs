@@ -22,7 +22,7 @@ pub mod embed;
 // Re-export core types for convenience
 pub use ids::{
     AttachmentId, CallId, ChannelId, DeviceId, DraftId, IntegrationId, MessageId, NotificationId,
-    ReactionId, SessionId, ThreadId, UserId,
+    ReactionId, SavedMessageId, SessionId, ThreadId, UserId,
 };
 pub use user::{Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
 pub use message::{
@@ -44,3 +44,6 @@ pub use call::{Call, CallEndReason, CallState, CallType, Participant, Verificati
 pub use moderation::{Ban, ModerationAction, ModerationLogEntry, Mute};
 pub use draft::{Draft, DraftKey};
 pub use ephemeral::{EphemeralMessage, EphemeralState, MessageTTL};
+pub use saved_message::{SavedContent, SavedMessage};
+pub use mention::{Mention, MentionExtractor, MentionSuggestion, MentionType};
+pub use embed::{EmbedType, GitHubEmbed, LinkEmbed, LinkPreview, TwitterEmbed, YouTubeEmbed};
