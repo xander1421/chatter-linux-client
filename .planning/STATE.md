@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 23 complete — Inbox Provider & Poller (DeviceInboxProvider, InboxPoller, MessageProcessor, LocalQueue)
+**Current focus:** Phase 24 in progress — Inbox Message Handlers (ChatHandler, AttachmentHandler complete)
 
 ## Current Position
 
-Phase: 23 of 66 (Inbox Provider & Poller)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 23-02-PLAN.md
+Phase: 24 of 66 (Inbox Message Handlers)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-03 — Completed 24-01-PLAN.md
 
-Progress: ██████████████████████████████████████████████████████████░░░░░░░░░░░░░░ 61.3%
+Progress: ███████████████████████████████████████████████████████████░░░░░░░░░░░░░ 62.5%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 39
-- Average duration: ~4.1 min
-- Total execution time: ~159 min
+- Total plans completed: 40
+- Average duration: ~4.4 min
+- Total execution time: ~177 min
 
 **By Phase:**
 
@@ -50,10 +50,11 @@ Progress: ███████████████████████�
 | 21 | 3 | ~12m | ~4m |
 | 22 | 2 | ~9m | ~4.5m |
 | 23 | 2 | ~8m | ~4m |
+| 24 | 1 | ~18m | ~18m |
 
 **Recent Trend:**
-- Last 5 plans: 22-1 (~4m), 22-2 (~5m), 23-1 (~4m), 23-2 (~4m)
-- Trend: Consistent ~3-5m per plan
+- Last 5 plans: 22-2 (~5m), 23-1 (~4m), 23-2 (~4m), 24-1 (~18m)
+- Trend: Handler infrastructure plans take longer (more tests)
 
 ## Accumulated Context
 
@@ -131,6 +132,9 @@ Recent decisions affecting current work:
 - ContentType from protobuf wire format (peek first bytes)
 - ProcessingError.is_recoverable() for retry decisions
 - LocalQueue exponential backoff: base_delay * 2^attempts, capped at 5 min
+- SHA256-based deterministic UUIDs for message IDs (no Uuid v5 feature)
+- Stateless handlers with HandlerContext for broadcast event emission
+- DomainEvent via broadcast channels (capacity 64) for multi-subscriber consumption
 
 ### Deferred Issues
 
@@ -143,6 +147,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 23-02-PLAN.md (MessageProcessor & LocalQueue)
+Stopped at: Completed 24-01-PLAN.md (ChatHandler & AttachmentHandler)
 Resume file: None
-Next action: Proceed to Phase 24 (Inbox Message Handlers)
+Next action: Execute 24-02-PLAN.md (ReactionHandler, ReceiptHandler)
