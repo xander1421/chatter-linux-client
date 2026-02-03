@@ -31,9 +31,7 @@ use std::fmt;
 
 use tokio::sync::broadcast;
 
-use crate::domain::{
-    Attachment, ChannelId, Message, MessageContent, MessageId, UserId,
-};
+use crate::domain::{Attachment, ChannelId, Message, MessageContent, MessageId, UserId};
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 
 use std::sync::Arc;
@@ -46,6 +44,7 @@ pub use pin::PinHandler;
 pub use reaction::ReactionHandler;
 pub use receipt::ReceiptHandler;
 pub use sender_key::SenderKeyHandler;
+pub use sync::SyncHandler;
 pub use typing::TypingHandler;
 
 // ============================================================================
@@ -366,6 +365,20 @@ pub enum DomainEvent {
         /// When the distribution was sent (ms since epoch).
         timestamp: u64,
     },
+    /// Multi-device sync: message deleted locally on another device.
+    ///
+    /// Different from MessageDeleted (delete for everyone) - this only
+    /// syncs local deletion across user's devices.
+    DeleteForMeSync {
+        /// Conversation containing the deleted message.
+        conversation_id: ChannelId,
+        /// Author of the deleted message.
+        target_author_id: UserId,
+        /// The deleted message (derived from timestamp).
+        target_message_id: MessageId,
+        /// When the sync was issued (ms since epoch).
+        timestamp: u64,
+    },
 }
 
 impl DomainEvent {
@@ -387,6 +400,7 @@ impl DomainEvent {
             DomainEvent::MessageUnpinned { channel_id, .. } => Some(*channel_id),
             DomainEvent::KeyExchangeReceived { conversation_id, .. } => Some(*conversation_id),
             DomainEvent::SenderKeyReceived { channel_id, .. } => Some(*channel_id),
+            DomainEvent::DeleteForMeSync { conversation_id, .. } => Some(*conversation_id),
         }
     }
 
@@ -465,6 +479,10 @@ impl HandlerRegistry {
     /// - `ReactionHandler` - Emoji reactions on messages
     /// - `ReceiptHandler` - Delivery/read/viewed receipts
     /// - `TypingHandler` - Typing indicators
+    /// - `KeyExchangeHandler` - Mailbox key exchange for DM encryption
+    /// - `SenderKeyHandler` - Group sender key distribution
+    /// - `PinHandler` - Message pin/unpin events
+    /// - `SyncHandler` - Multi-device sync messages (DeleteForMeSync)
     pub fn new(local_user_id: UserId, event_tx: broadcast::Sender<DomainEvent>) -> Self {
         let context = HandlerContext::new(local_user_id, event_tx);
 
@@ -474,6 +492,11 @@ impl HandlerRegistry {
             Arc::new(ReactionHandler::new()),
             Arc::new(ReceiptHandler::new()),
             Arc::new(TypingHandler::new()),
+            // Phase 25 handlers
+            Arc::new(KeyExchangeHandler::new()),
+            Arc::new(SenderKeyHandler::new()),
+            Arc::new(PinHandler::new()),
+            Arc::new(SyncHandler::new()),
         ];
 
         Self { handlers, context }
@@ -606,6 +629,40 @@ mod tests {
             receipt_timestamp: 456,
         };
         assert_eq!(read.channel_id(), None); // Cross-channel
+
+        // Test DeleteForMeSync event
+        let message_id = MessageId::new();
+        let delete_sync = DomainEvent::DeleteForMeSync {
+            conversation_id: channel_id,
+            target_author_id: user_id,
+            target_message_id: message_id,
+            timestamp: 1704067200000,
+        };
+        assert_eq!(delete_sync.channel_id(), Some(channel_id));
+        assert!(!delete_sync.is_transient()); // DeleteForMeSync is NOT transient
+    }
+
+    #[test]
+    fn test_domain_event_delete_for_me_sync() {
+        let channel_id = ChannelId::new();
+        let user_id = UserId::new();
+        let message_id = MessageId::new();
+
+        let event = DomainEvent::DeleteForMeSync {
+            conversation_id: channel_id,
+            target_author_id: user_id,
+            target_message_id: message_id,
+            timestamp: 1704067200000,
+        };
+
+        // Test channel_id()
+        assert_eq!(event.channel_id(), Some(channel_id));
+
+        // Test is_transient() - DeleteForMeSync should be persisted
+        assert!(!event.is_transient());
+
+        // Test is_message_event() - this is a sync event, not a direct message event
+        assert!(!event.is_message_event());
     }
 
     #[test]
@@ -667,18 +724,18 @@ mod tests {
     #[test]
     fn test_registry_has_default_handlers() {
         let (registry, _rx) = make_registry();
-        // 5 default handlers: Chat, Attachment, Reaction, Receipt, Typing
-        assert_eq!(registry.handler_count(), 5);
+        // 9 handlers: Chat, Attachment, Reaction, Receipt, Typing, KeyExchange, SenderKey, Pin, Sync
+        assert_eq!(registry.handler_count(), 9);
     }
 
     #[test]
     fn test_registry_register_custom_handler() {
         let (mut registry, _rx) = make_registry();
-        assert_eq!(registry.handler_count(), 5);
+        assert_eq!(registry.handler_count(), 9);
 
         // Add custom handler
         registry.register(Arc::new(TypingHandler::new()));
-        assert_eq!(registry.handler_count(), 6);
+        assert_eq!(registry.handler_count(), 10);
     }
 
     #[test]
@@ -770,5 +827,68 @@ mod tests {
 
         let result = registry.route(&processed).await.unwrap();
         assert!(result.is_ignored());
+    }
+
+    #[tokio::test]
+    async fn test_registry_routes_sender_key_distribution() {
+        use crate::proto::content_v1::SenderKeyDistribution;
+
+        let (registry, mut rx) = make_registry();
+
+        let sender_key = SenderKeyDistribution {
+            channel_id: Uuid::new_v4().to_string(),
+            distribution_message: vec![0x01, 0x02, 0x03, 0x04],
+            timestamp: 1704067200000,
+        };
+
+        let content = Content {
+            content: Some(content::Content::SenderKey(sender_key)),
+            ephemeral_reply_to: None,
+            timestamp: 1704067200000,
+            padding: vec![],
+        };
+
+        let mut plaintext = Vec::new();
+        content.encode(&mut plaintext).unwrap();
+        let processed = make_processed(ContentType::SenderKeyDistribution, plaintext);
+
+        let result = registry.route(&processed).await.unwrap();
+        assert!(result.is_success());
+
+        // Verify event was emitted
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, DomainEvent::SenderKeyReceived { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_registry_routes_sync_message_delete_for_me() {
+        use crate::proto::content_v1::DeleteForMeSync;
+
+        let (registry, mut rx) = make_registry();
+
+        let delete_sync = DeleteForMeSync {
+            conversation_id: Uuid::new_v4().to_string(),
+            target_author_aci: Uuid::new_v4().to_string(),
+            target_sent_timestamp: 1704067200000,
+            timestamp: 1704067201000,
+        };
+
+        let content = Content {
+            content: Some(content::Content::DeleteForMeSync(delete_sync)),
+            ephemeral_reply_to: None,
+            timestamp: 1704067201000,
+            padding: vec![],
+        };
+
+        let mut plaintext = Vec::new();
+        content.encode(&mut plaintext).unwrap();
+        let processed = make_processed(ContentType::SyncMessage, plaintext);
+
+        let result = registry.route(&processed).await.unwrap();
+        assert!(result.is_success());
+
+        // Verify event was emitted
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, DomainEvent::DeleteForMeSync { .. }));
     }
 }
