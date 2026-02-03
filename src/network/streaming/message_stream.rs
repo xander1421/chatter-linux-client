@@ -59,3 +59,24 @@ pub struct MessageDeleted {
     /// Timestamp of the deletion event.
     pub timestamp: u64,
 }
+
+impl MessageEventRouter {
+    /// Create a new MessageEventRouter with all channels initialized.
+    pub fn new() -> Self {
+        Self {
+            message_sent: broadcast::channel(CHANNEL_CAPACITY).0,
+            message_updated: broadcast::channel(CHANNEL_CAPACITY).0,
+            message_deleted: broadcast::channel(CHANNEL_CAPACITY).0,
+            reaction_added: broadcast::channel(CHANNEL_CAPACITY).0,
+            reaction_removed: broadcast::channel(CHANNEL_CAPACITY).0,
+            read_receipt: broadcast::channel(CHANNEL_CAPACITY).0,
+            typing_indicator: broadcast::channel(CHANNEL_CAPACITY).0,
+        }
+    }
+}
+
+impl Default for MessageEventRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
