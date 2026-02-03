@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 24 complete — Ready for Phase 25 (Inbox Sync Handlers)
+**Current focus:** Phase 25 planned — Ready for execution (Inbox Sync Handlers)
 
 ## Current Position
 
-Phase: 24 of 66 (Inbox Message Handlers)
-Plan: 3 of 3 in current phase
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 24-03-PLAN.md
+Phase: 25 of 66 (Inbox Sync Handlers)
+Plan: 0 of 2 in current phase
+Status: Planning complete, ready for execution
+Last activity: 2026-02-03 — Created 25-01-PLAN.md, 25-02-PLAN.md
 
 Progress: ████████████████████████████████████████████████████████████░░░░░░░░░░░░ 65.2%
 
@@ -147,6 +147,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 24-03-PLAN.md (TypingHandler, HandlerRegistry, Phase 24 complete)
+Stopped at: Created Phase 25 plans (2 plans: sync handlers + registry integration)
 Resume file: None
-Next action: Plan Phase 25 (Inbox Sync Handlers)
+Next action: Execute 25-01-PLAN.md (KeyExchangeHandler, SenderKeyHandler, PinHandler)
