@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 25 of 66 (Inbox Sync Handlers)
-Plan: 0 of 2 in current phase
-Status: Planning complete, ready for execution
-Last activity: 2026-02-03 — Created 25-01-PLAN.md, 25-02-PLAN.md
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-03 — Completed 25-01-PLAN.md
 
-Progress: ████████████████████████████████████████████████████████████░░░░░░░░░░░░ 65.2%
+Progress: ████████████████████████████████████████████████████████████░░░░░░░░░░░░ 65.9%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 41
-- Average duration: ~4.4 min
-- Total execution time: ~181 min
+- Total plans completed: 42
+- Average duration: ~4.6 min
+- Total execution time: ~193 min
 
 **By Phase:**
 
@@ -53,8 +53,8 @@ Progress: ███████████████████████�
 | 24 | 3 | ~26m | ~9m |
 
 **Recent Trend:**
-- Last 5 plans: 23-2 (~4m), 24-1 (~18m), 24-2 (~4m), 24-3 (~4m)
-- Trend: Handler implementation with tests runs ~4-5 min per plan
+- Last 5 plans: 24-1 (~18m), 24-2 (~4m), 24-3 (~4m), 25-1 (~12m)
+- Trend: Handler implementation with tests runs ~4-12 min per plan
 
 ## Accumulated Context
 
@@ -135,6 +135,9 @@ Recent decisions affecting current work:
 - SHA256-based deterministic UUIDs for message IDs (no Uuid v5 feature)
 - Stateless handlers with HandlerContext for broadcast event emission
 - DomainEvent via broadcast channels (capacity 64) for multi-subscriber consumption
+- KeyExchange validates 32-byte ephemeral_pk (Ed25519 public key)
+- SenderKey passes raw distribution_message bytes to crypto layer
+- PinHandler uses local_user_id fallback for sealed sender messages
 
 ### Deferred Issues
 
@@ -147,6 +150,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Created Phase 25 plans (2 plans: sync handlers + registry integration)
+Stopped at: Completed 25-01-PLAN.md (KeyExchange, SenderKey, Pin handlers)
 Resume file: None
-Next action: Execute 25-01-PLAN.md (KeyExchangeHandler, SenderKeyHandler, PinHandler)
+Next action: Execute 25-02-PLAN.md (SyncHandler, processor routing updates)

@@ -549,7 +549,7 @@ None (custom application, no pre-existing domain skills)
 | 22 | Network Validation | 2 | Done | 2026-02-03 |
 | 23 | Inbox Provider & Poller | 2 | Done | 2026-02-03 |
 | 24 | Inbox Message Handlers | 3 | Done | 2026-02-03 |
-| 25 | Inbox Sync Handlers | TBD | Not started | - |
+| 25 | Inbox Sync Handlers | 2 | In progress | - |
 | 26 | Mailbox Token Manager | TBD | Not started | - |
 | 27 | Mailbox DM System | TBD | Not started | - |
 | 28 | Mailbox Group System | TBD | Not started | - |
