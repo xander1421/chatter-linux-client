@@ -138,7 +138,7 @@ None (custom application, no pre-existing domain skills)
 **Goal**: UserRepo, MessageRepo, ChannelRepo with CRUD operations
 **Depends on**: Phase 5
 **Research**: Unlikely (standard repository pattern)
-**Plans**: TBD
+**Plans**: 3 (06-01: Users, 06-02: Channels, 06-03: Messages)
 
 ### Phase 7: Storage Supporting Repositories
 **Goal**: AttachmentRepo, ReactionRepo, DraftRepo, SettingsRepo
