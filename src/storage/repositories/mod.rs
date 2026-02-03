@@ -11,6 +11,7 @@
 //! - [`ReactionRepository`] - Message reactions (toggle pattern)
 //! - [`DraftRepository`] - Message draft persistence
 //! - [`SettingsRepository`] - Key-value application settings
+//! - [`SearchIndex`] - FTS5 full-text message search
 //!
 //! # Usage
 //!
@@ -37,5 +38,6 @@ pub use channel_repo::ChannelRepository;
 pub use draft_repo::DraftRepository;
 pub use message_repo::MessageRepository;
 pub use reaction_repo::ReactionRepository;
+pub use search_index::{SearchIndex, SearchResult};
 pub use settings_repo::{keys as settings_keys, SettingsRepository};
 pub use user_repo::UserRepository;
