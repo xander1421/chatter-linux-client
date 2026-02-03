@@ -15,8 +15,8 @@ use crate::proto::chat_v1::{
     ListBlockedUsersRequest, ListBlockedUsersResponse, ListFriendRequestsRequest,
     ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse, PresenceUpdate,
     RemoveFriendRequest, StreamPresenceRequest, UnblockUserRequest, UpdatePresenceRequest,
-    UpdateUserProfileRequest, UserEvent, UserPresence, UserProfile, UserSearchRequest,
-    UserSearchResponse,
+    UpdateUserProfileRequest, UserEvent, UserEventRequest, UserPresence, UserProfile,
+    UserSearchRequest, UserSearchResponse,
 };
 
 /// User service client wrapper.
@@ -304,5 +304,33 @@ impl UserClient {
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Event Streaming ====================
+
+    /// Stream all user events (friends, blocks, profile changes, etc).
+    ///
+    /// Long-lived stream for real-time updates.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_id` - User ID to stream events for (typically current user)
+    pub async fn stream_user_events(
+        &mut self,
+        user_id: &str,
+    ) -> Result<impl Stream<Item = Result<UserEvent, NetworkError>>, NetworkError> {
+        let request = UserEventRequest {
+            user_id: user_id.to_string(),
+        };
+
+        let response = self
+            .inner
+            .stream_user_events(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
     }
 }
