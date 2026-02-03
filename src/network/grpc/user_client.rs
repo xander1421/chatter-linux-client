@@ -10,9 +10,12 @@ use tonic::transport::Channel;
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    user_service_client::UserServiceClient, GetUserProfileRequest, PresenceUpdate,
-    StreamPresenceRequest, UpdatePresenceRequest, UpdateUserProfileRequest, UserEvent,
-    UserPresence, UserProfile, UserSearchRequest, UserSearchResponse,
+    friend_requests_filter, user_service_client::UserServiceClient, FriendRequest,
+    FriendRequestsFilter, FriendResponse, FriendStatus, GetUserProfileRequest,
+    ListFriendRequestsRequest, ListFriendRequestsResponse, ListFriendsRequest, ListFriendsResponse,
+    PresenceUpdate, RemoveFriendRequest, StreamPresenceRequest, UpdatePresenceRequest,
+    UpdateUserProfileRequest, UserEvent, UserPresence, UserProfile, UserSearchRequest,
+    UserSearchResponse,
 };
 
 /// User service client wrapper.
@@ -134,5 +137,112 @@ impl UserClient {
         Ok(response
             .into_inner()
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    // ==================== Friend Management RPCs ====================
+
+    /// Send a friend request to a user (streaming response).
+    pub async fn send_friend_request(
+        &mut self,
+        user_id: &str,
+        message: Option<&str>,
+    ) -> Result<impl Stream<Item = Result<UserEvent, NetworkError>>, NetworkError> {
+        let request = FriendRequest {
+            user_id: user_id.to_string(),
+            message: message.unwrap_or("").to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        let response = self
+            .inner
+            .send_friend_request(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    /// Respond to a friend request (streaming response).
+    pub async fn respond_friend_request(
+        &mut self,
+        user_id: &str,
+        status: FriendStatus,
+        message: Option<&str>,
+    ) -> Result<impl Stream<Item = Result<UserEvent, NetworkError>>, NetworkError> {
+        let request = FriendResponse {
+            user_id: user_id.to_string(),
+            status: status.into(),
+            message: message.unwrap_or("").to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        let response = self
+            .inner
+            .respond_friend_request(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    /// Remove a friend.
+    pub async fn remove_friend(&mut self, user_id: &str) -> Result<(), NetworkError> {
+        let request = RemoveFriendRequest {
+            user_id: user_id.to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .remove_friend(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// List friends with pagination.
+    pub async fn list_friends(
+        &mut self,
+        limit: i32,
+        offset: i32,
+    ) -> Result<ListFriendsResponse, NetworkError> {
+        let request = ListFriendsRequest { limit, offset };
+
+        self.inner
+            .list_friends(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// List pending friend requests.
+    ///
+    /// # Arguments
+    ///
+    /// * `filter` - Filter type (All, Pending, Accepted, Sent, Received)
+    /// * `limit` - Max results to return
+    /// * `offset` - Pagination offset
+    pub async fn list_friend_requests(
+        &mut self,
+        filter: friend_requests_filter::Filter,
+        limit: i32,
+        offset: i32,
+    ) -> Result<ListFriendRequestsResponse, NetworkError> {
+        let request = ListFriendRequestsRequest {
+            filter: Some(FriendRequestsFilter {
+                filter: filter.into(),
+                limit,
+                offset,
+            }),
+        };
+
+        self.inner
+            .list_friend_requests(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
     }
 }
