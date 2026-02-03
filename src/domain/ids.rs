@@ -43,6 +43,10 @@ pub struct ReactionId(pub Uuid);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct IntegrationId(pub Uuid);
 
+/// Unique identifier for a notification (UUID v4).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub struct NotificationId(pub Uuid);
+
 /// Unique identifier for a thread (same as MessageId of root message).
 pub type ThreadId = MessageId;
 
@@ -121,7 +125,8 @@ impl_uuid_id!(
     CallId,
     SessionId,
     ReactionId,
-    IntegrationId
+    IntegrationId,
+    NotificationId
 );
 
 // ============================================================================

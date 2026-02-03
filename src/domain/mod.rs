@@ -21,8 +21,8 @@ pub mod embed;
 
 // Re-export core types for convenience
 pub use ids::{
-    AttachmentId, CallId, ChannelId, DeviceId, IntegrationId, MessageId, ReactionId, SessionId,
-    ThreadId, UserId,
+    AttachmentId, CallId, ChannelId, DeviceId, IntegrationId, MessageId, NotificationId,
+    ReactionId, SessionId, ThreadId, UserId,
 };
 pub use user::{Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
 pub use message::{
@@ -35,4 +35,8 @@ pub use channel::{
 };
 pub use attachment::{
     Attachment, AttachmentStatus, FileCategory, FileMetadata, GifMetadata, GifProvider, Thumbnail,
+};
+pub use reaction::{Emoji, EmojiCategory, Reaction};
+pub use notification::{
+    CallNotificationType, Notification, NotificationPriority, NotificationType,
 };
