@@ -530,7 +530,7 @@ None (custom application, no pre-existing domain skills)
 | 3 | Domain Supporting Entities | 2 | Done | 2026-02-03 |
 | 4 | Domain Privacy Entities | 2 | Done | 2026-02-03 |
 | 5 | Storage Database Setup | 2 | Done | 2026-02-03 |
-| 6 | Storage Core Repositories | TBD | Not started | - |
+| 6 | Storage Core Repositories | 3 | In progress | - |
 | 7 | Storage Supporting Repositories | TBD | Not started | - |
 | 8 | Storage Search Index | TBD | Not started | - |
 | 9 | Storage Key Store | TBD | Not started | - |

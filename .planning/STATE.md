@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 5 — Storage Database Setup — COMPLETE
+**Current focus:** Phase 6 — Storage Core Repositories — In progress
 
 ## Current Position
 
-Phase: 5 of 66 (Storage Database Setup) — COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 05-02-PLAN.md
+Phase: 6 of 66 (Storage Core Repositories)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-03 — Completed 06-01-PLAN.md
 
-Progress: [xxxxxxxxx]░ 13.6%
+Progress: [xxxxxxxxxx]░ 15.2%
 
 ## Performance Metrics
 
@@ -74,6 +74,10 @@ Recent decisions affecting current work:
 - Verify encryption key on open via cipher_version query
 - schema_version managed by MigrationRunner, not individual migrations
 - Migrations sorted by version, each in own transaction
+- Arc<Database> for repository dependency injection
+- Enums as integers in SQLite (PresenceStatus 0-3, FriendshipStatus 0-2)
+- While loop for list queries (avoid rusqlite lifetime issues)
+- UPSERT for profile updates
 
 ### Deferred Issues
 
@@ -86,5 +90,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Phase 5 complete
-Resume file: None (ready for Phase 6)
+Stopped at: Completed 06-01-PLAN.md
+Resume file: None
