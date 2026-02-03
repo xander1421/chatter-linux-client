@@ -459,3 +459,82 @@ impl UserClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Note: Full integration tests require a running server.
+    // These tests verify compilation and basic structure.
+
+    #[test]
+    fn test_user_client_construction_types() {
+        // This test verifies the type signatures compile correctly.
+        // We can't actually create a client without a real channel,
+        // but we verify the wrapper pattern is correct.
+        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+            let _client = UserClient::new(channel, interceptor);
+        }
+    }
+
+    #[test]
+    fn test_presence_status_values() {
+        // Verify UserPresence enum is accessible and has expected values
+        assert_eq!(UserPresence::PresenceUnspecified as i32, 0);
+        assert_eq!(UserPresence::Offline as i32, 1);
+        assert_eq!(UserPresence::Online as i32, 2);
+        assert_eq!(UserPresence::Away as i32, 3);
+        assert_eq!(UserPresence::DoNotDisturb as i32, 4);
+    }
+
+    #[test]
+    fn test_friend_status_values() {
+        // Verify FriendStatus enum is accessible
+        assert_eq!(FriendStatus::Unspecified as i32, 0);
+        assert_eq!(FriendStatus::None as i32, 1);
+        assert_eq!(FriendStatus::Pending as i32, 2);
+        assert_eq!(FriendStatus::Accepted as i32, 3);
+        assert_eq!(FriendStatus::Declined as i32, 4);
+        assert_eq!(FriendStatus::Blocked as i32, 5);
+    }
+
+    #[test]
+    fn test_friend_requests_filter_values() {
+        // Verify filter enum is accessible
+        use friend_requests_filter::Filter;
+        assert_eq!(Filter::All as i32, 0);
+        assert_eq!(Filter::Pending as i32, 1);
+        assert_eq!(Filter::Accepted as i32, 2);
+        assert_eq!(Filter::Sent as i32, 3);
+        assert_eq!(Filter::Received as i32, 4);
+    }
+
+    #[test]
+    fn test_user_profile_construction() {
+        // Verify UserProfile can be constructed
+        let profile = UserProfile {
+            user_id: "user-123".to_string(),
+            display_name: "Test User".to_string(),
+            avatar_url: "https://example.com/avatar.png".to_string(),
+            status_message: "Hello!".to_string(),
+            presence: UserPresence::Online as i32,
+        };
+
+        assert_eq!(profile.user_id, "user-123");
+        assert_eq!(profile.display_name, "Test User");
+        assert_eq!(profile.presence, UserPresence::Online as i32);
+    }
+
+    #[test]
+    fn test_friend_request_construction() {
+        // Verify FriendRequest can be constructed
+        let request = FriendRequest {
+            user_id: "friend-456".to_string(),
+            message: "Let's be friends!".to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        assert_eq!(request.user_id, "friend-456");
+        assert!(!request.request_id.is_empty());
+    }
+}
