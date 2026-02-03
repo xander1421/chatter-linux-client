@@ -15,10 +15,13 @@ use crate::proto::chat_v1::{
     DeleteIntegrationRequest, DeleteIntegrationResponse, DisableIntegrationRequest,
     DisableIntegrationResponse, EnableIntegrationRequest, EnableIntegrationResponse,
     GetChannelIntegrationsRequest, GetChannelIntegrationsResponse, GetIntegrationRequest,
-    GetIntegrationResponse, HandleWebhookCallbackRequest, HandleWebhookCallbackResponse,
-    Integration, IntegrationConfig, ListIntegrationsRequest, ListIntegrationsResponse,
-    RegisterWebhookRequest, RegisterWebhookResponse, RemoveIntegrationFromChannelRequest,
-    RemoveIntegrationFromChannelResponse, TestIntegrationRequest, TestIntegrationResponse,
+    GetIntegrationResponse, GetModelLimitsRequest, GetModelLimitsResponse,
+    HandleWebhookCallbackRequest, HandleWebhookCallbackResponse, Integration, IntegrationConfig,
+    IntegrationType, ListAvailableModelsRequest, ListAvailableModelsResponse,
+    ListIntegrationsRequest, ListIntegrationsResponse, RegisterWebhookRequest,
+    RegisterWebhookResponse, RemoveIntegrationFromChannelRequest,
+    RemoveIntegrationFromChannelResponse, StreamIntegrationEventsRequest,
+    StreamIntegrationEventsResponse, TestIntegrationRequest, TestIntegrationResponse,
     UnregisterWebhookRequest, UnregisterWebhookResponse, UpdateIntegrationRequest,
     UpdateIntegrationResponse, WebhookConfig,
 };
@@ -371,5 +374,220 @@ impl IntegrationClient {
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== AI Model RPCs ====================
+
+    /// Get token/parameter limits for a specific AI model.
+    ///
+    /// # Arguments
+    ///
+    /// * `integration_type` - The type of integration (e.g., IntegrationType::Claude)
+    /// * `model` - The model ID (e.g., "claude-3-opus")
+    pub async fn get_model_limits(
+        &mut self,
+        integration_type: IntegrationType,
+        model: &str,
+    ) -> Result<GetModelLimitsResponse, NetworkError> {
+        let request = GetModelLimitsRequest {
+            integration_type: integration_type as i32,
+            model: model.to_string(),
+        };
+
+        self.inner
+            .get_model_limits(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// List available AI models for an integration type.
+    ///
+    /// # Arguments
+    ///
+    /// * `integration_type` - The type of integration (e.g., IntegrationType::Claude)
+    /// * `api_key` - Optional API key (uses existing integration secret if not provided)
+    /// * `integration_id` - Optional integration ID to use for fetching API key
+    pub async fn list_available_models(
+        &mut self,
+        integration_type: IntegrationType,
+        api_key: Option<&str>,
+        integration_id: Option<&str>,
+    ) -> Result<ListAvailableModelsResponse, NetworkError> {
+        let request = ListAvailableModelsRequest {
+            integration_type: integration_type as i32,
+            api_key: api_key.unwrap_or("").to_string(),
+            integration_id: integration_id.unwrap_or("").to_string(),
+        };
+
+        self.inner
+            .list_available_models(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Event Streaming ====================
+
+    /// Stream integration events.
+    ///
+    /// Long-lived stream for real-time integration events.
+    ///
+    /// # Arguments
+    ///
+    /// * `integration_id` - Optional integration ID. If not provided, streams events for all integrations.
+    pub async fn stream_integration_events(
+        &mut self,
+        integration_id: Option<&str>,
+    ) -> Result<impl Stream<Item = Result<StreamIntegrationEventsResponse, NetworkError>>, NetworkError>
+    {
+        let request = StreamIntegrationEventsRequest {
+            integration_ids: integration_id
+                .map(|id| vec![id.to_string()])
+                .unwrap_or_default(),
+            event_types: vec![],
+            since: 0,
+        };
+
+        let response = self
+            .inner
+            .stream_integration_events(request)
+            .await
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response
+            .into_inner()
+            .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Note: Full integration tests require a running server.
+    // These tests verify compilation and basic structure.
+
+    #[test]
+    fn test_integration_client_construction_types() {
+        // This test verifies the type signatures compile correctly.
+        fn _verify_types(channel: Channel, interceptor: AuthInterceptor) {
+            let _client = IntegrationClient::new(channel, interceptor);
+        }
+    }
+
+    #[test]
+    fn test_create_integration_request_construction() {
+        let request = CreateIntegrationRequest {
+            name: "test-integration".to_string(),
+            r#type: IntegrationType::Claude as i32,
+            config: None,
+            secrets: Default::default(),
+            channel_ids: vec![],
+        };
+
+        assert_eq!(request.name, "test-integration");
+        assert_eq!(request.r#type, IntegrationType::Claude as i32);
+    }
+
+    #[test]
+    fn test_register_webhook_request_construction() {
+        use crate::proto::chat_v1::WebhookEvent;
+
+        let events = vec![
+            WebhookEvent {
+                r#type: 1, // Example event type
+                filters: None,
+            },
+            WebhookEvent {
+                r#type: 2,
+                filters: None,
+            },
+        ];
+
+        let config = WebhookConfig {
+            url: "https://example.com/webhook".to_string(),
+            secret: "secret123".to_string(),
+            events,
+            headers: Default::default(),
+            timeout_seconds: 30,
+            retry_count: 3,
+        };
+
+        let request = RegisterWebhookRequest {
+            integration_id: "integration-123".to_string(),
+            config: Some(config),
+        };
+
+        assert_eq!(request.integration_id, "integration-123");
+        assert!(request.config.is_some());
+        let config = request.config.unwrap();
+        assert_eq!(config.url, "https://example.com/webhook");
+        assert_eq!(config.events.len(), 2);
+    }
+
+    #[test]
+    fn test_add_integration_to_channel_request_construction() {
+        let request = AddIntegrationToChannelRequest {
+            integration_id: "integration-456".to_string(),
+            channel_id: "channel-789".to_string(),
+        };
+
+        assert_eq!(request.integration_id, "integration-456");
+        assert_eq!(request.channel_id, "channel-789");
+    }
+
+    #[test]
+    fn test_get_model_limits_request_construction() {
+        let request = GetModelLimitsRequest {
+            integration_type: IntegrationType::Openai as i32,
+            model: "gpt-4".to_string(),
+        };
+
+        assert_eq!(request.integration_type, IntegrationType::Openai as i32);
+        assert_eq!(request.model, "gpt-4");
+    }
+
+    #[test]
+    fn test_integration_type_values() {
+        // Verify IntegrationType enum has expected values
+        assert_eq!(IntegrationType::Unspecified as i32, 0);
+        assert_eq!(IntegrationType::Webhook as i32, 1);
+        assert_eq!(IntegrationType::Claude as i32, 10);
+        assert_eq!(IntegrationType::Openai as i32, 11);
+        assert_eq!(IntegrationType::GoogleAi as i32, 12);
+    }
+
+    #[test]
+    fn test_integration_config_construction() {
+        let config = IntegrationConfig {
+            provider_type: "ai".to_string(),
+            provider_name: "Anthropic".to_string(),
+            initialized_at: "2024-01-01".to_string(),
+            model: "claude-3-opus".to_string(),
+            max_tokens: 4096,
+            temperature: 0.7,
+            system_prompt: "You are a helpful assistant.".to_string(),
+            auto_respond: true,
+            bot_name: "Claude Bot".to_string(),
+            supported_models: vec!["claude-3-opus".to_string(), "claude-3-sonnet".to_string()],
+            include_history: true,
+            history_limit: 10,
+            respond_to_all: false,
+            webhook_url: String::new(),
+            timeout_seconds: 30,
+            retry_enabled: true,
+            retry_count: 3,
+            client_id: String::new(),
+            redirect_uri: String::new(),
+            scopes: vec![],
+            extra_config: Default::default(),
+        };
+
+        assert_eq!(config.model, "claude-3-opus");
+        assert_eq!(config.max_tokens, 4096);
+        assert!((config.temperature - 0.7).abs() < f64::EPSILON);
+        assert!(config.auto_respond);
+        assert_eq!(config.supported_models.len(), 2);
     }
 }
