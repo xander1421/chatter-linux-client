@@ -545,7 +545,7 @@ None (custom application, no pre-existing domain skills)
 | 18 | Network Channel & Message Clients | 2 | Done | 2026-02-03 |
 | 19 | Network Supporting Clients | 4 | Done | 2026-02-03 |
 | 20 | Network Streaming | 4 | Done | 2026-02-03 |
-| 21 | Network Resilience | TBD | Not started | - |
+| 21 | Network Resilience | 3 | In progress | - |
 | 22 | Network Validation | TBD | Not started | - |
 | 23 | Inbox Provider & Poller | TBD | Not started | - |
 | 24 | Inbox Message Handlers | TBD | Not started | - |

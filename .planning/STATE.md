@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 20 complete — Ready for Phase 21 (Network Resilience)
+**Current focus:** Phase 21 in progress — Retry Infrastructure complete, 2 plans remaining
 
 ## Current Position
 
-Phase: 20 of 66 (Network Streaming)
-Plan: 4 of 4 in current phase
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 20-04-PLAN.md
+Phase: 21 of 66 (Network Resilience)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-03 — Completed 21-01-PLAN.md
 
-Progress: ████████████████████████████████████████████████████░░░░░░░░░░░░░░░░░░░░ 54.5%
+Progress: █████████████████████████████████████████████████████░░░░░░░░░░░░░░░░░░░ 55.7%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 33
+- Total plans completed: 34
 - Average duration: ~4.2 min
-- Total execution time: ~139 min
+- Total execution time: ~142 min
 
 **By Phase:**
 
@@ -47,10 +47,11 @@ Progress: ███████████████████████�
 | 18 | 2 | ~6m | ~3m |
 | 19 | 4 | ~11m | ~3m |
 | 20 | 4 | ~11m | ~3m |
+| 21 | 1 | ~3m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 20-1 (~3m), 20-2 (~3m), 20-3 (~2m), 20-4 (~3m)
-- Trend: Phase 20 complete at ~3m average
+- Last 5 plans: 20-2 (~3m), 20-3 (~2m), 20-4 (~3m), 21-1 (~3m)
+- Trend: Consistent ~3m per plan
 
 ## Accumulated Context
 
@@ -132,6 +133,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 20-04-PLAN.md (Specialized Handlers - Phase 20 complete)
+Stopped at: Completed 21-01-PLAN.md (Retry Infrastructure)
 Resume file: None
-Next action: Plan Phase 21 (Network Resilience)
+Next action: Execute 21-02-PLAN.md (Connection Recovery)
