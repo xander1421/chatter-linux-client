@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 17 in planning — AuthClient and UserClient wrappers
+**Current focus:** Phase 17 complete — Network client wrappers (Auth, User) done
 
 ## Current Position
 
 Phase: 17 of 66 (Network Auth & User Clients)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-03 — Completed 17-02-PLAN.md
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-02-03 — Completed 17-03-PLAN.md
 
-Progress: █████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 39.4%
+Progress: █████████████████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░ 40.9%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 26
+- Total plans completed: 27
 - Average duration: ~4.5 min
-- Total execution time: ~118 min
+- Total execution time: ~122 min
 
 **By Phase:**
 
@@ -43,11 +43,11 @@ Progress: ███████████████████████�
 | 14 | 1 | ~4m | ~4m |
 | 15 | 1 | ~12m | ~12m |
 | 16 | 2 | ~9m | ~4.5m |
-| 17 | 2 | ~10m | ~5m |
+| 17 | 3 | ~14m | ~5m |
 
 **Recent Trend:**
-- Last 5 plans: 16-1 (~4m), 16-2 (~5m), 17-1 (~6m), 17-2 (~4m)
-- Trend: Phase 17 in progress; AuthClient Signal Protocol RPCs complete
+- Last 5 plans: 16-2 (~5m), 17-1 (~6m), 17-2 (~4m), 17-3 (~4m)
+- Trend: Phase 17 complete; AuthClient + UserClient network wrappers done
 
 ## Accumulated Context
 
@@ -121,6 +121,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 17-02-PLAN.md
+Stopped at: Completed 17-03-PLAN.md (Phase 17 complete)
 Resume file: None
-Next action: Execute 17-03-PLAN.md (UserClient)
+Next action: Plan Phase 18 (Network Channel & Message Clients)
