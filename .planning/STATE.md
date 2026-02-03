@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 20 in progress — MessageEventRouter complete, PresenceStream next
+**Current focus:** Phase 20 complete — Ready for Phase 21 (Network Resilience)
 
 ## Current Position
 
 Phase: 20 of 66 (Network Streaming)
-Plan: 3 of 4 in current phase
-Status: In progress
-Last activity: 2026-02-03 — Completed 20-03-PLAN.md
+Plan: 4 of 4 in current phase
+Status: Phase complete
+Last activity: 2026-02-03 — Completed 20-04-PLAN.md
 
-Progress: ███████████████████████████████████████████████████░░░░░░░░░░░░░░░░░░░░░ 53.2%
+Progress: ████████████████████████████████████████████████████░░░░░░░░░░░░░░░░░░░░ 54.5%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 32
-- Average duration: ~4.3 min
-- Total execution time: ~136 min
+- Total plans completed: 33
+- Average duration: ~4.2 min
+- Total execution time: ~139 min
 
 **By Phase:**
 
@@ -46,11 +46,11 @@ Progress: ███████████████████████�
 | 17 | 3 | ~14m | ~5m |
 | 18 | 2 | ~6m | ~3m |
 | 19 | 4 | ~11m | ~3m |
-| 20 | 3/4 | ~8m | ~3m |
+| 20 | 4 | ~11m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 19-4 (~2m), 20-1 (~3m), 20-2 (~3m), 20-3 (~2m)
-- Trend: Streaming infrastructure maintains ~2-3m average
+- Last 5 plans: 20-1 (~3m), 20-2 (~3m), 20-3 (~2m), 20-4 (~3m)
+- Trend: Phase 20 complete at ~3m average
 
 ## Accumulated Context
 
@@ -117,6 +117,9 @@ Recent decisions affecting current work:
 - MessageEventRouter uses broadcast capacity 256 for typed event channels
 - route() returns bool for success/failure tracking
 - PresenceRouter uses broadcast capacity 128 with 1000-entry LRU cache
+- TypingAggregator uses HashMap<channel, HashMap<user, Instant>> with 10s timeout
+- ReactionEvent wraps proto ReactionUpdate with user_id from stream context
+- ReadReceiptAggregator uses high-water mark (only update if newer timestamp)
 
 ### Deferred Issues
 
@@ -129,6 +132,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Completed 20-03-PLAN.md (PresenceRouter with local cache)
+Stopped at: Completed 20-04-PLAN.md (Specialized Handlers - Phase 20 complete)
 Resume file: None
-Next action: Execute 20-04-PLAN.md (Specialized Handlers)
+Next action: Plan Phase 21 (Network Resilience)
