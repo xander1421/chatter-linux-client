@@ -41,6 +41,7 @@ pub use attachment::AttachmentHandler;
 pub use chat::ChatHandler;
 pub use reaction::ReactionHandler;
 pub use receipt::ReceiptHandler;
+pub use typing::TypingHandler;
 
 // ============================================================================
 // InboxHandler Trait

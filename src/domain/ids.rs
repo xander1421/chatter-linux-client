@@ -140,6 +140,52 @@ impl_uuid_id!(
 );
 
 // ============================================================================
+// ChannelId helpers
+// ============================================================================
+
+impl ChannelId {
+    /// Create a deterministic channel ID from two user IDs for DM conversations.
+    ///
+    /// The channel ID is derived by sorting the two user IDs lexicographically
+    /// and hashing them together. This ensures the same channel ID is produced
+    /// regardless of which user initiates the conversation.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let channel_id = ChannelId::from_dm_participants(&user_a, &user_b);
+    /// // Same result regardless of order
+    /// assert_eq!(channel_id, ChannelId::from_dm_participants(&user_b, &user_a));
+    /// ```
+    #[must_use]
+    pub fn from_dm_participants(user_a: &UserId, user_b: &UserId) -> Self {
+        use sha2::{Digest, Sha256};
+
+        // Sort user IDs lexicographically for deterministic ordering
+        let (first, second) = if user_a.0 < user_b.0 {
+            (user_a.0, user_b.0)
+        } else {
+            (user_b.0, user_a.0)
+        };
+
+        // Hash the concatenated UUIDs
+        let mut hasher = Sha256::new();
+        hasher.update(first.as_bytes());
+        hasher.update(second.as_bytes());
+        let hash = hasher.finalize();
+
+        // Convert first 16 bytes to UUID (version 4 format)
+        let mut uuid_bytes = [0u8; 16];
+        uuid_bytes.copy_from_slice(&hash[..16]);
+        // Set version 4 (random) and variant 1 (RFC 4122)
+        uuid_bytes[6] = (uuid_bytes[6] & 0x0f) | 0x40;
+        uuid_bytes[8] = (uuid_bytes[8] & 0x3f) | 0x80;
+
+        Self(Uuid::from_bytes(uuid_bytes))
+    }
+}
+
+// ============================================================================
 // DeviceId implementation (u32-based)
 // ============================================================================
 
