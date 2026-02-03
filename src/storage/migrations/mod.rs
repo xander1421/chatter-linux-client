@@ -5,6 +5,7 @@
 pub mod v001_initial;
 pub mod v002_users;
 pub mod v003_channels;
+pub mod v004_messages;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -13,6 +14,7 @@ use rusqlite::Connection;
 pub use v001_initial::V001Initial;
 pub use v002_users::V002Users;
 pub use v003_channels::V003Channels;
+pub use v004_messages::V004Messages;
 
 /// Trait for database migrations.
 ///
@@ -136,4 +138,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V001Initial)
         .register(V002Users)
         .register(V003Channels)
+        .register(V004Messages)
 }
