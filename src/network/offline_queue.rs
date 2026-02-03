@@ -526,3 +526,521 @@ impl Default for OfflineQueue {
         Self::new(1000)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    // Helper to create a test message operation
+    fn msg_op(channel: &str, content: &str) -> OperationType {
+        OperationType::SendMessage {
+            channel_id: channel.to_string(),
+            content: content.as_bytes().to_vec(),
+        }
+    }
+
+    // Helper to create a test reaction operation
+    fn reaction_op(msg_id: &str, emoji: &str) -> OperationType {
+        OperationType::SendReaction {
+            message_id: msg_id.to_string(),
+            emoji: emoji.to_string(),
+        }
+    }
+
+    // ==================== Core Operation Tests ====================
+
+    #[test]
+    fn test_enqueue_dequeue() {
+        let queue = OfflineQueue::new(100);
+
+        // Enqueue three operations with different priorities to ensure deterministic ordering
+        let id1 = queue
+            .enqueue_with_priority(msg_op("channel-1", "Hello"), 10)
+            .unwrap();
+        let id2 = queue
+            .enqueue_with_priority(msg_op("channel-1", "World"), 20)
+            .unwrap();
+        let id3 = queue
+            .enqueue_with_priority(msg_op("channel-2", "Test"), 30)
+            .unwrap();
+
+        assert_eq!(queue.len(), 3);
+
+        // Dequeue should return in priority order (lower = higher priority)
+        let op1 = queue.dequeue().unwrap();
+        assert_eq!(op1.id, id1);
+
+        let op2 = queue.dequeue().unwrap();
+        assert_eq!(op2.id, id2);
+
+        let op3 = queue.dequeue().unwrap();
+        assert_eq!(op3.id, id3);
+
+        assert!(queue.is_empty());
+        assert!(queue.dequeue().is_none());
+    }
+
+    #[test]
+    fn test_priority_ordering() {
+        let queue = OfflineQueue::new(100);
+
+        // Enqueue with different priorities (lower = higher priority)
+        let low_priority = queue
+            .enqueue_with_priority(msg_op("ch", "low"), 200)
+            .unwrap();
+        let high_priority = queue
+            .enqueue_with_priority(msg_op("ch", "high"), 10)
+            .unwrap();
+        let medium_priority = queue
+            .enqueue_with_priority(msg_op("ch", "medium"), 100)
+            .unwrap();
+
+        // Should dequeue in priority order
+        assert_eq!(queue.dequeue().unwrap().id, high_priority);
+        assert_eq!(queue.dequeue().unwrap().id, medium_priority);
+        assert_eq!(queue.dequeue().unwrap().id, low_priority);
+    }
+
+    #[test]
+    fn test_queue_full() {
+        let queue = OfflineQueue::new(2); // Small capacity
+
+        queue.enqueue(msg_op("ch", "1")).unwrap();
+        queue.enqueue(msg_op("ch", "2")).unwrap();
+
+        // Third should fail
+        let result = queue.enqueue(msg_op("ch", "3"));
+        assert!(matches!(result, Err(QueueError::QueueFull(2))));
+
+        // After dequeue, should work again
+        queue.dequeue();
+        assert!(queue.enqueue(msg_op("ch", "3")).is_ok());
+    }
+
+    #[test]
+    fn test_remove_operation() {
+        let queue = OfflineQueue::new(100);
+
+        // Use different priorities to ensure deterministic ordering
+        let id1 = queue
+            .enqueue_with_priority(msg_op("ch", "1"), 10)
+            .unwrap();
+        let id2 = queue
+            .enqueue_with_priority(msg_op("ch", "2"), 20)
+            .unwrap();
+        let id3 = queue
+            .enqueue_with_priority(msg_op("ch", "3"), 30)
+            .unwrap();
+
+        // Remove middle operation
+        assert!(queue.remove(id2));
+        assert_eq!(queue.len(), 2);
+
+        // Remove non-existent should return false
+        assert!(!queue.remove(Uuid::new_v4()));
+
+        // Remaining operations should still be in order
+        assert_eq!(queue.dequeue().unwrap().id, id1);
+        assert_eq!(queue.dequeue().unwrap().id, id3);
+    }
+
+    #[test]
+    fn test_clear() {
+        let queue = OfflineQueue::new(100);
+
+        queue.enqueue(msg_op("ch", "1")).unwrap();
+        queue.enqueue(msg_op("ch", "2")).unwrap();
+        queue.enqueue(msg_op("ch", "3")).unwrap();
+
+        assert_eq!(queue.len(), 3);
+
+        queue.clear();
+
+        assert!(queue.is_empty());
+        assert_eq!(queue.len(), 0);
+    }
+
+    #[test]
+    fn test_peek() {
+        let queue = OfflineQueue::new(100);
+
+        assert!(queue.peek().is_none());
+
+        let id = queue.enqueue(msg_op("ch", "hello")).unwrap();
+
+        // Peek should return the operation
+        let peeked = queue.peek().unwrap();
+        assert_eq!(peeked.id, id);
+
+        // Peek should not remove it
+        assert_eq!(queue.len(), 1);
+        let peeked_again = queue.peek().unwrap();
+        assert_eq!(peeked_again.id, id);
+    }
+
+    // ==================== Persistence Tests ====================
+
+    #[tokio::test]
+    async fn test_save_load_roundtrip() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("queue.json");
+
+        let queue = OfflineQueue::new(100);
+
+        // Add some operations with different priorities for deterministic ordering
+        let id1 = queue
+            .enqueue_with_priority(msg_op("channel-1", "Hello"), 100)
+            .unwrap();
+        let id2 = queue
+            .enqueue_with_priority(reaction_op("msg-1", "thumbsup"), 50)
+            .unwrap();
+        let id3 = queue
+            .enqueue_with_priority(
+                OperationType::MarkRead {
+                    channel_id: "ch".to_string(),
+                    up_to_message_id: "msg-100".to_string(),
+                },
+                150,
+            )
+            .unwrap();
+
+        // Save to file
+        queue.save(&path).await.unwrap();
+
+        // Create new queue and load
+        let new_queue = OfflineQueue::new(100);
+        let loaded_count = new_queue.load(&path).await.unwrap();
+
+        assert_eq!(loaded_count, 3);
+        assert_eq!(new_queue.len(), 3);
+
+        // Verify priority order is preserved
+        // id2 has priority 50 (highest), id1 and id3 have priority 100
+        let op = new_queue.dequeue().unwrap();
+        assert_eq!(op.id, id2);
+
+        // id1 was queued before id3, so should come first
+        let op = new_queue.dequeue().unwrap();
+        assert_eq!(op.id, id1);
+
+        let op = new_queue.dequeue().unwrap();
+        assert_eq!(op.id, id3);
+    }
+
+    #[tokio::test]
+    async fn test_load_missing_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nonexistent.json");
+
+        let queue = OfflineQueue::new(100);
+        let count = queue.load(&path).await.unwrap();
+
+        assert_eq!(count, 0);
+        assert!(queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_save_atomic() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("queue.json");
+        let tmp_path = path.with_extension("tmp");
+
+        let queue = OfflineQueue::new(100);
+        queue.enqueue(msg_op("ch", "test")).unwrap();
+
+        // Save
+        queue.save(&path).await.unwrap();
+
+        // Final file should exist
+        assert!(path.exists());
+
+        // Temp file should NOT exist (was renamed)
+        assert!(!tmp_path.exists());
+    }
+
+    // ==================== Replay Support Tests ====================
+
+    #[test]
+    fn test_pending_operations_ordering() {
+        let queue = OfflineQueue::new(100);
+
+        queue
+            .enqueue_with_priority(msg_op("ch", "low"), 200)
+            .unwrap();
+        queue
+            .enqueue_with_priority(msg_op("ch", "high"), 10)
+            .unwrap();
+        queue
+            .enqueue_with_priority(msg_op("ch", "medium"), 100)
+            .unwrap();
+
+        let pending = queue.pending_operations();
+
+        assert_eq!(pending.len(), 3);
+
+        // Should be sorted by priority
+        assert_eq!(pending[0].priority, 10);
+        assert_eq!(pending[1].priority, 100);
+        assert_eq!(pending[2].priority, 200);
+
+        // Should not remove operations
+        assert_eq!(queue.len(), 3);
+    }
+
+    #[test]
+    fn test_mark_attempted_increments() {
+        let queue = OfflineQueue::new(100);
+
+        let id = queue.enqueue(msg_op("ch", "test")).unwrap();
+
+        // Initial attempts should be 0
+        let op = queue.peek().unwrap();
+        assert_eq!(op.attempts, 0);
+
+        // Mark as attempted
+        assert!(queue.mark_attempted(id));
+
+        let op = queue.peek().unwrap();
+        assert_eq!(op.attempts, 1);
+
+        // Mark again
+        assert!(queue.mark_attempted(id));
+
+        let op = queue.peek().unwrap();
+        assert_eq!(op.attempts, 2);
+    }
+
+    #[test]
+    fn test_mark_attempted_max_exceeded() {
+        let queue = OfflineQueue::new(100);
+
+        // Create operation with max_attempts = 3
+        let mut op = QueuedOperation::new(msg_op("ch", "test"));
+        op.max_attempts = Some(3);
+        let id = queue.enqueue_operation(op).unwrap();
+
+        // First two attempts should return true
+        assert!(queue.mark_attempted(id)); // attempts = 1
+        assert!(queue.mark_attempted(id)); // attempts = 2
+
+        // Third attempt should return false (max exceeded)
+        assert!(!queue.mark_attempted(id)); // attempts = 3 >= max
+
+        // Operation should still be in queue (caller removes it)
+        assert_eq!(queue.len(), 1);
+    }
+
+    #[test]
+    fn test_mark_attempted_unlimited() {
+        let queue = OfflineQueue::new(100);
+
+        // Create operation with unlimited attempts
+        let mut op = QueuedOperation::new(msg_op("ch", "test"));
+        op.max_attempts = None;
+        let id = queue.enqueue_operation(op).unwrap();
+
+        // Should always return true
+        for _ in 0..100 {
+            assert!(queue.mark_attempted(id));
+        }
+    }
+
+    #[test]
+    fn test_mark_attempted_nonexistent() {
+        let queue = OfflineQueue::new(100);
+
+        // Should return false for non-existent operation
+        assert!(!queue.mark_attempted(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn test_stats() {
+        let queue = OfflineQueue::new(100);
+
+        // Empty stats
+        let stats = queue.stats();
+        assert_eq!(stats.total_operations, 0);
+        assert!(stats.oldest_operation_age.is_none());
+        assert!(stats.operations_by_type.is_empty());
+
+        // Add various operations
+        queue.enqueue(msg_op("ch", "1")).unwrap();
+        queue.enqueue(msg_op("ch", "2")).unwrap();
+        queue.enqueue(reaction_op("msg", "thumbsup")).unwrap();
+        queue
+            .enqueue(OperationType::SendTyping {
+                channel_id: "ch".to_string(),
+            })
+            .unwrap();
+
+        let stats = queue.stats();
+        assert_eq!(stats.total_operations, 4);
+        assert!(stats.oldest_operation_age.is_some());
+        assert_eq!(stats.operations_by_type.get("SendMessage"), Some(&2));
+        assert_eq!(stats.operations_by_type.get("SendReaction"), Some(&1));
+        assert_eq!(stats.operations_by_type.get("SendTyping"), Some(&1));
+    }
+
+    // ==================== Event Tests ====================
+
+    #[tokio::test]
+    async fn test_enqueue_emits_added_event() {
+        let queue = OfflineQueue::new(100);
+        let mut rx = queue.subscribe();
+
+        let id = queue.enqueue(msg_op("ch", "test")).unwrap();
+
+        let event = rx.recv().await.unwrap();
+        match event {
+            QueueEvent::Added(event_id) => assert_eq!(event_id, id),
+            _ => panic!("Expected Added event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dequeue_emits_removed_event() {
+        let queue = OfflineQueue::new(100);
+        let id = queue.enqueue(msg_op("ch", "test")).unwrap();
+
+        let mut rx = queue.subscribe();
+
+        queue.dequeue();
+
+        let event = rx.recv().await.unwrap();
+        match event {
+            QueueEvent::Removed(event_id) => assert_eq!(event_id, id),
+            _ => panic!("Expected Removed event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_remove_emits_removed_event() {
+        let queue = OfflineQueue::new(100);
+        let id = queue.enqueue(msg_op("ch", "test")).unwrap();
+
+        let mut rx = queue.subscribe();
+
+        queue.remove(id);
+
+        let event = rx.recv().await.unwrap();
+        match event {
+            QueueEvent::Removed(event_id) => assert_eq!(event_id, id),
+            _ => panic!("Expected Removed event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_clear_emits_cleared_event() {
+        let queue = OfflineQueue::new(100);
+        queue.enqueue(msg_op("ch", "1")).unwrap();
+        queue.enqueue(msg_op("ch", "2")).unwrap();
+
+        let mut rx = queue.subscribe();
+
+        queue.clear();
+
+        let event = rx.recv().await.unwrap();
+        assert!(matches!(event, QueueEvent::Cleared));
+    }
+
+    #[tokio::test]
+    async fn test_replay_events() {
+        let queue = OfflineQueue::new(100);
+        let mut rx = queue.subscribe();
+
+        queue.emit_replay_started(5);
+        let event = rx.recv().await.unwrap();
+        assert!(matches!(event, QueueEvent::ReplayStarted { count: 5 }));
+
+        queue.emit_replay_completed(3, 2);
+        let event = rx.recv().await.unwrap();
+        assert!(matches!(
+            event,
+            QueueEvent::ReplayCompleted {
+                succeeded: 3,
+                failed: 2
+            }
+        ));
+    }
+
+    // ==================== Edge Case Tests ====================
+
+    #[test]
+    fn test_operation_type_names() {
+        assert_eq!(msg_op("ch", "test").type_name(), "SendMessage");
+        assert_eq!(reaction_op("msg", "emoji").type_name(), "SendReaction");
+        assert_eq!(
+            OperationType::MarkRead {
+                channel_id: "ch".to_string(),
+                up_to_message_id: "msg".to_string(),
+            }
+            .type_name(),
+            "MarkRead"
+        );
+        assert_eq!(
+            OperationType::SendTyping {
+                channel_id: "ch".to_string(),
+            }
+            .type_name(),
+            "SendTyping"
+        );
+        assert_eq!(
+            OperationType::EditMessage {
+                message_id: "msg".to_string(),
+                content: vec![],
+            }
+            .type_name(),
+            "EditMessage"
+        );
+        assert_eq!(
+            OperationType::DeleteMessage {
+                message_id: "msg".to_string(),
+            }
+            .type_name(),
+            "DeleteMessage"
+        );
+    }
+
+    #[test]
+    fn test_queued_operation_builders() {
+        let op = QueuedOperation::new(msg_op("ch", "test"));
+        assert_eq!(op.priority, 100);
+        assert_eq!(op.attempts, 0);
+        assert_eq!(op.max_attempts, Some(5));
+
+        let op = QueuedOperation::with_priority(msg_op("ch", "test"), 50);
+        assert_eq!(op.priority, 50);
+
+        let op = QueuedOperation::with_max_attempts(msg_op("ch", "test"), None);
+        assert_eq!(op.max_attempts, None);
+    }
+
+    #[test]
+    fn test_default_queue() {
+        let queue = OfflineQueue::default();
+        assert_eq!(queue.max_size(), 1000);
+    }
+
+    #[test]
+    fn test_with_limits() {
+        let queue = OfflineQueue::with_limits(50, 1024);
+        assert_eq!(queue.max_size(), 50);
+
+        // Test that operation size limit is enforced
+        let large_content = vec![0u8; 2000]; // Larger than 1024 limit when serialized
+        let result = queue.enqueue(OperationType::SendMessage {
+            channel_id: "ch".to_string(),
+            content: large_content,
+        });
+
+        // The operation might be close to the limit, let's use a clearly oversized one
+        let huge_content = vec![0u8; 10000];
+        let queue2 = OfflineQueue::with_limits(50, 100); // Very small limit
+        let result2 = queue2.enqueue(OperationType::SendMessage {
+            channel_id: "ch".to_string(),
+            content: huge_content,
+        });
+        assert!(matches!(result2, Err(QueueError::OperationTooLarge { .. })));
+    }
+}
