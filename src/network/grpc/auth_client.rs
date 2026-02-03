@@ -12,8 +12,10 @@ use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     auth_event, auth_service_client::AuthServiceClient, AuthEvent, AuthResponse,
     ChangePasswordRequest, CheckUsernameRequest, CheckUsernameResponse,
-    CompletePasswordResetRequest, LoginRequest, LogoutRequest, RegisterRequest,
-    RequestPasswordResetRequest, ResendVerificationEmailRequest, Session, VerifyEmailRequest,
+    CompletePasswordResetRequest, GetActiveSessionsRequest, GetActiveSessionsResponse,
+    InvalidateAllSessionsRequest, InvalidateSessionRequest, LoginRequest, LogoutRequest,
+    RegisterRequest, RequestPasswordResetRequest, ResendVerificationEmailRequest, Session,
+    VerifyEmailRequest,
 };
 
 /// Auth service client wrapper.
@@ -298,6 +300,48 @@ impl AuthClient {
             .complete_password_reset(request)
             .await
             .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// List all active sessions for current user.
+    pub async fn list_sessions(&mut self) -> Result<GetActiveSessionsResponse, NetworkError> {
+        let request = GetActiveSessionsRequest {};
+
+        self.inner
+            .list_sessions(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Revoke a specific session by device ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `device_id` - Signal device ID to invalidate
+    pub async fn revoke_session(&mut self, device_id: u32) -> Result<(), NetworkError> {
+        let request = InvalidateSessionRequest {
+            device_id,
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .revoke_session(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Revoke all sessions except current.
+    pub async fn revoke_all_sessions(&mut self) -> Result<(), NetworkError> {
+        let request = InvalidateAllSessionsRequest {
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .revoke_all_sessions(request)
+            .await
+            .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
     }
 }
