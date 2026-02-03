@@ -606,4 +606,142 @@ mod tests {
             panic!("Wrong event type");
         }
     }
+
+    // ========================================================================
+    // HandlerRegistry Tests
+    // ========================================================================
+
+    use crate::proto::content_v1::{content, typing_message, Content, TypingMessage};
+    use crate::proto::mailbox_v1::EnvelopeType;
+    use libsignal_protocol::{DeviceId, ProtocolAddress};
+    use prost::Message as ProstMessage;
+    use uuid::Uuid;
+
+    fn make_registry() -> (HandlerRegistry, broadcast::Receiver<DomainEvent>) {
+        let (tx, rx) = broadcast::channel(64);
+        let registry = HandlerRegistry::new(UserId::new(), tx);
+        (registry, rx)
+    }
+
+    fn make_processed(content_type: ContentType, plaintext: Vec<u8>) -> ProcessedMessage {
+        ProcessedMessage::new(
+            "msg-test".to_string(),
+            Some(ProtocolAddress::new(
+                Uuid::new_v4().to_string(),
+                DeviceId::try_from(1u32).unwrap(),
+            )),
+            content_type,
+            plaintext,
+            1234567890000,
+            EnvelopeType::SealedSender,
+        )
+    }
+
+    #[test]
+    fn test_registry_has_default_handlers() {
+        let (registry, _rx) = make_registry();
+        // 5 default handlers: Chat, Attachment, Reaction, Receipt, Typing
+        assert_eq!(registry.handler_count(), 5);
+    }
+
+    #[test]
+    fn test_registry_register_custom_handler() {
+        let (mut registry, _rx) = make_registry();
+        assert_eq!(registry.handler_count(), 5);
+
+        // Add custom handler
+        registry.register(Arc::new(TypingHandler::new()));
+        assert_eq!(registry.handler_count(), 6);
+    }
+
+    #[test]
+    fn test_registry_subscribe() {
+        let (registry, _rx) = make_registry();
+        // Can create multiple subscribers
+        let _rx1 = registry.subscribe();
+        let _rx2 = registry.subscribe();
+    }
+
+    #[tokio::test]
+    async fn test_registry_routes_typing_message() {
+        let (registry, mut rx) = make_registry();
+
+        // Create typing message content
+        let typing = TypingMessage {
+            action: typing_message::Action::Started as i32,
+            timestamp: 1704067200000,
+            channel_id: Uuid::new_v4().to_string(),
+        };
+
+        let content = Content {
+            content: Some(content::Content::Typing(typing)),
+            ephemeral_reply_to: None,
+            timestamp: 1704067200000,
+            padding: vec![],
+        };
+
+        let mut plaintext = Vec::new();
+        content.encode(&mut plaintext).unwrap();
+        let processed = make_processed(ContentType::TypingMessage, plaintext);
+
+        let result = registry.route(&processed).await.unwrap();
+        assert!(result.is_success());
+
+        // Verify event was emitted
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, DomainEvent::TypingStarted { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_registry_routes_receipt_message() {
+        use crate::proto::content_v1::{receipt_message, ReceiptMessage};
+
+        let (registry, mut rx) = make_registry();
+
+        let receipt = ReceiptMessage {
+            r#type: receipt_message::Type::Read as i32,
+            timestamps: vec![1704067200000],
+            timestamp: 1704067201000,
+        };
+
+        let content = Content {
+            content: Some(content::Content::Receipt(receipt)),
+            ephemeral_reply_to: None,
+            timestamp: 1704067201000,
+            padding: vec![],
+        };
+
+        let mut plaintext = Vec::new();
+        content.encode(&mut plaintext).unwrap();
+        let processed = make_processed(ContentType::ReceiptMessage, plaintext);
+
+        let result = registry.route(&processed).await.unwrap();
+        assert!(result.is_success());
+
+        // Verify event was emitted
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, DomainEvent::MessagesRead { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_registry_returns_ignored_for_unknown() {
+        let (registry, _rx) = make_registry();
+
+        // Unknown content type
+        let processed = make_processed(ContentType::Unknown(99), vec![]);
+
+        let result = registry.route(&processed).await.unwrap();
+        assert!(result.is_ignored());
+    }
+
+    #[tokio::test]
+    async fn test_registry_routes_null_message() {
+        let (registry, _rx) = make_registry();
+
+        // NullMessage has no handler currently
+        let processed = make_processed(ContentType::NullMessage, vec![]);
+
+        let result = registry.route(&processed).await.unwrap();
+        assert!(result.is_ignored());
+    }
 }
