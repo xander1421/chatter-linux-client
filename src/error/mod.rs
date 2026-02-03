@@ -8,4 +8,5 @@ pub mod network_error;
 pub mod recovery;
 pub mod storage_error;
 
+pub use crypto_error::CryptoError;
 pub use storage_error::StorageError;
