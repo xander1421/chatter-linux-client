@@ -39,6 +39,7 @@ use crate::inbox::processor::{ContentType, ProcessedMessage};
 // Re-export handlers
 pub use attachment::AttachmentHandler;
 pub use chat::ChatHandler;
+pub use reaction::ReactionHandler;
 
 // ============================================================================
 // InboxHandler Trait
