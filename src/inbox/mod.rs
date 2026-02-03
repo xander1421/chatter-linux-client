@@ -54,5 +54,5 @@ pub use queue::{LocalQueue, QueuedInboxMessage};
 pub use handlers::{
     AttachmentHandler, ChatHandler, DomainEvent, HandlerContext, HandlerError, HandlerOutcome,
     HandlerRegistry, HandlerResult, InboxHandler, KeyExchangeHandler, PinHandler, ReactionHandler,
-    ReceiptHandler, SenderKeyHandler, TypingHandler,
+    ReceiptHandler, SenderKeyHandler, SyncHandler, TypingHandler,
 };
