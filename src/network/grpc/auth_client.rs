@@ -10,13 +10,17 @@ use tonic::transport::Channel;
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    auth_event, auth_service_client::AuthServiceClient, AccountDeletionEvent, AuthEvent,
-    AuthResponse, ChangePasswordRequest, CheckUsernameRequest, CheckUsernameResponse,
-    CompletePasswordResetRequest, DeleteAccountRequest, GetActiveSessionsRequest,
-    GetActiveSessionsResponse, InvalidateAllSessionsRequest, InvalidateSessionRequest,
-    ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest, RegisterRequest,
-    RenameDeviceRequest, RequestPasswordResetRequest, ResendVerificationEmailRequest,
-    RevokeDeviceRequest, Session, VerifyEmailRequest,
+    auth_event, auth_service_client::AuthServiceClient, signal_pre_key_bundle,
+    AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordRequest, CheckUsernameRequest,
+    CheckUsernameResponse, CompletePasswordResetRequest, DeleteAccountRequest,
+    GetActiveSessionsRequest, GetActiveSessionsResponse, GetPreKeyBundleRequest,
+    GetPreKeyBundleResponse, GetPreKeyStatsRequest, GetPreKeyStatsResponse,
+    GetSenderCertificateRequest, GetSenderCertificateResponse, InvalidateAllSessionsRequest,
+    InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
+    RefreshPreKeysRequest, RegisterRequest, RenameDeviceRequest, RequestPasswordResetRequest,
+    RequestSenderCertificateRequest, RequestSenderCertificateResponse,
+    ResendVerificationEmailRequest, RevokeDeviceRequest, ServerTrustRootResponse, Session,
+    SignalPreKeyBundle, UploadPreKeyBundleRequest, VerifyEmailRequest,
 };
 
 /// Auth service client wrapper.
@@ -424,6 +428,32 @@ impl AuthClient {
         Ok(response
             .into_inner()
             .map(|r| r.map_err(|s| NetworkError::from_status(&s))))
+    }
+
+    // ==================== Signal Protocol RPCs ====================
+
+    /// Upload prekey bundle for this device.
+    ///
+    /// Called after registration and when prekeys need replenishment.
+    /// Includes identity key, signed prekey, and optional one-time/kyber prekeys.
+    ///
+    /// # Arguments
+    ///
+    /// * `bundle` - Complete Signal prekey bundle for this device
+    pub async fn upload_pre_key_bundle(
+        &mut self,
+        bundle: SignalPreKeyBundle,
+    ) -> Result<(), NetworkError> {
+        let request = UploadPreKeyBundleRequest {
+            bundle: Some(bundle),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        self.inner
+            .upload_pre_key_bundle(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
     }
 }
 
