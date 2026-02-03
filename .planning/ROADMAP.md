@@ -48,7 +48,7 @@ None (custom application, no pre-existing domain skills)
 
 ### Inbox & Mailbox
 - [x] **Phase 23: Inbox Provider & Poller** - DeviceInboxProvider, polling loop
-- [ ] **Phase 24: Inbox Message Handlers** - Chat, attachment, reaction, receipt, typing (1/3 plans)
+- [ ] **Phase 24: Inbox Message Handlers** - Chat, attachment, reaction, receipt, typing (2/3 plans)
 - [ ] **Phase 25: Inbox Sync Handlers** - Key exchange, sender key, pin, sync
 - [ ] **Phase 26: Mailbox Token Manager** - Blind signature tokens, daily quota
 - [ ] **Phase 27: Mailbox DM System** - Bootstrap, conversation keys, two-way anonymity
