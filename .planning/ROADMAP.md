@@ -43,7 +43,7 @@ None (custom application, no pre-existing domain skills)
 - [ ] **Phase 18: Network Channel & Message Clients** - ChannelClient, MessageClient
 - [x] **Phase 19: Network Supporting Clients** - FileClient, NotificationClient, IntegrationClient, MailboxClient
 - [x] **Phase 20: Network Streaming** - StreamManager, real-time streams
-- [ ] **Phase 21: Network Resilience** - Connection recovery, retry, offline queue
+- [x] **Phase 21: Network Resilience** - Connection recovery, retry, offline queue
 - [ ] **Phase 22: Network Validation** - Orderer, deduplicator, validator pipeline
 
 ### Inbox & Mailbox
@@ -545,7 +545,7 @@ None (custom application, no pre-existing domain skills)
 | 18 | Network Channel & Message Clients | 2 | Done | 2026-02-03 |
 | 19 | Network Supporting Clients | 4 | Done | 2026-02-03 |
 | 20 | Network Streaming | 4 | Done | 2026-02-03 |
-| 21 | Network Resilience | 3 | In progress | - |
+| 21 | Network Resilience | 3 | Done | 2026-02-03 |
 | 22 | Network Validation | TBD | Not started | - |
 | 23 | Inbox Provider & Poller | TBD | Not started | - |
 | 24 | Inbox Message Handlers | TBD | Not started | - |
