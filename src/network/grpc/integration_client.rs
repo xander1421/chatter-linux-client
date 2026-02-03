@@ -14,10 +14,13 @@ use crate::proto::chat_v1::{
     AddIntegrationToChannelResponse, CreateIntegrationRequest, CreateIntegrationResponse,
     DeleteIntegrationRequest, DeleteIntegrationResponse, DisableIntegrationRequest,
     DisableIntegrationResponse, EnableIntegrationRequest, EnableIntegrationResponse,
-    GetIntegrationRequest, GetIntegrationResponse, IntegrationConfig, IntegrationType,
-    ListIntegrationsRequest, ListIntegrationsResponse, TestIntegrationRequest,
-    TestIntegrationResponse, UpdateIntegrationRequest, UpdateIntegrationResponse,
-    Integration,
+    GetChannelIntegrationsRequest, GetChannelIntegrationsResponse, GetIntegrationRequest,
+    GetIntegrationResponse, HandleWebhookCallbackRequest, HandleWebhookCallbackResponse,
+    Integration, IntegrationConfig, ListIntegrationsRequest, ListIntegrationsResponse,
+    RegisterWebhookRequest, RegisterWebhookResponse, RemoveIntegrationFromChannelRequest,
+    RemoveIntegrationFromChannelResponse, TestIntegrationRequest, TestIntegrationResponse,
+    UnregisterWebhookRequest, UnregisterWebhookResponse, UpdateIntegrationRequest,
+    UpdateIntegrationResponse, WebhookConfig,
 };
 
 /// Integration service client wrapper.
@@ -227,6 +230,144 @@ impl IntegrationClient {
 
         self.inner
             .test_integration(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Webhook RPCs ====================
+
+    /// Register a webhook for an integration.
+    ///
+    /// # Arguments
+    ///
+    /// * `integration_id` - Integration to register webhook for
+    /// * `config` - Webhook configuration
+    pub async fn register_webhook(
+        &mut self,
+        integration_id: &str,
+        config: WebhookConfig,
+    ) -> Result<RegisterWebhookResponse, NetworkError> {
+        let request = RegisterWebhookRequest {
+            integration_id: integration_id.to_string(),
+            config: Some(config),
+        };
+
+        self.inner
+            .register_webhook(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Unregister a webhook.
+    ///
+    /// # Arguments
+    ///
+    /// * `integration_id` - Integration the webhook belongs to
+    /// * `webhook_id` - Webhook ID to unregister
+    pub async fn unregister_webhook(
+        &mut self,
+        integration_id: &str,
+        webhook_id: &str,
+    ) -> Result<UnregisterWebhookResponse, NetworkError> {
+        let request = UnregisterWebhookRequest {
+            integration_id: integration_id.to_string(),
+            webhook_id: webhook_id.to_string(),
+        };
+
+        self.inner
+            .unregister_webhook(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Handle an incoming webhook callback.
+    ///
+    /// # Arguments
+    ///
+    /// * `webhook_id` - Webhook ID
+    /// * `headers` - HTTP headers from the callback
+    /// * `body` - Raw body bytes
+    pub async fn handle_webhook_callback(
+        &mut self,
+        webhook_id: &str,
+        headers: std::collections::HashMap<String, String>,
+        body: Vec<u8>,
+    ) -> Result<HandleWebhookCallbackResponse, NetworkError> {
+        let request = HandleWebhookCallbackRequest {
+            webhook_id: webhook_id.to_string(),
+            headers,
+            body,
+        };
+
+        self.inner
+            .handle_webhook_callback(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    // ==================== Channel Integration RPCs ====================
+
+    /// Add an integration to a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `integration_id` - Integration to add
+    /// * `channel_id` - Channel to add integration to
+    pub async fn add_integration_to_channel(
+        &mut self,
+        integration_id: &str,
+        channel_id: &str,
+    ) -> Result<AddIntegrationToChannelResponse, NetworkError> {
+        let request = AddIntegrationToChannelRequest {
+            integration_id: integration_id.to_string(),
+            channel_id: channel_id.to_string(),
+        };
+
+        self.inner
+            .add_integration_to_channel(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Remove an integration from a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `integration_id` - Integration to remove
+    /// * `channel_id` - Channel to remove integration from
+    pub async fn remove_integration_from_channel(
+        &mut self,
+        integration_id: &str,
+        channel_id: &str,
+    ) -> Result<RemoveIntegrationFromChannelResponse, NetworkError> {
+        let request = RemoveIntegrationFromChannelRequest {
+            integration_id: integration_id.to_string(),
+            channel_id: channel_id.to_string(),
+        };
+
+        self.inner
+            .remove_integration_from_channel(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Get all integrations for a channel.
+    pub async fn get_channel_integrations(
+        &mut self,
+        channel_id: &str,
+    ) -> Result<GetChannelIntegrationsResponse, NetworkError> {
+        let request = GetChannelIntegrationsRequest {
+            channel_id: channel_id.to_string(),
+        };
+
+        self.inner
+            .get_channel_integrations(request)
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
