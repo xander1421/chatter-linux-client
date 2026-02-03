@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 4 — Domain Privacy Entities — COMPLETE
+**Current focus:** Phase 5 — Storage Database Setup — IN PROGRESS
 
 ## Current Position
 
-Phase: 4 of 66 (Domain Privacy Entities) — COMPLETE
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-03 — Completed 04-02-PLAN.md
+Phase: 5 of 66 (Storage Database Setup)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-03 — Completed 05-01-PLAN.md
 
-Progress: [xxxxxxx]░░░ 10.6%
+Progress: [xxxxxxxx]░░ 12.1%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 7
+- Total plans completed: 8
 - Average duration: ~5 min
-- Total execution time: ~50 min
+- Total execution time: ~52 min
 
 **By Phase:**
 
@@ -31,10 +31,11 @@ Progress: [xxxxxxx]░░░ 10.6%
 | 2 | 2 | ~10m | ~5m |
 | 3 | 2 | ~12m | ~6m |
 | 4 | 2 | ~10m | ~5m |
+| 5 | 1/2 | ~2m | ~2m |
 
 **Recent Trend:**
-- Last 5 plans: 3-1 (~2m), 3-2 (~10m), 4-1 (~4m), 4-2 (~6m)
-- Trend: Domain entities fast with subagent execution
+- Last 5 plans: 3-2 (~10m), 4-1 (~4m), 4-2 (~6m), 5-1 (~2m)
+- Trend: Storage setup fast with established patterns
 
 ## Accumulated Context
 
@@ -68,6 +69,9 @@ Recent decisions affecting current work:
 - Mention extraction returns target_id as None (caller resolves)
 - LinkEmbed.source_url() returns String for GitHub URL construction
 - YouTube duration uses std::time::Duration (not chrono)
+- Single Mutex<Connection> for v1 (can upgrade to pool later)
+- cipher_compatibility=4 for SQLCipher 4.x mode
+- Verify encryption key on open via cipher_version query
 
 ### Deferred Issues
 
@@ -80,5 +84,5 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-03
-Stopped at: Phase 4 complete
-Resume file: None (ready for Phase 5)
+Stopped at: Completed 05-01-PLAN.md
+Resume file: None (ready for 05-02-PLAN.md)
