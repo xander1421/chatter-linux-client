@@ -20,7 +20,7 @@ None (custom application, no pre-existing domain skills)
 ### Domain Layer
 - [x] **Phase 2: Domain Core Entities** - User, Message, Channel, Attachment, IDs
 - [x] **Phase 3: Domain Supporting Entities** - Reaction, Notification, Call, Moderation
-- [ ] **Phase 4: Domain Privacy Entities** - Draft, Ephemeral, SavedMessage, Mention, Embed (1/2 plans)
+- [x] **Phase 4: Domain Privacy Entities** - Draft, Ephemeral, SavedMessage, Mention, Embed
 
 ### Storage Layer
 - [ ] **Phase 5: Storage Database Setup** - SQLCipher connection, migrations infrastructure
@@ -126,7 +126,7 @@ None (custom application, no pre-existing domain skills)
 **Goal**: Implement Draft, EphemeralMessage, SavedMessage, Mention, Embed types
 **Depends on**: Phase 2
 **Research**: Unlikely (standard Rust structs)
-**Plans**: 1/2 complete
+**Plans**: 2/2 complete ✓
 
 ### Phase 5: Storage Database Setup
 **Goal**: SQLCipher database connection pool and migration infrastructure
@@ -528,7 +528,7 @@ None (custom application, no pre-existing domain skills)
 | 1 | Scaffolding | 1 | Done | 2026-02-03 |
 | 2 | Domain Core Entities | 2 | Done | 2026-02-03 |
 | 3 | Domain Supporting Entities | 2 | Done | 2026-02-03 |
-| 4 | Domain Privacy Entities | 2 | In progress (1/2) | - |
+| 4 | Domain Privacy Entities | 2 | Done | 2026-02-03 |
 | 5 | Storage Database Setup | TBD | Not started | - |
 | 6 | Storage Core Repositories | TBD | Not started | - |
 | 7 | Storage Supporting Repositories | TBD | Not started | - |
