@@ -183,6 +183,16 @@ impl KeyStore {
         Ok(rows > 0)
     }
 
+    /// Count the number of available pre-keys.
+    ///
+    /// Used to determine when to refresh pre-keys.
+    /// Signal recommends maintaining at least 100 pre-keys.
+    pub fn count_prekeys(&self) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM prekeys", [], |row| row.get(0))?;
+        Ok(count as u32)
+    }
+
     // ========================================================================
     // Signed Pre-keys
     // ========================================================================
