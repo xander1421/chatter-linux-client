@@ -3,12 +3,14 @@
 //! Migration infrastructure for schema evolution with version tracking.
 
 pub mod v001_initial;
+pub mod v002_users;
 
 use crate::error::StorageError;
 use chrono::Utc;
 use rusqlite::Connection;
 
 pub use v001_initial::V001Initial;
+pub use v002_users::V002Users;
 
 /// Trait for database migrations.
 ///
@@ -128,5 +130,7 @@ impl Default for MigrationRunner {
 ///
 /// This is the standard way to get a runner with all migrations.
 pub fn default_migrations() -> MigrationRunner {
-    MigrationRunner::new().register(V001Initial)
+    MigrationRunner::new()
+        .register(V001Initial)
+        .register(V002Users)
 }
