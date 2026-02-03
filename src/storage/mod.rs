@@ -15,4 +15,6 @@ pub use repositories::ChannelRepository;
 pub use repositories::DraftRepository;
 pub use repositories::MessageRepository;
 pub use repositories::ReactionRepository;
+pub use repositories::SettingsRepository;
 pub use repositories::UserRepository;
+pub use repositories::settings_keys;
