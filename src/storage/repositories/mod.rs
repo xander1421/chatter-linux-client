@@ -12,6 +12,7 @@ pub mod search_index;
 pub mod settings_repo;
 pub mod user_repo;
 
+pub use attachment_repo::AttachmentRepository;
 pub use channel_repo::ChannelRepository;
 pub use message_repo::MessageRepository;
 pub use user_repo::UserRepository;
