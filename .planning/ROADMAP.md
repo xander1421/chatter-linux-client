@@ -150,7 +150,7 @@ None (custom application, no pre-existing domain skills)
 **Goal**: FTS5 full-text search index for messages
 **Depends on**: Phase 6
 **Research**: Unlikely (SQLite FTS5 documented)
-**Plans**: TBD
+**Plans**: 1/1 complete ✓
 
 ### Phase 9: Storage Key Store
 **Goal**: Signal protocol key storage (identity, prekey, session, sender_key)
@@ -532,7 +532,7 @@ None (custom application, no pre-existing domain skills)
 | 5 | Storage Database Setup | 2 | Done | 2026-02-03 |
 | 6 | Storage Core Repositories | 3 | Done | 2026-02-03 |
 | 7 | Storage Supporting Repositories | 4 | Done | 2026-02-03 |
-| 8 | Storage Search Index | TBD | Not started | - |
+| 8 | Storage Search Index | 1 | Done | 2026-02-03 |
 | 9 | Storage Key Store | TBD | Not started | - |
 | 10 | Crypto Signal Store | TBD | Not started | - |
 | 11 | Crypto Identity & Sessions | TBD | Not started | - |
