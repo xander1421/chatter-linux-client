@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 29 in progress — Mailbox Privacy Features
+**Current focus:** Phase 29 complete — Ready for Phase 30 (Services Auth)
 
 ## Current Position
 
 Phase: 29 of 66 (Mailbox Privacy Features)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-04 — Completed 29-02 (key rolling)
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-02-04 — Completed 29-03 (cover traffic)
 
-Progress: ███████████████████████████████████████████████████████████████░░░░░░░░░ 77.4%
+Progress: ███████████████████████████████████████████████████████████████░░░░░░░░░ 78.1%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 49
-- Average duration: ~4.8 min
-- Total execution time: ~233 min
+- Total plans completed: 50
+- Average duration: ~4.7 min
+- Total execution time: ~235 min
 
 **By Phase:**
 
@@ -55,11 +55,11 @@ Progress: ███████████████████████�
 | 26 | 1 | ~15m | ~15m |
 | 27 | 3 | ~21m | ~7m |
 | 28 | 3 | ~12m | ~4m |
-| 29 | 2+ | ~5m | ~2.5m |
+| 29 | 3 | ~7m | ~2.3m |
 
 **Recent Trend:**
-- Last 5 plans: 28-1 (~3m), 28-2 (~6m), 29-1 (~3m), 29-2 (~2m)
-- Trend: Privacy features progressing, key rolling implemented
+- Last 5 plans: 28-2 (~6m), 28-3 (~3m), 29-1 (~3m), 29-2 (~2m), 29-3 (~2m)
+- Trend: Phase 29 complete, privacy features done
 
 ## Accumulated Context
 
@@ -156,6 +156,9 @@ Recent decisions affecting current work:
 - 24-hour rotation threshold for mailbox key rolling (rotate when expiring within 24h)
 - 1-hour overlap period for old mailboxes (grace period for in-flight messages)
 - RwLock<Vec<PendingDeletion>> for async-safe pending deletion tracking
+- Exponential distribution for cover traffic timing (more realistic than uniform)
+- Callback-based cover traffic send (decouples from network layer)
+- Cover traffic disabled by default (user opt-in for privacy vs bandwidth)
 
 ### Deferred Issues
 
@@ -168,6 +171,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 29-02 (key rolling)
-Resume file: .planning/phases/29-mailbox-privacy-features/29-02-SUMMARY.md
-Next action: Execute Phase 29-03 (cover traffic)
+Stopped at: Completed Phase 29-03 (cover traffic) - Phase 29 complete
+Resume file: .planning/phases/29-mailbox-privacy-features/29-03-SUMMARY.md
+Next action: Plan Phase 30 (Services Auth)

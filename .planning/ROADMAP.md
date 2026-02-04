@@ -53,7 +53,7 @@ None (custom application, no pre-existing domain skills)
 - [ ] **Phase 26: Mailbox Token Manager** - Blind signature tokens, daily quota
 - [ ] **Phase 27: Mailbox DM System** - Bootstrap, conversation keys, two-way anonymity
 - [ ] **Phase 28: Mailbox Group System** - Member mailboxes, N-way fanout
-- [ ] **Phase 29: Mailbox Privacy Features** - Cover traffic, key rolling (2/3 plans complete)
+- [x] **Phase 29: Mailbox Privacy Features** - Cover traffic, key rolling
 
 ### Services Layer
 - [ ] **Phase 30: Services Auth** - Login, logout, device auth
@@ -553,7 +553,7 @@ None (custom application, no pre-existing domain skills)
 | 26 | Mailbox Token Manager | 1 | Done | 2026-02-04 |
 | 27 | Mailbox DM System | 3 | Done | 2026-02-04 |
 | 28 | Mailbox Group System | 3 | Done | 2026-02-04 |
-| 29 | Mailbox Privacy Features | 3 | In progress | - |
+| 29 | Mailbox Privacy Features | 3 | Done | 2026-02-04 |
 | 30 | Services Auth | TBD | Not started | - |
 | 31 | Services Account | TBD | Not started | - |
 | 32 | Services Message Core | TBD | Not started | - |
