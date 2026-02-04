@@ -21,3 +21,9 @@ pub use blind_signature::{
 pub use token_manager::{
     MailboxToken, QuotaStatus, TokenManager, DEFAULT_TOKEN_REQUEST_COUNT, MIN_TOKEN_THRESHOLD,
 };
+
+// Re-export DM types
+pub use dm::{
+    BootstrapResponse, BootstrapResult, DmBootstrap, DmConversation, DmConversationManager,
+    DmMailbox, PollResult, ReceivedMessage, SendResult, TwoWayAnonymity,
+};

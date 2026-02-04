@@ -42,6 +42,26 @@ pub enum MailboxError {
     /// Conversation already exists (bootstrap not needed).
     #[error("conversation already exists")]
     ConversationExists,
+
+    /// Conversation not found in storage.
+    #[error("conversation not found")]
+    ConversationNotFound,
+
+    /// No mailbox configured for conversation.
+    #[error("no mailbox configured")]
+    NoMailboxConfigured,
+
+    /// Peer's mailbox address unknown.
+    #[error("peer mailbox unknown")]
+    PeerMailboxUnknown,
+
+    /// Conversation not fully established (no shared secret).
+    #[error("conversation not established")]
+    ConversationNotEstablished,
+
+    /// Key derivation failed.
+    #[error("key derivation failed: {0}")]
+    KeyDerivationFailed(String),
 }
 
 #[cfg(test)]
@@ -75,6 +95,11 @@ mod tests {
             MailboxError::Storage("db error".to_string()),
             MailboxError::Network("connection failed".to_string()),
             MailboxError::ConversationExists,
+            MailboxError::ConversationNotFound,
+            MailboxError::NoMailboxConfigured,
+            MailboxError::PeerMailboxUnknown,
+            MailboxError::ConversationNotEstablished,
+            MailboxError::KeyDerivationFailed("test".to_string()),
         ];
 
         // All variants should implement Error (can call to_string)
@@ -87,5 +112,23 @@ mod tests {
     fn test_conversation_exists_display() {
         let err = MailboxError::ConversationExists;
         assert_eq!(err.to_string(), "conversation already exists");
+    }
+
+    #[test]
+    fn test_dm_error_variants_display() {
+        let err = MailboxError::ConversationNotFound;
+        assert_eq!(err.to_string(), "conversation not found");
+
+        let err = MailboxError::NoMailboxConfigured;
+        assert_eq!(err.to_string(), "no mailbox configured");
+
+        let err = MailboxError::PeerMailboxUnknown;
+        assert_eq!(err.to_string(), "peer mailbox unknown");
+
+        let err = MailboxError::ConversationNotEstablished;
+        assert_eq!(err.to_string(), "conversation not established");
+
+        let err = MailboxError::KeyDerivationFailed("X25519 ECDH failed".to_string());
+        assert_eq!(err.to_string(), "key derivation failed: X25519 ECDH failed");
     }
 }
