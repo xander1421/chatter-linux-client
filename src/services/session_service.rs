@@ -68,4 +68,36 @@ impl SessionService {
     pub fn current_device_id(&self) -> Option<u32> {
         self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten()
     }
+
+    /// List all active sessions for the current user.
+    ///
+    /// Returns a list of sessions with device info, timestamps, and whether
+    /// each session is the current one (as provided by the server).
+    pub async fn list_sessions(
+        &self,
+        auth_client: &mut AuthClient,
+    ) -> Result<Vec<Session>, SessionError> {
+        if !self.is_logged_in() {
+            return Err(SessionError::NotLoggedIn);
+        }
+
+        let response = auth_client.list_sessions().await?;
+
+        let sessions = response
+            .sessions
+            .into_iter()
+            .map(|s| Session {
+                device_id: s.device_id,
+                device_info: s.device_info,
+                ip_address: s.ip_address,
+                created_at: DateTime::from_timestamp_millis(s.created_at as i64)
+                    .unwrap_or_else(|| DateTime::UNIX_EPOCH),
+                last_used: DateTime::from_timestamp_millis(s.last_used as i64)
+                    .unwrap_or_else(|| DateTime::UNIX_EPOCH),
+                is_current: s.is_current_session,
+            })
+            .collect();
+
+        Ok(sessions)
+    }
 }
