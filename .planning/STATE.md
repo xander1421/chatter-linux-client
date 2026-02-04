@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 28 in progress — Group mailbox state management
+**Current focus:** Phase 28 in progress — Group mailbox fanout
 
 ## Current Position
 
 Phase: 28 of 66 (Mailbox Group System)
-Plan: 1 of TBD in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-04 — Completed 28-01 (group mailbox state)
+Last activity: 2026-02-04 — Completed 28-02 (group mailbox fanout)
 
-Progress: ██████████████████████████████████████████████████████████████░░░░░░░░░░ 74.6%
+Progress: ██████████████████████████████████████████████████████████████░░░░░░░░░░ 75.4%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 47
+- Total plans completed: 48
 - Average duration: ~4.8 min
-- Total execution time: ~225 min
+- Total execution time: ~231 min
 
 **By Phase:**
 
@@ -54,11 +54,11 @@ Progress: ███████████████████████�
 | 25 | 2 | ~20m | ~10m |
 | 26 | 1 | ~15m | ~15m |
 | 27 | 3 | ~21m | ~7m |
-| 28 | 1+ | ~3m | ~3m |
+| 28 | 2+ | ~9m | ~4.5m |
 
 **Recent Trend:**
-- Last 5 plans: 27-1 (~10m), 27-2 (~7m), 27-3 (~4m), 28-1 (~3m)
-- Trend: Group mailbox state leveraging DM patterns for fast execution
+- Last 5 plans: 27-2 (~7m), 27-3 (~4m), 28-1 (~3m), 28-2 (~6m)
+- Trend: Group fanout using futures::join_all for parallel delivery
 
 ## Accumulated Context
 
@@ -150,6 +150,8 @@ Recent decisions affecting current work:
 - Bootstrap detection via ephemeral_pk length (64 = bootstrap, 32 = regular key exchange)
 - GroupMailbox parallels DmMailbox: Ed25519 keypair, RSA signature, expiry tracking
 - HashMap<UserId, MemberMailbox> for O(1) member lookup in group state
+- futures::future::join_all for parallel fanout (collect all results even with failures)
+- FanoutResult builder methods (success/failure) for clearer construction
 
 ### Deferred Issues
 
@@ -162,6 +164,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 28-01 (group mailbox state)
-Resume file: .planning/phases/28-mailbox-group-system/28-01-SUMMARY.md
-Next action: Execute Phase 28-02 (group mailbox fanout)
+Stopped at: Completed Phase 28-02 (group mailbox fanout)
+Resume file: .planning/phases/28-mailbox-group-system/28-02-SUMMARY.md
+Next action: Execute Phase 28-03 (group coordination)
