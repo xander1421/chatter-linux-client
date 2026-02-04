@@ -139,6 +139,181 @@ impl MessageService {
 
         Ok(message)
     }
+
+    /// Edit a message in a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_client` - Mutable reference to message client
+    /// * `channel_id` - Channel containing the message
+    /// * `message_id` - ID of the message to edit
+    /// * `new_text` - New message text content
+    ///
+    /// # Errors
+    ///
+    /// Returns error if not logged in, message not found, user is not author,
+    /// or content is empty.
+    pub async fn edit_message(
+        &self,
+        message_client: &mut MessageClient,
+        channel_id: &ChannelId,
+        message_id: &MessageId,
+        new_text: &str,
+    ) -> Result<Message, MessageError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Validate new content
+        let trimmed_text = new_text.trim();
+        if trimmed_text.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "message content cannot be empty".to_string(),
+            ));
+        }
+
+        // Get existing message from local DB
+        let existing = self
+            .message_repo
+            .get(message_id)?
+            .ok_or_else(|| MessageError::MessageNotFound(message_id.clone()))?;
+
+        // Verify sender matches current user (only if sender_id is known)
+        if let Some(sender_id) = existing.sender_id {
+            if sender_id != current_user {
+                return Err(MessageError::NotAuthor);
+            }
+        }
+
+        // Build proto content
+        let content = chat_v1::message::Content {
+            r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
+        };
+
+        // Call server
+        let proto_message = message_client
+            .edit_message(&message_id.to_string(), &channel_id.to_string(), content)
+            .await?;
+
+        // Convert to domain message (use server response for consistency)
+        let mut updated_message = proto_to_domain_message(&proto_message, current_user)?;
+
+        // Mark edited locally (in case server didn't set it)
+        updated_message.mark_edited();
+
+        // Update local storage
+        self.message_repo.update(&updated_message)?;
+
+        Ok(updated_message)
+    }
+
+    /// Delete a message from a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_client` - Mutable reference to message client
+    /// * `channel_id` - Channel containing the message
+    /// * `message_id` - ID of the message to delete
+    ///
+    /// # Errors
+    ///
+    /// Returns error if not logged in, message not found, or user is not author.
+    pub async fn delete_message(
+        &self,
+        message_client: &mut MessageClient,
+        channel_id: &ChannelId,
+        message_id: &MessageId,
+    ) -> Result<(), MessageError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Get existing message from local DB
+        let existing = self
+            .message_repo
+            .get(message_id)?
+            .ok_or_else(|| MessageError::MessageNotFound(message_id.clone()))?;
+
+        // Verify sender matches current user (only if sender_id is known)
+        if let Some(sender_id) = existing.sender_id {
+            if sender_id != current_user {
+                return Err(MessageError::NotAuthor);
+            }
+        }
+
+        // Call server
+        message_client
+            .delete_message(&message_id.to_string(), &channel_id.to_string())
+            .await?;
+
+        // Soft delete locally - keep for history/sync
+        let mut message = existing;
+        message.mark_deleted();
+        self.message_repo.update(&message)?;
+
+        Ok(())
+    }
+
+    /// Get messages from a channel.
+    ///
+    /// Fetches messages from the server and stores them locally.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_client` - Mutable reference to message client
+    /// * `channel_id` - Channel to fetch messages from
+    /// * `limit` - Maximum number of messages to fetch
+    /// * `before` - Optional message ID to fetch messages before (cursor)
+    ///
+    /// # Returns
+    ///
+    /// Vector of messages in reverse chronological order (newest first).
+    pub async fn get_messages(
+        &self,
+        message_client: &mut MessageClient,
+        channel_id: &ChannelId,
+        limit: u32,
+        before: Option<&MessageId>,
+    ) -> Result<Vec<Message>, MessageError> {
+        use crate::proto::chat_v1::MessageSortDirection;
+
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Fetch from server
+        let response = message_client
+            .get_messages(
+                &channel_id.to_string(),
+                limit as i32,
+                None, // thread_root_id
+                None, // page_token
+                MessageSortDirection::SortNewestFirst,
+                before.map(|id| id.to_string()).as_deref(),
+                None, // reference_time
+            )
+            .await?;
+
+        // Convert proto messages to domain messages and store locally
+        let mut messages = Vec::with_capacity(response.messages.len());
+        for proto in &response.messages {
+            // Parse sender ID from proto author_id
+            let sender_id = if proto.author_id.is_empty() {
+                None
+            } else {
+                proto.author_id.parse().ok()
+            };
+
+            let message = proto_to_domain_message_with_sender(proto, sender_id)?;
+
+            // Upsert to local storage (insert or update)
+            match self.message_repo.get(&message.id)? {
+                Some(_) => self.message_repo.update(&message)?,
+                None => self.message_repo.insert(&message)?,
+            }
+
+            messages.push(message);
+        }
+
+        Ok(messages)
+    }
 }
 
 /// Convert a proto Message to a domain Message.
@@ -204,6 +379,88 @@ fn proto_to_domain_message(
         id,
         channel_id,
         sender_id: Some(sender_id),
+        content,
+        thread_id,
+        reply_to: None, // Not exposed in proto yet
+        attachments: Vec::new(), // Handled separately via mentioned_file_ids
+        is_pinned: proto.pinned,
+        is_edited: proto.edited,
+        is_deleted: false,
+        created_at,
+        updated_at,
+        edited_at,
+        reaction_counts,
+        current_user_reactions: proto.current_user_reactions.clone(),
+        mentioned_integrations,
+        targets_ai_bot: proto.targets_ai_bot,
+    })
+}
+
+/// Convert a proto Message to a domain Message with optional sender.
+///
+/// Used when fetching messages where sender_id comes from the proto (not known upfront).
+fn proto_to_domain_message_with_sender(
+    proto: &chat_v1::Message,
+    sender_id: Option<UserId>,
+) -> Result<Message, MessageError> {
+    // Parse message ID
+    let id: MessageId = proto
+        .id
+        .parse()
+        .map_err(|_| MessageError::InvalidContent("invalid message ID".to_string()))?;
+
+    // Parse channel ID
+    let channel_id: ChannelId = proto
+        .channel_id
+        .parse()
+        .map_err(|_| MessageError::InvalidContent("invalid channel ID".to_string()))?;
+
+    // Parse thread ID (parent_id in proto)
+    let thread_id: Option<MessageId> = if proto.parent_id.is_empty() {
+        None
+    } else {
+        Some(
+            proto
+                .parent_id
+                .parse()
+                .map_err(|_| MessageError::InvalidContent("invalid parent ID".to_string()))?,
+        )
+    };
+
+    // Parse mentioned integrations
+    let mentioned_integrations: Vec<IntegrationId> = proto
+        .mentioned_integrations
+        .iter()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+
+    // Convert proto content to domain content
+    let content = proto_content_to_domain(proto.content.as_ref())?;
+
+    // Convert reaction counts
+    let reaction_counts: Vec<ReactionCount> = proto
+        .reaction_counts
+        .iter()
+        .map(|rc| ReactionCount::new(rc.emoji.clone(), rc.count as u32))
+        .collect();
+
+    // Convert timestamp (proto uses millis)
+    let created_at = millis_to_datetime(proto.timestamp);
+    let updated_at = if proto.updated_at > 0 {
+        millis_to_datetime(proto.updated_at)
+    } else {
+        created_at
+    };
+    let edited_at = if proto.edited && proto.edited_at > 0 {
+        Some(millis_to_datetime(proto.edited_at))
+    } else {
+        None
+    };
+
+    Ok(Message {
+        id,
+        channel_id,
+        sender_id, // May be None for sealed sender messages
         content,
         thread_id,
         reply_to: None, // Not exposed in proto yet
