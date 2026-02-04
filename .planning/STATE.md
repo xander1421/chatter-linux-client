@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 30 in progress — Services Auth
+**Current focus:** Phase 31 in progress — Services Account
 
 ## Current Position
 
-Phase: 30 of 66 (Services Auth)
-Plan: 2 of 2 in current phase
+Phase: 31 of 66 (Services Account)
+Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-04 — Completed 30-02 (AuthService)
+Last activity: 2026-02-04 — Completed 31-01 (AccountService)
 
-Progress: ████████████████████████████████████████████████████████████████░░░░░░░░ 79.5%
+Progress: █████████████████████████████████████████████████████████████████░░░░░░░ 80.3%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 52
-- Average duration: ~4.7 min
-- Total execution time: ~242 min
+- Total plans completed: 53
+- Average duration: ~4.6 min
+- Total execution time: ~245 min
 
 **By Phase:**
 
@@ -57,10 +57,11 @@ Progress: ███████████████████████�
 | 28 | 3 | ~12m | ~4m |
 | 29 | 3 | ~7m | ~2.3m |
 | 30 | 2 | ~7m | ~3.5m |
+| 31 | 1 | ~3m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 29-2 (~2m), 29-3 (~2m), 30-1 (~3m), 30-2 (~4m)
-- Trend: Phase 30 complete, auth service layer functional
+- Last 5 plans: 29-3 (~2m), 30-1 (~3m), 30-2 (~4m), 31-1 (~3m)
+- Trend: Phase 31 complete, account management service functional
 
 ## Accumulated Context
 
@@ -178,6 +179,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 30-02 (AuthService) - Phase 30 complete
-Resume file: .planning/phases/30-services-auth/30-02-SUMMARY.md
-Next action: Plan Phase 31 (Services Account)
+Stopped at: Completed Phase 31-01 (AccountService) - Phase 31 complete
+Resume file: .planning/phases/31-services-account/31-01-SUMMARY.md
+Next action: Plan Phase 32 (Services Message Core)
