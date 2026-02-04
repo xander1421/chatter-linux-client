@@ -176,3 +176,179 @@ impl ContentEncoder {
         (size + BLOCK_SIZE - 1) & !(BLOCK_SIZE - 1)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pad_unpad_roundtrip() {
+        let content = b"Hello, anonymous mailbox!";
+        let padded = ContentEncoder::pad(content).unwrap();
+        let unpadded = ContentEncoder::unpad(&padded).unwrap();
+        assert_eq!(unpadded, content);
+    }
+
+    #[test]
+    fn test_pad_unpad_empty() {
+        let content = b"";
+        let padded = ContentEncoder::pad(content).unwrap();
+        assert!(padded.len() >= MIN_PADDED_SIZE);
+        let unpadded = ContentEncoder::unpad(&padded).unwrap();
+        assert_eq!(unpadded, content);
+    }
+
+    #[test]
+    fn test_padded_size_minimum() {
+        // Small content should pad to MIN_PADDED_SIZE
+        assert!(ContentEncoder::padded_size(10) >= MIN_PADDED_SIZE);
+        assert_eq!(ContentEncoder::padded_size(10) % BLOCK_SIZE, 0);
+    }
+
+    #[test]
+    fn test_padded_size_log_bucketing() {
+        // Different small sizes should bucket to same padded size (or discrete buckets)
+        let size_100 = ContentEncoder::padded_size(100);
+        let size_110 = ContentEncoder::padded_size(110);
+        // At least verify they're block-aligned
+        assert_eq!(size_100 % BLOCK_SIZE, 0);
+        assert_eq!(size_110 % BLOCK_SIZE, 0);
+    }
+
+    #[test]
+    fn test_content_too_large() {
+        let content = vec![0u8; MAX_CONTENT_SIZE + 1];
+        let result = ContentEncoder::pad(&content);
+        assert!(matches!(result, Err(ContentError::ContentTooLarge(_, _))));
+    }
+
+    #[test]
+    fn test_invalid_padding_too_short() {
+        let padded = vec![0u8; 3]; // Less than 4-byte length prefix
+        let result = ContentEncoder::unpad(&padded);
+        assert!(matches!(result, Err(ContentError::InvalidPadding(_))));
+    }
+
+    #[test]
+    fn test_invalid_padding_wrong_length() {
+        // Create valid-looking padded content but with wrong length prefix
+        let mut padded = vec![0u8; 256];
+        // Set length prefix to 500 (more than available)
+        padded[..4].copy_from_slice(&500u32.to_le_bytes());
+        let result = ContentEncoder::unpad(&padded);
+        assert!(matches!(result, Err(ContentError::InvalidPadding(_))));
+    }
+
+    #[test]
+    fn test_same_content_different_padding() {
+        // Same content should produce different padded bytes (random fill)
+        let content = b"test message";
+        let padded1 = ContentEncoder::pad(content).unwrap();
+        let padded2 = ContentEncoder::pad(content).unwrap();
+
+        // Length prefix and content should be the same
+        assert_eq!(&padded1[..4], &padded2[..4]);
+        assert_eq!(
+            &padded1[4..4 + content.len()],
+            &padded2[4..4 + content.len()]
+        );
+
+        // Padding bytes should differ (with very high probability)
+        let padding_start = 4 + content.len();
+        if padded1.len() > padding_start {
+            assert_ne!(
+                &padded1[padding_start..],
+                &padded2[padding_start..],
+                "random padding should differ"
+            );
+        }
+
+        // Both should unpad to same content
+        assert_eq!(ContentEncoder::unpad(&padded1).unwrap(), content);
+        assert_eq!(ContentEncoder::unpad(&padded2).unwrap(), content);
+    }
+
+    #[test]
+    fn test_padded_size_always_larger() {
+        for size in [0, 1, 100, 1000, 10_000, 50_000] {
+            let padded = ContentEncoder::padded_size(size);
+            // Padded size must be >= original + 4 (length prefix)
+            assert!(
+                padded >= size + 4,
+                "padded_size({}) = {} should be >= {}",
+                size,
+                padded,
+                size + 4
+            );
+            assert_eq!(
+                padded % BLOCK_SIZE,
+                0,
+                "padded_size({}) should be multiple of {}",
+                size,
+                BLOCK_SIZE
+            );
+        }
+    }
+
+    #[test]
+    fn test_max_content_boundary() {
+        let content = vec![0u8; MAX_CONTENT_SIZE];
+        let result = ContentEncoder::pad(&content);
+        assert!(result.is_ok());
+
+        let padded = result.unwrap();
+        let unpadded = ContentEncoder::unpad(&padded).unwrap();
+        assert_eq!(unpadded.len(), MAX_CONTENT_SIZE);
+    }
+
+    #[test]
+    fn test_padded_output_format() {
+        let content = b"hello world";
+        let padded = ContentEncoder::pad(content).unwrap();
+
+        // Check length prefix
+        let length_bytes: [u8; 4] = padded[..4].try_into().unwrap();
+        let length = u32::from_le_bytes(length_bytes) as usize;
+        assert_eq!(length, content.len());
+
+        // Check content preserved
+        assert_eq!(&padded[4..4 + content.len()], content);
+
+        // Check total size is block-aligned
+        assert_eq!(padded.len() % BLOCK_SIZE, 0);
+    }
+
+    #[test]
+    fn test_round_to_block_size() {
+        // Internal function test via padded_size
+        assert_eq!(ContentEncoder::padded_size(0) % 16, 0);
+        assert_eq!(ContentEncoder::padded_size(1) % 16, 0);
+        assert_eq!(ContentEncoder::padded_size(15) % 16, 0);
+        assert_eq!(ContentEncoder::padded_size(16) % 16, 0);
+        assert_eq!(ContentEncoder::padded_size(17) % 16, 0);
+    }
+
+    #[test]
+    fn test_various_content_sizes() {
+        for size in [1, 10, 50, 100, 200, 500, 1000, 5000, 10_000, 30_000] {
+            let content: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
+            let padded = ContentEncoder::pad(&content).expect("pad should succeed");
+            let unpadded = ContentEncoder::unpad(&padded).expect("unpad should succeed");
+            assert_eq!(
+                unpadded, content,
+                "roundtrip failed for size {}",
+                size
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_messages() {
+        let err = ContentError::ContentTooLarge(100_000, MAX_CONTENT_SIZE);
+        assert!(err.to_string().contains("100000"));
+        assert!(err.to_string().contains(&MAX_CONTENT_SIZE.to_string()));
+
+        let err = ContentError::InvalidPadding("test error".to_string());
+        assert!(err.to_string().contains("test error"));
+    }
+}
