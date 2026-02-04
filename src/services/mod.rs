@@ -5,6 +5,7 @@
 pub mod auth_service;
 pub mod session_service;
 pub mod account_service;
+pub mod device_service;
 pub mod message_service;
 pub mod message_gateway;
 pub mod channel_service;
