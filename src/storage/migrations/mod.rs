@@ -14,6 +14,7 @@ pub mod v009_search_index;
 pub mod v010_key_store;
 pub mod v011_mailbox_tokens;
 pub mod v012_dm_conversations;
+pub mod v013_group_mailboxes;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -31,6 +32,7 @@ pub use v009_search_index::V009SearchIndex;
 pub use v010_key_store::V010KeyStore;
 pub use v011_mailbox_tokens::V011MailboxTokens;
 pub use v012_dm_conversations::V012DmConversations;
+pub use v013_group_mailboxes::V013GroupMailboxes;
 
 /// Trait for database migrations.
 ///
@@ -163,4 +165,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V010KeyStore)
         .register(V011MailboxTokens)
         .register(V012DmConversations)
+        .register(V013GroupMailboxes)
 }
