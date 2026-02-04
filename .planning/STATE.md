@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 28 of 66 (Mailbox Group System)
-Plan: 2 of 3 in current phase
+Phase: 29 of 66 (Mailbox Privacy Features)
+Plan: 1 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-04 — Completed 28-02 (group mailbox fanout)
+Last activity: 2026-02-04 — Completed 29-01 (content padding)
 
-Progress: ██████████████████████████████████████████████████████████████░░░░░░░░░░ 75.4%
+Progress: ███████████████████████████████████████████████████████████████░░░░░░░░░ 76.9%
 
 ## Performance Metrics
 
@@ -54,11 +54,12 @@ Progress: ███████████████████████�
 | 25 | 2 | ~20m | ~10m |
 | 26 | 1 | ~15m | ~15m |
 | 27 | 3 | ~21m | ~7m |
-| 28 | 2+ | ~9m | ~4.5m |
+| 28 | 3 | ~12m | ~4m |
+| 29 | 1+ | ~3m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 27-2 (~7m), 27-3 (~4m), 28-1 (~3m), 28-2 (~6m)
-- Trend: Group fanout using futures::join_all for parallel delivery
+- Last 5 plans: 27-3 (~4m), 28-1 (~3m), 28-2 (~6m), 29-1 (~3m)
+- Trend: Starting privacy features, content padding with log-bucketing
 
 ## Accumulated Context
 
@@ -164,6 +165,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 28-02 (group mailbox fanout)
-Resume file: .planning/phases/28-mailbox-group-system/28-02-SUMMARY.md
-Next action: Execute Phase 28-03 (group coordination)
+Stopped at: Completed Phase 29-01 (content padding)
+Resume file: .planning/phases/29-mailbox-privacy-features/29-01-SUMMARY.md
+Next action: Execute Phase 29-02 (cover traffic)
