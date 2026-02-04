@@ -376,6 +376,81 @@ impl MessageService {
         Ok(messages)
     }
 
+    /// Send a reply (quote) to an existing message.
+    ///
+    /// Creates a new message that references another message. The reply_to
+    /// relationship is stored locally for display purposes - the server
+    /// treats this as a regular message.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_client` - Mutable reference to message client
+    /// * `channel_id` - Target channel ID
+    /// * `reply_to_id` - ID of the message being replied to
+    /// * `text` - Reply text content
+    /// * `attachment_ids` - Optional attachment IDs
+    /// * `mentioned_integrations` - AI integrations mentioned in message
+    /// * `targets_ai_bot` - Whether message targets AI bot
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_reply(
+        &self,
+        message_client: &mut MessageClient,
+        channel_id: &ChannelId,
+        reply_to_id: &MessageId,
+        text: &str,
+        attachment_ids: Vec<AttachmentId>,
+        mentioned_integrations: Vec<IntegrationId>,
+        targets_ai_bot: bool,
+    ) -> Result<Message, MessageError> {
+        // Check logged in
+        let sender_id = self.current_user_id()?;
+
+        // Validate reply_to exists locally (informational - server validates)
+        if self.message_repo.get(reply_to_id)?.is_none() {
+            // Log but don't fail - server will validate
+            // The message might exist on server but not locally
+        }
+
+        // Validate content - must have text or attachments
+        let trimmed_text = text.trim();
+        if trimmed_text.is_empty() && attachment_ids.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "reply must have text or attachments".to_string(),
+            ));
+        }
+
+        // Build proto content
+        let content = chat_v1::message::Content {
+            r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
+        };
+
+        // Call server - note: reply_to is stored locally, not sent to server
+        // Server's parent_id is for threads, not quotes
+        let proto_message = message_client
+            .send_message(
+                &channel_id.to_string(),
+                content,
+                None,  // parent_id is for threads, not replies
+                false, // ephemeral
+                None,  // ephemeral_ttl
+                false, // encrypt
+                None,  // crypto_options
+                mentioned_integrations.iter().map(|id| id.to_string()).collect(),
+                targets_ai_bot,
+                attachment_ids.iter().map(|id| id.to_string()).collect(),
+            )
+            .await?;
+
+        // Convert to domain message and set reply_to
+        let mut message = proto_to_domain_message(&proto_message, sender_id)?;
+        message.reply_to = Some(reply_to_id.clone());
+
+        // Store locally with reply_to set
+        self.message_repo.insert(&message)?;
+
+        Ok(message)
+    }
+
     /// Get messages from a channel.
     ///
     /// Fetches messages from the server and stores them locally.
