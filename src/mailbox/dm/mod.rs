@@ -7,6 +7,7 @@ pub mod conversation;
 pub mod two_way;
 
 // Re-export key types
+pub use bootstrap::{BootstrapResponse, BootstrapResult, DmBootstrap, DEFAULT_MAILBOX_TTL_SECONDS};
 pub use conversation::{
     ConversationKey, DmConversation, DmConversationManager, DmMailbox, PeerMailbox,
 };
