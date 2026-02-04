@@ -38,6 +38,10 @@ pub enum MailboxError {
     /// Network operation failed.
     #[error("network error: {0}")]
     Network(String),
+
+    /// Conversation already exists (bootstrap not needed).
+    #[error("conversation already exists")]
+    ConversationExists,
 }
 
 #[cfg(test)]
@@ -70,11 +74,18 @@ mod tests {
             MailboxError::TokenNotFound("id".to_string()),
             MailboxError::Storage("db error".to_string()),
             MailboxError::Network("connection failed".to_string()),
+            MailboxError::ConversationExists,
         ];
 
         // All variants should implement Error (can call to_string)
         for err in errors {
             let _ = err.to_string();
         }
+    }
+
+    #[test]
+    fn test_conversation_exists_display() {
+        let err = MailboxError::ConversationExists;
+        assert_eq!(err.to_string(), "conversation already exists");
     }
 }

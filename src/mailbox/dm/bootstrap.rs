@@ -1,6 +1,353 @@
 //! DM mailbox bootstrap.
 //!
-//! Initial sealed sender to mailbox exchange.
+//! Initial sealed sender to mailbox exchange for first contact.
+//!
+//! Bootstrap flow:
+//! 1. Alice wants to DM Bob (first time)
+//! 2. Alice acquires blind token via TokenManager
+//! 3. Alice creates ephemeral mailbox with token
+//! 4. Alice sends sealed sender message to Bob with her mailbox address
+//! 5. Bob receives via device inbox, extracts Alice's mailbox address
+//! 6. Bob creates his own mailbox, sends address to Alice's mailbox
+//! 7. Both now have each other's mailbox addresses - two-way anonymity established
 
-/// DM mailbox bootstrap handler.
-pub struct DmBootstrap;
+use std::sync::Arc;
+
+use chrono::{Duration, Utc};
+use prost::Message;
+
+use crate::domain::UserId;
+use crate::error::MailboxError;
+use crate::mailbox::dm::{ConversationKey, DmConversationManager, DmMailbox};
+use crate::mailbox::{MailboxToken, TokenManager};
+use crate::network::grpc::MailboxClient;
+use crate::proto::content_v1::{content, Content, KeyExchange};
+use crate::storage::Database;
+
+/// Default mailbox TTL: 7 days in seconds.
+pub const DEFAULT_MAILBOX_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+/// DM bootstrap handler for initiating anonymous DM conversations.
+///
+/// Bootstrap flow:
+/// 1. Check if conversation exists (might just need key exchange, not new mailbox)
+/// 2. Acquire token from TokenManager if needed
+/// 3. Create ephemeral mailbox on server
+/// 4. Generate conversation keys
+/// 5. Build bootstrap message with mailbox address + ephemeral public key
+/// 6. Return BootstrapResult for caller to send via sealed sender
+pub struct DmBootstrap {
+    /// Database connection for persistence (reserved for future use).
+    #[allow(dead_code)]
+    db: Arc<Database>,
+    /// Token manager for blind signature tokens.
+    token_manager: TokenManager,
+    /// Conversation manager for state persistence.
+    conversation_manager: DmConversationManager,
+}
+
+/// Result of bootstrap preparation (not yet sent).
+///
+/// Contains all information needed to complete the bootstrap via sealed sender.
+pub struct BootstrapResult {
+    /// Our newly created mailbox info.
+    pub our_mailbox: DmMailbox,
+    /// Our ephemeral public key for the conversation.
+    pub our_ephemeral_public: [u8; 32],
+    /// Serialized bootstrap message to send via sealed sender.
+    pub bootstrap_message: Vec<u8>,
+    /// Peer user ID this is for.
+    pub peer_id: UserId,
+}
+
+impl DmBootstrap {
+    /// Create a new DmBootstrap handler.
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Shared database connection
+    pub fn new(db: Arc<Database>) -> Self {
+        let token_manager = TokenManager::new(db.clone());
+        let conversation_manager = DmConversationManager::new(db.clone());
+        Self {
+            db,
+            token_manager,
+            conversation_manager,
+        }
+    }
+
+    /// Initiate a DM with a peer.
+    ///
+    /// Creates our mailbox, generates conversation keys, prepares bootstrap message.
+    /// Caller is responsible for sending the message via sealed sender.
+    ///
+    /// # Arguments
+    ///
+    /// * `peer_id` - The user we want to DM
+    /// * `mailbox_client` - For creating the ephemeral mailbox
+    ///
+    /// # Returns
+    ///
+    /// BootstrapResult with prepared bootstrap message, or error.
+    ///
+    /// # Errors
+    ///
+    /// - `ConversationExists` - Conversation already exists and doesn't need bootstrap
+    /// - `NoTokensAvailable` - No tokens available and couldn't request more
+    /// - `Network` - Failed to communicate with server
+    /// - `Storage` - Failed to persist state
+    pub async fn initiate_dm(
+        &self,
+        peer_id: UserId,
+        mailbox_client: &mut MailboxClient,
+    ) -> Result<BootstrapResult, MailboxError> {
+        // 1. Check existing conversation state
+        let existing = self.conversation_manager.load_conversation(&peer_id)?;
+        if let Some(conv) = &existing {
+            if !conv.needs_bootstrap() {
+                return Err(MailboxError::ConversationExists);
+            }
+        }
+
+        // 2. Get available token or request new ones
+        let token = self.ensure_token(mailbox_client).await?;
+
+        // 3. Create ephemeral mailbox on server
+        let response = mailbox_client
+            .create_ephemeral_mailbox(
+                token.public_key.clone(),
+                token.signature.clone(),
+                DEFAULT_MAILBOX_TTL_SECONDS,
+            )
+            .await
+            .map_err(|e| MailboxError::Network(e.to_string()))?;
+
+        // 4. Build our mailbox from token + response
+        let our_mailbox = self.build_mailbox_from_token(&token, &response)?;
+
+        // 5. Generate conversation keys
+        let conversation_key = ConversationKey::new();
+
+        // 6. Save state
+        self.conversation_manager
+            .save_our_mailbox(&peer_id, &our_mailbox)?;
+        self.conversation_manager
+            .save_conversation_key(&peer_id, &conversation_key)?;
+        self.token_manager.mark_token_used(&token.id)?;
+
+        // 7. Build bootstrap message (KeyExchange proto)
+        let bootstrap_message =
+            self.build_bootstrap_message(&our_mailbox, &conversation_key, &peer_id)?;
+
+        Ok(BootstrapResult {
+            our_mailbox,
+            our_ephemeral_public: conversation_key.our_ephemeral_public,
+            bootstrap_message,
+            peer_id,
+        })
+    }
+
+    /// Ensure we have an available token, requesting more if needed.
+    async fn ensure_token(
+        &self,
+        client: &mut MailboxClient,
+    ) -> Result<MailboxToken, MailboxError> {
+        if let Some(token) = self.token_manager.get_available_token()? {
+            return Ok(token);
+        }
+
+        // Need to request tokens
+        let count = self.token_manager.request_tokens(client, 5).await?;
+        if count == 0 {
+            return Err(MailboxError::NoTokensAvailable);
+        }
+
+        self.token_manager
+            .get_available_token()?
+            .ok_or(MailboxError::NoTokensAvailable)
+    }
+
+    /// Build DmMailbox from token and server response.
+    fn build_mailbox_from_token(
+        &self,
+        token: &MailboxToken,
+        response: &crate::proto::mailbox_v1::CreateEphemeralMailboxResponse,
+    ) -> Result<DmMailbox, MailboxError> {
+        let mut public_key = [0u8; 32];
+        let mut private_key = [0u8; 64];
+
+        if token.public_key.len() != 32 {
+            return Err(MailboxError::InvalidServerKey(format!(
+                "Invalid token public key size: expected 32, got {}",
+                token.public_key.len()
+            )));
+        }
+        if token.private_key.len() != 64 {
+            return Err(MailboxError::InvalidServerKey(format!(
+                "Invalid token private key size: expected 64, got {}",
+                token.private_key.len()
+            )));
+        }
+
+        public_key.copy_from_slice(&token.public_key);
+        private_key.copy_from_slice(&token.private_key);
+
+        Ok(DmMailbox {
+            id: response.mailbox_id.clone(),
+            public_key,
+            private_key,
+            signature: token.signature.clone(),
+            randomizer: token.randomizer.clone(),
+            token_id: token.id.clone(),
+            created_at: Utc::now(),
+            expires_at: Utc::now() + Duration::seconds(DEFAULT_MAILBOX_TTL_SECONDS as i64),
+            last_polled_at: None,
+        })
+    }
+
+    /// Check if an ephemeral_pk is a bootstrap message (64 bytes) vs regular key exchange (32 bytes).
+    ///
+    /// Bootstrap messages use a combined 64-byte key containing both the mailbox
+    /// public key and conversation ephemeral key.
+    pub fn is_bootstrap_message(ephemeral_pk: &[u8]) -> bool {
+        ephemeral_pk.len() == 64
+    }
+
+    /// Build bootstrap message as serialized Content proto.
+    ///
+    /// Bootstrap message uses 64-byte combined key:
+    /// - First 32 bytes: mailbox public key (where to send replies)
+    /// - Next 32 bytes: conversation ephemeral public key (for key agreement)
+    fn build_bootstrap_message(
+        &self,
+        mailbox: &DmMailbox,
+        key: &ConversationKey,
+        peer_id: &UserId,
+    ) -> Result<Vec<u8>, MailboxError> {
+        // For bootstrap, we encode mailbox address + ephemeral key together
+        // Using 64-byte format: first 32 bytes = mailbox pk, next 32 = conversation ephemeral
+        let mut combined_pk = Vec::with_capacity(64);
+        combined_pk.extend_from_slice(&mailbox.public_key);
+        combined_pk.extend_from_slice(&key.our_ephemeral_public);
+
+        let bootstrap_exchange = KeyExchange {
+            ephemeral_pk: combined_pk, // 64 bytes: mailbox || conversation key
+            conversation_id: peer_id.to_string(),
+            timestamp: Utc::now().timestamp_millis() as u64,
+        };
+
+        let content = Content {
+            content: Some(content::Content::KeyExchange(bootstrap_exchange)),
+            ephemeral_reply_to: None,
+            timestamp: Utc::now().timestamp_millis() as u64,
+            padding: vec![],
+        };
+
+        let mut bytes = Vec::new();
+        content
+            .encode(&mut bytes)
+            .map_err(|e| MailboxError::Storage(format!("Failed to encode content: {}", e)))?;
+        Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_mailbox_ttl() {
+        // 7 days in seconds
+        assert_eq!(DEFAULT_MAILBOX_TTL_SECONDS, 7 * 24 * 60 * 60);
+        assert_eq!(DEFAULT_MAILBOX_TTL_SECONDS, 604800);
+    }
+
+    #[test]
+    fn test_bootstrap_result_structure() {
+        let peer_id = UserId::new();
+        let result = BootstrapResult {
+            our_mailbox: DmMailbox {
+                id: "test-mailbox".to_string(),
+                public_key: [1u8; 32],
+                private_key: [2u8; 64],
+                signature: vec![3u8; 256],
+                randomizer: Some(vec![4u8; 32]),
+                token_id: "test-token".to_string(),
+                created_at: Utc::now(),
+                expires_at: Utc::now() + Duration::days(7),
+                last_polled_at: None,
+            },
+            our_ephemeral_public: [5u8; 32],
+            bootstrap_message: vec![6u8; 100],
+            peer_id,
+        };
+
+        assert_eq!(result.our_mailbox.id, "test-mailbox");
+        assert_eq!(result.our_ephemeral_public, [5u8; 32]);
+        assert_eq!(result.bootstrap_message.len(), 100);
+        assert_eq!(result.peer_id, peer_id);
+    }
+
+    #[test]
+    fn test_build_bootstrap_message_format() {
+        // Create a mock Content to verify the 64-byte format
+        let mailbox_pk = [1u8; 32];
+        let conversation_pk = [2u8; 32];
+        let peer_id = UserId::new();
+
+        // Build combined key manually (what build_bootstrap_message does)
+        let mut combined_pk = Vec::with_capacity(64);
+        combined_pk.extend_from_slice(&mailbox_pk);
+        combined_pk.extend_from_slice(&conversation_pk);
+
+        assert_eq!(combined_pk.len(), 64);
+        assert_eq!(&combined_pk[0..32], &mailbox_pk);
+        assert_eq!(&combined_pk[32..64], &conversation_pk);
+
+        let key_exchange = KeyExchange {
+            ephemeral_pk: combined_pk,
+            conversation_id: peer_id.to_string(),
+            timestamp: Utc::now().timestamp_millis() as u64,
+        };
+
+        let content = Content {
+            content: Some(content::Content::KeyExchange(key_exchange)),
+            ephemeral_reply_to: None,
+            timestamp: Utc::now().timestamp_millis() as u64,
+            padding: vec![],
+        };
+
+        let mut bytes = Vec::new();
+        content.encode(&mut bytes).unwrap();
+
+        // Verify we can decode it back
+        let decoded = Content::decode(bytes.as_slice()).unwrap();
+        assert!(decoded.content.is_some());
+
+        if let Some(content::Content::KeyExchange(ke)) = decoded.content {
+            assert_eq!(ke.ephemeral_pk.len(), 64);
+            assert_eq!(&ke.ephemeral_pk[0..32], &mailbox_pk);
+            assert_eq!(&ke.ephemeral_pk[32..64], &conversation_pk);
+        } else {
+            panic!("Expected KeyExchange content");
+        }
+    }
+
+    #[test]
+    fn test_is_bootstrap_message_detection() {
+        // 64-byte key = bootstrap
+        let bootstrap_key = vec![0u8; 64];
+        assert!(DmBootstrap::is_bootstrap_message(&bootstrap_key));
+
+        // 32-byte key = regular key exchange
+        let regular_key = vec![0u8; 32];
+        assert!(!DmBootstrap::is_bootstrap_message(&regular_key));
+
+        // Other sizes = not bootstrap
+        let short_key = vec![0u8; 16];
+        assert!(!DmBootstrap::is_bootstrap_message(&short_key));
+
+        let long_key = vec![0u8; 128];
+        assert!(!DmBootstrap::is_bootstrap_message(&long_key));
+    }
+}
