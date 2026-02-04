@@ -451,6 +451,85 @@ impl MessageService {
         Ok(message)
     }
 
+    /// Forward a message to another channel.
+    ///
+    /// Creates a new message in the target channel with the forwarded content.
+    /// The forwarded message includes attribution text indicating it was forwarded.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_client` - Mutable reference to message client
+    /// * `source_message_id` - ID of the message to forward
+    /// * `target_channel_id` - Channel to forward the message to
+    /// * `comment` - Optional comment to prepend to the forwarded content
+    ///
+    /// # Returns
+    ///
+    /// The newly created forwarded message.
+    pub async fn forward_message(
+        &self,
+        message_client: &mut MessageClient,
+        source_message_id: &MessageId,
+        target_channel_id: &ChannelId,
+        comment: Option<&str>,
+    ) -> Result<Message, MessageError> {
+        // Check logged in
+        let sender_id = self.current_user_id()?;
+
+        // Get source message from local storage
+        let source = self
+            .message_repo
+            .get(source_message_id)?
+            .ok_or_else(|| MessageError::MessageNotFound(source_message_id.clone()))?;
+
+        // Extract text content from source message
+        let original_text = source.as_text().unwrap_or("[No text content]");
+
+        // Build forwarded content with attribution
+        let forwarded_text = match comment {
+            Some(c) if !c.trim().is_empty() => {
+                format!("{}\n\n---\nForwarded:\n{}", c.trim(), original_text)
+            }
+            _ => format!("Forwarded:\n{}", original_text),
+        };
+
+        // Build proto content
+        let content = chat_v1::message::Content {
+            r#type: Some(chat_v1::message::content::Type::Text(forwarded_text)),
+        };
+
+        // Copy attachment IDs from source if any
+        let attachment_ids: Vec<String> = source
+            .attachments
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+
+        // Call server
+        let proto_message = message_client
+            .send_message(
+                &target_channel_id.to_string(),
+                content,
+                None,  // parent_id
+                false, // ephemeral
+                None,  // ephemeral_ttl
+                false, // encrypt
+                None,  // crypto_options
+                Vec::new(), // mentioned_integrations
+                false, // targets_ai_bot
+                attachment_ids,
+            )
+            .await?;
+
+        // Convert to domain message
+        let message = proto_to_domain_message(&proto_message, sender_id)?;
+
+        // Store locally
+        self.message_repo.insert(&message)?;
+
+        Ok(message)
+    }
+
     /// Get messages from a channel.
     ///
     /// Fetches messages from the server and stores them locally.
