@@ -58,7 +58,7 @@ None (custom application, no pre-existing domain skills)
 ### Services Layer
 - [x] **Phase 30: Services Auth** - Login, logout, device auth
 - [x] **Phase 31: Services Account** - Password change, deletion, session management
-- [ ] **Phase 32: Services Message Core** - Send, receive, edit, delete
+- [x] **Phase 32: Services Message Core** - Send, receive, edit, delete
 - [ ] **Phase 33: Services Message Advanced** - Forward, quote, pin, thread, draft
 - [ ] **Phase 34: Services Ephemeral Messages** - TTL support, countdown timers
 - [ ] **Phase 35: Services Channel** - Create, join, leave, archive, templates
@@ -556,7 +556,7 @@ None (custom application, no pre-existing domain skills)
 | 29 | Mailbox Privacy Features | 3 | Done | 2026-02-04 |
 | 30 | Services Auth | 2 | Done | 2026-02-04 |
 | 31 | Services Account | 3 | Done | 2026-02-05 |
-| 32 | Services Message Core | 1+ | In progress | - |
+| 32 | Services Message Core | 2 | Done | 2026-02-05 |
 | 33 | Services Message Advanced | TBD | Not started | - |
 | 34 | Services Ephemeral Messages | TBD | Not started | - |
 | 35 | Services Channel | TBD | Not started | - |
