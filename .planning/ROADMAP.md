@@ -552,7 +552,7 @@ None (custom application, no pre-existing domain skills)
 | 25 | Inbox Sync Handlers | 2 | Done | 2026-02-04 |
 | 26 | Mailbox Token Manager | 1 | Done | 2026-02-04 |
 | 27 | Mailbox DM System | 3 | Done | 2026-02-04 |
-| 28 | Mailbox Group System | TBD | Not started | - |
+| 28 | Mailbox Group System | TBD | In progress | - |
 | 29 | Mailbox Privacy Features | TBD | Not started | - |
 | 30 | Services Auth | TBD | Not started | - |
 | 31 | Services Account | TBD | Not started | - |

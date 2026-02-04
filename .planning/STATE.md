@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 27 complete — Ready for Phase 28 (Mailbox Group System)
+**Current focus:** Phase 28 in progress — Group mailbox state management
 
 ## Current Position
 
-Phase: 27 of 66 (Mailbox DM System)
-Plan: 3 of 3 in current phase
-Status: Phase complete
-Last activity: 2026-02-04 — Completed 27-03 (two-way DM messaging)
+Phase: 28 of 66 (Mailbox Group System)
+Plan: 1 of TBD in current phase
+Status: In progress
+Last activity: 2026-02-04 — Completed 28-01 (group mailbox state)
 
-Progress: ██████████████████████████████████████████████████████████████░░░░░░░░░░ 73.0%
+Progress: ██████████████████████████████████████████████████████████████░░░░░░░░░░ 74.6%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 46
+- Total plans completed: 47
 - Average duration: ~4.8 min
-- Total execution time: ~222 min
+- Total execution time: ~225 min
 
 **By Phase:**
 
@@ -54,10 +54,11 @@ Progress: ███████████████████████�
 | 25 | 2 | ~20m | ~10m |
 | 26 | 1 | ~15m | ~15m |
 | 27 | 3 | ~21m | ~7m |
+| 28 | 1+ | ~3m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 26-1 (~15m), 27-1 (~10m), 27-2 (~7m), 27-3 (~4m)
-- Trend: DM system averages ~7 min per plan with solid test coverage
+- Last 5 plans: 27-1 (~10m), 27-2 (~7m), 27-3 (~4m), 28-1 (~3m)
+- Trend: Group mailbox state leveraging DM patterns for fast execution
 
 ## Accumulated Context
 
@@ -147,6 +148,8 @@ Recent decisions affecting current work:
 - 64-byte Ed25519 private key storage: Full keypair bytes (32 secret + 32 public) for ed25519-dalek compatibility
 - 64-byte combined key for DM bootstrap: first 32 = mailbox pk, next 32 = conversation ephemeral pk
 - Bootstrap detection via ephemeral_pk length (64 = bootstrap, 32 = regular key exchange)
+- GroupMailbox parallels DmMailbox: Ed25519 keypair, RSA signature, expiry tracking
+- HashMap<UserId, MemberMailbox> for O(1) member lookup in group state
 
 ### Deferred Issues
 
@@ -159,6 +162,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 27-03 (two-way DM messaging)
-Resume file: .planning/phases/27-mailbox-dm-system/27-03-SUMMARY.md
-Next action: Plan Phase 28 (Mailbox Group System)
+Stopped at: Completed Phase 28-01 (group mailbox state)
+Resume file: .planning/phases/28-mailbox-group-system/28-01-SUMMARY.md
+Next action: Execute Phase 28-02 (group mailbox fanout)
