@@ -554,7 +554,7 @@ None (custom application, no pre-existing domain skills)
 | 27 | Mailbox DM System | 3 | Done | 2026-02-04 |
 | 28 | Mailbox Group System | 3 | Done | 2026-02-04 |
 | 29 | Mailbox Privacy Features | 3 | Done | 2026-02-04 |
-| 30 | Services Auth | TBD | Not started | - |
+| 30 | Services Auth | TBD | In progress | - |
 | 31 | Services Account | TBD | Not started | - |
 | 32 | Services Message Core | TBD | Not started | - |
 | 33 | Services Message Advanced | TBD | Not started | - |

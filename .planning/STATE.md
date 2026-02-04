@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 29 complete — Ready for Phase 30 (Services Auth)
+**Current focus:** Phase 30 in progress — Services Auth
 
 ## Current Position
 
-Phase: 29 of 66 (Mailbox Privacy Features)
-Plan: 3 of 3 in current phase
-Status: Phase complete
-Last activity: 2026-02-04 — Completed 29-03 (cover traffic)
+Phase: 30 of 66 (Services Auth)
+Plan: 1 of TBD in current phase
+Status: In progress
+Last activity: 2026-02-04 — Completed 30-01 (DeviceCredentials)
 
-Progress: ███████████████████████████████████████████████████████████████░░░░░░░░░ 78.1%
+Progress: ███████████████████████████████████████████████████████████████░░░░░░░░░ 78.3%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 50
+- Total plans completed: 51
 - Average duration: ~4.7 min
-- Total execution time: ~235 min
+- Total execution time: ~238 min
 
 **By Phase:**
 
@@ -56,10 +56,11 @@ Progress: ███████████████████████�
 | 27 | 3 | ~21m | ~7m |
 | 28 | 3 | ~12m | ~4m |
 | 29 | 3 | ~7m | ~2.3m |
+| 30 | 1 | ~3m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 28-2 (~6m), 28-3 (~3m), 29-1 (~3m), 29-2 (~2m), 29-3 (~2m)
-- Trend: Phase 29 complete, privacy features done
+- Last 5 plans: 29-1 (~3m), 29-2 (~2m), 29-3 (~2m), 30-1 (~3m)
+- Trend: Services layer starting, device auth foundation complete
 
 ## Accumulated Context
 
@@ -159,6 +160,8 @@ Recent decisions affecting current work:
 - Exponential distribution for cover traffic timing (more realistic than uniform)
 - Callback-based cover traffic send (decouples from network layer)
 - Cover traffic disabled by default (user opt-in for privacy vs bandwidth)
+- DeviceCredentials uses rand::rng() directly (avoids rand_core version conflicts)
+- UAK derivation: HKDF-SHA256, info="UnidentifiedDelivery", 16 bytes output
 
 ### Deferred Issues
 
@@ -171,6 +174,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 29-03 (cover traffic) - Phase 29 complete
-Resume file: .planning/phases/29-mailbox-privacy-features/29-03-SUMMARY.md
-Next action: Plan Phase 30 (Services Auth)
+Stopped at: Completed Phase 30-01 (DeviceCredentials)
+Resume file: .planning/phases/30-services-auth/30-01-SUMMARY.md
+Next action: Plan or execute next plan in Phase 30
