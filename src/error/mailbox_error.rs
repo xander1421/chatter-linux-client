@@ -62,6 +62,18 @@ pub enum MailboxError {
     /// Key derivation failed.
     #[error("key derivation failed: {0}")]
     KeyDerivationFailed(String),
+
+    /// Group not found in storage.
+    #[error("group not found")]
+    GroupNotFound,
+
+    /// Group not ready for messaging (no member mailboxes).
+    #[error("group not ready: no member mailboxes configured")]
+    GroupNotReady,
+
+    /// Fanout had partial failures.
+    #[error("fanout partial failure: {successful} succeeded, {failed} failed")]
+    FanoutPartialFailure { successful: usize, failed: usize },
 }
 
 #[cfg(test)]
@@ -100,6 +112,12 @@ mod tests {
             MailboxError::PeerMailboxUnknown,
             MailboxError::ConversationNotEstablished,
             MailboxError::KeyDerivationFailed("test".to_string()),
+            MailboxError::GroupNotFound,
+            MailboxError::GroupNotReady,
+            MailboxError::FanoutPartialFailure {
+                successful: 3,
+                failed: 2,
+            },
         ];
 
         // All variants should implement Error (can call to_string)
@@ -130,5 +148,26 @@ mod tests {
 
         let err = MailboxError::KeyDerivationFailed("X25519 ECDH failed".to_string());
         assert_eq!(err.to_string(), "key derivation failed: X25519 ECDH failed");
+    }
+
+    #[test]
+    fn test_group_error_variants_display() {
+        let err = MailboxError::GroupNotFound;
+        assert_eq!(err.to_string(), "group not found");
+
+        let err = MailboxError::GroupNotReady;
+        assert_eq!(
+            err.to_string(),
+            "group not ready: no member mailboxes configured"
+        );
+
+        let err = MailboxError::FanoutPartialFailure {
+            successful: 5,
+            failed: 2,
+        };
+        assert_eq!(
+            err.to_string(),
+            "fanout partial failure: 5 succeeded, 2 failed"
+        );
     }
 }
