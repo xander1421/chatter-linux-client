@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 26 complete — Ready for Phase 27 (Mailbox DM System)
+**Current focus:** Phase 27 in progress — DM conversation state complete, bootstrap next
 
 ## Current Position
 
-Phase: 26 of 66 (Mailbox Token Manager)
-Plan: 1 of 1 in current phase
-Status: Complete
-Last activity: 2026-02-04 — Completed 26-01 (Blind signature tokens)
+Phase: 27 of 66 (Mailbox DM System)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-04 — Completed 27-01 (DM conversation state)
 
-Progress: █████████████████████████████████████████████████████████████░░░░░░░░░░░ 68.7%
+Progress: █████████████████████████████████████████████████████████████░░░░░░░░░░░ 69.8%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 43
-- Average duration: ~4.9 min
-- Total execution time: ~201 min
+- Total plans completed: 44
+- Average duration: ~4.8 min
+- Total execution time: ~211 min
 
 **By Phase:**
 
@@ -53,9 +53,10 @@ Progress: ███████████████████████�
 | 24 | 3 | ~26m | ~9m |
 | 25 | 2 | ~20m | ~10m |
 | 26 | 1 | ~15m | ~15m |
+| 27 | 1 | ~10m | ~10m |
 
 **Recent Trend:**
-- Last 5 plans: 24-3 (~4m), 25-1 (~12m), 25-2 (~8m), 26-1 (~15m)
+- Last 5 plans: 25-1 (~12m), 25-2 (~8m), 26-1 (~15m), 27-1 (~10m)
 - Trend: Handler implementation with tests runs ~4-12 min per plan; crypto-heavy plans take longer
 
 ## Accumulated Context
@@ -142,6 +143,8 @@ Recent decisions affecting current work:
 - PinHandler uses local_user_id fallback for sealed sender messages
 - blind-rsa-signatures 0.14 for Rust 1.85 compatibility (0.15+ has derive_more issues)
 - Ed25519 key generation via rand::fill() to avoid rand_core version conflicts
+- Separate Ed25519 and X25519 for DM mailbox: Ed25519 for mailbox identity/auth, X25519 for message encryption (Signal pattern)
+- 64-byte Ed25519 private key storage: Full keypair bytes (32 secret + 32 public) for ed25519-dalek compatibility
 
 ### Deferred Issues
 
@@ -154,6 +157,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 26-01 (Mailbox Token Manager)
-Resume file: .planning/phases/26-mailbox-token-manager/26-01-SUMMARY.md
-Next action: Plan Phase 27 (Mailbox DM System)
+Stopped at: Completed Phase 27-01 (DM conversation state)
+Resume file: .planning/phases/27-mailbox-dm-system/27-01-SUMMARY.md
+Next action: Execute 27-02-PLAN.md (DM bootstrap)
