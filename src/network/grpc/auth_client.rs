@@ -20,8 +20,21 @@ use crate::proto::chat_v1::{
     RefreshPreKeysRequest, RegisterRequest, RenameDeviceRequest, RequestPasswordResetRequest,
     RequestSenderCertificateRequest, RequestSenderCertificateResponse,
     ResendVerificationEmailRequest, RevokeDeviceRequest, ServerTrustRootResponse, Session,
-    SignalPreKeyBundle, UploadPreKeyBundleRequest, VerifyEmailRequest,
+    SignalPreKeyBundle, UploadPreKeyBundleRequest, User as ProtoUser, VerifyEmailRequest,
 };
+
+/// Result of a successful registration.
+///
+/// Contains both the user info (with user_id) and the session info.
+#[derive(Debug, Clone)]
+pub struct RegistrationResult {
+    /// User ID assigned by the server.
+    pub user_id: String,
+    /// Username.
+    pub username: String,
+    /// Session info with device_id and auth tokens.
+    pub session: Session,
+}
 
 /// Auth service client wrapper.
 ///
@@ -196,7 +209,7 @@ impl AuthClient {
     /// Register and wait for completion.
     ///
     /// Convenience method that consumes the event stream and returns
-    /// the final session on success.
+    /// the registration result with user_id and session on success.
     pub async fn register_and_wait(
         &mut self,
         username: &str,
@@ -206,7 +219,7 @@ impl AuthClient {
         device_info: &str,
         device_auth_token: &[u8],
         unidentified_access_key: &[u8; 16],
-    ) -> Result<Session, NetworkError> {
+    ) -> Result<RegistrationResult, NetworkError> {
         let stream = self
             .register(
                 username,
@@ -221,17 +234,30 @@ impl AuthClient {
 
         tokio::pin!(stream);
 
+        // Capture user info when UserRegistered event arrives
+        let mut user_info: Option<ProtoUser> = None;
+
         while let Some(result) = stream.next().await {
             let event = result?;
             if let Some(payload) = event.payload {
                 match payload {
+                    auth_event::Payload::UserRegistered(user) => {
+                        user_info = Some(user);
+                    }
                     auth_event::Payload::SessionCreated(session) => {
-                        return Ok(session);
+                        // We need the user_info for the user_id
+                        let user = user_info.ok_or_else(|| {
+                            NetworkError::Unknown("session created without user info".to_string())
+                        })?;
+                        return Ok(RegistrationResult {
+                            user_id: user.id,
+                            username: user.username,
+                            session,
+                        });
                     }
                     auth_event::Payload::RegistrationError(error) => {
                         return Err(NetworkError::ServerError(error.message));
                     }
-                    _ => {} // Progress events, ignore
                 }
             }
         }
