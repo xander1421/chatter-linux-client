@@ -21,6 +21,8 @@ use crate::error::MailboxError;
 /// Caches the parsed RSA public key along with metadata for key rotation tracking.
 #[derive(Clone)]
 pub struct ServerPublicKey {
+    // Note: blind_rsa_signatures::PublicKey doesn't derive Debug,
+    // so we implement Debug manually below.
     /// The RSA-2048 public key for blinding operations.
     inner: PublicKey,
     /// Server's key identifier for rotation tracking.
@@ -73,6 +75,16 @@ impl ServerPublicKey {
     /// Get a reference to the inner public key.
     pub(crate) fn inner(&self) -> &PublicKey {
         &self.inner
+    }
+}
+
+impl std::fmt::Debug for ServerPublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerPublicKey")
+            .field("key_id", &self.key_id)
+            .field("valid_until", &self.valid_until)
+            .field("inner", &"<RSA PublicKey>")
+            .finish()
     }
 }
 
