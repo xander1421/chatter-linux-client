@@ -4,6 +4,18 @@
 
 use thiserror::Error;
 
+/// Content padding errors.
+#[derive(Debug, Clone, Error)]
+pub enum ContentError {
+    /// Content exceeds maximum size.
+    #[error("content too large: {0} bytes (max {1})")]
+    ContentTooLarge(usize, usize),
+
+    /// Invalid padded content (corrupted or tampered).
+    #[error("invalid padded content: {0}")]
+    InvalidPadding(String),
+}
+
 /// Mailbox error for token and mailbox operations.
 #[derive(Debug, Clone, Error)]
 pub enum MailboxError {
@@ -74,6 +86,10 @@ pub enum MailboxError {
     /// Fanout had partial failures.
     #[error("fanout partial failure: {successful} succeeded, {failed} failed")]
     FanoutPartialFailure { successful: usize, failed: usize },
+
+    /// Content encoding/padding error.
+    #[error("content error: {0}")]
+    Content(#[from] ContentError),
 }
 
 #[cfg(test)]
@@ -97,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_error_variants() {
-        let errors = vec![
+        let errors: Vec<MailboxError> = vec![
             MailboxError::BlindSignature("test".to_string()),
             MailboxError::InvalidServerKey("test".to_string()),
             MailboxError::TokenExpired,
@@ -118,6 +134,7 @@ mod tests {
                 successful: 3,
                 failed: 2,
             },
+            MailboxError::Content(ContentError::ContentTooLarge(100_000, 65_536)),
         ];
 
         // All variants should implement Error (can call to_string)
@@ -169,5 +186,21 @@ mod tests {
             err.to_string(),
             "fanout partial failure: 5 succeeded, 2 failed"
         );
+    }
+
+    #[test]
+    fn test_content_error_display() {
+        let err = ContentError::ContentTooLarge(100_000, 65_536);
+        assert_eq!(err.to_string(), "content too large: 100000 bytes (max 65536)");
+
+        let err = ContentError::InvalidPadding("corrupt data".to_string());
+        assert_eq!(err.to_string(), "invalid padded content: corrupt data");
+    }
+
+    #[test]
+    fn test_content_error_conversion() {
+        let content_err = ContentError::ContentTooLarge(100, 50);
+        let mailbox_err: MailboxError = content_err.into();
+        assert!(mailbox_err.to_string().contains("content error"));
     }
 }

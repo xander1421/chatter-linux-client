@@ -10,6 +10,6 @@ pub mod recovery;
 pub mod storage_error;
 
 pub use crypto_error::CryptoError;
-pub use mailbox_error::MailboxError;
+pub use mailbox_error::{ContentError, MailboxError};
 pub use network_error::NetworkError;
 pub use storage_error::StorageError;

@@ -7,7 +7,8 @@
 //! identical in size to the server.
 
 use rand::RngCore;
-use thiserror::Error;
+
+use crate::error::ContentError;
 
 /// Minimum padded content size for NDSS privacy.
 /// Small enough to not waste bandwidth, large enough to hide typical messages.
@@ -24,18 +25,6 @@ const BLOCK_SIZE: usize = 16;
 
 /// Length prefix size (4 bytes for u32 little-endian).
 const LENGTH_PREFIX_SIZE: usize = 4;
-
-/// Content encoding errors.
-#[derive(Debug, Clone, Error)]
-pub enum ContentError {
-    /// Content exceeds maximum size.
-    #[error("content too large: {0} bytes (max {1})")]
-    ContentTooLarge(usize, usize),
-
-    /// Invalid padded content (corrupted or tampered).
-    #[error("invalid padded content: {0}")]
-    InvalidPadding(String),
-}
 
 /// Mailbox content encoder with NDSS-style padding.
 ///
@@ -180,6 +169,7 @@ impl ContentEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::ContentError;
 
     #[test]
     fn test_pad_unpad_roundtrip() {

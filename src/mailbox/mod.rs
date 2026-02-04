@@ -33,3 +33,6 @@ pub use group::{
     FanoutResult, GroupFanout, GroupFanoutResult, GroupMailbox, GroupMailboxManager,
     GroupMailboxState, GroupPollResult, MemberMailbox,
 };
+
+// Re-export content encoding types
+pub use content::{ContentEncoder, MAX_CONTENT_SIZE, MIN_PADDED_SIZE};
