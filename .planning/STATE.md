@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 26 planned — Ready for execution (Mailbox Token Manager)
+**Current focus:** Phase 26 complete — Ready for Phase 27 (Mailbox DM System)
 
 ## Current Position
 
 Phase: 26 of 66 (Mailbox Token Manager)
 Plan: 1 of 1 in current phase
-Status: Planning complete
-Last activity: 2026-02-04 — Created 26-01-PLAN.md
+Status: Complete
+Last activity: 2026-02-04 — Completed 26-01 (Blind signature tokens)
 
-Progress: █████████████████████████████████████████████████████████████░░░░░░░░░░░ 67.2%
+Progress: █████████████████████████████████████████████████████████████░░░░░░░░░░░ 68.7%
 
 ## Performance Metrics
 
@@ -52,10 +52,11 @@ Progress: ███████████████████████�
 | 23 | 2 | ~8m | ~4m |
 | 24 | 3 | ~26m | ~9m |
 | 25 | 2 | ~20m | ~10m |
+| 26 | 1 | ~15m | ~15m |
 
 **Recent Trend:**
-- Last 5 plans: 24-2 (~4m), 24-3 (~4m), 25-1 (~12m), 25-2 (~8m)
-- Trend: Handler implementation with tests runs ~4-12 min per plan
+- Last 5 plans: 24-3 (~4m), 25-1 (~12m), 25-2 (~8m), 26-1 (~15m)
+- Trend: Handler implementation with tests runs ~4-12 min per plan; crypto-heavy plans take longer
 
 ## Accumulated Context
 
@@ -139,6 +140,8 @@ Recent decisions affecting current work:
 - KeyExchange validates 32-byte ephemeral_pk (Ed25519 public key)
 - SenderKey passes raw distribution_message bytes to crypto layer
 - PinHandler uses local_user_id fallback for sealed sender messages
+- blind-rsa-signatures 0.14 for Rust 1.85 compatibility (0.15+ has derive_more issues)
+- Ed25519 key generation via rand::fill() to avoid rand_core version conflicts
 
 ### Deferred Issues
 
@@ -151,6 +154,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Created 26-01-PLAN.md (Phase 26 ready for execution)
-Resume file: .planning/phases/26-mailbox-token-manager/26-01-PLAN.md
-Next action: Execute Phase 26-01 (Blind signature tokens)
+Stopped at: Completed Phase 26-01 (Mailbox Token Manager)
+Resume file: .planning/phases/26-mailbox-token-manager/26-01-SUMMARY.md
+Next action: Plan Phase 27 (Mailbox DM System)
