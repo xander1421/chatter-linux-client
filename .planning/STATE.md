@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 27 in progress — DM conversation state complete, bootstrap next
+**Current focus:** Phase 27 in progress — DM bootstrap complete, two-way messaging next
 
 ## Current Position
 
 Phase: 27 of 66 (Mailbox DM System)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-04 — Completed 27-01 (DM conversation state)
+Last activity: 2026-02-04 — Completed 27-02 (DM bootstrap)
 
-Progress: █████████████████████████████████████████████████████████████░░░░░░░░░░░ 69.8%
+Progress: █████████████████████████████████████████████████████████████░░░░░░░░░░░ 71.4%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 44
+- Total plans completed: 45
 - Average duration: ~4.8 min
-- Total execution time: ~211 min
+- Total execution time: ~218 min
 
 **By Phase:**
 
@@ -53,10 +53,10 @@ Progress: ███████████████████████�
 | 24 | 3 | ~26m | ~9m |
 | 25 | 2 | ~20m | ~10m |
 | 26 | 1 | ~15m | ~15m |
-| 27 | 1 | ~10m | ~10m |
+| 27 | 2 | ~17m | ~8.5m |
 
 **Recent Trend:**
-- Last 5 plans: 25-1 (~12m), 25-2 (~8m), 26-1 (~15m), 27-1 (~10m)
+- Last 5 plans: 25-2 (~8m), 26-1 (~15m), 27-1 (~10m), 27-2 (~7m)
 - Trend: Handler implementation with tests runs ~4-12 min per plan; crypto-heavy plans take longer
 
 ## Accumulated Context
@@ -145,6 +145,8 @@ Recent decisions affecting current work:
 - Ed25519 key generation via rand::fill() to avoid rand_core version conflicts
 - Separate Ed25519 and X25519 for DM mailbox: Ed25519 for mailbox identity/auth, X25519 for message encryption (Signal pattern)
 - 64-byte Ed25519 private key storage: Full keypair bytes (32 secret + 32 public) for ed25519-dalek compatibility
+- 64-byte combined key for DM bootstrap: first 32 = mailbox pk, next 32 = conversation ephemeral pk
+- Bootstrap detection via ephemeral_pk length (64 = bootstrap, 32 = regular key exchange)
 
 ### Deferred Issues
 
@@ -157,6 +159,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 27-01 (DM conversation state)
-Resume file: .planning/phases/27-mailbox-dm-system/27-01-SUMMARY.md
-Next action: Execute 27-02-PLAN.md (DM bootstrap)
+Stopped at: Completed Phase 27-02 (DM bootstrap)
+Resume file: .planning/phases/27-mailbox-dm-system/27-02-SUMMARY.md
+Next action: Execute 27-03-PLAN.md (two-way DM messaging)
