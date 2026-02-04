@@ -556,7 +556,7 @@ None (custom application, no pre-existing domain skills)
 | 29 | Mailbox Privacy Features | 3 | Done | 2026-02-04 |
 | 30 | Services Auth | 2 | Done | 2026-02-04 |
 | 31 | Services Account | 3 | Done | 2026-02-05 |
-| 32 | Services Message Core | TBD | Not started | - |
+| 32 | Services Message Core | 1+ | In progress | - |
 | 33 | Services Message Advanced | TBD | Not started | - |
 | 34 | Services Ephemeral Messages | TBD | Not started | - |
 | 35 | Services Channel | TBD | Not started | - |

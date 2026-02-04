@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 31 in progress — Services Account
+**Current focus:** Phase 32 in progress — Services Message Core
 
 ## Current Position
 
-Phase: 31 of 66 (Services Account)
-Plan: 3 of 3 in current phase
-Status: Phase complete
-Last activity: 2026-02-05 — Completed 31-03 (DeviceService)
+Phase: 32 of 66 (Services Message Core)
+Plan: 1 of ? in current phase
+Status: In progress
+Last activity: 2026-02-05 — Completed 32-01 (MessageService)
 
-Progress: █████████████████████████████████████████████████████████████████░░░░░░░ 81.5%
+Progress: █████████████████████████████████████████████████████████████████░░░░░░░ 82%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 55
+- Total plans completed: 56
 - Average duration: ~4.5 min
-- Total execution time: ~249 min
+- Total execution time: ~253 min
 
 **By Phase:**
 
@@ -58,10 +58,11 @@ Progress: ███████████████████████�
 | 29 | 3 | ~7m | ~2.3m |
 | 30 | 2 | ~7m | ~3.5m |
 | 31 | 3 | ~7m | ~2.3m |
+| 32 | 1 | ~4m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 30-2 (~4m), 31-1 (~3m), 31-2 (~3m), 31-3 (~1m)
-- Trend: Phase 31 complete, account services layer ready
+- Last 5 plans: 31-1 (~3m), 31-2 (~3m), 31-3 (~1m), 32-1 (~4m)
+- Trend: Phase 32 started, message service layer in progress
 
 ## Accumulated Context
 
@@ -167,6 +168,8 @@ Recent decisions affecting current work:
 - Fresh profile key per login (UAK derivation)
 - Preserve identity keys on logout (support re-login)
 - RegistrationResult captures user_id from UserRegistered event stream
+- Proto millis timestamps to chrono DateTime via timestamp_millis_opt with fallback
+- MessageService takes MessageClient by mutable reference (caller owns connection)
 
 ### Deferred Issues
 
@@ -179,6 +182,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed Phase 31-03 (DeviceService) - Phase 31 complete
-Resume file: .planning/phases/31-services-account/31-03-SUMMARY.md
-Next action: Plan Phase 32 (Services Message Core)
+Stopped at: Completed 32-01-PLAN.md (MessageService)
+Resume file: .planning/phases/32-services-message-core/32-01-SUMMARY.md
+Next action: Execute 32-02-PLAN.md or plan if doesn't exist
