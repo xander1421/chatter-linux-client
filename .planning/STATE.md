@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 30 of 66 (Services Auth)
-Plan: 1 of TBD in current phase
-Status: In progress
-Last activity: 2026-02-04 — Completed 30-01 (DeviceCredentials)
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-04 — Completed 30-02 (AuthService)
 
-Progress: ███████████████████████████████████████████████████████████████░░░░░░░░░ 78.3%
+Progress: ████████████████████████████████████████████████████████████████░░░░░░░░ 79.5%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 51
+- Total plans completed: 52
 - Average duration: ~4.7 min
-- Total execution time: ~238 min
+- Total execution time: ~242 min
 
 **By Phase:**
 
@@ -56,11 +56,11 @@ Progress: ███████████████████████�
 | 27 | 3 | ~21m | ~7m |
 | 28 | 3 | ~12m | ~4m |
 | 29 | 3 | ~7m | ~2.3m |
-| 30 | 1 | ~3m | ~3m |
+| 30 | 2 | ~7m | ~3.5m |
 
 **Recent Trend:**
-- Last 5 plans: 29-1 (~3m), 29-2 (~2m), 29-3 (~2m), 30-1 (~3m)
-- Trend: Services layer starting, device auth foundation complete
+- Last 5 plans: 29-2 (~2m), 29-3 (~2m), 30-1 (~3m), 30-2 (~4m)
+- Trend: Phase 30 complete, auth service layer functional
 
 ## Accumulated Context
 
@@ -162,6 +162,10 @@ Recent decisions affecting current work:
 - Cover traffic disabled by default (user opt-in for privacy vs bandwidth)
 - DeviceCredentials uses rand::rng() directly (avoids rand_core version conflicts)
 - UAK derivation: HKDF-SHA256, info="UnidentifiedDelivery", 16 bytes output
+- SHA256 password hashing for server auth (server expects pre-hashed)
+- Fresh profile key per login (UAK derivation)
+- Preserve identity keys on logout (support re-login)
+- RegistrationResult captures user_id from UserRegistered event stream
 
 ### Deferred Issues
 
@@ -174,6 +178,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 30-01 (DeviceCredentials)
-Resume file: .planning/phases/30-services-auth/30-01-SUMMARY.md
-Next action: Plan or execute next plan in Phase 30
+Stopped at: Completed Phase 30-02 (AuthService) - Phase 30 complete
+Resume file: .planning/phases/30-services-auth/30-02-SUMMARY.md
+Next action: Plan Phase 31 (Services Account)

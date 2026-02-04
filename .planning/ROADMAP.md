@@ -56,7 +56,7 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 29: Mailbox Privacy Features** - Cover traffic, key rolling
 
 ### Services Layer
-- [ ] **Phase 30: Services Auth** - Login, logout, device auth
+- [x] **Phase 30: Services Auth** - Login, logout, device auth
 - [ ] **Phase 31: Services Account** - Password change, deletion, session management
 - [ ] **Phase 32: Services Message Core** - Send, receive, edit, delete
 - [ ] **Phase 33: Services Message Advanced** - Forward, quote, pin, thread, draft
@@ -554,7 +554,7 @@ None (custom application, no pre-existing domain skills)
 | 27 | Mailbox DM System | 3 | Done | 2026-02-04 |
 | 28 | Mailbox Group System | 3 | Done | 2026-02-04 |
 | 29 | Mailbox Privacy Features | 3 | Done | 2026-02-04 |
-| 30 | Services Auth | TBD | In progress | - |
+| 30 | Services Auth | 2 | Done | 2026-02-04 |
 | 31 | Services Account | TBD | Not started | - |
 | 32 | Services Message Core | TBD | Not started | - |
 | 33 | Services Message Advanced | TBD | Not started | - |
