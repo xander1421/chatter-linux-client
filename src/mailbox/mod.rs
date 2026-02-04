@@ -27,3 +27,9 @@ pub use dm::{
     BootstrapResponse, BootstrapResult, DmBootstrap, DmConversation, DmConversationManager,
     DmMailbox, PollResult, ReceivedMessage, SendResult, TwoWayAnonymity,
 };
+
+// Re-export group types
+pub use group::{
+    FanoutResult, GroupFanout, GroupFanoutResult, GroupMailbox, GroupMailboxManager,
+    GroupMailboxState, GroupPollResult, MemberMailbox,
+};
