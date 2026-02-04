@@ -38,6 +38,7 @@ pub struct PollResult {
 }
 
 /// A message received from a mailbox.
+#[derive(Debug)]
 pub struct ReceivedMessage {
     /// Server-assigned message ID (for acknowledgment).
     pub message_id: String,
