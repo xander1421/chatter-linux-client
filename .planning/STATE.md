@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 28 in progress — Group mailbox fanout
+**Current focus:** Phase 29 in progress — Mailbox Privacy Features
 
 ## Current Position
 
 Phase: 29 of 66 (Mailbox Privacy Features)
-Plan: 1 of 3 in current phase
+Plan: 2 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-04 — Completed 29-01 (content padding)
+Last activity: 2026-02-04 — Completed 29-02 (key rolling)
 
-Progress: ███████████████████████████████████████████████████████████████░░░░░░░░░ 76.9%
+Progress: ███████████████████████████████████████████████████████████████░░░░░░░░░ 77.4%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 48
+- Total plans completed: 49
 - Average duration: ~4.8 min
-- Total execution time: ~231 min
+- Total execution time: ~233 min
 
 **By Phase:**
 
@@ -55,11 +55,11 @@ Progress: ███████████████████████�
 | 26 | 1 | ~15m | ~15m |
 | 27 | 3 | ~21m | ~7m |
 | 28 | 3 | ~12m | ~4m |
-| 29 | 1+ | ~3m | ~3m |
+| 29 | 2+ | ~5m | ~2.5m |
 
 **Recent Trend:**
-- Last 5 plans: 27-3 (~4m), 28-1 (~3m), 28-2 (~6m), 29-1 (~3m)
-- Trend: Starting privacy features, content padding with log-bucketing
+- Last 5 plans: 28-1 (~3m), 28-2 (~6m), 29-1 (~3m), 29-2 (~2m)
+- Trend: Privacy features progressing, key rolling implemented
 
 ## Accumulated Context
 
@@ -153,6 +153,9 @@ Recent decisions affecting current work:
 - HashMap<UserId, MemberMailbox> for O(1) member lookup in group state
 - futures::future::join_all for parallel fanout (collect all results even with failures)
 - FanoutResult builder methods (success/failure) for clearer construction
+- 24-hour rotation threshold for mailbox key rolling (rotate when expiring within 24h)
+- 1-hour overlap period for old mailboxes (grace period for in-flight messages)
+- RwLock<Vec<PendingDeletion>> for async-safe pending deletion tracking
 
 ### Deferred Issues
 
@@ -165,6 +168,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-04
-Stopped at: Completed Phase 29-01 (content padding)
-Resume file: .planning/phases/29-mailbox-privacy-features/29-01-SUMMARY.md
-Next action: Execute Phase 29-02 (cover traffic)
+Stopped at: Completed Phase 29-02 (key rolling)
+Resume file: .planning/phases/29-mailbox-privacy-features/29-02-SUMMARY.md
+Next action: Execute Phase 29-03 (cover traffic)
