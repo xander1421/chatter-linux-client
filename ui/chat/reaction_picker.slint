@@ -1,0 +1,149 @@
+// Reaction picker popup component
+//
+// Wraps EmojiPicker with quick reaction bar and message context.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
+
+export component ReactionPicker inherits Rectangle {
+    // Visibility
+    in property <bool> visible: false;
+
+    // Message being reacted to
+    in property <string> message-id;
+
+    // Emoji data (passed through to EmojiPicker)
+    in property <[EmojiData]> emoji-list: [];
+
+    // EmojiPicker state (two-way bindings)
+    in-out property <int> selected-category: 0;
+    in-out property <string> search-query: "";
+
+    // Positioning
+    in property <length> position-x: 0;
+    in property <length> position-y: 0;
+
+    // Callbacks
+    callback reaction-selected(string, string); // (message_id, emoji)
+    callback close;
+    callback category-changed(int);
+    callback search-changed(string);
+
+    // Quick reaction emoji
+    property <[string]> quick-reactions: ["\u{1F44D}", "\u{2764}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F621}"];
+    // thumbs up, heart, joy, surprised, crying, angry
+
+    // Only render when visible
+    opacity: root.visible ? 1 : 0;
+    visible: root.visible;
+
+    // Full screen backdrop
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    // Backdrop touch area (click outside to close)
+    backdrop := TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => {
+            root.close();
+        }
+    }
+
+    // Picker container (positioned absolutely)
+    Rectangle {
+        x: root.position-x;
+        y: root.position-y;
+        width: 280px;
+        height: 352px; // 320px EmojiPicker + 32px quick bar
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+        border-width: 1px;
+        border-color: Colors.text-muted.with-alpha(0.2);
+
+        // Block backdrop clicks when clicking picker
+        TouchArea {
+            width: 100%;
+            height: 100%;
+        }
+
+        VerticalLayout {
+            // Quick reactions bar
+            Rectangle {
+                height: 32px;
+                background: Colors.surface-hover;
+                border-radius: Spacing.radius-lg Spacing.radius-lg 0 0;
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: 0;
+
+                    for emoji in root.quick-reactions: Rectangle {
+                        horizontal-stretch: 1;
+                        height: 32px;
+
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            border-radius: Spacing.radius-sm;
+                            background: quick-area.has-hover ? Colors.background : transparent;
+
+                            Text {
+                                text: emoji;
+                                font-size: Typography.lg;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            quick-area := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                clicked => {
+                                    root.reaction-selected(root.message-id, emoji);
+                                    root.close();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Divider
+            Rectangle {
+                height: 1px;
+                background: Colors.text-muted.with-alpha(0.15);
+            }
+
+            // EmojiPicker
+            EmojiPicker {
+                visible: true;
+                emoji-list: root.emoji-list;
+                selected-category <=> root.selected-category;
+                search-query <=> root.search-query;
+
+                emoji-selected(emoji) => {
+                    root.reaction-selected(root.message-id, emoji);
+                    root.close();
+                }
+
+                category-changed(idx) => {
+                    root.category-changed(idx);
+                }
+
+                search-changed(query) => {
+                    root.search-changed(query);
+                }
+
+                close => {
+                    root.close();
+                }
+            }
+        }
+    }
+}
