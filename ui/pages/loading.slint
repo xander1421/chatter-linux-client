@@ -1,17 +1,102 @@
-// Loading page component
+// Loading page component with animated spinner and customizable messages
 
 import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
 
 export component LoadingPage inherits Rectangle {
     in property <string> message: "Loading...";
+    in property <string> secondary-message: "";
 
     background: Colors.background;
 
-    Text {
-        text: root.message;
-        color: Colors.text-primary;
-        font-size: 18px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    // Centered content
+    VerticalLayout {
+        alignment: center;
+
+        HorizontalLayout {
+            alignment: center;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: Spacing.lg;
+
+                // Animated spinner (48x48px)
+                Rectangle {
+                    width: 48px;
+                    height: 48px;
+
+                    // Spinner ring
+                    Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        border-radius: 24px;
+                        border-width: 4px;
+                        border-color: Colors.primary.with-alpha(0.3);
+                        background: transparent;
+                    }
+
+                    // Spinner arc indicator
+                    Rectangle {
+                        width: 100%;
+                        height: 100%;
+                        background: transparent;
+
+                        // Top indicator dot
+                        Rectangle {
+                            x: 20px;
+                            y: 0px;
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Colors.primary;
+                        }
+
+                        // Right indicator dot (90 degrees)
+                        Rectangle {
+                            x: 40px;
+                            y: 20px;
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Colors.primary.with-alpha(0.7);
+                        }
+
+                        // Bottom indicator dot (180 degrees)
+                        Rectangle {
+                            x: 20px;
+                            y: 40px;
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: Colors.primary.with-alpha(0.4);
+                        }
+
+                        animate rotation {
+                            duration: 800ms;
+                            iteration-count: -1;
+                            easing: linear;
+                        }
+                        rotation: 360deg;
+                    }
+                }
+
+                // Primary message
+                Text {
+                    text: root.message;
+                    color: Colors.text-primary;
+                    font-size: Typography.lg;
+                    horizontal-alignment: center;
+                }
+
+                // Secondary message (only shown if not empty)
+                if secondary-message != "": Text {
+                    text: root.secondary-message;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                }
+            }
+        }
     }
 }
