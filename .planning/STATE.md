@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 64 — UI Modals
+**Current focus:** Phase 66 — UI Auth Screens
 
 ## Current Position
 
 Phase: 65 of 66 (UI Settings Screens)
-Plan: 1 of TBD in current phase
-Status: In progress
-Last activity: 2026-02-06 — Completed 65-01-PLAN.md (Settings foundation)
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-06 — Completed 65-02-PLAN.md (Privacy & Encryption settings)
 
 Progress: ████████████████████████████████████████████████████████████████████████ 99%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 74
+- Total plans completed: 75
 - Average duration: ~4.4 min
-- Total execution time: ~326 min
+- Total execution time: ~329 min
 
 **By Phase:**
 
@@ -94,11 +94,11 @@ Progress: ███████████████████████�
 | 62 | 2 | ~5m | ~2.5m |
 | 63 | 2 | ~6m | ~3m |
 | 64 | 3 | ~13m | ~4.3m |
-| 65 | 1 | ~7m | ~7m |
+| 65 | 2 | ~10m | ~5m |
 
 **Recent Trend:**
-- Last 5 plans: 64-1 (~8m), 64-2 (~1m), 64-3 (~4m), 65-1 (~7m)
-- Trend: Settings screens in progress
+- Last 5 plans: 64-2 (~1m), 64-3 (~4m), 65-1 (~7m), 65-2 (~3m)
+- Trend: Phase 65 complete, ready for auth screens
 
 ## Accumulated Context
 
@@ -275,6 +275,9 @@ Recent decisions affecting current work:
 - Settings sidebar: 240px fixed width with vertical navigation
 - Inline form pattern: toggle visibility with save/cancel buttons
 - SessionInfo struct for session management modal
+- Letter-spacing 1px for fingerprint display (Slint lacks monospace font specification)
+- Prekey thresholds: green >= 10, yellow 5-9, red < 5
+- Toggle row pattern with label/description and aligned toggle
 
 ### Deferred Issues
 
@@ -287,6 +290,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-06
-Stopped at: Completed 65-01-PLAN.md (Settings foundation)
+Stopped at: Completed 65-02-PLAN.md (Privacy & Encryption settings)
 Resume file: None
-Next action: Plan 65-02 (Privacy settings)
+Next action: Plan Phase 66 (UI Auth Screens)
