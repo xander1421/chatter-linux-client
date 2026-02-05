@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 53 — Media Playback
+**Current focus:** Phase 56 — Media GIF & Embeds
 
 ## Current Position
 
-Phase: 55 of 66 (Media Previews)
+Phase: 56 of 66 (Media GIF & Embeds)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-05 — Completed 55-01-PLAN.md (media previews)
+Last activity: 2026-02-05 — Completed 56-01-PLAN.md (GIF picker subsystem)
 
-Progress: ████████████████████████████████████████████████████████████████████████░ 99%
+Progress: █████████████████████████████████████████████████████████████████████████ 99%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 65
+- Total plans completed: 66
 - Average duration: ~4.6 min
-- Total execution time: ~296 min
+- Total execution time: ~304 min
 
 **By Phase:**
 
@@ -84,10 +84,11 @@ Progress: ███████████████████████�
 
 | 54 | 1 | ~5m | ~5m |
 | 55 | 1 | ~4m | ~4m |
+| 56 | 1 | ~8m | ~8m |
 
 **Recent Trend:**
-- Last 5 plans: 52-1 (~7m), 53-1 (~4m), 54-1 (~5m), 55-1 (~4m)
-- Trend: Media layer progressing; previews complete
+- Last 5 plans: 53-1 (~4m), 54-1 (~5m), 55-1 (~4m), 56-1 (~8m)
+- Trend: Media layer complete; GIF picker done
 
 ## Accumulated Context
 
@@ -229,6 +230,9 @@ Recent decisions affecting current work:
 - ExternalOpener is stateless (struct as namespace, all methods independent)
 - AutostartManager uses dirs crate for config dir (independent of Directories struct)
 - URL validation limited to http/https/mailto for security
+- GIF cache uses simple HashMap with TTL instead of LRU library
+- Inline URL encoding for Tenor API (no urlencoding crate)
+- Prefer gif format over mediumgif, tinygif over nanogif for quality
 
 ### Deferred Issues
 
@@ -241,6 +245,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 55-01-PLAN.md (media previews)
+Stopped at: Completed 56-01-PLAN.md (GIF picker subsystem)
 Resume file: None
-Next action: Plan phase 56 (Media GIF & Embeds)
+Next action: Plan phase 57 (UI Foundation)
