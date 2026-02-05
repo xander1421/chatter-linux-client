@@ -197,6 +197,195 @@ impl ChannelService {
 
         Ok(channel)
     }
+
+    /// Update a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel to update
+    /// * `name` - Optional new name
+    /// * `description` - Optional new description
+    /// * `image_url` - Optional new image URL
+    /// * `config` - Optional new configuration
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_channel(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        name: Option<&str>,
+        description: Option<&str>,
+        image_url: Option<&str>,
+        config: Option<ChannelConfig>,
+    ) -> Result<Channel, ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Get existing channel from local DB (need current state for update)
+        let existing = self
+            .channel_repo
+            .get(channel_id)?
+            .ok_or_else(|| ChannelError::ChannelNotFound(channel_id.clone()))?;
+
+        // Build proto Channel with updated fields
+        let proto_channel = chat_v1::Channel {
+            id: channel_id.to_string(),
+            r#type: domain_channel_type_to_proto(existing.channel_type) as i32,
+            name: name.unwrap_or(&existing.name).to_string(),
+            config: Some(config.as_ref().map(domain_config_to_proto).unwrap_or_else(|| {
+                domain_config_to_proto(&existing.config)
+            })),
+            owner_id: existing.owner_id.to_string(),
+            members: vec![],
+            created_at: existing.created_at.timestamp_millis() as u64,
+            description: description
+                .map(|s| s.to_string())
+                .or_else(|| existing.description.clone())
+                .unwrap_or_default(),
+            img_url: image_url
+                .map(|s| s.to_string())
+                .or_else(|| existing.image_url.clone())
+                .unwrap_or_default(),
+            archived: existing.archived,
+        };
+
+        // Build FieldMask with fields being updated
+        let mut paths = Vec::new();
+        if name.is_some() {
+            paths.push("name".to_string());
+        }
+        if description.is_some() {
+            paths.push("description".to_string());
+        }
+        if image_url.is_some() {
+            paths.push("img_url".to_string());
+        }
+        if config.is_some() {
+            paths.push("config".to_string());
+        }
+
+        let update_mask = if paths.is_empty() {
+            None
+        } else {
+            Some(prost_types::FieldMask { paths })
+        };
+
+        // Call server (streaming)
+        let channel_id_str = channel_id.to_string();
+        let mut stream = channel_client
+            .update_channel(&channel_id_str, proto_channel, update_mask)
+            .await?;
+
+        // Consume stream, find channel_updated event
+        let mut channel_opt: Option<Channel> = None;
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            if let Some(channel_event::Event::ChannelUpdated(proto_channel)) = event.event {
+                channel_opt = Some(proto_to_domain_channel(&proto_channel)?);
+                break;
+            }
+        }
+
+        let channel = channel_opt.ok_or_else(|| {
+            ChannelError::InvalidInput("no channel updated event received".to_string())
+        })?;
+
+        // Update local storage
+        self.channel_repo.update(&channel)?;
+
+        Ok(channel)
+    }
+
+    /// Delete a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel to delete
+    pub async fn delete_channel(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+    ) -> Result<(), ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (streaming)
+        let channel_id_str = channel_id.to_string();
+        let mut stream = channel_client
+            .delete_channel(&channel_id_str)
+            .await?;
+
+        // Consume stream, find channel_deleted event
+        let mut deleted = false;
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            if let Some(channel_event::Event::ChannelDeleted(_)) = event.event {
+                deleted = true;
+                break;
+            }
+        }
+
+        if !deleted {
+            return Err(ChannelError::InvalidInput(
+                "no channel deleted event received".to_string(),
+            ));
+        }
+
+        // Delete from local storage (ignore NotFound - may already be deleted)
+        let _ = self.channel_repo.delete(channel_id);
+
+        // Delete memberships for this channel
+        if let Ok(memberships) = self.channel_repo.list_members(channel_id) {
+            for membership in memberships {
+                let _ = self.channel_repo.delete_membership(channel_id, &membership.user_id);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// List channels with pagination.
+    ///
+    /// Fetches from server and upserts each to local storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `limit` - Maximum number of channels to fetch
+    /// * `offset` - Pagination offset
+    /// * `archived` - Optional filter for archived status
+    pub async fn list_channels(
+        &self,
+        channel_client: &mut ChannelClient,
+        limit: u32,
+        offset: u32,
+        archived: Option<bool>,
+    ) -> Result<Vec<Channel>, ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (unary)
+        let response = channel_client
+            .list_channels(limit as i32, offset as i32, archived)
+            .await?;
+
+        // Convert each proto Channel to domain Channel
+        let mut channels = Vec::with_capacity(response.channels.len());
+        for proto in &response.channels {
+            let channel = proto_to_domain_channel(proto)?;
+
+            // Upsert to local storage
+            match self.channel_repo.get(&channel.id)? {
+                Some(_) => self.channel_repo.update(&channel)?,
+                None => self.channel_repo.insert(&channel)?,
+            }
+
+            channels.push(channel);
+        }
+
+        Ok(channels)
+    }
 }
 
 /// Convert a proto Channel to a domain Channel.
