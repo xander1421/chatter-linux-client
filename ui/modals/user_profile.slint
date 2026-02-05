@@ -1,0 +1,243 @@
+// UserProfileModal - Modal for viewing user profiles
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Avatar } from "../components/avatar.slint";
+
+export component UserProfileModal inherits Rectangle {
+    in property <bool> visible: false;
+    in property <string> user-id: "";
+    in property <string> display-name: "";
+    in property <string> username: "";
+    in property <string> avatar-url: "";
+    in property <string> status-text: "";  // custom status message
+    in property <string> presence: "offline";  // "online", "away", "dnd", "offline"
+    in property <string> bio: "";
+    in property <bool> is-friend: false;
+    in property <bool> is-blocked: false;
+    in property <bool> is-self: false;  // viewing own profile
+    in property <bool> loading: false;
+
+    callback close();
+    callback send-message();  // open DM
+    callback add-friend();
+    callback remove-friend();
+    callback block-user();
+    callback unblock-user();
+
+    // Helper to get presence color from string
+    pure function presence-color(p: string) -> color {
+        if p == "online" {
+            return Colors.online;
+        } else if p == "away" {
+            return Colors.away;
+        } else if p == "dnd" {
+            return Colors.dnd;
+        } else {
+            return Colors.offline;
+        }
+    }
+
+    // Helper to get presence label
+    pure function presence-label(p: string) -> string {
+        if p == "online" {
+            return "Online";
+        } else if p == "away" {
+            return "Away";
+        } else if p == "dnd" {
+            return "Do Not Disturb";
+        } else {
+            return "Offline";
+        }
+    }
+
+    Modal {
+        visible: root.visible;
+        title: "";  // No title - profile header is visual
+        width: 400px;
+
+        close => {
+            root.close();
+        }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+            alignment: center;
+
+            // Large centered avatar with presence indicator
+            HorizontalLayout {
+                alignment: center;
+
+                Avatar {
+                    size: 96px;
+                    fallback-text: root.display-name.character-count > 0 ?
+                        root.display-name.to-upper-ascii() : "?";
+                    show-presence: true;
+                    presence-color: root.presence-color(root.presence);
+                }
+            }
+
+            // Display name - centered, large
+            Text {
+                text: root.display-name;
+                color: Colors.text-primary;
+                font-size: Typography.xl;
+                font-weight: Typography.semibold;
+                horizontal-alignment: center;
+            }
+
+            // Username - centered, secondary
+            Text {
+                text: "@" + root.username;
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+            }
+
+            // Status pill (only if status-text is not empty)
+            if root.status-text != "": HorizontalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: status-pill-text.width + Spacing.md * 2;
+                    height: 28px;
+                    background: Colors.surface-hover;
+                    border-radius: Spacing.radius-full;
+
+                    status-pill-text := Text {
+                        x: Spacing.md;
+                        text: root.status-text;
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.medium;
+                        vertical-alignment: center;
+                        height: 100%;
+                    }
+                }
+            }
+
+            // Presence indicator row
+            HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.xs;
+
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: root.presence-color(root.presence);
+                }
+
+                Text {
+                    text: root.presence-label(root.presence);
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                }
+            }
+
+            // Bio section (only if bio is not empty)
+            if root.bio != "": VerticalLayout {
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.text-muted.with-alpha(0.2);
+                }
+
+                Text {
+                    text: root.bio;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                    // Max 3 lines approximated by max-height
+                    max-height: Typography.sm * 4;
+                    overflow: elide;
+                }
+            }
+
+            // Divider
+            Rectangle {
+                height: 1px;
+                background: Colors.text-muted.with-alpha(0.2);
+            }
+
+            // Action buttons row - centered
+            HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.sm;
+                height: 40px;
+
+                // Self view - Edit Profile only
+                if root.is-self: Button {
+                    text: "Edit Profile";
+                    variant: "primary";
+
+                    clicked => {
+                        // Edit profile action would be handled by parent
+                        root.close();
+                    }
+                }
+
+                // Blocked view - Unblock only
+                if root.is-blocked && !root.is-self: Button {
+                    text: root.loading ? "" : "Unblock";
+                    variant: "danger";
+                    loading: root.loading;
+
+                    clicked => {
+                        if !root.loading {
+                            root.unblock-user();
+                        }
+                    }
+                }
+
+                // Normal view (not self, not blocked)
+                if !root.is-self && !root.is-blocked: Button {
+                    text: "Message";
+                    variant: "primary";
+
+                    clicked => {
+                        root.send-message();
+                    }
+                }
+
+                if !root.is-self && !root.is-blocked && root.is-friend: Button {
+                    text: root.loading ? "" : "Remove Friend";
+                    variant: "secondary";
+                    loading: root.loading;
+
+                    clicked => {
+                        if !root.loading {
+                            root.remove-friend();
+                        }
+                    }
+                }
+
+                if !root.is-self && !root.is-blocked && !root.is-friend: Button {
+                    text: root.loading ? "" : "Add Friend";
+                    variant: "secondary";
+                    loading: root.loading;
+
+                    clicked => {
+                        if !root.loading {
+                            root.add-friend();
+                        }
+                    }
+                }
+
+                if !root.is-self && !root.is-blocked: Button {
+                    text: "Block";
+                    variant: "ghost";
+
+                    clicked => {
+                        root.block-user();
+                    }
+                }
+            }
+        }
+    }
+}
