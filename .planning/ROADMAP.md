@@ -559,7 +559,7 @@ None (custom application, no pre-existing domain skills)
 | 32 | Services Message Core | 2 | Done | 2026-02-05 |
 | 33 | Services Message Advanced | 2 | Done | 2026-02-05 |
 | 34 | Services Ephemeral Messages | 2 | Done | 2026-02-05 |
-| 35 | Services Channel | TBD | Not started | - |
+| 35 | Services Channel | 3 | In progress | - |
 | 36 | Services User | TBD | Not started | - |
 | 37 | Services Presence | TBD | Not started | - |
 | 38 | Services Real-time | TBD | Not started | - |
