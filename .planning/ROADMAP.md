@@ -570,7 +570,7 @@ None (custom application, no pre-existing domain skills)
 | 43 | Services Saved Messages | 1 | Done | 2026-02-05 |
 | 44 | State Core Stores | 1 | Done | 2026-02-05 |
 | 45 | State Chat Stores | 1 | Done | 2026-02-05 |
-| 46 | State User Stores | TBD | Not started | - |
+| 46 | State User Stores | 1 | Done | 2026-02-05 |
 | 47 | State Streaming & Offline | TBD | Not started | - |
 | 48 | Events Bus & Handlers | TBD | Not started | - |
 | 49 | System Keyring & Directories | TBD | Not started | - |

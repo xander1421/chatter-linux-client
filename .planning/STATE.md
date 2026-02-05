@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 45 — State Chat Stores
+**Current focus:** Phase 46 — State User Stores
 
 ## Current Position
 
-Phase: 45 of 66 (State Chat Stores)
+Phase: 46 of 66 (State User Stores)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-05 — Completed 45-01-PLAN.md (chat state stores)
+Last activity: 2026-02-05 — Completed 46-01-PLAN.md (user state stores)
 
 Progress: █████████████████████████████████████████████████████████████████████░░░ 97%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 60
+- Total plans completed: 61
 - Average duration: ~4.6 min
-- Total execution time: ~277 min
+- Total execution time: ~281 min
 
 **By Phase:**
 
@@ -73,9 +73,10 @@ Progress: ███████████████████████�
 | 43 | 2 | ~8m | ~4m |
 | 44 | 1 | ~3m | ~3m |
 | 45 | 1 | ~4m | ~4m |
+| 46 | 1 | ~4m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 43-1 (~4m), 43-2 (~4m), 44-1 (~3m), 45-1 (~4m)
+- Last 5 plans: 43-2 (~4m), 44-1 (~3m), 45-1 (~4m), 46-1 (~4m)
 - Trend: State layer progressing smoothly
 
 ## Accumulated Context
@@ -200,6 +201,10 @@ Recent decisions affecting current work:
 - Max 3 concurrent thread panels enforced in ChatState
 - PaginationCursor uses (has_more, oldest_id, oldest_timestamp) tuple
 - Navigation wraparound in PinnedState (next after last goes to first)
+- UserStateData friends as Vec<UserId> (profiles fetched separately for lazy loading)
+- PresenceStateData last_updated for staleness detection
+- PrivacyState global defaults apply when no per-conversation override exists
+- ConversationPrivacySettings.private() factory for disabling all privacy signals
 
 ### Deferred Issues
 
@@ -212,6 +217,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 45-01-PLAN.md (chat state stores)
+Stopped at: Completed 46-01-PLAN.md (user state stores)
 Resume file: None
-Next action: Plan Phase 46 (State User Stores)
+Next action: Plan Phase 47 (State Streaming & Offline)
