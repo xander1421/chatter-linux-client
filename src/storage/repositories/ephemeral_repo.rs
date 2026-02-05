@@ -193,7 +193,7 @@ fn row_to_ephemeral(
     };
 
     // Try to convert ttl_seconds to MessageTTL, fall back to closest match
-    let ttl = MessageTTL::from_secs(ttl_seconds as u64).unwrap_or_else(|| {
+    let ttl = MessageTTL::from_secs(ttl_seconds as u64).unwrap_or({
         // Fall back to the closest predefined TTL
         if ttl_seconds <= 30 {
             MessageTTL::Seconds30

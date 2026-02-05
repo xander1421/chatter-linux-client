@@ -155,7 +155,7 @@ impl UserService {
         let existing = self
             .user_repo
             .get_profile(&current_user)?
-            .ok_or_else(|| UserError::UserNotFound(current_user.clone()))?;
+            .ok_or_else(|| UserError::UserNotFound(current_user))?;
 
         // Build proto UserProfile with updated fields
         let proto_profile = UserProfile {
@@ -259,7 +259,7 @@ impl UserService {
         // Create local friendship with Pending status
         let friendship = Friendship {
             user_id: current_user,
-            friend_id: friend_id.clone(),
+            friend_id: *friend_id,
             status: FriendshipStatus::Pending,
             created_at: Utc::now(),
         };
@@ -316,7 +316,7 @@ impl UserService {
             // Upsert friendship with Accepted status
             let friendship = Friendship {
                 user_id: current_user,
-                friend_id: friend_id.clone(),
+                friend_id: *friend_id,
                 status: FriendshipStatus::Accepted,
                 created_at: Utc::now(),
             };
@@ -366,7 +366,7 @@ impl UserService {
                 .map_err(|_| UserError::InvalidInput("invalid friend user ID".to_string()))?;
 
             let friendship = Friendship {
-                user_id: current_user.clone(),
+                user_id: current_user,
                 friend_id,
                 status: FriendshipStatus::Accepted,
                 created_at: Utc::now(),
@@ -422,7 +422,7 @@ impl UserService {
             let status = proto_friend_status_to_domain(request.status);
 
             let friendship = Friendship {
-                user_id: current_user.clone(),
+                user_id: current_user,
                 friend_id,
                 status,
                 created_at: Utc::now(),
@@ -512,8 +512,8 @@ impl UserService {
 
         // Update local friendship to Blocked status (or create if missing)
         let friendship = Friendship {
-            user_id: current_user.clone(),
-            friend_id: user_id.clone(),
+            user_id: current_user,
+            friend_id: *user_id,
             status: FriendshipStatus::Blocked,
             created_at: Utc::now(),
         };
@@ -594,8 +594,8 @@ impl UserService {
 
             // Update local friendship to Blocked status
             let friendship = Friendship {
-                user_id: current_user.clone(),
-                friend_id: user_id.clone(),
+                user_id: current_user,
+                friend_id: user_id,
                 status: FriendshipStatus::Blocked,
                 created_at: Utc::now(),
             };

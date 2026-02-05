@@ -139,7 +139,7 @@ impl StreamingState {
         user_reacted: Option<bool>,
     ) {
         self.store.update(|data| {
-            let reactions = data.recent_reactions.entry(message_id.clone()).or_default();
+            let reactions = data.recent_reactions.entry(*message_id).or_default();
 
             // Find existing reaction for this emoji
             if let Some(reaction) = reactions.iter_mut().find(|r| r.emoji == emoji) {

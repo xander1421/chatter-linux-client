@@ -249,7 +249,7 @@ impl MessageService {
         let existing = self
             .message_repo
             .get(message_id)?
-            .ok_or_else(|| MessageError::MessageNotFound(message_id.clone()))?;
+            .ok_or_else(|| MessageError::MessageNotFound(*message_id))?;
 
         // Verify sender matches current user (only if sender_id is known)
         if let Some(sender_id) = existing.sender_id {
@@ -304,7 +304,7 @@ impl MessageService {
         let existing = self
             .message_repo
             .get(message_id)?
-            .ok_or_else(|| MessageError::MessageNotFound(message_id.clone()))?;
+            .ok_or_else(|| MessageError::MessageNotFound(*message_id))?;
 
         // Verify sender matches current user (only if sender_id is known)
         if let Some(sender_id) = existing.sender_id {
@@ -517,7 +517,7 @@ impl MessageService {
 
         // Convert to domain message and set reply_to
         let mut message = proto_to_domain_message(&proto_message, sender_id)?;
-        message.reply_to = Some(reply_to_id.clone());
+        message.reply_to = Some(*reply_to_id);
 
         // Store locally with reply_to set
         self.message_repo.insert(&message)?;
@@ -554,7 +554,7 @@ impl MessageService {
         let source = self
             .message_repo
             .get(source_message_id)?
-            .ok_or_else(|| MessageError::MessageNotFound(source_message_id.clone()))?;
+            .ok_or_else(|| MessageError::MessageNotFound(*source_message_id))?;
 
         // Extract text content from source message
         let original_text = source.as_text().unwrap_or("[No text content]");

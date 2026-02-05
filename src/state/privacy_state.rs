@@ -144,7 +144,7 @@ impl PrivacyState {
         data.conversation_settings
             .get(channel_id)
             .cloned()
-            .unwrap_or_else(|| ConversationPrivacySettings {
+            .unwrap_or(ConversationPrivacySettings {
                 read_receipts_enabled: data.global_read_receipts,
                 typing_indicators_enabled: data.global_typing_indicators,
                 screenshots_allowed: true,

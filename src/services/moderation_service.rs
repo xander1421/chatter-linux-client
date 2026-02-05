@@ -179,7 +179,7 @@ impl ModerationService {
             .await?;
 
         // Create domain Ban
-        let mut ban = Ban::new(channel_id.clone(), user_id.clone(), current_user);
+        let mut ban = Ban::new(*channel_id, *user_id, current_user);
         if let Some(dur) = duration {
             ban = ban.with_expiry(Duration::from_std(dur).unwrap_or(Duration::days(365)));
         }
@@ -269,7 +269,7 @@ impl ModerationService {
         let mut membership = self
             .channel_repo
             .get_membership(channel_id, user_id)?
-            .ok_or_else(|| ModerationError::UserNotFound(user_id.clone()))?;
+            .ok_or_else(|| ModerationError::UserNotFound(*user_id))?;
 
         // Update membership with mute state
         let chrono_duration = Duration::from_std(duration).unwrap_or(Duration::hours(1));
@@ -281,8 +281,8 @@ impl ModerationService {
 
         // Create domain Mute
         let mut mute = Mute::new(
-            channel_id.clone(),
-            user_id.clone(),
+            *channel_id,
+            *user_id,
             current_user,
             chrono_duration,
         );
@@ -316,7 +316,7 @@ impl ModerationService {
         let mut membership = self
             .channel_repo
             .get_membership(channel_id, user_id)?
-            .ok_or_else(|| ModerationError::UserNotFound(user_id.clone()))?;
+            .ok_or_else(|| ModerationError::UserNotFound(*user_id))?;
 
         // Clear mute state
         membership.is_muted = false;
@@ -345,7 +345,7 @@ impl ModerationService {
         let membership = self
             .channel_repo
             .get_membership(channel_id, user_id)?
-            .ok_or_else(|| ModerationError::UserNotFound(user_id.clone()))?;
+            .ok_or_else(|| ModerationError::UserNotFound(*user_id))?;
 
         // Return permissions based on role
         Ok(Permissions::for_role(membership.role))
@@ -374,13 +374,13 @@ impl ModerationService {
         let moderator_membership = self
             .channel_repo
             .get_membership(channel_id, user_id)?
-            .ok_or_else(|| ModerationError::UserNotFound(user_id.clone()))?;
+            .ok_or_else(|| ModerationError::UserNotFound(*user_id))?;
 
         // Get target's membership
         let target_membership = self
             .channel_repo
             .get_membership(channel_id, target_user_id)?
-            .ok_or_else(|| ModerationError::UserNotFound(target_user_id.clone()))?;
+            .ok_or_else(|| ModerationError::UserNotFound(*target_user_id))?;
 
         // Convert roles to numeric values for comparison
         let moderator_level = role_level(moderator_membership.role);
@@ -440,8 +440,8 @@ impl ModerationService {
         let current_user = self.current_user_id()?;
 
         let mut entry = ModerationLogEntry::new(
-            channel_id.clone(),
-            target_user_id.clone(),
+            *channel_id,
+            *target_user_id,
             current_user,
             action,
         );

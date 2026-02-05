@@ -21,7 +21,7 @@ use super::{DomainEvent, HandlerContext, HandlerError, HandlerOutcome, HandlerRe
 
 /// Create a deterministic UUID from a u64 timestamp.
 fn uuid_from_timestamp(ts: u64) -> Uuid {
-    let hash = Sha256::digest(&ts.to_le_bytes());
+    let hash = Sha256::digest(ts.to_le_bytes());
     let mut uuid_bytes = [0u8; 16];
     uuid_bytes.copy_from_slice(&hash[..16]);
     // Set version 4 (random) and variant 1 (RFC 4122)

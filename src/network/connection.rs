@@ -20,8 +20,10 @@ pub enum FailReason {
 
 /// Connection state for the state machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub enum ConnectionState {
     /// Not connected to server.
+    #[default]
     Disconnected,
     /// Attempting initial connection.
     Connecting,
@@ -39,11 +41,6 @@ pub enum ConnectionState {
     },
 }
 
-impl Default for ConnectionState {
-    fn default() -> Self {
-        Self::Disconnected
-    }
-}
 
 impl ConnectionState {
     /// Check if this is a terminal failure state.

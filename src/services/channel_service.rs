@@ -151,7 +151,7 @@ impl ChannelService {
 
         // Create membership for current user as Owner
         let membership = Membership {
-            channel_id: channel.id.clone(),
+            channel_id: channel.id,
             user_id: current_user,
             role: MemberRole::Owner,
             joined_at: channel.created_at,
@@ -225,7 +225,7 @@ impl ChannelService {
         let existing = self
             .channel_repo
             .get(channel_id)?
-            .ok_or_else(|| ChannelError::ChannelNotFound(channel_id.clone()))?;
+            .ok_or_else(|| ChannelError::ChannelNotFound(*channel_id))?;
 
         // Build proto Channel with updated fields
         let proto_channel = chat_v1::Channel {
@@ -407,7 +407,7 @@ impl ChannelService {
 
         // Create membership record for current user with role Member
         let membership = Membership {
-            channel_id: channel_id.clone(),
+            channel_id: *channel_id,
             user_id: current_user,
             role: MemberRole::Member,
             joined_at: Utc::now(),
@@ -603,7 +603,7 @@ impl ChannelService {
             let channel = self.get_channel(channel_client, channel_id).await?;
 
             let membership = Membership {
-                channel_id: channel_id.clone(),
+                channel_id: *channel_id,
                 user_id: current_user,
                 role: MemberRole::Member,
                 joined_at: Utc::now(),
@@ -1159,7 +1159,7 @@ fn proto_config_to_domain(proto_config: Option<&chat_v1::channel::Config>) -> Ch
         Some(config) => ChannelConfig {
             persistence: proto_persistence_to_domain(config.persistence),
             max_members: if config.max_members > 0 {
-                Some(config.max_members as u32)
+                Some(config.max_members)
             } else {
                 None
             },
@@ -1229,7 +1229,7 @@ fn proto_to_domain_membership(
     let joined_at = millis_to_datetime(proto.joined_at);
 
     Ok(Membership {
-        channel_id: channel_id.clone(),
+        channel_id: *channel_id,
         user_id,
         role,
         joined_at,

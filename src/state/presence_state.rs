@@ -148,7 +148,7 @@ impl PresenceState {
             .get()
             .presence
             .get(user_id)
-            .map_or(false, |status| *status == PresenceStatus::Online)
+            .is_some_and(|status| *status == PresenceStatus::Online)
     }
 
     /// Check if a user is available (online or away).
@@ -160,7 +160,7 @@ impl PresenceState {
             .get()
             .presence
             .get(user_id)
-            .map_or(false, |status| status.is_available())
+            .is_some_and(|status| status.is_available())
     }
 
     /// Clear all presence data (typically called on logout/disconnect).

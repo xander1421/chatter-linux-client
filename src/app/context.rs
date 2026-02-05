@@ -252,7 +252,7 @@ impl AppContext {
         let passphrase = hex::encode(bytes);
 
         // Store in keyring
-        keyring.set_passphrase(&passphrase).map_err(SystemError::from)?;
+        keyring.set_passphrase(&passphrase)?;
 
         Ok(passphrase)
     }

@@ -290,12 +290,11 @@ impl GroupMailboxManager {
                     .map_err(|e| MailboxError::Storage(format!("Invalid expires_at: {}", e)))?
                     .with_timezone(&Utc);
                 let last_polled_at = last_polled_at
-                    .map(|s| {
+                    .and_then(|s| {
                         DateTime::parse_from_rfc3339(&s)
                             .map(|dt| dt.with_timezone(&Utc))
                             .ok()
-                    })
-                    .flatten();
+                    });
 
                 Ok(Some(GroupMailbox {
                     id,
@@ -364,12 +363,11 @@ impl GroupMailboxManager {
                 .with_timezone(&Utc);
 
             let expires_at = expires_at_str
-                .map(|s| {
+                .and_then(|s| {
                     DateTime::parse_from_rfc3339(&s)
                         .map(|dt| dt.with_timezone(&Utc))
                         .ok()
-                })
-                .flatten();
+                });
 
             members.insert(
                 user_id,

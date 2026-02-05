@@ -118,7 +118,7 @@ impl EphemeralService {
         let ephemeral = self
             .ephemeral_repo
             .get(message_id)?
-            .ok_or_else(|| EphemeralError::MessageNotFound(message_id.clone()))?;
+            .ok_or_else(|| EphemeralError::MessageNotFound(*message_id))?;
 
         Ok(ephemeral)
     }

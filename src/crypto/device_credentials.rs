@@ -49,7 +49,7 @@ impl DeviceToken {
 
     /// Encode token as base64 for transmission.
     pub fn to_base64(&self) -> String {
-        BASE64.encode(&self.token)
+        BASE64.encode(self.token)
     }
 }
 

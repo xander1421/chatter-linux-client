@@ -116,7 +116,7 @@ impl KeyStore {
             result.ok()
         };
 
-        let key_changed = existing.as_ref().map_or(false, |existing_key| {
+        let key_changed = existing.as_ref().is_some_and(|existing_key| {
             existing_key.as_slice() != identity_key
         });
 

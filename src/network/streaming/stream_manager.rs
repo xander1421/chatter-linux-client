@@ -164,12 +164,12 @@ impl StreamManager {
         handles
             .message_events
             .as_ref()
-            .map_or(false, |h| h.is_running())
-            || handles.presence.as_ref().map_or(false, |h| h.is_running())
+            .is_some_and(|h| h.is_running())
+            || handles.presence.as_ref().is_some_and(|h| h.is_running())
             || handles
                 .user_events
                 .as_ref()
-                .map_or(false, |h| h.is_running())
+                .is_some_and(|h| h.is_running())
     }
 
     /// Get a shutdown receiver for stream tasks.

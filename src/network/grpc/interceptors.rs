@@ -12,6 +12,7 @@ use tonic::{Request, Status};
 
 /// Authentication modes for gRPC requests.
 #[derive(Clone)]
+#[derive(Default)]
 pub enum AuthMode {
     /// Bearer token (JWT or device token).
     Bearer(String),
@@ -28,14 +29,10 @@ pub enum AuthMode {
         access_key: [u8; 16],
     },
     /// No authentication.
+    #[default]
     None,
 }
 
-impl Default for AuthMode {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 /// Thread-safe authentication interceptor for gRPC requests.
 ///

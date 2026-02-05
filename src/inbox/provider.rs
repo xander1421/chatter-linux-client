@@ -163,8 +163,10 @@ pub enum InboxEvent {
 
 /// Current state of the inbox polling system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum InboxState {
     /// Not currently polling.
+    #[default]
     Idle,
     /// Actively polling the server.
     Polling,
@@ -174,11 +176,6 @@ pub enum InboxState {
     Stopped,
 }
 
-impl Default for InboxState {
-    fn default() -> Self {
-        Self::Idle
-    }
-}
 
 // ============================================================================
 // Statistics

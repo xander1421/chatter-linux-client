@@ -390,12 +390,11 @@ impl DmConversationManager {
                     .map_err(|e| MailboxError::Storage(format!("Invalid expires_at: {}", e)))?
                     .with_timezone(&Utc);
                 let last_polled_at = last_polled_at
-                    .map(|s| {
+                    .and_then(|s| {
                         DateTime::parse_from_rfc3339(&s)
                             .map(|dt| dt.with_timezone(&Utc))
                             .ok()
-                    })
-                    .flatten();
+                    });
 
                 Ok(Some(DmMailbox {
                     id,
@@ -445,12 +444,11 @@ impl DmConversationManager {
                     .map_err(|e| MailboxError::Storage(format!("Invalid received_at: {}", e)))?
                     .with_timezone(&Utc);
                 let expires_at = expires_at
-                    .map(|s| {
+                    .and_then(|s| {
                         DateTime::parse_from_rfc3339(&s)
                             .map(|dt| dt.with_timezone(&Utc))
                             .ok()
-                    })
-                    .flatten();
+                    });
 
                 Ok(Some(PeerMailbox {
                     public_key: public_key_arr,
@@ -531,12 +529,11 @@ impl DmConversationManager {
                     .map_err(|e| MailboxError::Storage(format!("Invalid created_at: {}", e)))?
                     .with_timezone(&Utc);
                 let established_at = established_at
-                    .map(|s| {
+                    .and_then(|s| {
                         DateTime::parse_from_rfc3339(&s)
                             .map(|dt| dt.with_timezone(&Utc))
                             .ok()
-                    })
-                    .flatten();
+                    });
 
                 Ok(Some(ConversationKey {
                     our_ephemeral_public: our_public_arr,

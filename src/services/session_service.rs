@@ -91,9 +91,9 @@ impl SessionService {
                 device_info: s.device_info,
                 ip_address: s.ip_address,
                 created_at: DateTime::from_timestamp_millis(s.created_at as i64)
-                    .unwrap_or_else(|| DateTime::UNIX_EPOCH),
+                    .unwrap_or(DateTime::UNIX_EPOCH),
                 last_used: DateTime::from_timestamp_millis(s.last_used as i64)
-                    .unwrap_or_else(|| DateTime::UNIX_EPOCH),
+                    .unwrap_or(DateTime::UNIX_EPOCH),
                 is_current: s.is_current_session,
             })
             .collect();
