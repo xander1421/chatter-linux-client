@@ -32,4 +32,16 @@ pub enum SystemError {
     /// D-Bus communication error.
     #[error("D-Bus error: {0}")]
     Dbus(String),
+
+    /// Failed to initialize clipboard.
+    #[error("Failed to initialize clipboard: {0}")]
+    ClipboardInit(String),
+
+    /// Failed to read from clipboard.
+    #[error("Failed to read from clipboard: {0}")]
+    ClipboardRead(String),
+
+    /// Failed to write to clipboard.
+    #[error("Failed to write to clipboard: {0}")]
+    ClipboardWrite(String),
 }
