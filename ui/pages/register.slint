@@ -1,52 +1,214 @@
-// Register page component
+// Register page component with validation and password confirmation
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 
 export component RegisterPage inherits Rectangle {
+    in-out property <string> display-name: "";
     in-out property <string> username: "";
     in-out property <string> password: "";
-    in-out property <string> display-name: "";
+    in-out property <string> confirm-password: "";
+    in property <bool> loading: false;
+    in property <string> error: "";
+
+    // Internal validation state
+    property <bool> submitted: false;
+    property <bool> display-name-empty: display-name == "";
+    property <bool> username-empty: username == "";
+    property <bool> password-empty: password == "";
+    property <bool> confirm-password-empty: confirm-password == "";
+    property <bool> passwords-match: password == confirm-password;
+    property <bool> fields-valid: !display-name-empty && !username-empty && !password-empty && !confirm-password-empty && passwords-match;
 
     callback register(string, string, string);
     callback go-to-login();
 
     background: Colors.background;
 
+    // Centered form container
     VerticalLayout {
         alignment: center;
-        spacing: Spacing.lg;
-        padding: Spacing.xl;
 
-        Text {
-            text: "Create Account";
-            color: Colors.text-primary;
-            font-size: 24px;
-            horizontal-alignment: center;
-        }
+        Rectangle {
+            max-width: 400px;
+            horizontal-stretch: 0;
 
-        Input {
-            placeholder: "Display Name";
-            text <=> root.display-name;
-        }
+            VerticalLayout {
+                alignment: center;
+                spacing: Spacing.lg;
+                padding: Spacing.xl;
 
-        Input {
-            placeholder: "Username";
-            text <=> root.username;
-        }
+                // App logo/title
+                Text {
+                    text: "Chatter";
+                    color: Colors.primary;
+                    font-size: Typography.xxxl;
+                    font-weight: Typography.bold;
+                    horizontal-alignment: center;
+                }
 
-        Input {
-            placeholder: "Password";
-            password: true;
-            text <=> root.password;
-        }
+                // Subtitle
+                Text {
+                    text: "Create your account";
+                    color: Colors.text-secondary;
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                }
 
-        Button {
-            text: "Register";
-            clicked => {
-                root.register(root.username, root.password, root.display-name);
+                // Spacer
+                Rectangle { height: Spacing.md; }
+
+                // Display name field with label
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Display Name";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Input {
+                        placeholder: "How others will see you";
+                        text <=> root.display-name;
+                        disabled: root.loading;
+                        error: submitted && display-name-empty;
+                        error-message: submitted && display-name-empty ? "Display name is required" : "";
+                    }
+                }
+
+                // Username field with label
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Username";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Input {
+                        placeholder: "Choose a unique username";
+                        text <=> root.username;
+                        disabled: root.loading;
+                        error: submitted && username-empty;
+                        error-message: submitted && username-empty ? "Username is required" : "";
+                    }
+                }
+
+                // Password field with label
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Password";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Input {
+                        placeholder: "Create a strong password";
+                        password: true;
+                        text <=> root.password;
+                        disabled: root.loading;
+                        error: submitted && password-empty;
+                        error-message: submitted && password-empty ? "Password is required" : "";
+                    }
+                }
+
+                // Confirm password field with label
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Confirm Password";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Input {
+                        placeholder: "Enter password again";
+                        password: true;
+                        text <=> root.confirm-password;
+                        disabled: root.loading;
+                        error: submitted && (confirm-password-empty || (!confirm-password-empty && !passwords-match));
+                        error-message: {
+                            if submitted && confirm-password-empty {
+                                "Please confirm your password"
+                            } else if submitted && !passwords-match {
+                                "Passwords do not match"
+                            } else {
+                                ""
+                            }
+                        };
+                    }
+                }
+
+                // Error message display
+                if error != "": Rectangle {
+                    background: Colors.error.with-alpha(0.1);
+                    border-radius: Spacing.radius-md;
+                    padding: Spacing.md;
+
+                    Text {
+                        text: root.error;
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Spacer
+                Rectangle { height: Spacing.sm; }
+
+                // Register button
+                Button {
+                    text: loading ? "" : "Create Account";
+                    variant: "primary";
+                    loading: root.loading;
+                    disabled: root.loading || (submitted && !fields-valid);
+
+                    clicked => {
+                        submitted = true;
+                        if fields-valid {
+                            root.register(root.username, root.password, root.display-name);
+                        }
+                    }
+                }
+
+                // Login link
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Already have an account?";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Rectangle {
+                        height: 20px;
+
+                        Text {
+                            text: "Sign in";
+                            color: Colors.primary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.go-to-login();
+                            }
+                        }
+                    }
+                }
             }
         }
     }
