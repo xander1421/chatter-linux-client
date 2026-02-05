@@ -578,7 +578,7 @@ None (custom application, no pre-existing domain skills)
 | 51 | System Utilities | 1 | Done | 2026-02-05 |
 | 52 | Media File Handling | 1 | Done | 2026-02-05 |
 | 53 | Media Playback | 1 | Done | 2026-02-05 |
-| 54 | Media Recording | TBD | Not started | - |
+| 54 | Media Recording | 1 | Done | 2026-02-05 |
 | 55 | Media Previews | TBD | Not started | - |
 | 56 | Media GIF & Embeds | TBD | Not started | - |
 | 57 | UI Foundation | TBD | Not started | - |
