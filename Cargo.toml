@@ -103,7 +103,7 @@ bytes = "1"
 http = "1"
 rfd = "0.15"                              # Native file dialogs
 mime_guess = "2"                          # MIME type detection
-reqwest = { version = "0.12", features = ["rustls-tls"] }  # HTTP client for presigned URLs
+reqwest = { version = "0.12", features = ["rustls-tls", "json"] }  # HTTP client for presigned URLs
 open = "5.3.3"
 rodio = "0.21.1"
 cpal = "0.15"                              # Audio input (recording)

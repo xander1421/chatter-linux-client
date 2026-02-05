@@ -35,4 +35,8 @@ pub enum MediaError {
     /// Preview error (PDF, code, etc.).
     #[error("preview error: {0}")]
     PreviewError(String),
+
+    /// GIF API error.
+    #[error("gif error: {0}")]
+    GifError(String),
 }
