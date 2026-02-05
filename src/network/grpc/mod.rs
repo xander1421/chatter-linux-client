@@ -13,6 +13,7 @@ pub mod mailbox_client;
 pub mod message_client;
 pub mod notification_client;
 pub mod user_client;
+pub mod saved_messages_client;
 
 pub use auth_client::AuthClient;
 pub use channel_client::ChannelClient;
@@ -23,4 +24,5 @@ pub use interceptors::{AuthInterceptor, AuthMode};
 pub use mailbox_client::MailboxClient;
 pub use message_client::MessageClient;
 pub use notification_client::NotificationClient;
+pub use saved_messages_client::SavedMessagesClient;
 pub use user_client::UserClient;
