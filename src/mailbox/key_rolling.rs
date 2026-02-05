@@ -75,6 +75,7 @@ pub struct KeyRollingService {
     /// Pending old mailboxes to be deleted after overlap period.
     pending_deletions: RwLock<Vec<PendingDeletion>>,
     /// Rotation threshold (how soon before expiry to rotate).
+    #[allow(dead_code)]
     rotation_threshold: Duration,
     /// Overlap period for old mailboxes.
     overlap_period: Duration,

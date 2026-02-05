@@ -72,16 +72,20 @@ pub struct EventHandlers {
     /// Message cache and draft state.
     message_state: MessageState,
     /// Channel/thread navigation state.
+    #[allow(dead_code)]
     chat_state: ChatState,
     /// Pinned messages navigation state.
     pinned_state: PinnedState,
     /// User profile and relationship cache.
+    #[allow(dead_code)]
     user_state: UserState,
     /// User presence status cache.
+    #[allow(dead_code)]
     presence_state: PresenceState,
     /// Real-time streaming data (typing, reactions).
     streaming_state: StreamingState,
     /// Connection and offline queue status.
+    #[allow(dead_code)]
     offline_state: OfflineState,
 }
 

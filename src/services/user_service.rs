@@ -740,6 +740,7 @@ fn proto_to_domain_profile(proto: &UserProfile) -> Result<Profile, UserError> {
 }
 
 /// Convert a domain Profile to a proto UserProfile.
+#[allow(dead_code)]
 fn domain_to_proto_profile(profile: &Profile) -> UserProfile {
     UserProfile {
         user_id: profile.user_id.to_string(),

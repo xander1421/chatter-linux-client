@@ -64,7 +64,7 @@ impl SystemTray {
             let service_handle = service.handle();
 
             // Run the service (this blocks until shutdown)
-            service.run();
+            let _ = service.run();
 
             drop(service_handle);
         });
@@ -84,10 +84,7 @@ impl SystemTray {
             loop {
                 tokio::select! {
                     Some(msg) = rx.recv() => {
-                        match msg {
-                            TrayMessage::Quit => break,
-                            _ => {}
-                        }
+                        if let TrayMessage::Quit = msg { break }
                     }
                     Some(event) = event_rx.recv() => {
                         // Forward events from tray callbacks
