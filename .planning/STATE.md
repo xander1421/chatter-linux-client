@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 38 of 66 (Services Real-time)
+Phase: 39 of 66 (Services Reactions)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-05 — Completed 38-01-PLAN.md (real-time services)
+Last activity: 2026-02-05 — Completed 39-01-PLAN.md (reaction service)
 
-Progress: ██████████████████████████████████████████████████████████████████░░░░░░ 91%
+Progress: ███████████████████████████████████████████████████████████████████░░░░░ 92%
 
 ## Performance Metrics
 
@@ -66,10 +66,11 @@ Progress: ███████████████████████�
 
 | 37 | 1 | ~5m | ~5m |
 | 38 | 1 | ~5m | ~5m |
+| 39 | 1 | ~5m | ~5m |
 
 **Recent Trend:**
-- Last 5 plans: 36-2 (~8m), 36-3 (~6m), 37-1 (~5m), 38-1 (~5m)
-- Trend: Phase 38 complete
+- Last 5 plans: 36-3 (~6m), 37-1 (~5m), 38-1 (~5m), 39-1 (~5m)
+- Trend: Phase 39 complete
 
 ## Accumulated Context
 
@@ -185,6 +186,8 @@ Recent decisions affecting current work:
 - FriendRequestFilter enum mirrors proto; respond_friend_request returns Option<Friendship>
 - Local query methods skip auth check (get_user_local, get_profile_local, search_users_local)
 - Search results NOT stored locally (discovery pattern, not relationships)
+- New ReactionId per conversion: proto Reaction lacks ID, generate during conversion (acceptable for display use)
+- ReactionEvent re-export: Added from aggregator for convenience
 
 ### Deferred Issues
 
@@ -197,6 +200,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 38-01-PLAN.md (real-time services)
+Stopped at: Completed 39-01-PLAN.md (reaction service)
 Resume file: None
-Next action: Plan Phase 39 (Services Reactions)
+Next action: Plan Phase 40 (Services Search)
