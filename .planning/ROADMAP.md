@@ -59,8 +59,8 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 30: Services Auth** - Login, logout, device auth
 - [x] **Phase 31: Services Account** - Password change, deletion, session management
 - [x] **Phase 32: Services Message Core** - Send, receive, edit, delete
-- [ ] **Phase 33: Services Message Advanced** - Forward, quote, pin, thread, draft
-- [ ] **Phase 34: Services Ephemeral Messages** - TTL support, countdown timers
+- [x] **Phase 33: Services Message Advanced** - Forward, quote, pin, thread, draft
+- [x] **Phase 34: Services Ephemeral Messages** - TTL support, countdown timers
 - [ ] **Phase 35: Services Channel** - Create, join, leave, archive, templates
 - [ ] **Phase 36: Services User** - Profile, status, friends, blocking
 - [ ] **Phase 37: Services Presence** - Online/offline/away/DND

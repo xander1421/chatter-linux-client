@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 34 — Services Ephemeral Messages
+**Current focus:** Phase 35 — Services Channel
 
 ## Current Position
 
-Phase: 34 of 66 (Services Ephemeral Messages)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-05 — Completed 34-02-PLAN.md
+Phase: 35 of 66 (Services Channel)
+Plan: 1 of 3 in current phase
+Status: Plan 01 complete
+Last activity: 2026-02-05 — Completed 35-01-PLAN.md
 
-Progress: █████████████████████████████████████████████████████████████████░░░░░░░ 84%
+Progress: █████████████████████████████████████████████████████████████████░░░░░░░ 85%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 57
-- Average duration: ~4.5 min
-- Total execution time: ~259 min
+- Total plans completed: 58
+- Average duration: ~4.6 min
+- Total execution time: ~267 min
 
 **By Phase:**
 
@@ -61,10 +61,11 @@ Progress: ███████████████████████�
 | 32 | 2 | ~10m | ~5m |
 | 33 | 2 | ~4m | ~2m |
 | 34 | 2 | ~6m | ~3m |
+| 35 | 1 | ~8m | ~8m |
 
 **Recent Trend:**
-- Last 5 plans: 33-1 (~2m), 33-2 (~2m), 34-1 (~3m), 34-2 (~3m)
-- Trend: Phase 34 complete
+- Last 5 plans: 33-2 (~2m), 34-1 (~3m), 34-2 (~3m), 35-1 (~8m)
+- Trend: Phase 35 started
 
 ## Accumulated Context
 
@@ -175,6 +176,8 @@ Recent decisions affecting current work:
 - Soft delete for message deletion (keep for history/sync)
 - Server-first fetch for get_messages (always fetch from server, then upsert locally)
 - Ownership validation allows edit/delete if sender_id is None (sealed sender)
+- Streaming RPC consumption: while let loop with event variant matching
+- ChannelService follows MessageService pattern: &mut client, server-first, upsert locally
 
 ### Deferred Issues
 
@@ -187,6 +190,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 34-02-PLAN.md (Phase 34 complete)
-Resume file: .planning/phases/34-services-ephemeral-messages/34-02-SUMMARY.md
-Next action: Plan Phase 35 (Services Channel)
+Stopped at: Completed 35-01-PLAN.md (ChannelService core CRUD)
+Resume file: .planning/phases/35-services-channel/35-01-SUMMARY.md
+Next action: Execute 35-02-PLAN.md (membership operations)
