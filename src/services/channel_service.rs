@@ -727,6 +727,115 @@ impl ChannelService {
         Ok(membership)
     }
 
+    // ==================== Archive Operations ====================
+
+    /// Archive a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel to archive
+    pub async fn archive_channel(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+    ) -> Result<Channel, ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (unary, returns ArchiveChannelResponse)
+        let channel_id_str = channel_id.to_string();
+        let response = channel_client.archive_channel(&channel_id_str).await?;
+
+        // Extract archived_channel from response
+        let proto_channel = response
+            .archived_channel
+            .ok_or_else(|| ChannelError::InvalidInput("no archived_channel in response".to_string()))?;
+
+        // Convert to domain Channel (should have archived=true)
+        let channel = proto_to_domain_channel(&proto_channel)?;
+
+        // Update local storage
+        match self.channel_repo.get(channel_id)? {
+            Some(_) => self.channel_repo.update(&channel)?,
+            None => self.channel_repo.insert(&channel)?,
+        }
+
+        Ok(channel)
+    }
+
+    /// Unarchive a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel to unarchive
+    pub async fn unarchive_channel(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+    ) -> Result<Channel, ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (unary, returns UnarchiveChannelResponse)
+        let channel_id_str = channel_id.to_string();
+        let response = channel_client.unarchive_channel(&channel_id_str).await?;
+
+        // Extract unarchived_channel from response
+        let proto_channel = response
+            .unarchived_channel
+            .ok_or_else(|| ChannelError::InvalidInput("no unarchived_channel in response".to_string()))?;
+
+        // Convert to domain Channel (should have archived=false)
+        let channel = proto_to_domain_channel(&proto_channel)?;
+
+        // Update local storage
+        match self.channel_repo.get(channel_id)? {
+            Some(_) => self.channel_repo.update(&channel)?,
+            None => self.channel_repo.insert(&channel)?,
+        }
+
+        Ok(channel)
+    }
+
+    /// List archived channel IDs.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `limit` - Maximum number of channels to fetch
+    /// * `offset` - Pagination offset
+    ///
+    /// # Returns
+    ///
+    /// Vector of ChannelIds for archived channels. Caller can fetch full details if needed.
+    pub async fn list_archived_channels(
+        &self,
+        channel_client: &mut ChannelClient,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<ChannelId>, ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (unary)
+        let response = channel_client
+            .list_archived_channels(limit as i32, offset as i32)
+            .await?;
+
+        // Response contains archived_channel_ids as strings - parse each to ChannelId
+        let mut channel_ids = Vec::with_capacity(response.archived_channel_ids.len());
+        for id_str in &response.archived_channel_ids {
+            let channel_id: ChannelId = id_str.parse().map_err(|_| {
+                ChannelError::InvalidInput(format!("invalid channel ID: {}", id_str))
+            })?;
+            channel_ids.push(channel_id);
+        }
+
+        Ok(channel_ids)
+    }
+
     /// List channels with pagination.
     ///
     /// Fetches from server and upserts each to local storage.
