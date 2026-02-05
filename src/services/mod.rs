@@ -56,3 +56,6 @@ pub use crate::network::streaming::reaction_stream::ReactionEvent;
 
 // Re-exports for search service
 pub use search_service::{CombinedSearchResults, SearchError, SearchService};
+
+// Re-exports for moderation service
+pub use moderation_service::{ModerationError, ModerationService, proto_moderation_action_to_domain};

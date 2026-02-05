@@ -400,3 +400,217 @@ fn role_level(role: MemberRole) -> u8 {
         MemberRole::Owner => 3,
     }
 }
+
+/// Convert proto ChannelModeration action to domain ModerationAction.
+pub fn proto_moderation_action_to_domain(action: channel_moderation::Action) -> ModerationAction {
+    match action {
+        channel_moderation::Action::Kick => ModerationAction::Kick,
+        channel_moderation::Action::Ban => ModerationAction::Ban,
+        channel_moderation::Action::Mute => ModerationAction::Mute,
+        channel_moderation::Action::Unban | channel_moderation::Action::Unmute => {
+            // These are reversals, not standalone actions - default to Kick
+            ModerationAction::Kick
+        }
+        channel_moderation::Action::Unspecified => ModerationAction::Warn,
+    }
+}
+
+impl ModerationService {
+    /// Log a moderation action.
+    ///
+    /// Creates a ModerationLogEntry that could be stored locally if needed.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel where the action took place
+    /// * `target_user_id` - User who was the target of the action
+    /// * `action` - Type of moderation action
+    /// * `reason` - Optional reason for the action
+    ///
+    /// # Returns
+    ///
+    /// The created ModerationLogEntry.
+    pub fn log_action(
+        &self,
+        channel_id: &ChannelId,
+        target_user_id: &UserId,
+        action: ModerationAction,
+        reason: Option<&str>,
+    ) -> Result<ModerationLogEntry, ModerationError> {
+        let current_user = self.current_user_id()?;
+
+        let mut entry = ModerationLogEntry::new(
+            channel_id.clone(),
+            target_user_id.clone(),
+            current_user,
+            action,
+        );
+
+        if let Some(r) = reason {
+            entry = entry.with_reason(r.to_string());
+        }
+
+        // Could store locally in a moderation log table if needed
+        // For now, just return the entry
+        Ok(entry)
+    }
+
+    /// Handle a moderation event from the server.
+    ///
+    /// Converts the proto ChannelModeration to domain action and updates local state.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` - The ChannelModeration event from the server
+    pub fn handle_moderation_event(&self, event: &ChannelModeration) -> Result<(), ModerationError> {
+        // Parse channel_id
+        let channel_id: ChannelId = event
+            .channel_id
+            .parse()
+            .map_err(|_| ModerationError::InvalidInput("invalid channel ID".to_string()))?;
+
+        // Parse user_id (target of moderation)
+        let user_id: UserId = event
+            .user_id
+            .parse()
+            .map_err(|_| ModerationError::InvalidInput("invalid user ID".to_string()))?;
+
+        // Parse action
+        let action = channel_moderation::Action::try_from(event.action)
+            .unwrap_or(channel_moderation::Action::Unspecified);
+
+        match action {
+            channel_moderation::Action::Kick => {
+                // Remove membership from local storage
+                let _ = self.channel_repo.delete_membership(&channel_id, &user_id);
+            }
+            channel_moderation::Action::Ban => {
+                // Remove membership from local storage (banned users are no longer members)
+                let _ = self.channel_repo.delete_membership(&channel_id, &user_id);
+            }
+            channel_moderation::Action::Mute => {
+                // Update local membership with mute state
+                if let Ok(Some(mut membership)) =
+                    self.channel_repo.get_membership(&channel_id, &user_id)
+                {
+                    membership.is_muted = true;
+                    // Set muted_until from event duration if provided
+                    if let Some(duration) = &event.duration {
+                        let chrono_duration = Duration::seconds(duration.seconds)
+                            + Duration::nanoseconds(duration.nanos as i64);
+                        membership.muted_until = Some(Utc::now() + chrono_duration);
+                    }
+                    let _ = self.channel_repo.update_membership(&membership);
+                }
+            }
+            channel_moderation::Action::Unban => {
+                // No action needed - user would need to rejoin
+            }
+            channel_moderation::Action::Unmute => {
+                // Clear mute state on local membership
+                if let Ok(Some(mut membership)) =
+                    self.channel_repo.get_membership(&channel_id, &user_id)
+                {
+                    membership.is_muted = false;
+                    membership.muted_until = None;
+                    let _ = self.channel_repo.update_membership(&membership);
+                }
+            }
+            channel_moderation::Action::Unspecified => {
+                // Unknown action, ignore
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_proto_action_conversion() {
+        assert_eq!(
+            proto_moderation_action_to_domain(channel_moderation::Action::Kick),
+            ModerationAction::Kick
+        );
+        assert_eq!(
+            proto_moderation_action_to_domain(channel_moderation::Action::Ban),
+            ModerationAction::Ban
+        );
+        assert_eq!(
+            proto_moderation_action_to_domain(channel_moderation::Action::Mute),
+            ModerationAction::Mute
+        );
+        // Unban/Unmute are reversals, not standalone actions
+        assert_eq!(
+            proto_moderation_action_to_domain(channel_moderation::Action::Unban),
+            ModerationAction::Kick // Default fallback
+        );
+        assert_eq!(
+            proto_moderation_action_to_domain(channel_moderation::Action::Unspecified),
+            ModerationAction::Warn
+        );
+    }
+
+    #[test]
+    fn test_permissions_for_role() {
+        // Member permissions
+        let member_perms = Permissions::for_role(MemberRole::Member);
+        assert!(member_perms.can_send_messages);
+        assert!(member_perms.can_edit_own_messages);
+        assert!(!member_perms.can_delete_any_message);
+        assert!(!member_perms.can_manage_members);
+
+        // Moderator permissions
+        let mod_perms = Permissions::for_role(MemberRole::Moderator);
+        assert!(mod_perms.can_send_messages);
+        assert!(mod_perms.can_delete_any_message);
+        assert!(mod_perms.can_manage_members);
+        assert!(!mod_perms.can_manage_roles);
+
+        // Admin permissions
+        let admin_perms = Permissions::for_role(MemberRole::Admin);
+        assert!(admin_perms.can_manage_roles);
+        assert!(admin_perms.can_edit_channel);
+        assert!(admin_perms.can_delete_channel);
+
+        // Owner permissions (same as admin)
+        let owner_perms = Permissions::for_role(MemberRole::Owner);
+        assert_eq!(owner_perms, admin_perms);
+    }
+
+    #[test]
+    fn test_role_level() {
+        assert_eq!(role_level(MemberRole::Member), 0);
+        assert_eq!(role_level(MemberRole::Moderator), 1);
+        assert_eq!(role_level(MemberRole::Admin), 2);
+        assert_eq!(role_level(MemberRole::Owner), 3);
+
+        // Verify ordering
+        assert!(role_level(MemberRole::Owner) > role_level(MemberRole::Admin));
+        assert!(role_level(MemberRole::Admin) > role_level(MemberRole::Moderator));
+        assert!(role_level(MemberRole::Moderator) > role_level(MemberRole::Member));
+    }
+
+    #[test]
+    fn test_moderation_error_display() {
+        let err = ModerationError::NotLoggedIn;
+        assert!(err.to_string().contains("not logged in"));
+
+        let err = ModerationError::NotAuthorized;
+        assert!(err.to_string().contains("not authorized"));
+
+        let channel_id = ChannelId::new();
+        let err = ModerationError::ChannelNotFound(channel_id);
+        assert!(err.to_string().contains("channel not found"));
+
+        let user_id = UserId::new();
+        let err = ModerationError::UserNotFound(user_id);
+        assert!(err.to_string().contains("user not found"));
+
+        let err = ModerationError::InvalidInput("bad input".to_string());
+        assert!(err.to_string().contains("bad input"));
+    }
+}
