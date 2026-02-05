@@ -1,0 +1,322 @@
+// InviteMemberModal - Modal for inviting users to a channel
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { Avatar } from "../components/avatar.slint";
+
+// User struct for invite targets
+export struct InviteUser {
+    id: string,
+    display-name: string,
+    username: string,
+    avatar-url: string,
+    already-member: bool,
+}
+
+export component InviteMemberModal inherits Rectangle {
+    in property <bool> visible: false;
+    in property <string> channel-name: "";
+    in-out property <string> search-text: "";
+    in property <[InviteUser]> users: [];
+    in property <[string]> selected-users: [];
+    in property <bool> loading: false;
+
+    callback close();
+    callback toggle-user(string);  // user_id - toggles selection
+    callback invite();  // confirms invite for all selected users
+
+    // Helper to check if user is selected
+    pure function is-selected(user-id: string) -> bool {
+        for selected in root.selected-users {
+            if selected == user-id {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Get display name for a user ID
+    pure function get-user-name(user-id: string) -> string {
+        for user in root.users {
+            if user.id == user-id {
+                return user.display-name;
+            }
+        }
+        return "";
+    }
+
+    // Reset state when modal closes
+    changed visible => {
+        if !visible {
+            search-text = "";
+        }
+    }
+
+    Modal {
+        visible: root.visible;
+        title: "Invite Members";
+        width: 480px;
+
+        close => {
+            root.close();
+        }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            // Header text showing channel name
+            Text {
+                text: "Invite to #" + root.channel-name;
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+            }
+
+            // Search input
+            Input {
+                placeholder: "Search by name or username...";
+                text <=> root.search-text;
+            }
+
+            // Selected users chips bar (only if there are selections)
+            if root.selected-users.length > 0: Rectangle {
+                min-height: 32px;
+                max-height: 64px;
+
+                Flickable {
+                    viewport-width: chips-row.preferred-width;
+                    viewport-height: chips-row.preferred-height;
+
+                    chips-row := HorizontalLayout {
+                        spacing: Spacing.xs;
+                        padding: Spacing.xs;
+
+                        for user-id[index] in root.selected-users: Rectangle {
+                            property <string> name: root.get-user-name(user-id);
+
+                            width: chip-text.width + 24px + Spacing.sm * 3;
+                            height: 28px;
+                            background: Colors.primary.with-alpha(0.2);
+                            border-radius: Spacing.radius-full;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.xs;
+                                spacing: Spacing.xs;
+
+                                chip-text := Text {
+                                    text: name;
+                                    color: Colors.primary;
+                                    font-size: Typography.xs;
+                                    font-weight: Typography.medium;
+                                    vertical-alignment: center;
+                                }
+
+                                // Remove button
+                                Rectangle {
+                                    width: 16px;
+                                    height: 16px;
+                                    border-radius: 8px;
+                                    background: chip-remove-touch.has-hover ? Colors.primary.with-alpha(0.3) : transparent;
+
+                                    // X icon
+                                    Rectangle {
+                                        width: 8px;
+                                        height: 2px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        background: Colors.primary;
+                                        rotation-angle: 45deg;
+                                    }
+                                    Rectangle {
+                                        width: 8px;
+                                        height: 2px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        background: Colors.primary;
+                                        rotation-angle: -45deg;
+                                    }
+
+                                    chip-remove-touch := TouchArea {
+                                        clicked => {
+                                            root.toggle-user(user-id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // User list (scrollable)
+            Rectangle {
+                min-height: 200px;
+                max-height: 300px;
+                vertical-stretch: 1;
+                background: Colors.surface;
+                border-radius: Spacing.radius-md;
+                border-width: 1px;
+                border-color: Colors.text-muted.with-alpha(0.2);
+
+                Flickable {
+                    viewport-height: user-list.preferred-height;
+                    viewport-width: parent.width;
+
+                    user-list := VerticalLayout {
+                        padding: Spacing.xs;
+
+                        for user[index] in root.users: Rectangle {
+                            property <bool> matches: root.search-text == "" ||
+                                user.display-name.to-lower-ascii().contains(root.search-text.to-lower-ascii()) ||
+                                user.username.to-lower-ascii().contains(root.search-text.to-lower-ascii());
+                            property <bool> is-selected: root.is-selected(user.id);
+
+                            visible: matches;
+                            height: matches ? 52px : 0;
+                            background: user.already-member ? transparent :
+                                (user-touch.has-hover ? Colors.surface-hover : transparent);
+                            border-radius: Spacing.radius-md;
+                            opacity: user.already-member ? 0.5 : 1.0;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                spacing: Spacing.sm;
+
+                                // Avatar
+                                Avatar {
+                                    size: 36px;
+                                    fallback-text: user.display-name.character-count > 0 ? user.display-name.to-upper-ascii() : "?";
+                                }
+
+                                // Name and username
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: 2px;
+
+                                    Text {
+                                        text: user.display-name;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: "@" + user.username;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                // Already member badge
+                                if user.already-member: Rectangle {
+                                    width: member-text.width + Spacing.sm * 2;
+                                    height: 20px;
+                                    background: Colors.text-muted.with-alpha(0.2);
+                                    border-radius: Spacing.radius-sm;
+
+                                    member-text := Text {
+                                        x: Spacing.sm;
+                                        text: "Member";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        vertical-alignment: center;
+                                        height: 100%;
+                                    }
+                                }
+
+                                // Checkbox (only for non-members)
+                                if !user.already-member: Rectangle {
+                                    width: 20px;
+                                    height: 20px;
+                                    border-radius: Spacing.radius-sm;
+                                    border-width: is-selected ? 0 : 2px;
+                                    border-color: Colors.text-muted;
+                                    background: is-selected ? Colors.primary : transparent;
+
+                                    // Checkmark (shown when selected)
+                                    if is-selected: Rectangle {
+                                        // Left part of checkmark
+                                        Rectangle {
+                                            x: 5px;
+                                            y: 10px;
+                                            width: 4px;
+                                            height: 2px;
+                                            background: Colors.text-primary;
+                                            rotation-angle: 45deg;
+                                        }
+                                        // Right part of checkmark
+                                        Rectangle {
+                                            x: 6px;
+                                            y: 8px;
+                                            width: 8px;
+                                            height: 2px;
+                                            background: Colors.text-primary;
+                                            rotation-angle: -45deg;
+                                        }
+                                    }
+                                }
+                            }
+
+                            user-touch := TouchArea {
+                                enabled: !user.already-member;
+                                mouse-cursor: user.already-member ? default : pointer;
+
+                                clicked => {
+                                    if !user.already-member {
+                                        root.toggle-user(user.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Footer with action buttons
+            HorizontalLayout {
+                spacing: Spacing.md;
+                height: 40px;
+
+                // Spacer
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                // Cancel button
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+
+                    clicked => {
+                        root.close();
+                    }
+                }
+
+                // Invite button
+                Button {
+                    text: root.loading ? "" :
+                        (root.selected-users.length == 0 ? "Invite" :
+                         root.selected-users.length == 1 ? "Invite 1 user" :
+                         "Invite " + root.selected-users.length + " users");
+                    variant: "primary";
+                    disabled: root.selected-users.length == 0 || root.loading;
+                    loading: root.loading;
+
+                    clicked => {
+                        if root.selected-users.length > 0 && !root.loading {
+                            root.invite();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
