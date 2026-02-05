@@ -1,0 +1,280 @@
+// PDF preview panel component
+//
+// Displays PDF file info and controls for external viewer delegation.
+// Since PDF rendering is handled by external applications, this panel
+// shows metadata and provides an "Open in PDF Viewer" action.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component PdfPreviewPanel inherits Rectangle {
+    // File info
+    in property <string> file-name: "";
+    in property <int> page-count: 0;
+    in property <int> current-page: 1;
+    in property <string> error-message: "";
+
+    // Callbacks
+    callback close-clicked();
+    callback open-external-clicked();
+    callback page-prev-clicked();
+    callback page-next-clicked();
+
+    // Computed properties
+    property <bool> has-error: root.error-message != "";
+    property <bool> can-prev: root.current-page > 1;
+    property <bool> can-next: root.current-page < root.page-count;
+
+    // Panel styling
+    background: Colors.surface;
+    border-radius: Spacing.radius-md;
+    clip: true;
+
+    VerticalLayout {
+        // Header bar
+        Rectangle {
+            height: 40px;
+            background: Colors.background;
+
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+                alignment: space-between;
+
+                // Left side: file info
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: start;
+
+                    // File name
+                    Text {
+                        text: root.file-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    // PDF badge
+                    Rectangle {
+                        height: 20px;
+                        width: pdf-text.preferred-width + Spacing.sm * 2;
+                        background: Colors.error.transparentize(0.8);
+                        border-radius: Spacing.radius-sm;
+
+                        pdf-text := Text {
+                            text: "PDF";
+                            color: Colors.error;
+                            font-size: Typography.xs;
+                            font-weight: Typography.semibold;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Right side: close button
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    background: close-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+                    border-radius: Spacing.radius-sm;
+
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: "\u{2715}"; // X mark
+                        font-size: Typography.sm;
+                        color: close-touch.has-hover ? Colors.error : Colors.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.close-clicked();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Main content area (centered)
+        Rectangle {
+            vertical-stretch: 1;
+            background: Colors.surface;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: Spacing.lg;
+                padding: Spacing.xl;
+
+                // Error state
+                if root.has-error: VerticalLayout {
+                    alignment: center;
+                    spacing: Spacing.md;
+
+                    // Error icon
+                    Text {
+                        text: "\u{26A0}"; // Warning
+                        font-size: 48px;
+                        color: Colors.warning;
+                        horizontal-alignment: center;
+                    }
+
+                    // Error message
+                    Text {
+                        text: root.error-message;
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Normal state
+                if !root.has-error: VerticalLayout {
+                    alignment: center;
+                    spacing: Spacing.md;
+
+                    // Large PDF icon
+                    Text {
+                        text: "\u{1F4C4}"; // Page facing up
+                        font-size: 64px;
+                        horizontal-alignment: center;
+                    }
+
+                    // File name
+                    Text {
+                        text: root.file-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.medium;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+
+                    // Page count info
+                    if root.page-count > 0: Text {
+                        text: root.page-count == 1 ? "1 page" : root.page-count + " pages";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                    }
+
+                    // Open in viewer button
+                    Rectangle {
+                        height: 40px;
+                        width: open-btn-layout.preferred-width;
+                        background: open-btn-touch.has-hover ? Colors.primary-hover : Colors.primary;
+                        border-radius: Spacing.radius-md;
+
+                        open-btn-layout := HorizontalLayout {
+                            padding-left: Spacing.lg;
+                            padding-right: Spacing.lg;
+                            spacing: Spacing.sm;
+                            alignment: center;
+
+                            Text {
+                                text: "\u{1F517}"; // Link
+                                font-size: Typography.sm;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: "Open in PDF Viewer";
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.medium;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        open-btn-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.open-external-clicked();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Footer bar with page navigation (for future embedded preview)
+        if root.page-count > 1 && !root.has-error: Rectangle {
+            height: 40px;
+            background: Colors.background;
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.md;
+
+                // Previous page button
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    background: root.can-prev && prev-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-sm;
+                    opacity: root.can-prev ? 1.0 : 0.3;
+
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: "\u{2039}"; // Left angle
+                        font-size: Typography.lg;
+                        color: Colors.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    prev-touch := TouchArea {
+                        enabled: root.can-prev;
+                        mouse-cursor: root.can-prev ? pointer : default;
+                        clicked => {
+                            root.page-prev-clicked();
+                        }
+                    }
+                }
+
+                // Page indicator
+                Text {
+                    text: root.current-page + " / " + root.page-count;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    vertical-alignment: center;
+                }
+
+                // Next page button
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    background: root.can-next && next-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-sm;
+                    opacity: root.can-next ? 1.0 : 0.3;
+
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: "\u{203A}"; // Right angle
+                        font-size: Typography.lg;
+                        color: Colors.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    next-touch := TouchArea {
+                        enabled: root.can-next;
+                        mouse-cursor: root.can-next ? pointer : default;
+                        clicked => {
+                            root.page-next-clicked();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
