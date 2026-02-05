@@ -1,9 +1,193 @@
 // Virtualized message list component
+//
+// Displays a scrollable list of messages with loading and empty states.
 
 import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Skeleton } from "../components/skeleton.slint";
+import { MessageItem } from "message_item.slint";
+
+// Data struct for message items (mirrors Rust MessageItemData)
+export struct MessageItemData {
+    message-id: string,
+    sender-id: string,
+    sender-name: string,
+    sender-initials: string,
+    sender-avatar-url: string,
+    content: string,
+    timestamp: string,
+    is-own: bool,
+    is-edited: bool,
+    is-deleted: bool,
+    is-system: bool,
+    is-ai: bool,
+    has-attachments: bool,
+    attachment-count: int,
+    has-reactions: bool,
+    reaction-summary: string,
+    reply-count: int,
+    is-thread-reply: bool,
+    show-sender: bool,
+}
 
 export component MessageList inherits Rectangle {
+    // Properties
+    in property <[MessageItemData]> messages: [];
+    in property <bool> loading: false;
+    in-out property <length> scroll-position: 0;
+
+    // Callbacks
+    callback message-clicked(string);
+    callback reply-clicked(string);
+    callback react-clicked(string);
+    callback thread-clicked(string);
+    callback more-clicked(string);
+    callback load-more();
+
+    // Layout
     background: Colors.background;
 
-    // Placeholder for virtualized message list
+    // Loading state: skeleton placeholders
+    if root.loading: VerticalLayout {
+        padding: Spacing.md;
+        spacing: Spacing.lg;
+
+        for _ in [1, 2, 3, 4, 5]: HorizontalLayout {
+            spacing: Spacing.sm;
+
+            // Avatar skeleton
+            Skeleton {
+                width: Spacing.avatar-sm;
+                height: Spacing.avatar-sm;
+                border-radius: Spacing.avatar-sm / 2;
+            }
+
+            // Content skeleton
+            VerticalLayout {
+                spacing: Spacing.xs;
+
+                // Name and timestamp
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+
+                    Skeleton {
+                        width: 80px;
+                        height: 14px;
+                        border-radius: 4px;
+                    }
+
+                    Skeleton {
+                        width: 40px;
+                        height: 12px;
+                        border-radius: 4px;
+                    }
+                }
+
+                // Message content (2 lines)
+                Skeleton {
+                    width: 200px;
+                    height: 14px;
+                    border-radius: 4px;
+                }
+
+                Skeleton {
+                    width: 150px;
+                    height: 14px;
+                    border-radius: 4px;
+                }
+            }
+        }
+    }
+
+    // Empty state
+    if !root.loading && root.messages.length == 0: Rectangle {
+        VerticalLayout {
+            alignment: center;
+            spacing: Spacing.md;
+
+            Text {
+                text: "\u{1F4AC}"; // Speech bubbles emoji
+                font-size: 48px;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "No messages yet";
+                color: Colors.text-secondary;
+                font-size: Typography.lg;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Be the first to say something!";
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    // Message list
+    if !root.loading && root.messages.length > 0: Flickable {
+        viewport-height: messages-layout.preferred-height;
+        viewport-y <=> root.scroll-position;
+
+        messages-layout := VerticalLayout {
+            padding: Spacing.md;
+            spacing: 2px;
+
+            // Load more trigger at top (for infinite scroll)
+            Rectangle {
+                height: Spacing.lg;
+
+                load-trigger := TouchArea {
+                    // This area triggers load-more when scrolled to top
+                    // In practice, you'd detect scroll position
+                }
+            }
+
+            for item in root.messages: MessageItem {
+                message-id: item.message-id;
+                sender-id: item.sender-id;
+                sender-name: item.sender-name;
+                sender-initials: item.sender-initials;
+                sender-avatar-url: item.sender-avatar-url;
+                content: item.content;
+                timestamp: item.timestamp;
+                is-own: item.is-own;
+                is-edited: item.is-edited;
+                is-deleted: item.is-deleted;
+                is-system: item.is-system;
+                is-ai: item.is-ai;
+                has-attachments: item.has-attachments;
+                attachment-count: item.attachment-count;
+                has-reactions: item.has-reactions;
+                reaction-summary: item.reaction-summary;
+                reply-count: item.reply-count;
+                is-thread-reply: item.is-thread-reply;
+                show-sender: item.show-sender;
+
+                message-clicked(id) => {
+                    root.message-clicked(id);
+                }
+
+                reply-clicked(id) => {
+                    root.reply-clicked(id);
+                }
+
+                react-clicked(id) => {
+                    root.react-clicked(id);
+                }
+
+                thread-clicked(id) => {
+                    root.thread-clicked(id);
+                }
+
+                more-clicked(id) => {
+                    root.more-clicked(id);
+                }
+            }
+        }
+    }
 }
