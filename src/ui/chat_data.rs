@@ -1,0 +1,443 @@
+//! Chat data structures for Slint UI bindings.
+//!
+//! Provides Rust structs that map to Slint struct definitions for
+//! chat components like message items.
+
+use crate::domain::message::{Message, MessageContent, ReactionCount};
+use chrono::{DateTime, Datelike, Duration, Local, Utc};
+
+// ============================================================================
+// Message Item Data
+// ============================================================================
+
+/// Message item data for Slint model binding.
+///
+/// Maps to the properties of `MessageItem` component in Slint.
+#[derive(Clone, Debug, Default)]
+pub struct MessageItemData {
+    /// Message ID for identification.
+    pub message_id: String,
+    /// Sender user ID.
+    pub sender_id: String,
+    /// Sender display name.
+    pub sender_name: String,
+    /// Sender initials for avatar fallback.
+    pub sender_initials: String,
+    /// Sender avatar URL (empty if none).
+    pub sender_avatar_url: String,
+    /// Plain text content to display.
+    pub content: String,
+    /// Formatted timestamp (e.g., "2:34 PM", "Yesterday").
+    pub timestamp: String,
+    /// Whether this is the current user's message.
+    pub is_own: bool,
+    /// Whether the message has been edited.
+    pub is_edited: bool,
+    /// Whether the message has been deleted.
+    pub is_deleted: bool,
+    /// Whether this is a system message (join/leave/etc).
+    pub is_system: bool,
+    /// Whether this is an AI-generated message.
+    pub is_ai: bool,
+    /// Whether the message has attachments.
+    pub has_attachments: bool,
+    /// Number of attachments.
+    pub attachment_count: u32,
+    /// Whether the message has reactions.
+    pub has_reactions: bool,
+    /// Reaction summary string (e.g., "👍 3  ❤️ 2").
+    pub reaction_summary: String,
+    /// Thread reply count (0 if not a thread root).
+    pub reply_count: u32,
+    /// Whether this is a reply in a thread.
+    pub is_thread_reply: bool,
+    /// Whether to show sender info (false for consecutive same-sender).
+    pub show_sender: bool,
+}
+
+impl MessageItemData {
+    /// Create a new message item data entry.
+    #[must_use]
+    pub fn new(message_id: impl Into<String>) -> Self {
+        Self {
+            message_id: message_id.into(),
+            show_sender: true,
+            ..Default::default()
+        }
+    }
+
+    /// Set sender information.
+    #[must_use]
+    pub fn with_sender(
+        mut self,
+        sender_id: impl Into<String>,
+        sender_name: impl Into<String>,
+        sender_initials: impl Into<String>,
+    ) -> Self {
+        self.sender_id = sender_id.into();
+        self.sender_name = sender_name.into();
+        self.sender_initials = sender_initials.into();
+        self
+    }
+
+    /// Set sender avatar URL.
+    #[must_use]
+    pub fn with_sender_avatar(mut self, url: impl Into<String>) -> Self {
+        self.sender_avatar_url = url.into();
+        self
+    }
+
+    /// Set message content.
+    #[must_use]
+    pub fn with_content(mut self, content: impl Into<String>) -> Self {
+        self.content = content.into();
+        self
+    }
+
+    /// Set formatted timestamp.
+    #[must_use]
+    pub fn with_timestamp(mut self, timestamp: impl Into<String>) -> Self {
+        self.timestamp = timestamp.into();
+        self
+    }
+
+    /// Set whether this is the current user's message.
+    #[must_use]
+    pub fn with_own(mut self, is_own: bool) -> Self {
+        self.is_own = is_own;
+        self
+    }
+
+    /// Set edited status.
+    #[must_use]
+    pub fn with_edited(mut self, is_edited: bool) -> Self {
+        self.is_edited = is_edited;
+        self
+    }
+
+    /// Mark as deleted.
+    #[must_use]
+    pub fn with_deleted(mut self, is_deleted: bool) -> Self {
+        self.is_deleted = is_deleted;
+        self
+    }
+
+    /// Mark as system message.
+    #[must_use]
+    pub fn with_system(mut self, is_system: bool) -> Self {
+        self.is_system = is_system;
+        self
+    }
+
+    /// Mark as AI message.
+    #[must_use]
+    pub fn with_ai(mut self, is_ai: bool) -> Self {
+        self.is_ai = is_ai;
+        self
+    }
+
+    /// Set attachment information.
+    #[must_use]
+    pub fn with_attachments(mut self, count: u32) -> Self {
+        self.has_attachments = count > 0;
+        self.attachment_count = count;
+        self
+    }
+
+    /// Set reaction information.
+    #[must_use]
+    pub fn with_reactions(mut self, summary: impl Into<String>) -> Self {
+        let summary = summary.into();
+        self.has_reactions = !summary.is_empty();
+        self.reaction_summary = summary;
+        self
+    }
+
+    /// Set thread information.
+    #[must_use]
+    pub fn with_thread(mut self, reply_count: u32, is_thread_reply: bool) -> Self {
+        self.reply_count = reply_count;
+        self.is_thread_reply = is_thread_reply;
+        self
+    }
+
+    /// Set whether to show sender info.
+    #[must_use]
+    pub fn with_show_sender(mut self, show: bool) -> Self {
+        self.show_sender = show;
+        self
+    }
+}
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Format a timestamp to a relative string for display.
+///
+/// Returns:
+/// - "Just now" for < 1 minute ago
+/// - "N min ago" for < 1 hour ago
+/// - "HH:MM AM/PM" for today
+/// - "Yesterday HH:MM AM/PM" for yesterday
+/// - "Mon HH:MM AM/PM" for this week
+/// - "Jan 1" for this year
+/// - "Jan 1, 2024" for older
+#[must_use]
+pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
+    let local = datetime.with_timezone(&Local);
+    let now = Local::now();
+    let diff = now.signed_duration_since(local);
+
+    if diff < Duration::minutes(1) {
+        return "Just now".to_string();
+    }
+
+    if diff < Duration::hours(1) {
+        let mins = diff.num_minutes();
+        return format!("{} min ago", mins);
+    }
+
+    let today = now.date_naive();
+    let msg_date = local.date_naive();
+
+    if msg_date == today {
+        return local.format("%-I:%M %p").to_string();
+    }
+
+    let yesterday = today - chrono::Duration::days(1);
+    if msg_date == yesterday {
+        return format!("Yesterday {}", local.format("%-I:%M %p"));
+    }
+
+    // Within the last week
+    if diff < Duration::days(7) {
+        return local.format("%a %-I:%M %p").to_string();
+    }
+
+    // This year
+    if local.year() == now.year() {
+        return local.format("%b %-d").to_string();
+    }
+
+    // Older
+    local.format("%b %-d, %Y").to_string()
+}
+
+/// Format reaction counts to a summary string.
+///
+/// Returns a string like "👍 3  ❤️ 2  😂 1"
+#[must_use]
+pub fn reaction_summary_string(reactions: &[ReactionCount]) -> String {
+    if reactions.is_empty() {
+        return String::new();
+    }
+
+    reactions
+        .iter()
+        .map(|r| format!("{} {}", r.emoji, r.count))
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+/// Extract display content from a message.
+///
+/// Returns the text to display for a message, handling different content types.
+#[must_use]
+pub fn extract_content_text(content: &MessageContent) -> String {
+    match content {
+        MessageContent::Text(text) => text.clone(),
+        MessageContent::Mixed(mixed) => mixed.text.clone().unwrap_or_default(),
+        MessageContent::AI(ai) => ai.text.clone(),
+        MessageContent::System(sys) => sys.description(),
+        MessageContent::Call(call) => {
+            match call.call_type {
+                crate::domain::message::CallMessageType::Started => {
+                    format!("{} started a call", call.initiator_name)
+                }
+                crate::domain::message::CallMessageType::Ended => {
+                    let duration = call.duration_display().unwrap_or_default();
+                    if duration.is_empty() {
+                        "Call ended".to_string()
+                    } else {
+                        format!("Call ended ({duration})")
+                    }
+                }
+                crate::domain::message::CallMessageType::Missed => {
+                    format!("Missed call from {}", call.initiator_name)
+                }
+            }
+        }
+        MessageContent::Encrypted(_) => "[Encrypted message]".to_string(),
+        MessageContent::SealedSender(_) => "[Encrypted message]".to_string(),
+    }
+}
+
+/// Convert a domain Message to MessageItemData.
+///
+/// # Arguments
+/// * `message` - The message to convert
+/// * `current_user_id` - The current user's ID (for is_own flag)
+/// * `sender_name` - The sender's display name (must be provided externally)
+/// * `sender_initials` - The sender's initials (must be provided externally)
+/// * `sender_avatar_url` - The sender's avatar URL (must be provided externally)
+/// * `reply_count` - Number of thread replies (must be provided externally)
+/// * `show_sender` - Whether to show sender info
+#[must_use]
+pub fn message_to_item_data(
+    message: &Message,
+    current_user_id: Option<&str>,
+    sender_name: &str,
+    sender_initials: &str,
+    sender_avatar_url: &str,
+    reply_count: u32,
+    show_sender: bool,
+) -> MessageItemData {
+    let sender_id = message
+        .sender_id
+        .as_ref()
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+
+    let is_own = current_user_id
+        .map(|uid| message.sender_id.as_ref().is_some_and(|sid| sid.to_string() == uid))
+        .unwrap_or(false);
+
+    let is_system = message.content.is_system();
+    let is_ai = matches!(message.content, MessageContent::AI(_));
+
+    MessageItemData::new(message.id.to_string())
+        .with_sender(sender_id, sender_name, sender_initials)
+        .with_sender_avatar(sender_avatar_url)
+        .with_content(extract_content_text(&message.content))
+        .with_timestamp(format_timestamp(message.created_at))
+        .with_own(is_own)
+        .with_edited(message.is_edited)
+        .with_deleted(message.is_deleted)
+        .with_system(is_system)
+        .with_ai(is_ai)
+        .with_attachments(message.attachments.len() as u32)
+        .with_reactions(reaction_summary_string(&message.reaction_counts))
+        .with_thread(reply_count, message.is_thread_reply())
+        .with_show_sender(show_sender)
+}
+
+/// Generate initials from a display name.
+///
+/// Takes up to 2 characters from the first two words.
+#[must_use]
+pub fn initials_from_name(name: &str) -> String {
+    name.split_whitespace()
+        .take(2)
+        .filter_map(|word| word.chars().next())
+        .collect::<String>()
+        .to_uppercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::ids::{ChannelId, MessageId, UserId};
+    use crate::domain::message::{Message, MessageContent, ReactionCount};
+
+    #[test]
+    fn test_message_item_data_new() {
+        let item = MessageItemData::new("msg-123")
+            .with_sender("user-1", "Alice", "AL")
+            .with_content("Hello, world!")
+            .with_timestamp("2:34 PM")
+            .with_own(true);
+
+        assert_eq!(item.message_id, "msg-123");
+        assert_eq!(item.sender_id, "user-1");
+        assert_eq!(item.sender_name, "Alice");
+        assert_eq!(item.content, "Hello, world!");
+        assert!(item.is_own);
+        assert!(item.show_sender);
+    }
+
+    #[test]
+    fn test_message_item_with_reactions() {
+        let item = MessageItemData::new("msg-456")
+            .with_reactions("👍 3  ❤️ 2");
+
+        assert!(item.has_reactions);
+        assert_eq!(item.reaction_summary, "👍 3  ❤️ 2");
+    }
+
+    #[test]
+    fn test_message_item_with_thread() {
+        let item = MessageItemData::new("msg-789")
+            .with_thread(5, false);
+
+        assert_eq!(item.reply_count, 5);
+        assert!(!item.is_thread_reply);
+    }
+
+    #[test]
+    fn test_reaction_summary_string() {
+        let reactions = vec![
+            ReactionCount::new("👍".to_string(), 3),
+            ReactionCount::new("❤️".to_string(), 2),
+        ];
+
+        let summary = reaction_summary_string(&reactions);
+        assert_eq!(summary, "👍 3  ❤️ 2");
+    }
+
+    #[test]
+    fn test_reaction_summary_string_empty() {
+        let reactions: Vec<ReactionCount> = vec![];
+        let summary = reaction_summary_string(&reactions);
+        assert!(summary.is_empty());
+    }
+
+    #[test]
+    fn test_extract_content_text() {
+        // Text content
+        let text = MessageContent::Text("Hello".to_string());
+        assert_eq!(extract_content_text(&text), "Hello");
+
+        // System message
+        let system = MessageContent::System(SystemMessage::ChannelCreated);
+        assert_eq!(extract_content_text(&system), "created the channel");
+
+        // Encrypted
+        let encrypted = MessageContent::Encrypted(crate::domain::message::EncryptedContent::new(
+            vec![1, 2, 3],
+            crate::domain::message::EncryptedMessageType::Signal,
+        ));
+        assert_eq!(extract_content_text(&encrypted), "[Encrypted message]");
+    }
+
+    #[test]
+    fn test_initials_from_name() {
+        assert_eq!(initials_from_name("Alice"), "A");
+        assert_eq!(initials_from_name("Alice Smith"), "AS");
+        assert_eq!(initials_from_name("Bob Charles Jones"), "BC");
+        assert_eq!(initials_from_name(""), "");
+    }
+
+    #[test]
+    fn test_message_to_item_data() {
+        let channel_id = ChannelId::new();
+        let sender_id = UserId::new();
+        let msg = Message::new_text(channel_id, Some(sender_id), "Test message".to_string());
+
+        let item = message_to_item_data(
+            &msg,
+            Some(&sender_id.to_string()),
+            "Bob",
+            "B",
+            "",
+            0,
+            true,
+        );
+
+        assert_eq!(item.content, "Test message");
+        assert_eq!(item.sender_name, "Bob");
+        assert!(item.is_own);
+        assert!(!item.is_system);
+        assert!(!item.is_edited);
+    }
+}
