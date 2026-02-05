@@ -565,7 +565,7 @@ None (custom application, no pre-existing domain skills)
 | 38 | Services Real-time | 1 | Done | 2026-02-05 |
 | 39 | Services Reactions | 1 | Done | 2026-02-05 |
 | 40 | Services Search | 1 | Done | 2026-02-05 |
-| 41 | Services Moderation | TBD | Not started | - |
+| 41 | Services Moderation | 1 | Done | 2026-02-05 |
 | 42 | Services AI Integration | TBD | Not started | - |
 | 43 | Services Saved Messages | TBD | Not started | - |
 | 44 | State Core Stores | TBD | Not started | - |
