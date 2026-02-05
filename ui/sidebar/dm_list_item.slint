@@ -1,0 +1,116 @@
+// DM list item component
+//
+// Displays a direct message conversation with avatar, presence, name, preview, and unread badge.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Avatar } from "../components/avatar.slint";
+
+export component DMListItem inherits Rectangle {
+    // Properties
+    in property <string> user-id: "";
+    in property <string> display-name: "User";
+    in property <image> avatar-source;
+    in property <string> initials: "";
+    in property <string> presence-status: "offline"; // "online", "away", "dnd", "offline"
+    in property <string> last-message: "";
+    in property <string> timestamp: "";
+    in property <int> unread-count: 0;
+    in property <bool> selected: false;
+
+    // Callbacks
+    callback clicked();
+
+    // Layout
+    height: 52px;
+    border-radius: Spacing.radius-sm;
+
+    // Background states: default, hover, selected
+    background: root.selected ? Colors.primary.with-alpha(0.2)
+              : touch.has-hover ? Colors.surface-hover
+              : Colors.surface;
+
+    // Content layout
+    HorizontalLayout {
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
+        alignment: stretch;
+
+        // Avatar with presence indicator
+        Avatar {
+            size: 32px;
+            source: root.avatar-source;
+            fallback-text: root.initials;
+            show-presence: true;
+            presence-color: root.presence-status == "online" ? Colors.online
+                         : root.presence-status == "away" ? Colors.away
+                         : root.presence-status == "dnd" ? Colors.dnd
+                         : Colors.offline;
+            vertical-alignment: center;
+        }
+
+        // Name and last message
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            // Display name
+            Text {
+                text: root.display-name;
+                color: root.selected ? Colors.text-primary : Colors.text-secondary;
+                font-size: 14px;
+                font-weight: root.unread-count > 0 ? 600 : 400;
+                overflow: elide;
+            }
+
+            // Last message preview
+            Text {
+                text: root.last-message;
+                color: Colors.text-muted;
+                font-size: 12px;
+                overflow: elide;
+            }
+        }
+
+        // Right side: timestamp and unread badge
+        VerticalLayout {
+            alignment: center;
+            spacing: 4px;
+
+            // Timestamp
+            Text {
+                text: root.timestamp;
+                color: Colors.text-muted;
+                font-size: 11px;
+                horizontal-alignment: right;
+            }
+
+            // Unread count badge
+            if root.unread-count > 0: Rectangle {
+                width: max(20px, badge-text.preferred-width + 12px);
+                height: 20px;
+                border-radius: Spacing.radius-full;
+                background: Colors.primary;
+                horizontal-alignment: right;
+
+                badge-text := Text {
+                    text: root.unread-count > 99 ? "99+" : root.unread-count;
+                    color: Colors.text-primary;
+                    font-size: 11px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // Touch area for click handling
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}

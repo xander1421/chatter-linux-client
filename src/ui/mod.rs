@@ -21,4 +21,6 @@ pub use emoji_data::{get_emoji_by_category, get_emoji_list, search_emoji, EmojiE
 pub use picker_data::{GifData, MentionSuggestionData};
 
 // Re-export sidebar data types
-pub use sidebar_data::ChannelListItemData;
+pub use sidebar_data::{
+    presence_color, ChannelListItemData, DMListItemData, UserProfileBarData,
+};
