@@ -1,7 +1,8 @@
-// Avatar component
+// Avatar component with image, fallback initials, and presence indicator
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
 
 export component Avatar inherits Rectangle {
     in property <image> source;
@@ -14,12 +15,36 @@ export component Avatar inherits Rectangle {
     height: size;
     border-radius: size / 2;
     background: Colors.surface;
+    clip: true;
 
-    // Fallback text when no image
-    Text {
+    // Avatar image (shown when source has content)
+    if source.width > 0: Image {
+        width: 100%;
+        height: 100%;
+        source: root.source;
+        image-fit: cover;
+    }
+
+    // Fallback text (shown when no image)
+    if source.width <= 0: Text {
+        width: 100%;
+        height: 100%;
         text: fallback-text;
         color: Colors.text-primary;
+        font-size: size * 0.4;
         horizontal-alignment: center;
         vertical-alignment: center;
+    }
+
+    // Presence indicator dot
+    if show-presence: Rectangle {
+        x: root.width - self.width - 1px;
+        y: root.height - self.height - 1px;
+        width: root.size * 0.25;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.presence-color;
+        border-width: 2px;
+        border-color: Colors.background;
     }
 }
