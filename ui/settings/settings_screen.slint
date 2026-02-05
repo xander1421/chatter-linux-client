@@ -580,10 +580,11 @@ export component SettingsScreen inherits Rectangle {
                             }
                         }
 
-                        // Encryption section placeholder
+                        // Encryption section
                         if active-section == "encryption": VerticalLayout {
-                            spacing: Spacing.md;
+                            spacing: Spacing.lg;
 
+                            // Section header
                             Text {
                                 text: "Encryption";
                                 color: Colors.text-primary;
@@ -592,9 +593,173 @@ export component SettingsScreen inherits Rectangle {
                             }
 
                             Text {
-                                text: "Encryption settings will be available in a future update.";
+                                text: "Your messages are protected with Signal Protocol end-to-end encryption";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
+                                wrap: word-wrap;
+                            }
+
+                            // Identity Verification group
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Your Safety Number";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.lg;
+                                        font-weight: Typography.medium;
+                                    }
+
+                                    // Fingerprint display
+                                    Rectangle {
+                                        background: Colors.background;
+                                        border-radius: Spacing.radius-md;
+
+                                        VerticalLayout {
+                                            padding: Spacing.lg;
+
+                                            Text {
+                                                text: root.identity-fingerprint != "" ? root.identity-fingerprint : "No fingerprint available";
+                                                color: root.identity-fingerprint != "" ? Colors.text-secondary : Colors.text-muted;
+                                                font-size: Typography.sm;
+                                                letter-spacing: 1px;
+                                                horizontal-alignment: center;
+                                            }
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        alignment: space-between;
+
+                                        Text {
+                                            text: "Share this with your contacts to verify encryption";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                            vertical-alignment: center;
+                                        }
+
+                                        Button {
+                                            text: "Copy";
+                                            variant: "ghost";
+                                            clicked => { root.copy-fingerprint-clicked(); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Sealed Sender setting
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Allow sealed sender from anyone";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Accept messages from unknown senders without revealing your identity";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    Toggle {
+                                        checked: root.sealed-sender-unrestricted;
+                                        toggled(value) => {
+                                            root.sealed-sender-unrestricted = value;
+                                            root.sealed-sender-changed(value);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Key Status group
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Encryption Keys";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.lg;
+                                        font-weight: Typography.medium;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xs;
+
+                                            HorizontalLayout {
+                                                spacing: Spacing.sm;
+
+                                                Text {
+                                                    text: "Prekeys available";
+                                                    color: Colors.text-secondary;
+                                                    font-size: Typography.sm;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                // Prekey count badge with color indicator
+                                                Rectangle {
+                                                    width: 32px;
+                                                    height: 22px;
+                                                    border-radius: Spacing.radius-sm;
+                                                    background: root.prekey-count >= 10 ? Colors.success :
+                                                               (root.prekey-count >= 5 ? Colors.warning : Colors.error);
+
+                                                    Text {
+                                                        text: root.prekey-count;
+                                                        color: Colors.text-primary;
+                                                        font-size: Typography.xs;
+                                                        font-weight: Typography.medium;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: root.prekey-count >= 10 ? "Keys are healthy" :
+                                                      (root.prekey-count >= 5 ? "Consider refreshing soon" : "Keys are low, refresh recommended");
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                        }
+
+                                        Button {
+                                            text: "Refresh Keys";
+                                            variant: "secondary";
+                                            clicked => { root.refresh-keys-clicked(); }
+                                        }
+                                    }
+                                }
                             }
                         }
 
