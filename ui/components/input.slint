@@ -1,4 +1,4 @@
-// Input component
+// Input component with focus states, placeholder, validation, and password mode
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -9,27 +9,82 @@ export component Input inherits Rectangle {
     in-out property <string> text: "";
     in property <bool> password: false;
     in property <bool> disabled: false;
+    in property <bool> error: false;
+    in property <string> error-message: "";
 
     callback accepted(string);
     callback edited(string);
 
-    height: 40px;
-    border-radius: Spacing.radius-md;
-    background: Colors.surface;
+    // Forward focus to input
+    forward-focus: input;
 
-    input := TextInput {
-        x: Spacing.md;
-        width: parent.width - Spacing.md * 2;
-        height: parent.height;
-        color: Colors.text-primary;
-        font-size: Typography.base;
-        text <=> root.text;
+    // Internal state
+    property <bool> focused: input.has-focus;
 
-        accepted => {
-            root.accepted(self.text);
+    // Computed border color
+    property <color> border-col: {
+        if error {
+            Colors.error
+        } else if focused {
+            Colors.primary
+        } else {
+            Colors.text-muted
         }
-        edited => {
-            root.edited(self.text);
+    };
+
+    background: transparent;
+    height: error && error-message != "" ? 62px : 40px;
+
+    // Main container
+    VerticalLayout {
+        spacing: Spacing.xs;
+
+        // Input container
+        Rectangle {
+            height: 40px;
+            border-radius: Spacing.radius-md;
+            background: Colors.surface;
+            border-width: 1px;
+            border-color: border-col;
+            opacity: disabled ? 0.5 : 1.0;
+
+            // Placeholder text (shown when empty)
+            if root.text == "" && !focused: Text {
+                x: Spacing.md;
+                width: parent.width - Spacing.md * 2;
+                height: 100%;
+                text: root.placeholder;
+                color: Colors.text-muted;
+                font-size: Typography.base;
+                vertical-alignment: center;
+            }
+
+            // Actual text input
+            input := TextInput {
+                x: Spacing.md;
+                width: parent.width - Spacing.md * 2;
+                height: parent.height;
+                color: Colors.text-primary;
+                font-size: Typography.base;
+                text <=> root.text;
+                input-type: root.password ? InputType.password : InputType.text;
+                enabled: !root.disabled;
+                vertical-alignment: center;
+
+                accepted => {
+                    root.accepted(self.text);
+                }
+                edited => {
+                    root.edited(self.text);
+                }
+            }
+        }
+
+        // Error message
+        if error && error-message != "": Text {
+            text: root.error-message;
+            color: Colors.error;
+            font-size: Typography.xs;
         }
     }
 }
