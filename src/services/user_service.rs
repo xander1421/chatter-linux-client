@@ -9,7 +9,7 @@ use tokio_stream::StreamExt;
 use chrono::Utc;
 
 use crate::domain::ids::UserId;
-use crate::domain::user::{Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage};
+use crate::domain::user::{Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::user_client::UserClient;
 use crate::proto::chat_v1::{friend_requests_filter, user_event, FriendStatus, UserProfile};
@@ -559,6 +559,104 @@ impl UserService {
         let _ = self.user_repo.delete_friendship(&current_user, user_id);
 
         Ok(())
+    }
+
+    /// List blocked users.
+    ///
+    /// Fetches blocked users from server and updates local storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_client` - Mutable reference to user client
+    /// * `limit` - Maximum number of blocked users to return
+    /// * `offset` - Pagination offset
+    pub async fn list_blocked_users(
+        &self,
+        user_client: &mut UserClient,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<UserId>, UserError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Call server (unary)
+        let response = user_client
+            .list_blocked_users(limit as i32, offset as i32)
+            .await?;
+
+        // Parse user IDs from response (proto User has id field)
+        let mut blocked_ids = Vec::with_capacity(response.blocked_users.len());
+        for proto_user in &response.blocked_users {
+            let user_id: UserId = proto_user
+                .id
+                .parse()
+                .map_err(|_| UserError::InvalidInput("invalid blocked user ID".to_string()))?;
+
+            // Update local friendship to Blocked status
+            let friendship = Friendship {
+                user_id: current_user.clone(),
+                friend_id: user_id.clone(),
+                status: FriendshipStatus::Blocked,
+                created_at: Utc::now(),
+            };
+
+            // Try update first, then insert if not exists
+            if self.user_repo.update_friendship(&friendship).is_err() {
+                let _ = self.user_repo.insert_friendship(&friendship);
+            }
+
+            blocked_ids.push(user_id);
+        }
+
+        Ok(blocked_ids)
+    }
+
+    // ========================================================================
+    // Local Query Methods (no network, no auth check needed)
+    // ========================================================================
+
+    /// Get a user from local storage only.
+    ///
+    /// Does not make any network calls.
+    pub fn get_user_local(&self, user_id: &UserId) -> Result<Option<User>, UserError> {
+        self.user_repo.get(user_id).map_err(UserError::Storage)
+    }
+
+    /// Get a user's profile from local storage only.
+    ///
+    /// Does not make any network calls.
+    pub fn get_profile_local(&self, user_id: &UserId) -> Result<Option<Profile>, UserError> {
+        self.user_repo.get_profile(user_id).map_err(UserError::Storage)
+    }
+
+    /// Search users in local storage.
+    ///
+    /// Searches known users (friends) by username. This is limited to users
+    /// that have been fetched from the server (friends, etc.). For discovery
+    /// of new users, use the `search_users` method which makes a network call.
+    ///
+    /// Does not make any network calls.
+    pub fn search_users_local(&self, query: &str) -> Result<Vec<User>, UserError> {
+        // Get current user for friendship lookup
+        let current_user = self.current_user_id()?;
+
+        // Get all friendships for current user
+        let friendships = self.user_repo.list_friends(&current_user)?;
+
+        // For each friend, fetch user and filter by username
+        let query_lower = query.to_lowercase();
+        let mut matching_users = Vec::new();
+
+        for friendship in friendships {
+            if let Ok(Some(user)) = self.user_repo.get(&friendship.friend_id) {
+                // Case-insensitive username contains check
+                if user.username.to_lowercase().contains(&query_lower) {
+                    matching_users.push(user);
+                }
+            }
+        }
+
+        Ok(matching_users)
     }
 }
 
