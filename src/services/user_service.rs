@@ -451,6 +451,31 @@ impl UserService {
             .list_friends(&current_user)
             .map_err(UserError::Storage)
     }
+
+    /// Remove a friend.
+    ///
+    /// Calls server to remove friendship, then deletes from local storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_client` - Mutable reference to user client
+    /// * `friend_id` - ID of friend to remove
+    pub async fn remove_friend(
+        &self,
+        user_client: &mut UserClient,
+        friend_id: &UserId,
+    ) -> Result<(), UserError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Call server (unary)
+        user_client.remove_friend(&friend_id.to_string()).await?;
+
+        // Delete from local storage (ignore NotFound)
+        let _ = self.user_repo.delete_friendship(&current_user, friend_id);
+
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -670,5 +695,72 @@ mod tests {
         assert_eq!(proto.avatar_url, "");
         assert_eq!(proto.status_message, "");
         assert_eq!(proto.presence, 4); // DoNotDisturb
+    }
+
+    #[test]
+    fn test_friend_request_filter_values() {
+        // Verify all filter variants exist and convert to proto correctly
+        assert_eq!(
+            FriendRequestFilter::All.to_proto(),
+            friend_requests_filter::Filter::All
+        );
+        assert_eq!(
+            FriendRequestFilter::Pending.to_proto(),
+            friend_requests_filter::Filter::Pending
+        );
+        assert_eq!(
+            FriendRequestFilter::Accepted.to_proto(),
+            friend_requests_filter::Filter::Accepted
+        );
+        assert_eq!(
+            FriendRequestFilter::Sent.to_proto(),
+            friend_requests_filter::Filter::Sent
+        );
+        assert_eq!(
+            FriendRequestFilter::Received.to_proto(),
+            friend_requests_filter::Filter::Received
+        );
+    }
+
+    #[test]
+    fn test_proto_friend_status_conversion() {
+        // Proto FriendStatus values:
+        // 0 = Unspecified, 1 = None, 2 = Pending, 3 = Accepted, 4 = Declined, 5 = Blocked
+
+        // Accepted maps to Accepted
+        assert_eq!(
+            proto_friend_status_to_domain(3),
+            FriendshipStatus::Accepted
+        );
+
+        // Blocked maps to Blocked
+        assert_eq!(
+            proto_friend_status_to_domain(5),
+            FriendshipStatus::Blocked
+        );
+
+        // Pending maps to Pending
+        assert_eq!(
+            proto_friend_status_to_domain(2),
+            FriendshipStatus::Pending
+        );
+
+        // Other values default to Pending
+        assert_eq!(
+            proto_friend_status_to_domain(0),
+            FriendshipStatus::Pending
+        );
+        assert_eq!(
+            proto_friend_status_to_domain(1),
+            FriendshipStatus::Pending
+        );
+        assert_eq!(
+            proto_friend_status_to_domain(4),
+            FriendshipStatus::Pending
+        );
+        assert_eq!(
+            proto_friend_status_to_domain(99),
+            FriendshipStatus::Pending
+        );
     }
 }
