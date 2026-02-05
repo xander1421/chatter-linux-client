@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 36 of 66 (Services User)
-Plan: 1 of 3 in current phase
-Status: Executing
-Last activity: 2026-02-05 — Completed 36-01-PLAN.md (UserService core structure)
+Plan: 2 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-05 — Completed 36-02-PLAN.md (friend management operations)
 
-Progress: ██████████████████████████████████████████████████████████████████░░░░░░ 87%
+Progress: ██████████████████████████████████████████████████████████████████░░░░░░ 88%
 
 ## Performance Metrics
 
@@ -64,7 +64,7 @@ Progress: ███████████████████████�
 | 35 | 3 | ~20m | ~7m |
 
 **Recent Trend:**
-- Last 5 plans: 35-1 (~8m), 35-2 (~7m), 35-3 (~5m), 36-1 (~5m)
+- Last 5 plans: 35-2 (~7m), 35-3 (~5m), 36-1 (~5m), 36-2 (~8m)
 - Trend: Phase 36 in progress
 
 ## Accumulated Context
@@ -178,6 +178,7 @@ Recent decisions affecting current work:
 - Ownership validation allows edit/delete if sender_id is None (sealed sender)
 - Streaming RPC consumption: while let loop with event variant matching
 - ChannelService follows MessageService pattern: &mut client, server-first, upsert locally
+- FriendRequestFilter enum mirrors proto; respond_friend_request returns Option<Friendship>
 
 ### Deferred Issues
 
@@ -190,6 +191,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 36-01-PLAN.md (UserService core structure)
-Resume file: .planning/phases/36-services-user/36-02-PLAN.md
-Next action: Execute 36-02-PLAN.md (friends operations)
+Stopped at: Completed 36-02-PLAN.md (friend management operations)
+Resume file: .planning/phases/36-services-user/36-03-PLAN.md
+Next action: Execute 36-03-PLAN.md (blocking operations)
