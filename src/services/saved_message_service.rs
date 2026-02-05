@@ -6,9 +6,12 @@
 
 use std::sync::Arc;
 
+use base64::Engine;
+
+use crate::crypto::{SavedMessageCrypto, SavedMessageSourcePlain};
 use crate::domain::ids::{ChannelId, MessageId, SavedMessageId, UserId};
 use crate::domain::saved_message::{SavedContent, SavedMessage};
-use crate::error::NetworkError;
+use crate::error::{CryptoError, NetworkError};
 use crate::network::grpc::SavedMessagesClient;
 use crate::proto::saved_messages_v1::{
     ListSavedMessagesResponse, PinnedSortBy, SavedMessage as ProtoSavedMessage,
@@ -34,6 +37,10 @@ pub enum SavedMessageError {
     /// Invalid data in request or response.
     #[error("invalid data: {0}")]
     InvalidData(String),
+
+    /// Encryption/decryption error.
+    #[error("encryption error: {0}")]
+    Encryption(#[from] CryptoError),
 }
 
 /// Saved message service.
@@ -72,6 +79,96 @@ impl SavedMessageService {
             .get_string(keys::CURRENT_USER_ID)
             .map_err(|_| SavedMessageError::NotLoggedIn)?
             .ok_or(SavedMessageError::NotLoggedIn)
+    }
+
+    /// Get the profile key for encryption/decryption.
+    ///
+    /// Returns the 32-byte profile key stored in settings (base64 encoded).
+    fn get_profile_key(&self) -> Result<[u8; 32], SavedMessageError> {
+        let key_b64 = self
+            .settings_repo
+            .get_string(keys::PROFILE_KEY)
+            .map_err(|_| SavedMessageError::NotLoggedIn)?
+            .ok_or(SavedMessageError::NotLoggedIn)?;
+
+        let key_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&key_b64)
+            .map_err(|_| SavedMessageError::InvalidData("invalid profile key encoding".to_string()))?;
+
+        if key_bytes.len() != 32 {
+            return Err(SavedMessageError::InvalidData(format!(
+                "profile key wrong length: expected 32, got {}",
+                key_bytes.len()
+            )));
+        }
+
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&key_bytes);
+        Ok(key)
+    }
+
+    // ========================================================================
+    // Encryption Helpers
+    // ========================================================================
+
+    /// Encrypt text content for saving.
+    ///
+    /// Encrypts text using the user's profile key and wraps in SavedMessageContent.
+    ///
+    /// # Arguments
+    ///
+    /// * `text` - The plaintext content to encrypt
+    pub fn encrypt_text(&self, text: &str) -> Result<SavedMessageContent, SavedMessageError> {
+        let profile_key = self.get_profile_key()?;
+        SavedMessageCrypto::encrypt_text(text, &profile_key).map_err(SavedMessageError::Encryption)
+    }
+
+    /// Encrypt source metadata for saving.
+    ///
+    /// Encrypts source information using the user's profile key.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The plaintext source metadata
+    pub fn encrypt_source(
+        &self,
+        source: &SavedMessageSourcePlain,
+    ) -> Result<SavedMessageSource, SavedMessageError> {
+        let profile_key = self.get_profile_key()?;
+        SavedMessageCrypto::encrypt_source(source, &profile_key)
+            .map_err(SavedMessageError::Encryption)
+    }
+
+    /// Decrypt message content after fetching.
+    ///
+    /// Decrypts content using the user's profile key.
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The encrypted SavedMessageContent
+    pub fn decrypt_content(
+        &self,
+        content: &SavedMessageContent,
+    ) -> Result<String, SavedMessageError> {
+        let profile_key = self.get_profile_key()?;
+        SavedMessageCrypto::decrypt_content(content, &profile_key)
+            .map_err(SavedMessageError::Encryption)
+    }
+
+    /// Decrypt source metadata after fetching.
+    ///
+    /// Decrypts source using the user's profile key.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The encrypted SavedMessageSource
+    pub fn decrypt_source(
+        &self,
+        source: &SavedMessageSource,
+    ) -> Result<SavedMessageSourcePlain, SavedMessageError> {
+        let profile_key = self.get_profile_key()?;
+        SavedMessageCrypto::decrypt_source(source, &profile_key)
+            .map_err(SavedMessageError::Encryption)
     }
 
     // ========================================================================
@@ -297,7 +394,7 @@ pub fn proto_to_domain_saved_message(
 
     // Build domain SavedMessage with minimal info
     // Note: source info is encrypted in proto.source and not parsed here
-    let mut domain_msg = SavedMessage {
+    let domain_msg = SavedMessage {
         id,
         user_id,
         content,
@@ -313,6 +410,68 @@ pub fn proto_to_domain_saved_message(
     // Future enhancement: add decryption support here
 
     Ok(domain_msg)
+}
+
+impl SavedMessageService {
+    /// Convert proto SavedMessage to domain SavedMessage with decryption.
+    ///
+    /// Decrypts the content and source using the user's profile key.
+    ///
+    /// # Arguments
+    ///
+    /// * `proto` - The encrypted proto SavedMessage
+    pub fn proto_to_domain_saved_message_decrypted(
+        &self,
+        proto: &ProtoSavedMessage,
+    ) -> Result<SavedMessage, SavedMessageError> {
+        // Parse IDs
+        let id: SavedMessageId = proto
+            .id
+            .parse()
+            .map_err(|_| SavedMessageError::InvalidData(format!("Invalid saved message ID: {}", proto.id)))?;
+
+        let user_id: UserId = proto
+            .user_id
+            .parse()
+            .map_err(|_| SavedMessageError::InvalidData(format!("Invalid user ID: {}", proto.user_id)))?;
+
+        // Convert timestamps (proto uses u64 millis)
+        let saved_at = chrono::DateTime::from_timestamp_millis(proto.created_at as i64)
+            .unwrap_or_else(chrono::Utc::now);
+
+        // Decrypt content
+        let content = if let Some(ref proto_content) = proto.content {
+            let decrypted_text = self.decrypt_content(proto_content)?;
+            SavedContent::Text { content: decrypted_text }
+        } else {
+            SavedContent::Text {
+                content: String::new(),
+            }
+        };
+
+        // Decrypt source if present
+        let (source_channel_id, source_message_id) = if let Some(ref proto_source) = proto.source {
+            let decrypted_source = self.decrypt_source(proto_source)?;
+            let channel_id: Option<ChannelId> = decrypted_source.channel_id.parse().ok();
+            let message_id: Option<MessageId> = decrypted_source.message_id.parse().ok();
+            (channel_id, message_id)
+        } else {
+            (None, None)
+        };
+
+        let domain_msg = SavedMessage {
+            id,
+            user_id,
+            content,
+            source_channel_id,
+            source_message_id,
+            note: None,
+            tags: Vec::new(),
+            saved_at,
+        };
+
+        Ok(domain_msg)
+    }
 }
 
 #[cfg(test)]
@@ -463,6 +622,97 @@ mod tests {
         };
 
         let result = proto_to_domain_saved_message(&proto);
+        assert!(matches!(result, Err(SavedMessageError::InvalidData(_))));
+    }
+
+    // ========================================================================
+    // Encryption Tests
+    // ========================================================================
+
+    /// Helper to set profile key for encryption tests.
+    fn set_profile_key(service: &SavedMessageService) {
+        // Generate a test profile key (32 bytes)
+        let mut key = [0u8; 32];
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(7);
+        }
+        let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
+
+        service
+            .settings_repo
+            .set_string(keys::PROFILE_KEY, &key_b64)
+            .expect("Failed to set profile key");
+    }
+
+    #[test]
+    fn test_encrypt_text_decrypt_content_roundtrip() {
+        let (service, _temp_dir) = create_test_service();
+        set_logged_in_user(&service, "550e8400-e29b-41d4-a716-446655440000");
+        set_profile_key(&service);
+
+        let text = "This is a saved message!";
+
+        // Encrypt
+        let encrypted = service.encrypt_text(text).expect("encrypt should succeed");
+
+        // Decrypt
+        let decrypted = service
+            .decrypt_content(&encrypted)
+            .expect("decrypt should succeed");
+
+        assert_eq!(decrypted, text);
+    }
+
+    #[test]
+    fn test_encrypt_source_decrypt_source_roundtrip() {
+        let (service, _temp_dir) = create_test_service();
+        set_logged_in_user(&service, "550e8400-e29b-41d4-a716-446655440000");
+        set_profile_key(&service);
+
+        let source = SavedMessageSourcePlain {
+            channel_id: "550e8400-e29b-41d4-a716-446655440001".to_string(),
+            message_id: "550e8400-e29b-41d4-a716-446655440002".to_string(),
+            author_id: "550e8400-e29b-41d4-a716-446655440003".to_string(),
+            timestamp: 1234567890000,
+        };
+
+        // Encrypt
+        let encrypted = service
+            .encrypt_source(&source)
+            .expect("encrypt should succeed");
+
+        // Decrypt
+        let decrypted = service
+            .decrypt_source(&encrypted)
+            .expect("decrypt should succeed");
+
+        assert_eq!(decrypted, source);
+    }
+
+    #[test]
+    fn test_encryption_error_when_profile_key_not_set() {
+        let (service, _temp_dir) = create_test_service();
+        set_logged_in_user(&service, "550e8400-e29b-41d4-a716-446655440000");
+        // Note: NOT setting profile key
+
+        let result = service.encrypt_text("test");
+        assert!(matches!(result, Err(SavedMessageError::NotLoggedIn)));
+    }
+
+    #[test]
+    fn test_get_profile_key_invalid_length() {
+        let (service, _temp_dir) = create_test_service();
+        set_logged_in_user(&service, "550e8400-e29b-41d4-a716-446655440000");
+
+        // Set a key with wrong length (16 bytes instead of 32)
+        let short_key = [0u8; 16];
+        let key_b64 = base64::engine::general_purpose::STANDARD.encode(short_key);
+        service
+            .settings_repo
+            .set_string(keys::PROFILE_KEY, &key_b64)
+            .expect("Failed to set profile key");
+
+        let result = service.encrypt_text("test");
         assert!(matches!(result, Err(SavedMessageError::InvalidData(_))));
     }
 }

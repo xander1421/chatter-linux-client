@@ -28,6 +28,10 @@ pub mod keys {
     pub const CURRENT_USER_ID: &str = "auth.current_user_id";
     pub const CURRENT_DEVICE_ID: &str = "auth.current_device_id";
 
+    // Crypto keys
+    /// Profile key for encrypting saved messages (32 bytes, base64 encoded)
+    pub const PROFILE_KEY: &str = "crypto.profile_key";
+
     // UI settings
     pub const WINDOW_WIDTH: &str = "ui.window_width";
     pub const WINDOW_HEIGHT: &str = "ui.window_height";
