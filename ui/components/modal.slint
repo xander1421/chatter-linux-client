@@ -1,33 +1,108 @@
-// Modal component
+// Modal component with header, close button, and content slots
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
 
 export component Modal inherits Rectangle {
     in property <bool> visible: false;
     in property <string> title: "";
+    in property <length> width: 480px;
 
     callback close();
 
-    // Backdrop
+    // Only show when visible
+    opacity: root.visible ? 1 : 0;
+    visible: root.visible;
+
+    // Backdrop - full parent coverage
     background: #00000080;
 
-    // Modal content
+    // Backdrop touch area for click-outside dismissal
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => {
+            root.close();
+        }
+    }
+
+    // Modal container - centered
     Rectangle {
-        width: 480px;
-        height: 320px;
+        property <length> modal-width: root.width;
+        width: modal-width;
+        min-height: 200px;
+        max-height: parent.height * 80%;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
 
-        // Title
-        Text {
-            x: Spacing.lg;
-            y: Spacing.lg;
-            text: root.title;
-            color: Colors.text-primary;
-            font-size: 18px;
+        // Block clicks on modal from closing
+        TouchArea {
+            width: 100%;
+            height: 100%;
+        }
+
+        VerticalLayout {
+            padding: Spacing.lg;
+            spacing: Spacing.md;
+
+            // Header row
+            HorizontalLayout {
+                spacing: Spacing.md;
+                height: 24px;
+
+                // Title
+                Text {
+                    text: root.title;
+                    color: Colors.text-primary;
+                    font-size: Typography.lg;
+                    font-weight: Typography.semibold;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                // Close button
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    border-radius: Spacing.radius-sm;
+                    background: close-area.has-hover ? Colors.surface-hover : transparent;
+
+                    // X icon using two crossed lines
+                    Rectangle {
+                        width: 14px;
+                        height: 2px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        background: Colors.text-secondary;
+                        rotation-angle: 45deg;
+                    }
+                    Rectangle {
+                        width: 14px;
+                        height: 2px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        background: Colors.text-secondary;
+                        rotation-angle: -45deg;
+                    }
+
+                    close-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            root.close();
+                        }
+                    }
+                }
+            }
+
+            // Content area - flexible height with @children slot
+            Rectangle {
+                vertical-stretch: 1;
+                @children
+            }
         }
     }
 }
