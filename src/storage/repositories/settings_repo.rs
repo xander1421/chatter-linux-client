@@ -65,7 +65,7 @@ impl SettingsRepository {
     /// Returns `None` if the key doesn't exist.
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, StorageError> {
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare("SELECT value_json FROM settings WHERE key = ?1")?;
+        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
 
         let result: Result<String, _> = stmt.query_row(params![key], |row| row.get(0));
 
@@ -90,10 +90,10 @@ impl SettingsRepository {
         let now = Utc::now().to_rfc3339();
 
         conn.execute(
-            "INSERT INTO settings (key, value_json, updated_at)
+            "INSERT INTO settings (key, value, updated_at)
              VALUES (?1, ?2, ?3)
              ON CONFLICT(key) DO UPDATE SET
-                 value_json = excluded.value_json,
+                 value = excluded.value,
                  updated_at = excluded.updated_at",
             params![key, json, now],
         )?;
@@ -173,7 +173,7 @@ impl SettingsRepository {
     /// Get all settings as (key, value_json) pairs.
     pub fn get_all(&self) -> Result<Vec<(String, String)>, StorageError> {
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare("SELECT key, value_json FROM settings ORDER BY key")?;
+        let mut stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key")?;
         let mut rows = stmt.query([])?;
 
         let mut settings = Vec::new();
