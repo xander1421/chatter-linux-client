@@ -85,7 +85,7 @@ None (custom application, no pre-existing domain skills)
 
 ### Media
 - [x] **Phase 52: Media File Handling** - File picker, MIME, thumbnails
-- [ ] **Phase 53: Media Playback** - Audio (rodio), video player
+- [x] **Phase 53: Media Playback** - Audio (rodio), video player
 - [ ] **Phase 54: Media Recording** - Voice, video recorder
 - [ ] **Phase 55: Media Previews** - PDF viewer, code preview
 - [ ] **Phase 56: Media GIF & Embeds** - GIF picker, YouTube/link embeds
@@ -577,7 +577,7 @@ None (custom application, no pre-existing domain skills)
 | 50 | System Tray & Notifications | 1 | Done | 2026-02-05 |
 | 51 | System Utilities | 1 | Done | 2026-02-05 |
 | 52 | Media File Handling | 1 | Done | 2026-02-05 |
-| 53 | Media Playback | TBD | Not started | - |
+| 53 | Media Playback | 1 | Done | 2026-02-05 |
 | 54 | Media Recording | TBD | Not started | - |
 | 55 | Media Previews | TBD | Not started | - |
 | 56 | Media GIF & Embeds | TBD | Not started | - |
