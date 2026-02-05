@@ -107,6 +107,59 @@ impl From<&Channel> for ChatHeaderData {
 }
 
 // ============================================================================
+// Pinned Bar Data
+// ============================================================================
+
+/// Pinned bar data for Slint model binding.
+///
+/// Maps to the properties of `PinnedBar` component in Slint.
+/// Provides Telegram-style navigation through pinned messages.
+#[derive(Clone, Debug, Default)]
+pub struct PinnedBarData {
+    /// Truncated content of the current pinned message.
+    pub message_preview: String,
+    /// Current position (1-based for display: "Pinned message 2 of 5").
+    pub current_index: i32,
+    /// Total number of pinned messages.
+    pub total_count: i32,
+    /// Whether the pinned bar is expanded (shows full preview).
+    pub is_expanded: bool,
+    /// Whether there are multiple pinned messages (show navigation controls).
+    pub has_multiple: bool,
+}
+
+impl PinnedBarData {
+    /// Create a new pinned bar data entry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the message preview text.
+    #[must_use]
+    pub fn with_preview(mut self, preview: impl Into<String>) -> Self {
+        self.message_preview = preview.into();
+        self
+    }
+
+    /// Set the current position (1-based index and total count).
+    #[must_use]
+    pub fn with_position(mut self, current: i32, total: i32) -> Self {
+        self.current_index = current;
+        self.total_count = total;
+        self.has_multiple = total >= 2;
+        self
+    }
+
+    /// Set the expanded state.
+    #[must_use]
+    pub fn with_expanded(mut self, expanded: bool) -> Self {
+        self.is_expanded = expanded;
+        self
+    }
+}
+
+// ============================================================================
 // Message Item Data
 // ============================================================================
 

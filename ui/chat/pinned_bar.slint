@@ -1,0 +1,209 @@
+// Pinned messages bar component
+//
+// Telegram-style navigation through pinned messages with prev/next controls.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component PinnedBar inherits Rectangle {
+    // Properties
+    in property <string> message-preview: "";
+    in property <int> current-index: 1;  // 1-based for display
+    in property <int> total-count: 1;
+    in property <bool> is-expanded: false;
+    in property <bool> has-multiple: false;
+
+    // Callbacks
+    callback prev-clicked();
+    callback next-clicked();
+    callback expand-clicked();
+    callback dismiss-clicked();
+    callback go-to-message();
+
+    // Computed
+    property <string> position-text: has-multiple ? "Pinned message \{current-index} of \{total-count}" : "Pinned message";
+
+    // Layout
+    height: is-expanded ? 72px : 44px;
+    background: Colors.surface;
+
+    // Main content
+    HorizontalLayout {
+        padding-left: Spacing.lg;
+        padding-right: Spacing.lg;
+        padding-top: Spacing.sm;
+        padding-bottom: Spacing.sm;
+        spacing: Spacing.md;
+        alignment: start;
+
+        // Left section: Pin icon and info
+        HorizontalLayout {
+            spacing: Spacing.sm;
+            alignment: start;
+
+            // Pin icon
+            Rectangle {
+                width: 24px;
+                height: 24px;
+                vertical-alignment: center;
+
+                Text {
+                    text: "\u{1F4CC}";  // Pushpin emoji
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    color: Colors.primary;
+                }
+            }
+
+            // Position indicator and preview
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+
+                // Position text
+                Text {
+                    text: position-text;
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    font-weight: Typography.medium;
+                }
+
+                // Message preview (clickable)
+                Rectangle {
+                    height: is-expanded ? self.preferred-height : Typography.sm + 4px;
+                    horizontal-stretch: 1;
+
+                    preview-text := Text {
+                        width: 100%;
+                        text: root.message-preview;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        overflow: is-expanded ? TextOverflow.clip : TextOverflow.elide;
+                        wrap: is-expanded ? TextWrap.word-wrap : TextWrap.no-wrap;
+                        vertical-alignment: center;
+                    }
+
+                    preview-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.go-to-message();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Spacer
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        // Right section: Navigation and action buttons
+        HorizontalLayout {
+            spacing: Spacing.xs;
+            alignment: end;
+
+            // Previous button (only show if multiple)
+            if root.has-multiple: Rectangle {
+                width: 28px;
+                height: 28px;
+                background: prev-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    text: "\u{25C0}";  // Left-pointing triangle
+                    font-size: Typography.sm;
+                    color: Colors.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                prev-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.prev-clicked();
+                    }
+                }
+            }
+
+            // Next button (only show if multiple)
+            if root.has-multiple: Rectangle {
+                width: 28px;
+                height: 28px;
+                background: next-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    text: "\u{25B6}";  // Right-pointing triangle
+                    font-size: Typography.sm;
+                    color: Colors.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                next-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.next-clicked();
+                    }
+                }
+            }
+
+            // Expand/collapse button
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                background: expand-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    text: is-expanded ? "\u{25B2}" : "\u{25BC}";  // Up/down triangles
+                    font-size: Typography.sm;
+                    color: Colors.text-secondary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                expand-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.expand-clicked();
+                    }
+                }
+            }
+
+            // Dismiss button
+            Rectangle {
+                width: 28px;
+                height: 28px;
+                background: dismiss-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    text: "\u{2715}";  // X mark
+                    font-size: Typography.sm;
+                    color: Colors.text-muted;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                dismiss-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.dismiss-clicked();
+                    }
+                }
+            }
+        }
+    }
+
+    // Bottom border
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: Colors.surface-hover;
+    }
+}
