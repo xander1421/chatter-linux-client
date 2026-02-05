@@ -1,0 +1,363 @@
+// Thread panel component for viewing replies to a message
+//
+// Displays as a right-side panel with root message preview, reply list, and composer.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Skeleton } from "../components/skeleton.slint";
+import { MessageItemData } from "message_list.slint";
+import { MessageItem } from "message_item.slint";
+
+export component ThreadPanel inherits Rectangle {
+    // Root message data
+    in property <string> root-message-id;
+    in property <string> root-sender-name;
+    in property <string> root-content-preview;
+    in property <int> reply-count: 0;
+    in property <string> channel-name;
+
+    // Replies list (reuses MessageItemData pattern)
+    in property <[MessageItemData]> replies: [];
+
+    // State
+    in property <bool> loading: false;
+
+    // Composer text (two-way binding)
+    in-out property <string> composer-text;
+
+    // Callbacks
+    callback close-clicked;
+    callback send-reply(string);
+    callback load-more-replies;
+    callback message-clicked(string);
+    callback react-clicked(string);
+
+    // Panel sizing
+    width: 320px;
+    background: Colors.surface;
+
+    // Left border to separate from main chat
+    border-width: 0 0 0 1px;
+    border-color: Colors.text-muted.with-alpha(0.2);
+
+    VerticalLayout {
+        // Header (48px)
+        Rectangle {
+            height: 48px;
+            background: Colors.surface;
+
+            HorizontalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.sm;
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+
+                    // Title with reply count badge
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        alignment: start;
+
+                        Text {
+                            text: "Thread";
+                            color: Colors.text-primary;
+                            font-size: Typography.base;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+
+                        // Reply count badge
+                        if root.reply-count > 0: Rectangle {
+                            width: badge-text.preferred-width + Spacing.sm;
+                            height: 18px;
+                            background: Colors.primary.with-alpha(0.15);
+                            border-radius: 9px;
+
+                            badge-text := Text {
+                                text: root.reply-count;
+                                color: Colors.primary;
+                                font-size: Typography.xs;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // Channel name (small, muted)
+                    if root.channel-name != "": Text {
+                        text: "# " + root.channel-name;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+                }
+
+                // Close button
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: Spacing.radius-sm;
+                    background: close-area.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "✕";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    close-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            root.close-clicked();
+                        }
+                    }
+                }
+            }
+
+            // Bottom border
+            Rectangle {
+                height: 1px;
+                y: parent.height - 1px;
+                background: Colors.text-muted.with-alpha(0.15);
+            }
+        }
+
+        // Root message preview (64px max)
+        Rectangle {
+            height: 64px;
+            background: Colors.surface-hover;
+
+            TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    root.message-clicked(root.root-message-id);
+                }
+            }
+
+            VerticalLayout {
+                padding: Spacing.sm;
+                spacing: 2px;
+
+                // Sender name
+                Text {
+                    text: root.root-sender-name;
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+
+                // Content preview (truncated)
+                Text {
+                    text: root.root-content-preview;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    overflow: elide;
+                    vertical-stretch: 1;
+                }
+            }
+        }
+
+        // Divider
+        Rectangle {
+            height: 1px;
+            background: Colors.text-muted.with-alpha(0.15);
+        }
+
+        // Reply list area
+        Rectangle {
+            vertical-stretch: 1;
+            background: Colors.background;
+
+            // Loading state
+            if root.loading: VerticalLayout {
+                padding: Spacing.md;
+                spacing: Spacing.md;
+
+                for _ in [1, 2, 3]: HorizontalLayout {
+                    spacing: Spacing.sm;
+
+                    Skeleton {
+                        width: 32px;
+                        height: 32px;
+                        border-radius: 16px;
+                    }
+
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        Skeleton {
+                            width: 80px;
+                            height: 12px;
+                            border-radius: 4px;
+                        }
+
+                        Skeleton {
+                            width: 150px;
+                            height: 12px;
+                            border-radius: 4px;
+                        }
+                    }
+                }
+            }
+
+            // Empty state
+            if !root.loading && root.replies.length == 0: Rectangle {
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: "\u{1F4AC}"; // Speech bubble emoji
+                        font-size: 32px;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: "No replies yet";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: "Be the first to reply!";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            // Replies list
+            if !root.loading && root.replies.length > 0: Flickable {
+                viewport-height: replies-layout.preferred-height;
+
+                replies-layout := VerticalLayout {
+                    padding: Spacing.sm;
+                    spacing: 2px;
+
+                    for item in root.replies: MessageItem {
+                        message-id: item.message-id;
+                        sender-id: item.sender-id;
+                        sender-name: item.sender-name;
+                        sender-initials: item.sender-initials;
+                        sender-avatar-url: item.sender-avatar-url;
+                        content: item.content;
+                        timestamp: item.timestamp;
+                        is-own: item.is-own;
+                        is-edited: item.is-edited;
+                        is-deleted: item.is-deleted;
+                        is-system: item.is-system;
+                        is-ai: item.is-ai;
+                        has-attachments: item.has-attachments;
+                        attachment-count: item.attachment-count;
+                        has-reactions: item.has-reactions;
+                        reaction-summary: item.reaction-summary;
+                        reply-count: 0;
+                        is-thread-reply: true;
+                        show-sender: item.show-sender;
+
+                        message-clicked(id) => {
+                            root.message-clicked(id);
+                        }
+
+                        react-clicked(id) => {
+                            root.react-clicked(id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Composer at bottom (simplified)
+        Rectangle {
+            height: 56px;
+            background: Colors.surface;
+
+            // Top border
+            Rectangle {
+                height: 1px;
+                background: Colors.text-muted.with-alpha(0.15);
+            }
+
+            HorizontalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.sm;
+
+                // Text input area
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 40px;
+                    background: Colors.background;
+                    border-radius: Spacing.radius-md;
+                    border-width: 1px;
+                    border-color: composer-input.has-focus ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+
+                        composer-input := TextInput {
+                            horizontal-stretch: 1;
+                            height: parent.height;
+                            color: Colors.text-primary;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                            text <=> root.composer-text;
+
+                            accepted => {
+                                if root.composer-text != "" {
+                                    root.send-reply(root.composer-text);
+                                    root.composer-text = "";
+                                }
+                            }
+                        }
+                    }
+
+                    // Placeholder
+                    if root.composer-text == "": Text {
+                        x: Spacing.sm;
+                        text: "Reply in thread...";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Send button
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    border-radius: Spacing.radius-md;
+                    background: root.composer-text != "" ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+
+                    Text {
+                        text: "\u{27A4}"; // Arrow symbol
+                        color: root.composer-text != "" ? Colors.text-on-primary : Colors.text-muted;
+                        font-size: Typography.base;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            if root.composer-text != "" {
+                                root.send-reply(root.composer-text);
+                                root.composer-text = "";
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

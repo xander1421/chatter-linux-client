@@ -160,6 +160,64 @@ impl PinnedBarData {
 }
 
 // ============================================================================
+// Thread Panel Data
+// ============================================================================
+
+/// Thread panel data for Slint model binding.
+///
+/// Maps to the properties of `ThreadPanel` component in Slint.
+/// Provides display data for thread replies to a root message.
+#[derive(Clone, Debug, Default)]
+pub struct ThreadPanelData {
+    /// Root message ID.
+    pub root_message_id: String,
+    /// Sender name of the root message.
+    pub root_sender_name: String,
+    /// Truncated content preview of the root message.
+    pub root_content_preview: String,
+    /// Number of replies in the thread.
+    pub reply_count: i32,
+    /// Channel name where the thread exists.
+    pub channel_name: String,
+}
+
+impl ThreadPanelData {
+    /// Create a new thread panel data entry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the root message information.
+    #[must_use]
+    pub fn with_root_message(
+        mut self,
+        message_id: impl Into<String>,
+        sender_name: impl Into<String>,
+        content_preview: impl Into<String>,
+    ) -> Self {
+        self.root_message_id = message_id.into();
+        self.root_sender_name = sender_name.into();
+        self.root_content_preview = content_preview.into();
+        self
+    }
+
+    /// Set the reply count.
+    #[must_use]
+    pub fn with_reply_count(mut self, count: i32) -> Self {
+        self.reply_count = count;
+        self
+    }
+
+    /// Set the channel name.
+    #[must_use]
+    pub fn with_channel(mut self, channel_name: impl Into<String>) -> Self {
+        self.channel_name = channel_name.into();
+        self
+    }
+}
+
+// ============================================================================
 // Message Item Data
 // ============================================================================
 
