@@ -15,6 +15,7 @@ pub mod v010_key_store;
 pub mod v011_mailbox_tokens;
 pub mod v012_dm_conversations;
 pub mod v013_group_mailboxes;
+pub mod v015_ephemeral_messages;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -33,6 +34,7 @@ pub use v010_key_store::V010KeyStore;
 pub use v011_mailbox_tokens::V011MailboxTokens;
 pub use v012_dm_conversations::V012DmConversations;
 pub use v013_group_mailboxes::V013GroupMailboxes;
+pub use v015_ephemeral_messages::V015EphemeralMessages;
 
 /// Trait for database migrations.
 ///
@@ -166,4 +168,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V011MailboxTokens)
         .register(V012DmConversations)
         .register(V013GroupMailboxes)
+        .register(V015EphemeralMessages)
 }
