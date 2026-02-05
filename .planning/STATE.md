@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 47 — State Streaming & Offline
+**Current focus:** Phase 49 — System Keyring & Directories
 
 ## Current Position
 
-Phase: 48 of 66 (Events Bus & Handlers)
+Phase: 49 of 66 (System Keyring & Directories)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-05 — Completed 48-01-PLAN.md (events bus & handlers)
+Last activity: 2026-02-05 — Completed 49-01-PLAN.md (system keyring & directories)
 
 Progress: ██████████████████████████████████████████████████████████████████████░░ 98%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 62
+- Total plans completed: 63
 - Average duration: ~4.6 min
-- Total execution time: ~285 min
+- Total execution time: ~287 min
 
 **By Phase:**
 
@@ -76,10 +76,11 @@ Progress: ███████████████████████�
 | 46 | 1 | ~4m | ~4m |
 | 47 | 1 | ~4m | ~4m |
 | 48 | 1 | ~18m | ~18m |
+| 49 | 1 | ~2m | ~2m |
 
 **Recent Trend:**
-- Last 5 plans: 45-1 (~4m), 46-1 (~4m), 47-1 (~4m), 48-1 (~18m)
-- Trend: Events layer complete; phase 48 included more complex EventHandlers
+- Last 5 plans: 46-1 (~4m), 47-1 (~4m), 48-1 (~18m), 49-1 (~2m)
+- Trend: System integration layer started; keyring/directories quick execution
 
 ## Accumulated Context
 
@@ -213,6 +214,10 @@ Recent decisions affecting current work:
 - Re-export DomainEvent from inbox::handlers instead of duplicating (single source of truth)
 - EventBus channel capacities: 64 for domain (burst handling), 32 for UI
 - EventHandlers.spawn() for background processing, sync handle_domain_event() for testability
+- Use directories crate ProjectDirs (not BaseDirs/UserDirs) for app-specific paths
+- Runtime directory is optional (best-effort creation)
+- Keyring entries created per-operation (not cached in struct)
+- Keyring tests marked #[ignore] for CI environments without Secret Service
 
 ### Deferred Issues
 
@@ -225,6 +230,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 48-01-PLAN.md (events bus & handlers)
+Stopped at: Completed 49-01-PLAN.md (system keyring & directories)
 Resume file: None
-Next action: Plan phase 49 (System Keyring & Directories)
+Next action: Plan phase 50 (System Tray & Notifications)

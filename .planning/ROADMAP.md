@@ -573,7 +573,7 @@ None (custom application, no pre-existing domain skills)
 | 46 | State User Stores | 1 | Done | 2026-02-05 |
 | 47 | State Streaming & Offline | 1 | Done | 2026-02-05 |
 | 48 | Events Bus & Handlers | 1 | Done | 2026-02-05 |
-| 49 | System Keyring & Directories | TBD | Not started | - |
+| 49 | System Keyring & Directories | 1 | Done | 2026-02-05 |
 | 50 | System Tray & Notifications | TBD | Not started | - |
 | 51 | System Utilities | TBD | Not started | - |
 | 52 | Media File Handling | TBD | Not started | - |
