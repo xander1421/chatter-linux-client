@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 58 — UI Basic Components
+**Current focus:** Phase 59 — UI Pickers
 
 ## Current Position
 
-Phase: 58 of 66 (UI Basic Components)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-05 — Completed 58-02-PLAN.md (UI Overlay Components)
+Phase: 59 of 66 (UI Pickers)
+Plan: 1 of 3 in current phase
+Status: In progress
+Last activity: 2026-02-05 — Completed 59-01-PLAN.md (EmojiPicker component)
 
 Progress: █████████████████████████████████████████████████████████████████████████ 99%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 68
-- Average duration: ~4.5 min
-- Total execution time: ~309 min
+- Total plans completed: 69
+- Average duration: ~4.6 min
+- Total execution time: ~315 min
 
 **By Phase:**
 
@@ -87,10 +87,11 @@ Progress: ███████████████████████�
 | 56 | 2 | ~12m | ~6m |
 | 57 | 1 | ~4m | ~4m |
 | 58 | 2 | ~3m | ~1.5m |
+| 59 | 1 | ~6m | ~6m |
 
 **Recent Trend:**
-- Last 5 plans: 56-2 (~4m), 57-1 (~4m), 58-1 (~1m), 58-2 (~2m)
-- Trend: UI components progressing quickly; Phase 58 complete
+- Last 5 plans: 57-1 (~4m), 58-1 (~1m), 58-2 (~2m), 59-1 (~6m)
+- Trend: UI pickers phase started; EmojiPicker complete
 
 ## Accumulated Context
 
@@ -244,6 +245,9 @@ Recent decisions affecting current work:
 - Modal nested TouchAreas for backdrop dismiss vs content click blocking
 - Toast 4px left accent border in variant color
 - Skeleton shimmer via linear gradient with infinite animation
+- EmojiPicker: embedded 700+ static emoji (no external crate), keywords on Rust side for search
+- EmojiPicker: Flickable with Math.floor/mod grid positioning for emoji layout
+- components/mod.slint centralizes all component exports
 
 ### Deferred Issues
 
@@ -256,6 +260,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 58-02-PLAN.md (UI Overlay Components)
+Stopped at: Completed 59-01-PLAN.md (EmojiPicker component)
 Resume file: None
-Next action: Plan phase 59 (UI Pickers)
+Next action: Execute 59-02-PLAN.md (DatePicker) or 59-03-PLAN.md (ColorPicker)
