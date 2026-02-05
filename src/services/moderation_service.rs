@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use chrono::Duration;
+use chrono::{Duration, Utc};
 
 use crate::domain::channel::{MemberRole, Permissions};
 use crate::domain::ids::{ChannelId, UserId};
@@ -238,5 +238,165 @@ impl ModerationService {
 
         // No local storage update needed - user can rejoin if they want
         Ok(())
+    }
+
+    /// Mute a user in a channel.
+    ///
+    /// Since there's no dedicated mute RPC, this updates local membership state
+    /// to track the mute. The server sends mute events via ChannelModeration.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel to mute in
+    /// * `user_id` - User to mute
+    /// * `duration` - Mute duration (required, unlike permanent bans)
+    /// * `reason` - Optional reason for the mute
+    ///
+    /// # Returns
+    ///
+    /// The created Mute domain object.
+    pub fn mute_user(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        duration: std::time::Duration,
+        reason: Option<&str>,
+    ) -> Result<Mute, ModerationError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Get existing membership
+        let mut membership = self
+            .channel_repo
+            .get_membership(channel_id, user_id)?
+            .ok_or_else(|| ModerationError::UserNotFound(user_id.clone()))?;
+
+        // Update membership with mute state
+        let chrono_duration = Duration::from_std(duration).unwrap_or(Duration::hours(1));
+        membership.is_muted = true;
+        membership.muted_until = Some(Utc::now() + chrono_duration);
+
+        // Save updated membership
+        self.channel_repo.update_membership(&membership)?;
+
+        // Create domain Mute
+        let mut mute = Mute::new(
+            channel_id.clone(),
+            user_id.clone(),
+            current_user,
+            chrono_duration,
+        );
+        if let Some(r) = reason {
+            mute = mute.with_reason(r.to_string());
+        }
+
+        // Create log entry (could be stored locally if needed)
+        let _log_entry = ModerationLogEntry::for_mute(&mute);
+
+        Ok(mute)
+    }
+
+    /// Unmute a user in a channel.
+    ///
+    /// Clears the is_muted flag on local membership.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel to unmute in
+    /// * `user_id` - User to unmute
+    pub fn unmute_user(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<(), ModerationError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Get existing membership
+        let mut membership = self
+            .channel_repo
+            .get_membership(channel_id, user_id)?
+            .ok_or_else(|| ModerationError::UserNotFound(user_id.clone()))?;
+
+        // Clear mute state
+        membership.is_muted = false;
+        membership.muted_until = None;
+
+        // Save updated membership
+        self.channel_repo.update_membership(&membership)?;
+
+        Ok(())
+    }
+
+    /// Get permissions for a user in a channel.
+    ///
+    /// Looks up the membership role and returns the corresponding permissions.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel to check permissions for
+    /// * `user_id` - User to get permissions for
+    pub fn get_user_permissions(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<Permissions, ModerationError> {
+        // Get membership for user
+        let membership = self
+            .channel_repo
+            .get_membership(channel_id, user_id)?
+            .ok_or_else(|| ModerationError::UserNotFound(user_id.clone()))?;
+
+        // Return permissions based on role
+        Ok(Permissions::for_role(membership.role))
+    }
+
+    /// Check if a user can moderate another user.
+    ///
+    /// Moderator can only moderate users with lower roles.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel to check in
+    /// * `user_id` - User attempting to moderate
+    /// * `target_user_id` - User being moderated
+    ///
+    /// # Returns
+    ///
+    /// True if user_id has a higher role than target_user_id and can moderate.
+    pub fn can_moderate(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        target_user_id: &UserId,
+    ) -> Result<bool, ModerationError> {
+        // Get moderator's membership
+        let moderator_membership = self
+            .channel_repo
+            .get_membership(channel_id, user_id)?
+            .ok_or_else(|| ModerationError::UserNotFound(user_id.clone()))?;
+
+        // Get target's membership
+        let target_membership = self
+            .channel_repo
+            .get_membership(channel_id, target_user_id)?
+            .ok_or_else(|| ModerationError::UserNotFound(target_user_id.clone()))?;
+
+        // Convert roles to numeric values for comparison
+        let moderator_level = role_level(moderator_membership.role);
+        let target_level = role_level(target_membership.role);
+
+        // Can moderate if moderator has higher level and at least Moderator role
+        Ok(moderator_level > target_level && moderator_level >= role_level(MemberRole::Moderator))
+    }
+}
+
+/// Convert MemberRole to numeric level for comparison.
+fn role_level(role: MemberRole) -> u8 {
+    match role {
+        MemberRole::Member => 0,
+        MemberRole::Moderator => 1,
+        MemberRole::Admin => 2,
+        MemberRole::Owner => 3,
     }
 }
