@@ -588,6 +588,6 @@ None (custom application, no pre-existing domain skills)
 | 61 | UI Chat Core | 2 | Done | 2026-02-05 |
 | 62 | UI Chat Features | 2 | Done | 2026-02-05 |
 | 63 | UI File Components | 2 | Done | 2026-02-05 |
-| 64 | UI Modals | TBD | Not started | - |
+| 64 | UI Modals | 3 | In progress | - |
 | 65 | UI Settings Screens | TBD | Not started | - |
 | 66 | UI Auth Screens | TBD | Not started | - |
