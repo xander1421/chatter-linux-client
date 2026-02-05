@@ -98,7 +98,7 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 61: UI Chat Core** - Message list, message item, input
 - [ ] **Phase 62: UI Chat Features** - Pinned bar, thread panel, reactions
 - [x] **Phase 63: UI File Components** - Attachments, previews
-- [ ] **Phase 64: UI Modals** - Create channel, settings, profile, forward
+- [x] **Phase 64: UI Modals** - Create channel, settings, profile, forward
 - [ ] **Phase 65: UI Settings Screens** - Account, privacy, encryption
 - [ ] **Phase 66: UI Auth Screens** - Login, register, loading
 
@@ -588,6 +588,6 @@ None (custom application, no pre-existing domain skills)
 | 61 | UI Chat Core | 2 | Done | 2026-02-05 |
 | 62 | UI Chat Features | 2 | Done | 2026-02-05 |
 | 63 | UI File Components | 2 | Done | 2026-02-05 |
-| 64 | UI Modals | 3 | In progress | - |
+| 64 | UI Modals | 3 | Done | 2026-02-05 |
 | 65 | UI Settings Screens | TBD | Not started | - |
 | 66 | UI Auth Screens | TBD | Not started | - |
