@@ -38,3 +38,12 @@ pub mod forward_service;
 pub mod mention_service;
 pub mod embed_service;
 pub mod gif_service;
+
+// Re-exports for typing service
+pub use typing_service::{TypingError, TypingService};
+
+// Re-exports for read receipt service
+pub use read_receipt_service::{ReadReceiptError, ReadReceiptService};
+
+// Re-export ReadState from aggregator for convenience
+pub use crate::network::streaming::read_receipt_stream::ReadState;
