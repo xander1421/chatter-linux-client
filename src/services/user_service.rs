@@ -476,6 +476,90 @@ impl UserService {
 
         Ok(())
     }
+
+    // ========================================================================
+    // Blocking Operations
+    // ========================================================================
+
+    /// Block a user.
+    ///
+    /// Calls server to block user, then updates local storage with Blocked status.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_client` - Mutable reference to user client
+    /// * `user_id` - ID of user to block
+    pub async fn block_user(
+        &self,
+        user_client: &mut UserClient,
+        user_id: &UserId,
+    ) -> Result<(), UserError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Call server (streaming response)
+        let user_id_str = user_id.to_string();
+        let mut stream = user_client.block_user(&user_id_str).await?;
+
+        // Consume stream for confirmation event
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            if let Some(user_event::Event::FriendStatusChanged(ref _status)) = event.event {
+                // Server confirmed the block
+                break;
+            }
+        }
+
+        // Update local friendship to Blocked status (or create if missing)
+        let friendship = Friendship {
+            user_id: current_user.clone(),
+            friend_id: user_id.clone(),
+            status: FriendshipStatus::Blocked,
+            created_at: Utc::now(),
+        };
+
+        // Try update first, then insert if not exists
+        if self.user_repo.update_friendship(&friendship).is_err() {
+            let _ = self.user_repo.insert_friendship(&friendship);
+        }
+
+        Ok(())
+    }
+
+    /// Unblock a user.
+    ///
+    /// Calls server to unblock user, then removes the friendship from local storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_client` - Mutable reference to user client
+    /// * `user_id` - ID of user to unblock
+    pub async fn unblock_user(
+        &self,
+        user_client: &mut UserClient,
+        user_id: &UserId,
+    ) -> Result<(), UserError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Call server (streaming response)
+        let user_id_str = user_id.to_string();
+        let mut stream = user_client.unblock_user(&user_id_str).await?;
+
+        // Consume stream for confirmation event
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            if let Some(user_event::Event::FriendStatusChanged(ref _status)) = event.event {
+                // Server confirmed the unblock
+                break;
+            }
+        }
+
+        // Delete the friendship from local storage (unblock = remove relationship)
+        let _ = self.user_repo.delete_friendship(&current_user, user_id);
+
+        Ok(())
+    }
 }
 
 // ============================================================================
