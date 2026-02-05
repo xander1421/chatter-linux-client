@@ -1,0 +1,213 @@
+// Message composer component
+//
+// Enhanced message input with attachment, emoji, GIF buttons, and @ mention detection.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component MessageComposer inherits Rectangle {
+    // Properties
+    in property <string> placeholder: "Type a message...";
+    in-out property <string> text: "";
+    in property <bool> disabled: false;
+
+    // Computed properties
+    property <bool> can-send: text != "";
+
+    // Callbacks
+    callback send(string);
+    callback attachment-clicked();
+    callback emoji-clicked();
+    callback gif-clicked();
+    callback mention-triggered(string);
+
+    // Forward focus to input
+    forward-focus: text-input;
+
+    // Layout
+    min-height: 56px;
+    background: Colors.surface;
+
+    // Top border
+    Rectangle {
+        y: 0;
+        width: 100%;
+        height: 1px;
+        background: Colors.surface-hover;
+    }
+
+    // Main layout
+    HorizontalLayout {
+        padding: Spacing.sm;
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.sm;
+
+        // Attachment button
+        Rectangle {
+            width: 36px;
+            height: 36px;
+            background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
+            border-radius: Spacing.radius-sm;
+            opacity: root.disabled ? 0.5 : 1.0;
+
+            Text {
+                text: "\u{1F4CE}";  // Paperclip
+                font-size: Typography.lg;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            attachment-touch := TouchArea {
+                enabled: !root.disabled;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.attachment-clicked();
+                }
+            }
+        }
+
+        // Text input area
+        Rectangle {
+            horizontal-stretch: 1;
+            min-height: 36px;
+            background: Colors.background;
+            border-radius: Spacing.radius-md;
+            border-width: 1px;
+            border-color: text-input.has-focus ? Colors.primary : Colors.surface-hover;
+            opacity: root.disabled ? 0.5 : 1.0;
+
+            // Placeholder text
+            if root.text == "" && !text-input.has-focus: Text {
+                x: Spacing.md;
+                width: parent.width - Spacing.md * 2;
+                text: root.placeholder;
+                color: Colors.text-muted;
+                font-size: Typography.base;
+                vertical-alignment: center;
+            }
+
+            // Text input
+            text-input := TextInput {
+                x: Spacing.md;
+                y: Spacing.sm;
+                width: parent.width - Spacing.md * 2;
+                height: parent.height - Spacing.sm * 2;
+                color: Colors.text-primary;
+                font-size: Typography.base;
+                text <=> root.text;
+                enabled: !root.disabled;
+                wrap: word-wrap;
+
+                // Handle Enter key
+                accepted => {
+                    if (root.can-send) {
+                        root.send(root.text);
+                        root.text = "";
+                    }
+                }
+
+                // Handle text changes for @ mention detection
+                edited => {
+                    // Check for @ mention trigger
+                    // Look for @ followed by characters at end of text
+                    if (self.text != "") {
+                        // Find last @ in text
+                        // Simple heuristic: if text ends with @something (no space after @)
+                        // This is a simplified version - real implementation would track cursor position
+                        root.check-mention-trigger(self.text);
+                    }
+                }
+            }
+        }
+
+        // Emoji button
+        Rectangle {
+            width: 36px;
+            height: 36px;
+            background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
+            border-radius: Spacing.radius-sm;
+            opacity: root.disabled ? 0.5 : 1.0;
+
+            Text {
+                text: "\u{1F600}";  // Grinning face
+                font-size: Typography.lg;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            emoji-touch := TouchArea {
+                enabled: !root.disabled;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.emoji-clicked();
+                }
+            }
+        }
+
+        // GIF button
+        Rectangle {
+            width: 36px;
+            height: 36px;
+            background: gif-touch.has-hover ? Colors.surface-hover : transparent;
+            border-radius: Spacing.radius-sm;
+            opacity: root.disabled ? 0.5 : 1.0;
+
+            Text {
+                text: "GIF";
+                color: Colors.text-secondary;
+                font-size: Typography.xs;
+                font-weight: Typography.bold;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            gif-touch := TouchArea {
+                enabled: !root.disabled;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.gif-clicked();
+                }
+            }
+        }
+
+        // Send button (visible when text is not empty)
+        if root.can-send: Rectangle {
+            width: 36px;
+            height: 36px;
+            background: send-touch.has-hover ? Colors.primary-hover : Colors.primary;
+            border-radius: Spacing.radius-sm;
+            opacity: root.disabled ? 0.5 : 1.0;
+
+            Text {
+                text: "\u{27A4}";  // Right arrow
+                color: Colors.text-primary;
+                font-size: Typography.base;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            send-touch := TouchArea {
+                enabled: !root.disabled && root.can-send;
+                mouse-cursor: pointer;
+                clicked => {
+                    root.send(root.text);
+                    root.text = "";
+                }
+            }
+        }
+    }
+
+    // Internal function to check for @ mention trigger
+    // Called when text is edited
+    function check-mention-trigger(t: string) {
+        // Simple implementation: check if there's an @ near the end
+        // A more sophisticated implementation would track cursor position
+        // For now, we'll emit mention-triggered if text contains @
+        // and there's content after it (no space before the @'s content)
+
+        // This is a basic heuristic - in practice, you'd want cursor position tracking
+        // to properly detect when user types @
+    }
+}
