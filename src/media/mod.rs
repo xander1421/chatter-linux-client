@@ -20,6 +20,7 @@ pub use audio_player::{AudioPlayer, PlaybackState};
 pub use audio_recorder::{AudioRecorder, RecordingState};
 pub use code_preview::{CodePreview, HighlightedLine, HighlightedSegment, SegmentStyle};
 pub use file_picker::{FileFilter, FilePicker, FilePickerConfig};
+pub use gif::{GifCache, GifClient, GifPicker, GifResult};
 pub use image_processor::{ImageProcessor, DEFAULT_THUMBNAIL_SIZE};
 pub use mime_detector::MimeDetector;
 pub use pdf_viewer::PdfViewer;
