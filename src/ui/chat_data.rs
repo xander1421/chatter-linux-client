@@ -1,10 +1,110 @@
 //! Chat data structures for Slint UI bindings.
 //!
 //! Provides Rust structs that map to Slint struct definitions for
-//! chat components like message items.
+//! chat components like message items and headers.
 
+use crate::domain::channel::{Channel, ChannelType};
 use crate::domain::message::{Message, MessageContent, ReactionCount};
 use chrono::{DateTime, Datelike, Duration, Local, Utc};
+
+// ============================================================================
+// Chat Header Data
+// ============================================================================
+
+/// Chat header data for Slint model binding.
+///
+/// Maps to the properties of `ChatHeader` component in Slint.
+#[derive(Clone, Debug, Default)]
+pub struct ChatHeaderData {
+    /// Channel ID.
+    pub channel_id: String,
+    /// Channel name.
+    pub channel_name: String,
+    /// Channel type: "public", "private", or "dm".
+    pub channel_type: String,
+    /// Number of members in the channel.
+    pub member_count: u32,
+    /// Channel topic/description.
+    pub topic: String,
+    /// Whether the channel is archived.
+    pub is_archived: bool,
+    /// Typing indicator text (e.g., "Alice is typing..." or empty).
+    pub typing_indicator: String,
+}
+
+impl ChatHeaderData {
+    /// Create a new chat header data entry.
+    #[must_use]
+    pub fn new(channel_id: impl Into<String>) -> Self {
+        Self {
+            channel_id: channel_id.into(),
+            channel_type: "public".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Set channel name.
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.channel_name = name.into();
+        self
+    }
+
+    /// Set channel type.
+    #[must_use]
+    pub fn with_type(mut self, channel_type: impl Into<String>) -> Self {
+        self.channel_type = channel_type.into();
+        self
+    }
+
+    /// Set member count.
+    #[must_use]
+    pub fn with_member_count(mut self, count: u32) -> Self {
+        self.member_count = count;
+        self
+    }
+
+    /// Set channel topic.
+    #[must_use]
+    pub fn with_topic(mut self, topic: impl Into<String>) -> Self {
+        self.topic = topic.into();
+        self
+    }
+
+    /// Set archived status.
+    #[must_use]
+    pub fn with_archived(mut self, is_archived: bool) -> Self {
+        self.is_archived = is_archived;
+        self
+    }
+
+    /// Set typing indicator text.
+    #[must_use]
+    pub fn with_typing_indicator(mut self, indicator: impl Into<String>) -> Self {
+        self.typing_indicator = indicator.into();
+        self
+    }
+}
+
+impl From<&Channel> for ChatHeaderData {
+    fn from(channel: &Channel) -> Self {
+        let channel_type_str = match channel.channel_type {
+            ChannelType::Public => "public",
+            ChannelType::Private => "private",
+            ChannelType::DirectMessage => "dm",
+        };
+
+        Self {
+            channel_id: channel.id.to_string(),
+            channel_name: channel.name.clone(),
+            channel_type: channel_type_str.to_string(),
+            member_count: 0, // Must be populated externally
+            topic: channel.description.clone().unwrap_or_default(),
+            is_archived: channel.archived,
+            typing_indicator: String::new(),
+        }
+    }
+}
 
 // ============================================================================
 // Message Item Data
@@ -439,5 +539,47 @@ mod tests {
         assert!(item.is_own);
         assert!(!item.is_system);
         assert!(!item.is_edited);
+    }
+
+    #[test]
+    fn test_chat_header_data_new() {
+        let header = ChatHeaderData::new("channel-123")
+            .with_name("general")
+            .with_type("public")
+            .with_member_count(42)
+            .with_topic("General discussion");
+
+        assert_eq!(header.channel_id, "channel-123");
+        assert_eq!(header.channel_name, "general");
+        assert_eq!(header.channel_type, "public");
+        assert_eq!(header.member_count, 42);
+        assert_eq!(header.topic, "General discussion");
+        assert!(!header.is_archived);
+        assert!(header.typing_indicator.is_empty());
+    }
+
+    #[test]
+    fn test_chat_header_data_from_channel() {
+        let owner_id = UserId::new();
+        let channel = Channel::new(
+            ChannelId::new(),
+            "dev-chat".to_string(),
+            ChannelType::Private,
+            owner_id,
+        );
+
+        let header = ChatHeaderData::from(&channel);
+
+        assert_eq!(header.channel_name, "dev-chat");
+        assert_eq!(header.channel_type, "private");
+        assert!(!header.is_archived);
+    }
+
+    #[test]
+    fn test_chat_header_data_with_typing() {
+        let header = ChatHeaderData::new("channel-456")
+            .with_typing_indicator("Alice is typing...");
+
+        assert_eq!(header.typing_indicator, "Alice is typing...");
     }
 }

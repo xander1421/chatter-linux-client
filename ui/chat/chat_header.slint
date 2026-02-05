@@ -1,0 +1,226 @@
+// Chat header component
+//
+// Displays channel information, topic, and action buttons.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+// Data struct for chat header (mirrors Rust ChatHeaderData)
+export struct ChatHeaderData {
+    channel-id: string,
+    channel-name: string,
+    channel-type: string,  // "public", "private", "dm"
+    member-count: int,
+    topic: string,
+    is-archived: bool,
+    typing-indicator: string,
+}
+
+export component ChatHeader inherits Rectangle {
+    // Properties from ChatHeaderData
+    in property <string> channel-id: "";
+    in property <string> channel-name: "";
+    in property <string> channel-type: "public";  // "public", "private", "dm"
+    in property <int> member-count: 0;
+    in property <string> topic: "";
+    in property <bool> is-archived: false;
+    in property <string> typing-indicator: "";
+
+    // Callbacks
+    callback search-clicked();
+    callback pinned-clicked();
+    callback settings-clicked();
+
+    // Computed properties
+    property <string> channel-icon: {
+        if channel-type == "dm" {
+            "@"
+        } else if channel-type == "private" {
+            "\u{1F512}"  // Lock emoji
+        } else {
+            "#"
+        }
+    };
+
+    property <bool> show-member-count: channel-type != "dm" && member-count > 0;
+
+    // Layout
+    height: 56px;
+    background: Colors.surface;
+
+    // Main content
+    HorizontalLayout {
+        padding-left: Spacing.lg;
+        padding-right: Spacing.lg;
+        spacing: Spacing.md;
+
+        // Left section: Channel icon and name
+        HorizontalLayout {
+            spacing: Spacing.sm;
+            alignment: start;
+
+            // Channel icon
+            Text {
+                text: channel-icon;
+                color: Colors.text-muted;
+                font-size: Typography.lg;
+                vertical-alignment: center;
+            }
+
+            // Channel name
+            Text {
+                text: root.channel-name;
+                color: Colors.text-primary;
+                font-size: Typography.base;
+                font-weight: Typography.semibold;
+                vertical-alignment: center;
+            }
+
+            // Archived badge
+            if root.is-archived: Rectangle {
+                height: 18px;
+                width: archived-text.preferred-width + 8px;
+                background: Colors.text-muted;
+                border-radius: 4px;
+
+                archived-text := Text {
+                    x: 4px;
+                    text: "Archived";
+                    color: Colors.surface;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Member count
+            if root.show-member-count: HorizontalLayout {
+                spacing: 4px;
+                alignment: center;
+
+                Rectangle {
+                    width: 1px;
+                    height: 16px;
+                    background: Colors.text-muted;
+                }
+
+                Text {
+                    text: "\{root.member-count} members";
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Center section: Topic (flex)
+        Rectangle {
+            horizontal-stretch: 1;
+
+            // Topic text (truncated)
+            if root.topic != "" && root.typing-indicator == "": Text {
+                width: 100%;
+                text: root.topic;
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+
+            // Typing indicator (takes precedence over topic)
+            if root.typing-indicator != "": HorizontalLayout {
+                spacing: Spacing.xs;
+                alignment: start;
+
+                // Animated dots would go here, using static for now
+                Text {
+                    text: root.typing-indicator;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-style: italic;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Right section: Action buttons
+        HorizontalLayout {
+            spacing: Spacing.xs;
+            alignment: end;
+
+            // Search button
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                background: search-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    text: "\u{1F50D}";  // Magnifying glass
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                search-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.search-clicked();
+                    }
+                }
+            }
+
+            // Pinned messages button
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                background: pin-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    text: "\u{1F4CC}";  // Pushpin
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                pin-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.pinned-clicked();
+                    }
+                }
+            }
+
+            // Settings button
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                background: settings-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    text: "\u{2699}";  // Gear
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                settings-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.settings-clicked();
+                    }
+                }
+            }
+        }
+    }
+
+    // Bottom border
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: Colors.surface-hover;
+    }
+}
