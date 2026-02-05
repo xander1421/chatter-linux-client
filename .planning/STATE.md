@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 33 next — Services Message Advanced
+**Current focus:** Phase 34 — Services Ephemeral Messages
 
 ## Current Position
 
-Phase: 33 of 66 (Services Message Advanced)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-05 — Completed 33-02-PLAN.md
+Phase: 34 of 66 (Services Ephemeral Messages)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-05 — Completed 34-01-PLAN.md
 
 Progress: █████████████████████████████████████████████████████████████████░░░░░░░ 83%
 
@@ -60,10 +60,11 @@ Progress: ███████████████████████�
 | 31 | 3 | ~7m | ~2.3m |
 | 32 | 2 | ~10m | ~5m |
 | 33 | 2 | ~4m | ~2m |
+| 34 | 1 | ~3m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 32-1 (~4m), 32-2 (~6m), 33-1 (~2m), 33-2 (~2m)
-- Trend: Phase 33 complete, ready for Phase 34
+- Last 5 plans: 32-2 (~6m), 33-1 (~2m), 33-2 (~2m), 34-1 (~3m)
+- Trend: Phase 34 in progress
 
 ## Accumulated Context
 
@@ -186,6 +187,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 33-02-PLAN.md (Phase 33 complete)
-Resume file: .planning/phases/33-services-message-advanced/33-02-SUMMARY.md
-Next action: Plan Phase 34 (Services Ephemeral Messages)
+Stopped at: Completed 34-01-PLAN.md (Phase 34 in progress)
+Resume file: .planning/phases/34-services-ephemeral-messages/34-01-SUMMARY.md
+Next action: Execute 34-02-PLAN.md (EphemeralService)
