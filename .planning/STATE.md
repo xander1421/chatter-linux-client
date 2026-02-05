@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 35 — Services Channel
+**Current focus:** Phase 40 — Services Search
 
 ## Current Position
 
-Phase: 39 of 66 (Services Reactions)
+Phase: 40 of 66 (Services Search)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-05 — Completed 39-01-PLAN.md (reaction service)
+Last activity: 2026-02-05 — Completed 40-01-PLAN.md (search service)
 
 Progress: ███████████████████████████████████████████████████████████████████░░░░░ 92%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 58
+- Total plans completed: 59
 - Average duration: ~4.6 min
-- Total execution time: ~267 min
+- Total execution time: ~273 min
 
 **By Phase:**
 
@@ -67,10 +67,11 @@ Progress: ███████████████████████�
 | 37 | 1 | ~5m | ~5m |
 | 38 | 1 | ~5m | ~5m |
 | 39 | 1 | ~5m | ~5m |
+| 40 | 1 | ~6m | ~6m |
 
 **Recent Trend:**
-- Last 5 plans: 36-3 (~6m), 37-1 (~5m), 38-1 (~5m), 39-1 (~5m)
-- Trend: Phase 39 complete
+- Last 5 plans: 37-1 (~5m), 38-1 (~5m), 39-1 (~5m), 40-1 (~6m)
+- Trend: Phase 40 complete
 
 ## Accumulated Context
 
@@ -188,6 +189,9 @@ Recent decisions affecting current work:
 - Search results NOT stored locally (discovery pattern, not relationships)
 - New ReactionId per conversion: proto Reaction lacks ID, generate during conversion (acceptable for display use)
 - ReactionEvent re-export: Added from aggregator for convenience
+- Local search does not require authentication (querying locally stored data)
+- Server search requires authentication, results NOT stored locally (discovery pattern)
+- Combined search gracefully degrades (local-only if not authenticated or network fails)
 
 ### Deferred Issues
 
@@ -200,6 +204,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 39-01-PLAN.md (reaction service)
+Stopped at: Completed 40-01-PLAN.md (search service)
 Resume file: None
-Next action: Plan Phase 40 (Services Search)
+Next action: Plan Phase 41 (Services Moderation)
