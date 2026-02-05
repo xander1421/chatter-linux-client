@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 59 of 66 (UI Pickers)
-Plan: 1 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-05 — Completed 59-01-PLAN.md (EmojiPicker component)
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-05 — Completed 59-02-PLAN.md (GIF picker, Mention autocomplete)
 
 Progress: █████████████████████████████████████████████████████████████████████████ 99%
 
@@ -87,11 +87,11 @@ Progress: ███████████████████████�
 | 56 | 2 | ~12m | ~6m |
 | 57 | 1 | ~4m | ~4m |
 | 58 | 2 | ~3m | ~1.5m |
-| 59 | 1 | ~6m | ~6m |
+| 59 | 2 | ~22m | ~11m |
 
 **Recent Trend:**
-- Last 5 plans: 57-1 (~4m), 58-1 (~1m), 58-2 (~2m), 59-1 (~6m)
-- Trend: UI pickers phase started; EmojiPicker complete
+- Last 5 plans: 58-1 (~1m), 58-2 (~2m), 59-1 (~6m), 59-2 (~16m)
+- Trend: UI pickers phase complete; All 3 picker components built
 
 ## Accumulated Context
 
@@ -248,6 +248,9 @@ Recent decisions affecting current work:
 - EmojiPicker: embedded 700+ static emoji (no external crate), keywords on Rust side for search
 - EmojiPicker: Flickable with Math.floor/mod grid positioning for emoji layout
 - components/mod.slint centralizes all component exports
+- GifPicker: preview_url for thumbnails, full_url for selection (Tenor API)
+- MentionAutocomplete: string-based type field for Slint compatibility
+- Tenor attribution footer required per API TOS
 
 ### Deferred Issues
 
@@ -260,6 +263,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 59-01-PLAN.md (EmojiPicker component)
+Stopped at: Completed 59-02-PLAN.md (GIF picker, Mention autocomplete)
 Resume file: None
-Next action: Execute 59-02-PLAN.md (DatePicker) or 59-03-PLAN.md (ColorPicker)
+Next action: Plan Phase 60 (UI Sidebar)
