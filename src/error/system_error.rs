@@ -44,4 +44,16 @@ pub enum SystemError {
     /// Failed to write to clipboard.
     #[error("Failed to write to clipboard: {0}")]
     ClipboardWrite(String),
+
+    /// Failed to open URL.
+    #[error("Failed to open URL: {0}")]
+    OpenUrl(String),
+
+    /// Failed to open file.
+    #[error("Failed to open file: {0}")]
+    OpenFile(String),
+
+    /// Invalid URL format.
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
 }
