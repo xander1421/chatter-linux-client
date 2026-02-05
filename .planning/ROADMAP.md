@@ -79,8 +79,8 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 48: Events Bus & Handlers** - EventBus, domain/UI events
 
 ### System Integration
-- [ ] **Phase 49: System Keyring & Directories** - Secret Service, XDG
-- [ ] **Phase 50: System Tray & Notifications** - StatusNotifierItem, notify-rust
+- [x] **Phase 49: System Keyring & Directories** - Secret Service, XDG
+- [x] **Phase 50: System Tray & Notifications** - StatusNotifierItem, notify-rust
 - [ ] **Phase 51: System Utilities** - Clipboard, open URLs, autostart
 
 ### Media
@@ -574,7 +574,7 @@ None (custom application, no pre-existing domain skills)
 | 47 | State Streaming & Offline | 1 | Done | 2026-02-05 |
 | 48 | Events Bus & Handlers | 1 | Done | 2026-02-05 |
 | 49 | System Keyring & Directories | 1 | Done | 2026-02-05 |
-| 50 | System Tray & Notifications | TBD | Not started | - |
+| 50 | System Tray & Notifications | 1 | Done | 2026-02-05 |
 | 51 | System Utilities | TBD | Not started | - |
 | 52 | Media File Handling | TBD | Not started | - |
 | 53 | Media Playback | TBD | Not started | - |
