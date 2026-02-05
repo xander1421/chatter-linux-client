@@ -1,0 +1,227 @@
+// ForwardMessageModal - Modal for forwarding messages to channels or DMs
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { Avatar } from "../components/avatar.slint";
+
+// Target struct for forward destinations
+export struct ForwardTarget {
+    id: string,
+    name: string,
+    avatar-url: string,
+    target-type: string,  // "channel" or "dm"
+}
+
+export component ForwardMessageModal inherits Rectangle {
+    in property <bool> visible: false;
+    in property <string> message-preview: "";
+    in-out property <string> search-text: "";
+    in property <[ForwardTarget]> targets: [];
+    in property <bool> loading: false;
+
+    callback close();
+    callback forward(string);  // target_id
+
+    // Internal state
+    property <string> selected-target-id: "";
+
+    // Reset state when modal closes
+    changed visible => {
+        if !visible {
+            selected-target-id = "";
+            search-text = "";
+        }
+    }
+
+    Modal {
+        visible: root.visible;
+        title: "Forward Message";
+        width: 480px;
+
+        close => {
+            root.close();
+        }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            // Message preview section
+            Rectangle {
+                height: 80px;
+                max-height: 80px;
+                background: Colors.surface-hover;
+                border-radius: Spacing.radius-md;
+
+                VerticalLayout {
+                    padding: Spacing.md;
+
+                    Text {
+                        text: "Forwarding:";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        font-weight: Typography.medium;
+                    }
+
+                    Text {
+                        text: root.message-preview;
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        overflow: elide;
+                        vertical-stretch: 1;
+                    }
+                }
+            }
+
+            // Search input
+            Input {
+                placeholder: "Search channels or people...";
+                text <=> root.search-text;
+            }
+
+            // Target list (scrollable)
+            Rectangle {
+                min-height: 200px;
+                max-height: 300px;
+                vertical-stretch: 1;
+                background: Colors.surface;
+                border-radius: Spacing.radius-md;
+                border-width: 1px;
+                border-color: Colors.text-muted.with-alpha(0.2);
+
+                Flickable {
+                    viewport-height: target-list.preferred-height;
+                    viewport-width: parent.width;
+
+                    target-list := VerticalLayout {
+                        padding: Spacing.xs;
+
+                        for target[index] in root.targets: Rectangle {
+                            property <bool> matches: root.search-text == "" || target.name.to-lower-ascii().contains(root.search-text.to-lower-ascii());
+                            property <bool> is-selected: root.selected-target-id == target.id;
+
+                            visible: matches;
+                            height: matches ? 48px : 0;
+                            background: is-selected ? Colors.primary.with-alpha(0.2) : target-touch.has-hover ? Colors.surface-hover : transparent;
+                            border-radius: Spacing.radius-md;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                spacing: Spacing.sm;
+
+                                // Avatar
+                                Avatar {
+                                    size: 32px;
+                                    fallback-text: target.name.character-count > 0 ? target.name.to-upper-ascii() : "?";
+                                }
+
+                                // Name and type
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+
+                                    Text {
+                                        text: target.name;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                // Type badge
+                                Rectangle {
+                                    width: type-text.width + Spacing.sm * 2;
+                                    height: 20px;
+                                    background: target.target-type == "channel" ? Colors.primary.with-alpha(0.2) : Colors.success.with-alpha(0.2);
+                                    border-radius: Spacing.radius-sm;
+
+                                    type-text := Text {
+                                        x: Spacing.sm;
+                                        text: target.target-type == "channel" ? "#channel" : "DM";
+                                        color: target.target-type == "channel" ? Colors.primary : Colors.success;
+                                        font-size: Typography.xs;
+                                        font-weight: Typography.medium;
+                                        vertical-alignment: center;
+                                        height: 100%;
+                                    }
+                                }
+
+                                // Selection indicator
+                                if is-selected: Rectangle {
+                                    width: 20px;
+                                    height: 20px;
+                                    border-radius: 10px;
+                                    background: Colors.primary;
+
+                                    // Checkmark
+                                    Rectangle {
+                                        x: 6px;
+                                        y: 8px;
+                                        width: 4px;
+                                        height: 2px;
+                                        background: Colors.text-primary;
+                                        rotation-angle: 45deg;
+                                    }
+                                    Rectangle {
+                                        x: 7px;
+                                        y: 6px;
+                                        width: 8px;
+                                        height: 2px;
+                                        background: Colors.text-primary;
+                                        rotation-angle: -45deg;
+                                    }
+                                }
+                            }
+
+                            target-touch := TouchArea {
+                                clicked => {
+                                    root.selected-target-id = target.id;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Footer with action buttons
+            HorizontalLayout {
+                spacing: Spacing.md;
+                height: 40px;
+
+                // Spacer
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                // Cancel button
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+
+                    clicked => {
+                        root.close();
+                    }
+                }
+
+                // Forward button
+                Button {
+                    text: root.loading ? "" : "Forward";
+                    variant: "primary";
+                    disabled: root.selected-target-id == "" || root.loading;
+                    loading: root.loading;
+
+                    clicked => {
+                        if root.selected-target-id != "" && !root.loading {
+                            root.forward(root.selected-target-id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
