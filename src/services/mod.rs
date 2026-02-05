@@ -53,3 +53,6 @@ pub use crate::network::streaming::read_receipt_stream::ReadState;
 
 // Re-export ReactionEvent from aggregator for convenience
 pub use crate::network::streaming::reaction_stream::ReactionEvent;
+
+// Re-exports for search service
+pub use search_service::{CombinedSearchResults, SearchError, SearchService};
