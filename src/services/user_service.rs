@@ -658,6 +658,47 @@ impl UserService {
 
         Ok(matching_users)
     }
+
+    // ========================================================================
+    // Search Operations
+    // ========================================================================
+
+    /// Search for users by query (network call).
+    ///
+    /// Searches all users on the server. Results are NOT stored locally
+    /// as they are discovery results, not established relationships.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_client` - Mutable reference to user client
+    /// * `query` - Search query string
+    /// * `limit` - Maximum number of results to return
+    /// * `offset` - Pagination offset
+    pub async fn search_users(
+        &self,
+        user_client: &mut UserClient,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Profile>, UserError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (unary)
+        let response = user_client
+            .search_users(query, limit as i32, offset as i32)
+            .await?;
+
+        // Convert each proto UserProfile to domain Profile
+        // Note: Do NOT store locally (search results are discovery, not relationships)
+        let mut profiles = Vec::with_capacity(response.results.len());
+        for proto_profile in &response.results {
+            let profile = proto_to_domain_profile(proto_profile)?;
+            profiles.push(profile);
+        }
+
+        Ok(profiles)
+    }
 }
 
 // ============================================================================
@@ -944,5 +985,60 @@ mod tests {
             proto_friend_status_to_domain(99),
             FriendshipStatus::Pending
         );
+    }
+
+    #[test]
+    fn test_user_service_construction() {
+        // This test verifies the UserService struct type signatures compile correctly.
+        // We can't create a real UserService without actual repositories,
+        // but we verify the construction pattern is correct.
+        fn _verify_types(
+            settings_repo: Arc<SettingsRepository>,
+            user_repo: Arc<UserRepository>,
+        ) {
+            let _service = UserService::new(settings_repo, user_repo);
+        }
+    }
+
+    #[test]
+    fn test_blocked_status_mapping() {
+        // Proto FriendStatus::Blocked = 5 should map to FriendshipStatus::Blocked
+        assert_eq!(
+            proto_friend_status_to_domain(5),
+            FriendshipStatus::Blocked
+        );
+
+        // Verify Blocked is distinct from other statuses
+        assert_ne!(
+            proto_friend_status_to_domain(5),
+            FriendshipStatus::Pending
+        );
+        assert_ne!(
+            proto_friend_status_to_domain(5),
+            FriendshipStatus::Accepted
+        );
+    }
+
+    #[test]
+    fn test_friend_request_filter_all_variants() {
+        // Verify all FriendRequestFilter variants can be converted and are distinct
+        let filters = [
+            FriendRequestFilter::All,
+            FriendRequestFilter::Pending,
+            FriendRequestFilter::Accepted,
+            FriendRequestFilter::Sent,
+            FriendRequestFilter::Received,
+        ];
+
+        // Each variant should produce a distinct proto value
+        let proto_values: Vec<_> = filters.iter().map(|f| f.to_proto() as i32).collect();
+        for i in 0..proto_values.len() {
+            for j in (i + 1)..proto_values.len() {
+                assert_ne!(
+                    proto_values[i], proto_values[j],
+                    "Filter variants should produce distinct values"
+                );
+            }
+        }
     }
 }
