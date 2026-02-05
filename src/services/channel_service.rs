@@ -14,7 +14,7 @@ use crate::domain::channel::{
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::channel_client::ChannelClient;
-use crate::proto::chat_v1::{self, channel_event};
+use crate::proto::chat_v1::{self, channel_event, ChannelRole};
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
@@ -620,6 +620,113 @@ impl ChannelService {
         }
     }
 
+    /// Get channel members with pagination.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel to get members from
+    /// * `limit` - Maximum number of members to fetch
+    /// * `offset` - Pagination offset
+    pub async fn get_channel_members(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Membership>, ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (unary)
+        let channel_id_str = channel_id.to_string();
+        let response = channel_client
+            .get_channel_members(&channel_id_str, limit as i32, offset as i32)
+            .await?;
+
+        // Convert each proto ChannelMember to domain Membership
+        let mut memberships = Vec::with_capacity(response.members.len());
+        for proto_member in &response.members {
+            let membership = proto_to_domain_membership(channel_id, proto_member)?;
+
+            // Upsert to local storage
+            match self.channel_repo.get_membership(channel_id, &membership.user_id)? {
+                Some(_) => self.channel_repo.update_membership(&membership)?,
+                None => self.channel_repo.insert_membership(&membership)?,
+            }
+
+            memberships.push(membership);
+        }
+
+        Ok(memberships)
+    }
+
+    /// Update a member's role.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - Channel containing the member
+    /// * `user_id` - User whose role to update
+    /// * `new_role` - The new role to assign
+    pub async fn update_member_role(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        new_role: MemberRole,
+    ) -> Result<Membership, ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Convert domain MemberRole to proto ChannelRole
+        let proto_role = domain_role_to_proto(new_role);
+
+        // Call server (streaming)
+        let channel_id_str = channel_id.to_string();
+        let user_id_str = user_id.to_string();
+        let mut stream = channel_client
+            .update_member_role(&channel_id_str, &user_id_str, proto_role)
+            .await?;
+
+        // Consume stream, look for member_updated event
+        let mut updated_member: Option<chat_v1::channel::ChannelMember> = None;
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            match event.event {
+                Some(channel_event::Event::MemberUpdated(member)) => {
+                    if member.user_id == user_id.to_string() {
+                        updated_member = Some(member);
+                        break;
+                    }
+                }
+                Some(channel_event::Event::OperationFailed(failure)) => {
+                    let err_msg = failure
+                        .error
+                        .map(|e| format!("update role failed: {:?} - {}", e.code, e.message))
+                        .unwrap_or_else(|| "update role failed: unknown error".to_string());
+                    return Err(ChannelError::InvalidInput(err_msg));
+                }
+                _ => continue,
+            }
+        }
+
+        let proto_member = updated_member.ok_or_else(|| {
+            ChannelError::InvalidInput("no member_updated event received".to_string())
+        })?;
+
+        // Convert to domain Membership
+        let membership = proto_to_domain_membership(channel_id, &proto_member)?;
+
+        // Update local storage
+        match self.channel_repo.get_membership(channel_id, &membership.user_id)? {
+            Some(_) => self.channel_repo.update_membership(&membership)?,
+            None => self.channel_repo.insert_membership(&membership)?,
+        }
+
+        Ok(membership)
+    }
+
     /// List channels with pagination.
     ///
     /// Fetches from server and upserts each to local storage.
@@ -791,6 +898,52 @@ fn millis_to_datetime(millis: u64) -> DateTime<Utc> {
         .unwrap_or_else(Utc::now)
 }
 
+/// Convert a proto ChannelMember to domain Membership.
+fn proto_to_domain_membership(
+    channel_id: &ChannelId,
+    proto: &chat_v1::channel::ChannelMember,
+) -> Result<Membership, ChannelError> {
+    let user_id: UserId = proto
+        .user_id
+        .parse()
+        .map_err(|_| ChannelError::InvalidInput("invalid user ID in member".to_string()))?;
+
+    let role = proto_role_to_domain(proto.role);
+    let joined_at = millis_to_datetime(proto.joined_at);
+
+    Ok(Membership {
+        channel_id: channel_id.clone(),
+        user_id,
+        role,
+        joined_at,
+        last_read_message_id: None, // Not in proto
+        is_muted: proto.muted,
+        muted_until: None, // Not in proto (ban_expires_at is for bans, not mutes)
+        notification_preference: NotificationPreference::All, // Not in proto
+    })
+}
+
+/// Convert proto ChannelRole (i32) to domain MemberRole.
+fn proto_role_to_domain(proto_role: i32) -> MemberRole {
+    match proto_role {
+        1 => MemberRole::Member,
+        2 => MemberRole::Moderator,
+        3 => MemberRole::Admin,
+        4 => MemberRole::Owner,
+        _ => MemberRole::Member, // Default for unspecified
+    }
+}
+
+/// Convert domain MemberRole to proto ChannelRole.
+fn domain_role_to_proto(role: MemberRole) -> ChannelRole {
+    match role {
+        MemberRole::Member => ChannelRole::Member,
+        MemberRole::Moderator => ChannelRole::Moderator,
+        MemberRole::Admin => ChannelRole::Admin,
+        MemberRole::Owner => ChannelRole::Owner,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -840,5 +993,32 @@ mod tests {
         let millis = 1706140800000u64; // 2024-01-25 00:00:00 UTC
         let dt = millis_to_datetime(millis);
         assert_eq!(dt.timestamp_millis(), millis as i64);
+    }
+
+    #[test]
+    fn test_proto_role_to_domain() {
+        assert_eq!(proto_role_to_domain(0), MemberRole::Member); // Unspecified
+        assert_eq!(proto_role_to_domain(1), MemberRole::Member);
+        assert_eq!(proto_role_to_domain(2), MemberRole::Moderator);
+        assert_eq!(proto_role_to_domain(3), MemberRole::Admin);
+        assert_eq!(proto_role_to_domain(4), MemberRole::Owner);
+    }
+
+    #[test]
+    fn test_domain_role_to_proto() {
+        assert_eq!(domain_role_to_proto(MemberRole::Member), ChannelRole::Member);
+        assert_eq!(domain_role_to_proto(MemberRole::Moderator), ChannelRole::Moderator);
+        assert_eq!(domain_role_to_proto(MemberRole::Admin), ChannelRole::Admin);
+        assert_eq!(domain_role_to_proto(MemberRole::Owner), ChannelRole::Owner);
+    }
+
+    #[test]
+    fn test_role_conversion_roundtrip() {
+        // Test roundtrip: domain -> proto -> domain
+        for role in [MemberRole::Member, MemberRole::Moderator, MemberRole::Admin, MemberRole::Owner] {
+            let proto = domain_role_to_proto(role);
+            let back = proto_role_to_domain(proto as i32);
+            assert_eq!(back, role);
+        }
     }
 }
