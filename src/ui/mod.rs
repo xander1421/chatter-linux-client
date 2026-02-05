@@ -18,7 +18,7 @@ pub use bridge::UiBridge;
 // Re-export chat data types
 pub use chat_data::{
     extract_content_text, format_timestamp, initials_from_name, message_to_item_data,
-    reaction_summary_string, ChatHeaderData, MessageItemData,
+    reaction_summary_string, ChatHeaderData, MessageItemData, PinnedBarData,
 };
 
 // Re-export emoji data types
