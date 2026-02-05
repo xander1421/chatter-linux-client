@@ -1,15 +1,338 @@
 // Single message item component
+//
+// Displays an individual message with avatar, sender, content, timestamp,
+// reactions, and thread indicator.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Avatar } from "../components/avatar.slint";
 
 export component MessageItem inherits Rectangle {
-    in property <string> sender: "";
+    // Message identity
+    in property <string> message-id: "";
+    in property <string> sender-id: "";
+
+    // Sender info
+    in property <string> sender-name: "";
+    in property <string> sender-initials: "";
+    in property <string> sender-avatar-url: "";
+
+    // Content
     in property <string> content: "";
     in property <string> timestamp: "";
-    in property <bool> is-own: false;
 
-    height: 60px;
-    background: is-own ? Colors.primary : Colors.surface;
-    border-radius: Spacing.radius-md;
+    // Flags
+    in property <bool> is-own: false;
+    in property <bool> is-edited: false;
+    in property <bool> is-deleted: false;
+    in property <bool> is-system: false;
+    in property <bool> is-ai: false;
+    in property <bool> show-sender: true;
+
+    // Attachments
+    in property <bool> has-attachments: false;
+    in property <int> attachment-count: 0;
+
+    // Reactions
+    in property <bool> has-reactions: false;
+    in property <string> reaction-summary: "";
+
+    // Thread
+    in property <int> reply-count: 0;
+    in property <bool> is-thread-reply: false;
+
+    // Hover state
+    in-out property <bool> hovered: false;
+
+    // Callbacks
+    callback reply-clicked(string);
+    callback react-clicked(string);
+    callback thread-clicked(string);
+    callback more-clicked(string);
+    callback message-clicked(string);
+
+    // Styling
+    min-height: main-layout.preferred-height;
+    background: touch.has-hover ? Colors.surface-hover : (root.is-own ? Colors.surface : transparent);
+    border-radius: Spacing.radius-sm;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+
+        clicked => {
+            root.message-clicked(root.message-id);
+        }
+    }
+
+    main-layout := VerticalLayout {
+        padding: Spacing.sm;
+        spacing: Spacing.xs;
+
+        // System message (centered, italic)
+        if root.is-system: Rectangle {
+            height: system-text.preferred-height;
+
+            system-text := Text {
+                width: 100%;
+                text: root.content;
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+                font-style: italic;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        // Deleted message
+        if !root.is-system && root.is-deleted: Rectangle {
+            height: deleted-text.preferred-height;
+
+            deleted-text := Text {
+                width: 100%;
+                text: "[Message deleted]";
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+                font-style: italic;
+                wrap: word-wrap;
+            }
+        }
+
+        // Normal message
+        if !root.is-system && !root.is-deleted: VerticalLayout {
+            spacing: Spacing.xs;
+
+            // Sender row (avatar + name + timestamp)
+            if root.show-sender: HorizontalLayout {
+                spacing: Spacing.sm;
+                alignment: start;
+
+                Avatar {
+                    size: Spacing.avatar-sm;
+                    fallback-text: root.sender-initials;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        alignment: start;
+
+                        // Sender name
+                        Text {
+                            text: root.sender-name;
+                            color: root.is-ai ? Colors.info : Colors.text-primary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        // AI badge
+                        if root.is-ai: Rectangle {
+                            height: 16px;
+                            width: ai-badge-text.preferred-width + 8px;
+                            background: Colors.info;
+                            border-radius: 4px;
+
+                            ai-badge-text := Text {
+                                x: 4px;
+                                text: "AI";
+                                color: Colors.text-primary;
+                                font-size: 10px;
+                                font-weight: Typography.semibold;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // Timestamp
+                        Text {
+                            text: root.timestamp;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+                        }
+
+                        // Edited indicator
+                        if root.is-edited: Text {
+                            text: "(edited)";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            font-style: italic;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // Content area
+            content-area := Rectangle {
+                height: content-text.preferred-height;
+
+                // Add left padding when sender is shown (to align with avatar content)
+                content-text := Text {
+                    x: root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0;
+                    width: parent.width - (root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0);
+                    text: root.content;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Attachments indicator
+            if root.has-attachments: HorizontalLayout {
+                padding-left: root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0;
+                spacing: Spacing.xs;
+
+                Text {
+                    text: "\u{1F4CE}"; // Paperclip emoji
+                    font-size: Typography.xs;
+                }
+
+                Text {
+                    text: root.attachment-count == 1 ? "1 attachment" : "\{root.attachment-count} attachments";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                }
+            }
+
+            // Bottom row: reactions and thread
+            if root.has-reactions || root.reply-count > 0: HorizontalLayout {
+                padding-left: root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0;
+                padding-top: Spacing.xs;
+                spacing: Spacing.md;
+                alignment: start;
+
+                // Reactions summary
+                if root.has-reactions: Rectangle {
+                    height: reactions-text.preferred-height + 4px;
+                    width: reactions-text.preferred-width + Spacing.sm;
+                    background: Colors.surface;
+                    border-radius: Spacing.radius-sm;
+
+                    reactions-text := Text {
+                        x: Spacing.xs;
+                        text: root.reaction-summary;
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        vertical-alignment: center;
+                    }
+
+                    reactions-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.react-clicked(root.message-id);
+                        }
+                    }
+                }
+
+                // Thread indicator
+                if root.reply-count > 0: Rectangle {
+                    height: thread-layout.preferred-height + 4px;
+                    width: thread-layout.preferred-width + Spacing.sm;
+
+                    thread-layout := HorizontalLayout {
+                        spacing: Spacing.xs;
+                        padding: 2px;
+
+                        Text {
+                            text: "\u{1F5E8}"; // Speech balloon
+                            font-size: Typography.xs;
+                        }
+
+                        Text {
+                            text: root.reply-count == 1 ? "1 reply" : "\{root.reply-count} replies";
+                            color: Colors.primary;
+                            font-size: Typography.xs;
+                        }
+                    }
+
+                    thread-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.thread-clicked(root.message-id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Hover action buttons (reply, react, more)
+        if touch.has-hover && !root.is-system && !root.is-deleted: Rectangle {
+            height: 28px;
+
+            HorizontalLayout {
+                padding-left: root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0;
+                spacing: Spacing.xs;
+                alignment: start;
+
+                // Reply button
+                Rectangle {
+                    height: 24px;
+                    width: 24px;
+                    background: Colors.surface;
+                    border-radius: Spacing.radius-sm;
+
+                    Text {
+                        text: "\u{21A9}"; // Reply arrow
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    reply-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.reply-clicked(root.message-id);
+                        }
+                    }
+                }
+
+                // React button
+                Rectangle {
+                    height: 24px;
+                    width: 24px;
+                    background: Colors.surface;
+                    border-radius: Spacing.radius-sm;
+
+                    Text {
+                        text: "\u{1F642}"; // Smile emoji
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    react-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.react-clicked(root.message-id);
+                        }
+                    }
+                }
+
+                // More button
+                Rectangle {
+                    height: 24px;
+                    width: 24px;
+                    background: Colors.surface;
+                    border-radius: Spacing.radius-sm;
+
+                    Text {
+                        text: "\u{22EE}"; // Vertical ellipsis
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    more-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.more-clicked(root.message-id);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
