@@ -561,7 +561,7 @@ None (custom application, no pre-existing domain skills)
 | 34 | Services Ephemeral Messages | 2 | Done | 2026-02-05 |
 | 35 | Services Channel | 3 | Done | 2026-02-05 |
 | 36 | Services User | 3 | Done | 2026-02-05 |
-| 37 | Services Presence | TBD | Not started | - |
+| 37 | Services Presence | 1 | Done | 2026-02-05 |
 | 38 | Services Real-time | TBD | Not started | - |
 | 39 | Services Reactions | TBD | Not started | - |
 | 40 | Services Search | TBD | Not started | - |
