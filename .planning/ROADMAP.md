@@ -84,7 +84,7 @@ None (custom application, no pre-existing domain skills)
 - [x] **Phase 51: System Utilities** - Clipboard, open URLs, autostart
 
 ### Media
-- [ ] **Phase 52: Media File Handling** - File picker, MIME, thumbnails
+- [x] **Phase 52: Media File Handling** - File picker, MIME, thumbnails
 - [ ] **Phase 53: Media Playback** - Audio (rodio), video player
 - [ ] **Phase 54: Media Recording** - Voice, video recorder
 - [ ] **Phase 55: Media Previews** - PDF viewer, code preview
@@ -576,7 +576,7 @@ None (custom application, no pre-existing domain skills)
 | 49 | System Keyring & Directories | 1 | Done | 2026-02-05 |
 | 50 | System Tray & Notifications | 1 | Done | 2026-02-05 |
 | 51 | System Utilities | 1 | Done | 2026-02-05 |
-| 52 | Media File Handling | TBD | Not started | - |
+| 52 | Media File Handling | 1 | Done | 2026-02-05 |
 | 53 | Media Playback | TBD | Not started | - |
 | 54 | Media Recording | TBD | Not started | - |
 | 55 | Media Previews | TBD | Not started | - |
