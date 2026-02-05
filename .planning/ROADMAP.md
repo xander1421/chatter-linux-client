@@ -95,7 +95,7 @@ None (custom application, no pre-existing domain skills)
 - [ ] **Phase 58: UI Basic Components** - Avatar, button, input, modal, toast
 - [ ] **Phase 59: UI Pickers** - Emoji, GIF, mention autocomplete
 - [x] **Phase 60: UI Sidebar** - Channel list, DM list, user profile
-- [ ] **Phase 61: UI Chat Core** - Message list, message item, input
+- [x] **Phase 61: UI Chat Core** - Message list, message item, input
 - [ ] **Phase 62: UI Chat Features** - Pinned bar, thread panel, reactions
 - [ ] **Phase 63: UI File Components** - Attachments, previews
 - [ ] **Phase 64: UI Modals** - Create channel, settings, profile, forward
@@ -585,7 +585,7 @@ None (custom application, no pre-existing domain skills)
 | 58 | UI Basic Components | 2 | Done | 2026-02-05 |
 | 59 | UI Pickers | 2 | Done | 2026-02-05 |
 | 60 | UI Sidebar | 2 | Done | 2026-02-05 |
-| 61 | UI Chat Core | 2 | In progress (1/2) | - |
+| 61 | UI Chat Core | 2 | Done | 2026-02-05 |
 | 62 | UI Chat Features | TBD | Not started | - |
 | 63 | UI File Components | TBD | Not started | - |
 | 64 | UI Modals | TBD | Not started | - |
