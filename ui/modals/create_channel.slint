@@ -1,0 +1,263 @@
+// CreateChannelModal - Two-step wizard for creating new channels
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { ChannelTemplates } from "channel_templates.slint";
+
+export component CreateChannelModal inherits Rectangle {
+    in property <bool> visible: false;
+    in-out property <string> channel-name: "";
+    in-out property <string> channel-description: "";
+    in-out property <string> selected-template: "";
+    in property <string> error-message: "";
+    in property <bool> loading: false;
+
+    callback close();
+    callback create(string, string, string);  // name, description, template
+
+    // Internal state
+    property <int> current-step: 1;
+
+    // Reset state when modal closes
+    changed visible => {
+        if !visible {
+            current-step = 1;
+        }
+    }
+
+    Modal {
+        visible: root.visible;
+        title: "Create Channel";
+        width: 560px;
+
+        close => {
+            root.close();
+        }
+
+        VerticalLayout {
+            spacing: Spacing.lg;
+
+            // Step indicator
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                height: 24px;
+
+                // Step 1 indicator
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    border-radius: Spacing.radius-full;
+                    background: current-step >= 1 ? Colors.primary : Colors.surface-hover;
+
+                    Text {
+                        text: "1";
+                        color: Colors.text-primary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.medium;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+
+                Text {
+                    text: "Choose Template";
+                    color: current-step == 1 ? Colors.text-primary : Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: current-step == 1 ? Typography.semibold : Typography.normal;
+                    vertical-alignment: center;
+                }
+
+                // Connector line
+                Rectangle {
+                    width: 40px;
+                    height: 2px;
+                    background: current-step >= 2 ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                    y: (parent.height - self.height) / 2;
+                }
+
+                // Step 2 indicator
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    border-radius: Spacing.radius-full;
+                    background: current-step >= 2 ? Colors.primary : Colors.surface-hover;
+
+                    Text {
+                        text: "2";
+                        color: Colors.text-primary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.medium;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+
+                Text {
+                    text: "Channel Details";
+                    color: current-step == 2 ? Colors.text-primary : Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: current-step == 2 ? Typography.semibold : Typography.normal;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Content area
+            Rectangle {
+                vertical-stretch: 1;
+                min-height: 280px;
+
+                // Step 1: Template selection
+                if current-step == 1: ChannelTemplates {
+                    selected-template <=> root.selected-template;
+
+                    template-selected(template) => {
+                        // Template selected, user can proceed
+                    }
+                }
+
+                // Step 2: Channel details form
+                if current-step == 2: VerticalLayout {
+                    spacing: Spacing.md;
+
+                    // Selected template indicator
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        height: 32px;
+
+                        Text {
+                            text: "Template:";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            background: Colors.primary.with-alpha(0.2);
+                            border-radius: Spacing.radius-sm;
+                            width: template-label.width + Spacing.md * 2;
+                            height: 24px;
+
+                            template-label := Text {
+                                x: Spacing.md;
+                                text: root.selected-template;
+                                color: Colors.primary;
+                                font-size: Typography.xs;
+                                font-weight: Typography.medium;
+                                vertical-alignment: center;
+                                height: 100%;
+                            }
+                        }
+                    }
+
+                    // Channel name input
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        Text {
+                            text: "Channel Name";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        Input {
+                            placeholder: "e.g., team-updates";
+                            text <=> root.channel-name;
+                            error: root.error-message != "" && root.channel-name == "";
+                            error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
+                        }
+                    }
+
+                    // Channel description input
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        Text {
+                            text: "Description (optional)";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        Input {
+                            placeholder: "What's this channel about?";
+                            text <=> root.channel-description;
+                        }
+                    }
+
+                    // Error message display
+                    if root.error-message != "" && root.channel-name != "": Text {
+                        text: root.error-message;
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                    }
+                }
+            }
+
+            // Footer with action buttons
+            HorizontalLayout {
+                spacing: Spacing.md;
+                height: 40px;
+
+                // Back button (Step 2 only)
+                if current-step == 2: Button {
+                    text: "Back";
+                    variant: "ghost";
+
+                    clicked => {
+                        current-step = 1;
+                    }
+                }
+
+                // Spacer
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                // Cancel button
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+
+                    clicked => {
+                        root.close();
+                    }
+                }
+
+                // Next/Create button
+                if current-step == 1: Button {
+                    text: "Next";
+                    variant: "primary";
+                    disabled: root.selected-template == "";
+
+                    clicked => {
+                        if root.selected-template != "" {
+                            current-step = 2;
+                        }
+                    }
+                }
+
+                if current-step == 2: Button {
+                    text: root.loading ? "" : "Create";
+                    variant: "primary";
+                    disabled: root.channel-name == "" || root.loading;
+                    loading: root.loading;
+
+                    clicked => {
+                        if root.channel-name != "" && !root.loading {
+                            root.create(root.channel-name, root.channel-description, root.selected-template);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
