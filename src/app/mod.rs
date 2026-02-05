@@ -3,5 +3,8 @@
 //! Top-level application initialization and management.
 
 pub mod bootstrap;
-pub mod shutdown;
 pub mod config;
+pub mod context;
+pub mod shutdown;
+
+pub use context::{AppContext, ContextError};
