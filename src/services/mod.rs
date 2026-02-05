@@ -65,3 +65,6 @@ pub use ai_service::{AIError, AIService};
 
 // Re-exports for AI summarization service
 pub use ai_summarize::{AISummarizeService, SummarizeError};
+
+// Re-exports for saved message service
+pub use saved_message_service::{SavedMessageError, SavedMessageService, proto_to_domain_saved_message};
