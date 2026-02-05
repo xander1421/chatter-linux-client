@@ -1,17 +1,84 @@
 // Main sidebar component
+//
+// Container with header, channel list, and profile placeholder.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { ChannelList, ChannelListItemData } from "channel_list.slint";
 
 export component Sidebar inherits Rectangle {
+    // Properties
+    in property <[ChannelListItemData]> channels: [];
+    in property <string> selected-channel-id: "";
+    in property <bool> collapsed: false;
+
+    // Callbacks
+    callback channel-selected(string);
+
+    // Layout
     width: Spacing.sidebar-width;
     background: Colors.surface;
 
-    // Placeholder for sidebar content
-    Text {
-        text: "Sidebar";
-        color: Colors.text-secondary;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    VerticalLayout {
+        // Header area
+        Rectangle {
+            height: 56px;
+            background: Colors.surface;
+
+            HorizontalLayout {
+                padding-left: Spacing.lg;
+                padding-right: Spacing.lg;
+                alignment: start;
+
+                Text {
+                    text: "Chatter";
+                    color: Colors.text-primary;
+                    font-size: 20px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Separator line
+        Rectangle {
+            height: 1px;
+            background: Colors.surface-hover;
+        }
+
+        // Channel list (takes remaining space)
+        ChannelList {
+            channels: root.channels;
+            selected-channel-id: root.selected-channel-id;
+
+            channel-selected(id) => {
+                root.channel-selected(id);
+            }
+        }
+
+        // Separator line
+        Rectangle {
+            height: 1px;
+            background: Colors.surface-hover;
+        }
+
+        // Profile placeholder area
+        Rectangle {
+            height: 64px;
+            background: Colors.surface;
+
+            HorizontalLayout {
+                padding-left: Spacing.lg;
+                padding-right: Spacing.lg;
+                alignment: start;
+
+                Text {
+                    text: "Profile";
+                    color: Colors.text-secondary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+            }
+        }
     }
 }
