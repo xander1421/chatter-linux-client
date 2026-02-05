@@ -27,3 +27,6 @@ pub use pdf_viewer::PdfViewer;
 pub use thumbnail_cache::ThumbnailCache;
 pub use video_player::VideoPlayer;
 pub use video_recorder::VideoRecorder;
+
+// Embed extractors
+pub use embed::{LinkPreviewGenerator, UrlUnfurler, YouTubeExtractor};
