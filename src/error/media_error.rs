@@ -31,4 +31,8 @@ pub enum MediaError {
     /// Audio recording error.
     #[error("recording error: {0}")]
     RecordingError(String),
+
+    /// Preview error (PDF, code, etc.).
+    #[error("preview error: {0}")]
+    PreviewError(String),
 }
