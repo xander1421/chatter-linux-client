@@ -1,0 +1,179 @@
+// Mention autocomplete popup for @user, #channel, @here, @all suggestions
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+// Mention suggestion data struct
+export struct MentionSuggestion {
+    id: string,
+    name: string,
+    mention-type: string,  // "user", "channel", "here", "all"
+    avatar-url: string,
+}
+
+export component MentionAutocomplete inherits Rectangle {
+    // Popup visibility
+    in property <bool> visible: false;
+
+    // Suggestions from Rust (max 8 shown)
+    in property <[MentionSuggestion]> suggestions: [];
+
+    // Currently selected index (for keyboard navigation)
+    in property <int> selected-index: 0;
+
+    // Callbacks
+    callback suggestion-selected(string, string);  // (id, display_text like "@alice")
+    callback close();
+
+    // Only render when visible
+    opacity: root.visible ? 1 : 0;
+    visible: root.visible;
+
+    // Compact popup - width fixed, height based on suggestions
+    width: 240px;
+    height: Math.min(suggestions.length, 8) * 40px + Spacing.sm * 2;
+    background: Colors.surface;
+    border-radius: Spacing.radius-lg;
+
+    // Drop shadow effect via border
+    border-width: 1px;
+    border-color: Colors.text-muted.with-alpha(0.2);
+
+    // Block clicks from passing through
+    TouchArea {
+        width: 100%;
+        height: 100%;
+    }
+
+    // Suggestions list
+    VerticalLayout {
+        padding: Spacing.sm;
+        spacing: 0;
+
+        for suggestion[index] in root.suggestions: Rectangle {
+            height: 40px;
+            border-radius: Spacing.radius-sm;
+            background: index == root.selected-index ? Colors.primary.with-alpha(0.2) : (item-area.has-hover ? Colors.surface-hover : transparent);
+
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+
+                // Avatar or icon based on type
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: suggestion.mention-type == "user" ? Spacing.radius-full : Spacing.radius-sm;
+                    background: suggestion.mention-type == "user" ? Colors.primary.with-alpha(0.3) : Colors.background;
+
+                    // User avatar (if URL provided) or fallback
+                    if suggestion.mention-type == "user" && suggestion.avatar-url != "": Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: @image-url(suggestion.avatar-url);
+                        image-fit: cover;
+                    }
+
+                    // User fallback icon (first letter)
+                    if suggestion.mention-type == "user" && suggestion.avatar-url == "": Text {
+                        text: "@";
+                        color: Colors.primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.semibold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    // Channel icon
+                    if suggestion.mention-type == "channel": Text {
+                        text: "#";
+                        color: Colors.text-secondary;
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    // Here/All icon
+                    if suggestion.mention-type == "here" || suggestion.mention-type == "all": Text {
+                        text: "@";
+                        color: Colors.warning;
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Name and type indicator
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+
+                    // Display name with prefix
+                    Text {
+                        text: suggestion.mention-type == "channel" ? "#" + suggestion.name : "@" + suggestion.name;
+                        color: index == root.selected-index ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.sm;
+                        font-weight: index == root.selected-index ? Typography.medium : Typography.normal;
+                        overflow: elide;
+                    }
+
+                    // Type description (for here/all only)
+                    if suggestion.mention-type == "here": Text {
+                        text: "Notify online members";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        overflow: elide;
+                    }
+
+                    if suggestion.mention-type == "all": Text {
+                        text: "Notify all members";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        overflow: elide;
+                    }
+                }
+
+                // Selection indicator for keyboard navigation
+                if index == root.selected-index: Rectangle {
+                    width: 4px;
+                    height: 20px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 2px;
+                    background: Colors.primary;
+                }
+            }
+
+            item-area := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    // Build display text based on type
+                    if suggestion.mention-type == "channel" {
+                        root.suggestion-selected(suggestion.id, "#" + suggestion.name);
+                    } else {
+                        root.suggestion-selected(suggestion.id, "@" + suggestion.name);
+                    }
+                }
+            }
+        }
+
+        // Empty state
+        if root.suggestions.length == 0: Rectangle {
+            height: 40px;
+
+            Text {
+                text: "No suggestions";
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
