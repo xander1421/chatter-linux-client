@@ -1,53 +1,106 @@
 // Main sidebar component
 //
-// Container with header, channel list, and profile placeholder.
+// Container with user profile bar, saved messages, channel list, and DM list.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { ChannelList, ChannelListItemData } from "channel_list.slint";
+import { DMList, DMListItemData } from "dm_list.slint";
+import { UserProfileBar } from "user_profile_bar.slint";
 
 export component Sidebar inherits Rectangle {
-    // Properties
+    // Properties - Channel list
     in property <[ChannelListItemData]> channels: [];
     in property <string> selected-channel-id: "";
+
+    // Properties - DM list
+    in property <[DMListItemData]> dm-conversations: [];
+    in property <string> selected-dm-id: "";
+
+    // Properties - User profile
+    in property <string> user-display-name: "User";
+    in property <image> user-avatar-source;
+    in property <string> user-initials: "";
+    in property <string> user-presence-status: "online";
+    in property <string> user-custom-status: "";
+
+    // Properties - General
     in property <bool> collapsed: false;
 
-    // Callbacks
+    // Callbacks - Navigation
     callback channel-selected(string);
+    callback dm-selected(string);
+    callback saved-messages-clicked();
+
+    // Callbacks - Profile
+    callback settings-clicked();
+    callback profile-clicked();
 
     // Layout
     width: Spacing.sidebar-width;
     background: Colors.surface;
 
     VerticalLayout {
-        // Header area
-        Rectangle {
-            height: 56px;
-            background: Colors.surface;
+        // User profile bar at top
+        UserProfileBar {
+            display-name: root.user-display-name;
+            avatar-source: root.user-avatar-source;
+            initials: root.user-initials;
+            presence-status: root.user-presence-status;
+            custom-status: root.user-custom-status;
 
-            HorizontalLayout {
-                padding-left: Spacing.lg;
-                padding-right: Spacing.lg;
-                alignment: start;
-
-                Text {
-                    text: "Chatter";
-                    color: Colors.text-primary;
-                    font-size: 20px;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                }
-            }
+            settings-clicked => { root.settings-clicked(); }
+            profile-clicked => { root.profile-clicked(); }
         }
 
-        // Separator line
+        // Separator
         Rectangle {
             height: 1px;
             background: Colors.surface-hover;
         }
 
-        // Channel list (takes remaining space)
+        // Saved messages entry
+        saved-messages := Rectangle {
+            height: 44px;
+            border-radius: Spacing.radius-sm;
+            background: saved-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                spacing: Spacing.sm;
+                alignment: start;
+
+                // Bookmark icon
+                Text {
+                    text: "\u{1F516}"; // Bookmark ribbon
+                    font-size: 16px;
+                    vertical-alignment: center;
+                }
+
+                // Text
+                Text {
+                    text: "Saved Messages";
+                    color: Colors.text-secondary;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                }
+            }
+
+            saved-touch := TouchArea {
+                clicked => { root.saved-messages-clicked(); }
+            }
+        }
+
+        // Separator
+        Rectangle {
+            height: 1px;
+            background: Colors.surface-hover;
+        }
+
+        // Channel list (flexible height)
         ChannelList {
+            vertical-stretch: 1;
             channels: root.channels;
             selected-channel-id: root.selected-channel-id;
 
@@ -56,28 +109,21 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        // Separator line
+        // Separator
         Rectangle {
             height: 1px;
             background: Colors.surface-hover;
         }
 
-        // Profile placeholder area
-        Rectangle {
-            height: 64px;
-            background: Colors.surface;
+        // DM list (flexible height, min 200px)
+        DMList {
+            vertical-stretch: 1;
+            min-height: 200px;
+            conversations: root.dm-conversations;
+            selected-conversation-id: root.selected-dm-id;
 
-            HorizontalLayout {
-                padding-left: Spacing.lg;
-                padding-right: Spacing.lg;
-                alignment: start;
-
-                Text {
-                    text: "Profile";
-                    color: Colors.text-secondary;
-                    font-size: 14px;
-                    vertical-alignment: center;
-                }
+            conversation-selected(id) => {
+                root.dm-selected(id);
             }
         }
     }
