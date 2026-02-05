@@ -7,6 +7,7 @@ pub mod bridge;
 pub mod chat_data;
 pub mod commands;
 pub mod emoji_data;
+pub mod file_data;
 pub mod handlers;
 pub mod picker_data;
 pub mod sidebar_data;
@@ -31,3 +32,6 @@ pub use picker_data::{GifData, MentionSuggestionData};
 pub use sidebar_data::{
     presence_color, ChannelListItemData, DMListItemData, UserProfileBarData,
 };
+
+// Re-export file data types
+pub use file_data::{category_icon, AttachmentItemData};
