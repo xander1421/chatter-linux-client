@@ -1,46 +1,162 @@
-// Login page component
+// Login page component with validation and loading states
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 
 export component LoginPage inherits Rectangle {
     in-out property <string> username: "";
     in-out property <string> password: "";
+    in property <bool> loading: false;
+    in property <string> error: "";
+
+    // Internal validation state
+    property <bool> submitted: false;
+    property <bool> username-empty: username == "";
+    property <bool> password-empty: password == "";
+    property <bool> fields-valid: !username-empty && !password-empty;
 
     callback login(string, string);
     callback register();
 
     background: Colors.background;
 
+    // Centered form container
     VerticalLayout {
         alignment: center;
-        spacing: Spacing.lg;
-        padding: Spacing.xl;
 
-        Text {
-            text: "Welcome to Chatter";
-            color: Colors.text-primary;
-            font-size: 24px;
-            horizontal-alignment: center;
-        }
+        Rectangle {
+            max-width: 400px;
+            horizontal-stretch: 0;
 
-        Input {
-            placeholder: "Username";
-            text <=> root.username;
-        }
+            VerticalLayout {
+                alignment: center;
+                spacing: Spacing.lg;
+                padding: Spacing.xl;
 
-        Input {
-            placeholder: "Password";
-            password: true;
-            text <=> root.password;
-        }
+                // App logo/title
+                Text {
+                    text: "Chatter";
+                    color: Colors.primary;
+                    font-size: Typography.xxxl;
+                    font-weight: Typography.bold;
+                    horizontal-alignment: center;
+                }
 
-        Button {
-            text: "Login";
-            clicked => {
-                root.login(root.username, root.password);
+                // Subtitle
+                Text {
+                    text: "Sign in to continue";
+                    color: Colors.text-secondary;
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                }
+
+                // Spacer
+                Rectangle { height: Spacing.md; }
+
+                // Username field with label
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Username";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Input {
+                        placeholder: "Enter your username";
+                        text <=> root.username;
+                        disabled: root.loading;
+                        error: submitted && username-empty;
+                        error-message: submitted && username-empty ? "Username is required" : "";
+                    }
+                }
+
+                // Password field with label
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Password";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Input {
+                        placeholder: "Enter your password";
+                        password: true;
+                        text <=> root.password;
+                        disabled: root.loading;
+                        error: submitted && password-empty;
+                        error-message: submitted && password-empty ? "Password is required" : "";
+                    }
+                }
+
+                // Error message display
+                if error != "": Rectangle {
+                    background: Colors.error.with-alpha(0.1);
+                    border-radius: Spacing.radius-md;
+                    padding: Spacing.md;
+
+                    Text {
+                        text: root.error;
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Spacer
+                Rectangle { height: Spacing.sm; }
+
+                // Login button
+                Button {
+                    text: loading ? "" : "Sign In";
+                    variant: "primary";
+                    loading: root.loading;
+                    disabled: root.loading || (submitted && !fields-valid);
+
+                    clicked => {
+                        submitted = true;
+                        if fields-valid {
+                            root.login(root.username, root.password);
+                        }
+                    }
+                }
+
+                // Register link
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Don't have an account?";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Rectangle {
+                        height: 20px;
+
+                        Text {
+                            text: "Register";
+                            color: Colors.primary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.register();
+                            }
+                        }
+                    }
+                }
             }
         }
     }
