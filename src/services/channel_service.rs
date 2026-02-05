@@ -345,6 +345,137 @@ impl ChannelService {
         Ok(())
     }
 
+    /// Join a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel to join
+    /// * `password` - Optional password for password-protected channels
+    pub async fn join_channel(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        password: Option<&str>,
+    ) -> Result<Channel, ChannelError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Call server (streaming, don't start event streaming)
+        let channel_id_str = channel_id.to_string();
+        let mut stream = channel_client
+            .join_channel(&channel_id_str, password, false)
+            .await?;
+
+        // Consume stream, look for member_added event
+        let mut joined = false;
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            match event.event {
+                Some(channel_event::Event::MemberAdded(member)) => {
+                    // Check that it's us who was added
+                    if member.user_id == current_user.to_string() {
+                        joined = true;
+                        break;
+                    }
+                }
+                Some(channel_event::Event::OperationFailed(failure)) => {
+                    let err_msg = failure
+                        .error
+                        .map(|e| format!("join failed: {:?} - {}", e.code, e.message))
+                        .unwrap_or_else(|| "join failed: unknown error".to_string());
+                    return Err(ChannelError::InvalidInput(err_msg));
+                }
+                _ => continue,
+            }
+        }
+
+        if !joined {
+            return Err(ChannelError::InvalidInput(
+                "no member_added event received".to_string(),
+            ));
+        }
+
+        // Drop stream explicitly before using channel_client again
+        drop(stream);
+
+        // Get channel from local DB or fetch from server
+        let channel = match self.channel_repo.get(channel_id)? {
+            Some(ch) => ch,
+            None => self.get_channel(channel_client, channel_id).await?,
+        };
+
+        // Create membership record for current user with role Member
+        let membership = Membership {
+            channel_id: channel_id.clone(),
+            user_id: current_user,
+            role: MemberRole::Member,
+            joined_at: Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: NotificationPreference::All,
+        };
+        self.channel_repo.insert_membership(&membership)?;
+
+        Ok(channel)
+    }
+
+    /// Leave a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel to leave
+    pub async fn leave_channel(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+    ) -> Result<(), ChannelError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Call server (streaming)
+        let channel_id_str = channel_id.to_string();
+        let mut stream = channel_client
+            .leave_channel(&channel_id_str)
+            .await?;
+
+        // Consume stream, look for member_removed_id event
+        let mut left = false;
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            match event.event {
+                Some(channel_event::Event::MemberRemovedId(removed_user_id)) => {
+                    // Check that it's us who was removed
+                    if removed_user_id == current_user.to_string() {
+                        left = true;
+                        break;
+                    }
+                }
+                Some(channel_event::Event::OperationFailed(failure)) => {
+                    let err_msg = failure
+                        .error
+                        .map(|e| format!("leave failed: {:?} - {}", e.code, e.message))
+                        .unwrap_or_else(|| "leave failed: unknown error".to_string());
+                    return Err(ChannelError::InvalidInput(err_msg));
+                }
+                _ => continue,
+            }
+        }
+
+        if !left {
+            return Err(ChannelError::InvalidInput(
+                "no member_removed_id event received".to_string(),
+            ));
+        }
+
+        // Delete membership from local DB (ignore NotFound - may already be deleted)
+        let _ = self.channel_repo.delete_membership(channel_id, &current_user);
+
+        Ok(())
+    }
+
     /// List channels with pagination.
     ///
     /// Fetches from server and upserts each to local storage.
