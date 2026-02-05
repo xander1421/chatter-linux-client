@@ -1,0 +1,497 @@
+// SettingsScreen - Main settings page with sidebar navigation
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { Avatar } from "../components/avatar.slint";
+import { Toggle } from "../components/toggle.slint";
+
+export component SettingsScreen inherits Rectangle {
+    // User profile data
+    in property <string> display-name: "";
+    in property <string> username: "";
+    in property <image> avatar;
+    in property <int> session-count: 0;
+
+    // Change password form state
+    in-out property <string> current-password: "";
+    in-out property <string> new-password: "";
+    in-out property <string> confirm-password: "";
+    in property <bool> password-changing: false;
+    in property <string> password-error: "";
+
+    // Navigation state
+    property <string> active-section: "account";  // "account", "privacy", "encryption", "appearance"
+    property <bool> show-password-form: false;
+
+    // Callbacks
+    callback edit-profile-clicked();
+    callback change-password(string, string);  // current, new
+    callback view-sessions-clicked();
+    callback logout-clicked();
+    callback delete-account-clicked();
+    callback close-settings();
+
+    background: Colors.background;
+
+    HorizontalLayout {
+        // Sidebar navigation (240px)
+        Rectangle {
+            width: 240px;
+            background: Colors.surface;
+
+            VerticalLayout {
+                padding: Spacing.md;
+                spacing: Spacing.xs;
+
+                // Header
+                Text {
+                    text: "Settings";
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    font-weight: Typography.semibold;
+                }
+
+                Rectangle { height: Spacing.md; }
+
+                // Navigation items
+                for item[index] in [
+                    { id: "account", label: "Account", enabled: true },
+                    { id: "privacy", label: "Privacy", enabled: true },
+                    { id: "encryption", label: "Encryption", enabled: true },
+                    { id: "appearance", label: "Appearance", enabled: false }
+                ]: Rectangle {
+                    height: 40px;
+                    border-radius: Spacing.radius-md;
+                    background: active-section == item.id ? Colors.primary :
+                               (nav-touch.has-hover && item.enabled ? Colors.surface-hover : transparent);
+                    opacity: item.enabled ? 1.0 : 0.5;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        alignment: start;
+
+                        Text {
+                            text: item.label;
+                            color: active-section == item.id ? Colors.text-primary :
+                                   (item.enabled ? Colors.text-secondary : Colors.text-muted);
+                            font-size: Typography.sm;
+                            font-weight: active-section == item.id ? Typography.medium : Typography.normal;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    nav-touch := TouchArea {
+                        mouse-cursor: item.enabled ? pointer : default;
+                        clicked => {
+                            if item.enabled {
+                                active-section = item.id;
+                            }
+                        }
+                    }
+                }
+
+                // Spacer
+                Rectangle { vertical-stretch: 1; }
+
+                // Back/Close button
+                Button {
+                    text: "Close Settings";
+                    variant: "ghost";
+                    clicked => { root.close-settings(); }
+                }
+            }
+        }
+
+        // Content area
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Colors.background;
+
+            Flickable {
+                viewport-width: self.width;
+                viewport-height: content-layout.preferred-height + Spacing.xl * 2;
+
+                content-layout := VerticalLayout {
+                    padding: Spacing.xl;
+                    spacing: Spacing.lg;
+                    alignment: start;
+
+                    // Center content with max-width
+                    Rectangle {
+                        max-width: 600px;
+
+                        // Account section
+                        if active-section == "account": VerticalLayout {
+                            spacing: Spacing.lg;
+
+                            // Section header
+                            Text {
+                                text: "Account";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.semibold;
+                            }
+
+                            // Profile info row
+                            Rectangle {
+                                height: 80px;
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    // Avatar
+                                    Avatar {
+                                        size: 64px;
+                                        source: root.avatar;
+                                        fallback-text: root.display-name != "" ?
+                                            root.display-name.to-upper-ascii() : "?";
+                                    }
+
+                                    // Name and username
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        alignment: center;
+                                        spacing: Spacing.xs;
+
+                                        Text {
+                                            text: root.display-name;
+                                            color: Colors.text-primary;
+                                            font-size: Typography.lg;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "@" + root.username;
+                                            color: Colors.text-secondary;
+                                            font-size: Typography.sm;
+                                        }
+                                    }
+
+                                    // Edit button
+                                    Button {
+                                        text: "Edit Profile";
+                                        variant: "ghost";
+                                        clicked => { root.edit-profile-clicked(); }
+                                    }
+                                }
+                            }
+
+                            // Security subsection
+                            Rectangle { height: Spacing.md; }
+
+                            Text {
+                                text: "Security";
+                                color: Colors.text-primary;
+                                font-size: Typography.lg;
+                                font-weight: Typography.semibold;
+                            }
+
+                            // Change Password group
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xs;
+
+                                            Text {
+                                                text: "Change Password";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                            }
+
+                                            Text {
+                                                text: "Update your password regularly to keep your account secure.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+
+                                        if !show-password-form: Button {
+                                            text: "Change Password";
+                                            variant: "secondary";
+                                            clicked => { show-password-form = true; }
+                                        }
+                                    }
+
+                                    // Inline password form
+                                    if show-password-form: VerticalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Rectangle {
+                                            height: 1px;
+                                            background: Colors.text-muted.with-alpha(0.2);
+                                        }
+
+                                        Input {
+                                            placeholder: "Current password";
+                                            password: true;
+                                            text <=> root.current-password;
+                                        }
+
+                                        Input {
+                                            placeholder: "New password";
+                                            password: true;
+                                            text <=> root.new-password;
+                                        }
+
+                                        Input {
+                                            placeholder: "Confirm new password";
+                                            password: true;
+                                            text <=> root.confirm-password;
+                                            error: root.password-error != "";
+                                            error-message: root.password-error;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+                                            alignment: end;
+
+                                            Button {
+                                                text: "Cancel";
+                                                variant: "ghost";
+                                                clicked => {
+                                                    show-password-form = false;
+                                                    root.current-password = "";
+                                                    root.new-password = "";
+                                                    root.confirm-password = "";
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Save";
+                                                variant: "primary";
+                                                loading: root.password-changing;
+                                                disabled: root.current-password == "" ||
+                                                         root.new-password == "" ||
+                                                         root.confirm-password == "";
+                                                clicked => {
+                                                    root.change-password(root.current-password, root.new-password);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Active Sessions group
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.xs;
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+
+                                            Text {
+                                                text: "Active Sessions";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                            }
+
+                                            // Count badge
+                                            Rectangle {
+                                                width: 24px;
+                                                height: 20px;
+                                                border-radius: Spacing.radius-sm;
+                                                background: Colors.primary;
+
+                                                Text {
+                                                    text: root.session-count;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.xs;
+                                                    horizontal-alignment: center;
+                                                    vertical-alignment: center;
+                                                    width: 100%;
+                                                    height: 100%;
+                                                }
+                                            }
+                                        }
+
+                                        Text {
+                                            text: "Manage devices that are signed in to your account.";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    Button {
+                                        text: "View All Sessions";
+                                        variant: "secondary";
+                                        clicked => { root.view-sessions-clicked(); }
+                                    }
+                                }
+                            }
+
+                            // Danger Zone
+                            Rectangle { height: Spacing.md; }
+
+                            Text {
+                                text: "Danger Zone";
+                                color: Colors.error;
+                                font-size: Typography.lg;
+                                font-weight: Typography.semibold;
+                            }
+
+                            Rectangle {
+                                background: Colors.error.with-alpha(0.05);
+                                border-radius: Spacing.radius-lg;
+                                border-width: 1px;
+                                border-color: Colors.error.with-alpha(0.2);
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    // Logout row
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xs;
+
+                                            Text {
+                                                text: "Log Out";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                            }
+
+                                            Text {
+                                                text: "Sign out of your account on this device.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                        }
+
+                                        Button {
+                                            text: "Log Out";
+                                            variant: "danger";
+                                            clicked => { root.logout-clicked(); }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        height: 1px;
+                                        background: Colors.error.with-alpha(0.2);
+                                    }
+
+                                    // Delete account row
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xs;
+
+                                            Text {
+                                                text: "Delete Account";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                            }
+
+                                            Text {
+                                                text: "Permanently delete your account and all associated data. This action cannot be undone.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+
+                                        Button {
+                                            text: "Delete Account";
+                                            variant: "danger";
+                                            clicked => { root.delete-account-clicked(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Privacy section placeholder
+                        if active-section == "privacy": VerticalLayout {
+                            spacing: Spacing.md;
+
+                            Text {
+                                text: "Privacy";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.semibold;
+                            }
+
+                            Text {
+                                text: "Privacy settings will be available in a future update.";
+                                color: Colors.text-muted;
+                                font-size: Typography.sm;
+                            }
+                        }
+
+                        // Encryption section placeholder
+                        if active-section == "encryption": VerticalLayout {
+                            spacing: Spacing.md;
+
+                            Text {
+                                text: "Encryption";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.semibold;
+                            }
+
+                            Text {
+                                text: "Encryption settings will be available in a future update.";
+                                color: Colors.text-muted;
+                                font-size: Typography.sm;
+                            }
+                        }
+
+                        // Appearance section placeholder (disabled)
+                        if active-section == "appearance": VerticalLayout {
+                            spacing: Spacing.md;
+
+                            Text {
+                                text: "Appearance";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.semibold;
+                            }
+
+                            Text {
+                                text: "Appearance settings are coming soon.";
+                                color: Colors.text-muted;
+                                font-size: Typography.sm;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
