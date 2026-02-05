@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
 
+use crate::domain::ephemeral::MessageTTL;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use crate::domain::message::{Message, MessageContent, MixedContent, ReactionCount};
 use crate::error::{NetworkError, StorageError};
@@ -127,6 +128,79 @@ impl MessageService {
                 None,  // crypto_options
                 mentioned_integrations.iter().map(|id| id.to_string()).collect(),
                 targets_ai_bot,
+                attachment_ids.iter().map(|id| id.to_string()).collect(),
+            )
+            .await?;
+
+        // Convert to domain message
+        let message = proto_to_domain_message(&proto_message, sender_id)?;
+
+        // Store locally
+        self.message_repo.insert(&message)?;
+
+        Ok(message)
+    }
+
+    /// Send an ephemeral (self-destructing) message to a channel.
+    ///
+    /// The message will be marked for deletion after the TTL expires,
+    /// starting from when the recipient reads it.
+    ///
+    /// Note: The caller is responsible for also calling `EphemeralService::track()`
+    /// after this returns successfully to set up local ephemeral tracking.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_client` - Mutable reference to message client
+    /// * `channel_id` - Target channel ID
+    /// * `text` - Message text content
+    /// * `ttl` - Time-to-live for the message
+    /// * `attachment_ids` - Optional attachment IDs
+    /// * `thread_id` - Optional parent message ID for threading
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_ephemeral_message(
+        &self,
+        message_client: &mut MessageClient,
+        channel_id: &ChannelId,
+        text: &str,
+        ttl: MessageTTL,
+        attachment_ids: Vec<AttachmentId>,
+        thread_id: Option<&MessageId>,
+    ) -> Result<Message, MessageError> {
+        // Check logged in
+        let sender_id = self.current_user_id()?;
+
+        // Validate content - must have text or attachments
+        let trimmed_text = text.trim();
+        if trimmed_text.is_empty() && attachment_ids.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "message must have text or attachments".to_string(),
+            ));
+        }
+
+        // Build proto content
+        let content = chat_v1::message::Content {
+            r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
+        };
+
+        // Convert TTL to prost Duration
+        let ephemeral_ttl = Some(prost_types::Duration {
+            seconds: ttl.as_secs() as i64,
+            nanos: 0,
+        });
+
+        // Call server with ephemeral flag
+        let proto_message = message_client
+            .send_message(
+                &channel_id.to_string(),
+                content,
+                thread_id.map(|id| id.to_string()).as_deref(),
+                true,          // ephemeral = true
+                ephemeral_ttl, // TTL duration
+                false,         // encrypt (separate concern)
+                None,          // crypto_options
+                Vec::new(),    // mentioned_integrations (not typically used with ephemeral)
+                false,         // targets_ai_bot
                 attachment_ids.iter().map(|id| id.to_string()).collect(),
             )
             .await?;
