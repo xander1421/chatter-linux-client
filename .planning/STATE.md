@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 57 — UI Foundation
+**Current focus:** Phase 58 — UI Basic Components
 
 ## Current Position
 
-Phase: 57 of 66 (UI Foundation)
-Plan: 1 of 1 in current phase
-Status: Phase complete
-Last activity: 2026-02-05 — Completed 57-01-PLAN.md (UI Foundation)
+Phase: 58 of 66 (UI Basic Components)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-05 — Completed 58-01-PLAN.md (UI Basic Components)
 
 Progress: █████████████████████████████████████████████████████████████████████████ 99%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 67
-- Average duration: ~4.6 min
-- Total execution time: ~308 min
+- Total plans completed: 68
+- Average duration: ~4.5 min
+- Total execution time: ~309 min
 
 **By Phase:**
 
@@ -86,10 +86,11 @@ Progress: ███████████████████████�
 | 55 | 1 | ~4m | ~4m |
 | 56 | 2 | ~12m | ~6m |
 | 57 | 1 | ~4m | ~4m |
+| 58 | 1 | ~1m | ~1m |
 
 **Recent Trend:**
-- Last 5 plans: 55-1 (~4m), 56-1 (~8m), 56-2 (~4m), 57-1 (~4m)
-- Trend: UI layer started; Slint foundation and UiBridge done
+- Last 5 plans: 56-1 (~8m), 56-2 (~4m), 57-1 (~4m), 58-1 (~1m)
+- Trend: UI components progressing quickly; basic components done
 
 ## Accumulated Context
 
@@ -237,6 +238,9 @@ Recent decisions affecting current work:
 - slint::include_modules! in binary (not library) to avoid duplicate types
 - UiBridge provides subscribe methods for async state sync
 - Main binary owns Slint-generated types and wires callbacks directly
+- Avatar presence dot uses background border for contrast
+- Button computed bg-color property for variant/state combinations
+- Input uses separate placeholder Text element for styling control
 
 ### Deferred Issues
 
@@ -249,6 +253,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 57-01-PLAN.md (UI Foundation)
+Stopped at: Completed 58-01-PLAN.md (UI Basic Components)
 Resume file: None
-Next action: Plan phase 58 (UI Basic Components)
+Next action: Plan phase 59 (UI Pickers)
