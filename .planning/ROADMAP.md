@@ -562,7 +562,7 @@ None (custom application, no pre-existing domain skills)
 | 35 | Services Channel | 3 | Done | 2026-02-05 |
 | 36 | Services User | 3 | Done | 2026-02-05 |
 | 37 | Services Presence | 1 | Done | 2026-02-05 |
-| 38 | Services Real-time | TBD | Not started | - |
+| 38 | Services Real-time | 1 | Done | 2026-02-05 |
 | 39 | Services Reactions | TBD | Not started | - |
 | 40 | Services Search | TBD | Not started | - |
 | 41 | Services Moderation | TBD | Not started | - |
