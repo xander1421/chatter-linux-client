@@ -558,7 +558,7 @@ None (custom application, no pre-existing domain skills)
 | 31 | Services Account | 3 | Done | 2026-02-05 |
 | 32 | Services Message Core | 2 | Done | 2026-02-05 |
 | 33 | Services Message Advanced | 2 | Done | 2026-02-05 |
-| 34 | Services Ephemeral Messages | 2 | In progress | - |
+| 34 | Services Ephemeral Messages | 2 | Done | 2026-02-05 |
 | 35 | Services Channel | TBD | Not started | - |
 | 36 | Services User | TBD | Not started | - |
 | 37 | Services Presence | TBD | Not started | - |
