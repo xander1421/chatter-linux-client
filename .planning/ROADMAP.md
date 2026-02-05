@@ -94,7 +94,7 @@ None (custom application, no pre-existing domain skills)
 - [ ] **Phase 57: UI Foundation** - Slint setup, bridge, theme
 - [ ] **Phase 58: UI Basic Components** - Avatar, button, input, modal, toast
 - [ ] **Phase 59: UI Pickers** - Emoji, GIF, mention autocomplete
-- [ ] **Phase 60: UI Sidebar** - Channel list, DM list, user profile
+- [x] **Phase 60: UI Sidebar** - Channel list, DM list, user profile
 - [ ] **Phase 61: UI Chat Core** - Message list, message item, input
 - [ ] **Phase 62: UI Chat Features** - Pinned bar, thread panel, reactions
 - [ ] **Phase 63: UI File Components** - Attachments, previews
@@ -584,7 +584,7 @@ None (custom application, no pre-existing domain skills)
 | 57 | UI Foundation | 1 | Done | 2026-02-05 |
 | 58 | UI Basic Components | 2 | Done | 2026-02-05 |
 | 59 | UI Pickers | 2 | Done | 2026-02-05 |
-| 60 | UI Sidebar | 1+ | In progress | - |
+| 60 | UI Sidebar | 2 | Done | 2026-02-05 |
 | 61 | UI Chat Core | TBD | Not started | - |
 | 62 | UI Chat Features | TBD | Not started | - |
 | 63 | UI File Components | TBD | Not started | - |
