@@ -1,0 +1,80 @@
+// DM list component
+//
+// Displays a scrollable list of direct message conversations with section header.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { DMListItem } from "dm_list_item.slint";
+
+// Data struct for DM items (mirrors Rust DMListItemData)
+export struct DMListItemData {
+    user-id: string,
+    display-name: string,
+    avatar-url: string,
+    initials: string,
+    presence-status: string,
+    last-message: string,
+    timestamp: string,
+    unread-count: int,
+}
+
+export component DMList inherits Rectangle {
+    // Properties
+    in property <[DMListItemData]> conversations: [];
+    in property <string> selected-conversation-id: "";
+
+    // Callbacks
+    callback conversation-selected(string);
+
+    // Layout
+    background: Colors.surface;
+
+    VerticalLayout {
+        // Section header
+        Rectangle {
+            height: 32px;
+            background: Colors.surface;
+
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                alignment: start;
+
+                Text {
+                    text: "DIRECT MESSAGES";
+                    color: Colors.text-muted;
+                    font-size: 11px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Scrollable DM list
+        Flickable {
+            viewport-height: dm-layout.preferred-height;
+
+            dm-layout := VerticalLayout {
+                padding-left: Spacing.xs;
+                padding-right: Spacing.xs;
+                spacing: 2px;
+
+                for item in root.conversations: DMListItem {
+                    user-id: item.user-id;
+                    display-name: item.display-name;
+                    initials: item.initials;
+                    presence-status: item.presence-status;
+                    last-message: item.last-message;
+                    timestamp: item.timestamp;
+                    unread-count: item.unread-count;
+                    selected: item.user-id == root.selected-conversation-id;
+
+                    clicked => {
+                        root.conversation-selected(item.user-id);
+                    }
+                }
+            }
+        }
+    }
+}

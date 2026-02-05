@@ -1,0 +1,108 @@
+// User profile bar component
+//
+// Displays current user's profile with avatar, name, status, and settings button.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Avatar } from "../components/avatar.slint";
+
+export component UserProfileBar inherits Rectangle {
+    // Properties
+    in property <string> display-name: "User";
+    in property <image> avatar-source;
+    in property <string> initials: "";
+    in property <string> presence-status: "online"; // "online", "away", "dnd", "offline"
+    in property <string> custom-status: "";
+
+    // Callbacks
+    callback settings-clicked();
+    callback profile-clicked();
+
+    // Layout
+    height: 64px;
+    background: Colors.background;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.md;
+        alignment: stretch;
+
+        // Clickable profile area (avatar + text)
+        profile-touch := TouchArea {
+            horizontal-stretch: 1;
+
+            clicked => {
+                root.profile-clicked();
+            }
+
+            HorizontalLayout {
+                spacing: Spacing.md;
+
+                // Avatar with presence
+                Avatar {
+                    size: 40px;
+                    source: root.avatar-source;
+                    fallback-text: root.initials;
+                    show-presence: true;
+                    presence-color: root.presence-status == "online" ? Colors.online
+                                 : root.presence-status == "away" ? Colors.away
+                                 : root.presence-status == "dnd" ? Colors.dnd
+                                 : Colors.offline;
+                    vertical-alignment: center;
+                }
+
+                // Name and status text
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 2px;
+
+                    // Display name
+                    Text {
+                        text: root.display-name;
+                        color: Colors.text-primary;
+                        font-size: 14px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+
+                    // Status text (custom or presence)
+                    Text {
+                        text: root.custom-status != "" ? root.custom-status
+                            : root.presence-status == "online" ? "Online"
+                            : root.presence-status == "away" ? "Away"
+                            : root.presence-status == "dnd" ? "Do Not Disturb"
+                            : "Offline";
+                        color: Colors.text-secondary;
+                        font-size: 12px;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // Settings gear icon
+        settings-button := Rectangle {
+            width: 32px;
+            height: 32px;
+            border-radius: Spacing.radius-sm;
+            background: settings-touch.has-hover ? Colors.surface-hover : transparent;
+            vertical-alignment: center;
+
+            Text {
+                text: "\u{2699}"; // Gear icon (Unicode)
+                color: Colors.text-secondary;
+                font-size: 20px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            settings-touch := TouchArea {
+                clicked => {
+                    root.settings-clicked();
+                }
+            }
+        }
+    }
+}
