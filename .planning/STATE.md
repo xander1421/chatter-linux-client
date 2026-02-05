@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 47 of 66 (State Streaming & Offline)
+Phase: 48 of 66 (Events Bus & Handlers)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-05 — Completed 47-01-PLAN.md (streaming & offline state)
+Last activity: 2026-02-05 — Completed 48-01-PLAN.md (events bus & handlers)
 
 Progress: ██████████████████████████████████████████████████████████████████████░░ 98%
 
@@ -75,10 +75,11 @@ Progress: ███████████████████████�
 | 45 | 1 | ~4m | ~4m |
 | 46 | 1 | ~4m | ~4m |
 | 47 | 1 | ~4m | ~4m |
+| 48 | 1 | ~18m | ~18m |
 
 **Recent Trend:**
-- Last 5 plans: 44-1 (~3m), 45-1 (~4m), 46-1 (~4m), 47-1 (~4m)
-- Trend: State layer progressing smoothly
+- Last 5 plans: 45-1 (~4m), 46-1 (~4m), 47-1 (~4m), 48-1 (~18m)
+- Trend: Events layer complete; phase 48 included more complex EventHandlers
 
 ## Accumulated Context
 
@@ -209,6 +210,9 @@ Recent decisions affecting current work:
 - StreamingState is simplified UI view, not raw aggregator data
 - OfflineState automatically updates last_connected on successful connection
 - set_queue_stats syncs total_operations to queue_count for convenience
+- Re-export DomainEvent from inbox::handlers instead of duplicating (single source of truth)
+- EventBus channel capacities: 64 for domain (burst handling), 32 for UI
+- EventHandlers.spawn() for background processing, sync handle_domain_event() for testability
 
 ### Deferred Issues
 
@@ -221,6 +225,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 47-01-PLAN.md (streaming & offline state)
+Stopped at: Completed 48-01-PLAN.md (events bus & handlers)
 Resume file: None
-Next action: Plan Phase 48 (Events Bus & Handlers)
+Next action: Plan phase 49 (System Keyring & Directories)

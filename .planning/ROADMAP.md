@@ -76,7 +76,7 @@ None (custom application, no pre-existing domain skills)
 - [ ] **Phase 45: State Chat Stores** - ChatState, MessageState, PinnedState
 - [ ] **Phase 46: State User Stores** - UserState, PresenceState, PrivacyState
 - [ ] **Phase 47: State Streaming & Offline** - StreamingState, OfflineState
-- [ ] **Phase 48: Events Bus & Handlers** - EventBus, domain/UI events
+- [x] **Phase 48: Events Bus & Handlers** - EventBus, domain/UI events
 
 ### System Integration
 - [ ] **Phase 49: System Keyring & Directories** - Secret Service, XDG
@@ -572,7 +572,7 @@ None (custom application, no pre-existing domain skills)
 | 45 | State Chat Stores | 1 | Done | 2026-02-05 |
 | 46 | State User Stores | 1 | Done | 2026-02-05 |
 | 47 | State Streaming & Offline | 1 | Done | 2026-02-05 |
-| 48 | Events Bus & Handlers | TBD | Not started | - |
+| 48 | Events Bus & Handlers | 1 | Done | 2026-02-05 |
 | 49 | System Keyring & Directories | TBD | Not started | - |
 | 50 | System Tray & Notifications | TBD | Not started | - |
 | 51 | System Utilities | TBD | Not started | - |
