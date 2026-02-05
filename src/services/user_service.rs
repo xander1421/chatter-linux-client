@@ -6,11 +6,13 @@ use std::sync::Arc;
 
 use tokio_stream::StreamExt;
 
+use chrono::Utc;
+
 use crate::domain::ids::UserId;
-use crate::domain::user::{PresenceStatus, Profile, StatusMessage};
+use crate::domain::user::{Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage};
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::user_client::UserClient;
-use crate::proto::chat_v1::{user_event, UserProfile};
+use crate::proto::chat_v1::{user_event, FriendStatus, UserProfile};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 use crate::storage::repositories::user_repo::UserRepository;
 
@@ -186,6 +188,123 @@ impl UserService {
 
         Ok(profile)
     }
+
+    // ========================================================================
+    // Friend Management
+    // ========================================================================
+
+    /// Send a friend request to another user.
+    ///
+    /// Calls the server to initiate the friend request, then stores the
+    /// pending friendship locally.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_client` - Mutable reference to user client
+    /// * `friend_id` - ID of user to send friend request to
+    /// * `message` - Optional message to include with request
+    pub async fn send_friend_request(
+        &self,
+        user_client: &mut UserClient,
+        friend_id: &UserId,
+        message: Option<&str>,
+    ) -> Result<Friendship, UserError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Call server (streaming response)
+        let friend_id_str = friend_id.to_string();
+        let mut stream = user_client
+            .send_friend_request(&friend_id_str, message)
+            .await?;
+
+        // Consume stream looking for FriendStatusChanged event
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            if let Some(user_event::Event::FriendStatusChanged(ref _status_response)) = event.event
+            {
+                // Server confirmed the request was sent
+                break;
+            }
+        }
+
+        // Create local friendship with Pending status
+        let friendship = Friendship {
+            user_id: current_user,
+            friend_id: friend_id.clone(),
+            status: FriendshipStatus::Pending,
+            created_at: Utc::now(),
+        };
+
+        // Insert to local storage (ignore if already exists)
+        let _ = self.user_repo.insert_friendship(&friendship);
+
+        Ok(friendship)
+    }
+
+    /// Respond to a friend request.
+    ///
+    /// Accepts or declines a pending friend request. If accepted, updates
+    /// local storage with accepted status. If declined, removes the friendship.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_client` - Mutable reference to user client
+    /// * `friend_id` - ID of user who sent the request
+    /// * `accept` - Whether to accept (true) or decline (false) the request
+    pub async fn respond_friend_request(
+        &self,
+        user_client: &mut UserClient,
+        friend_id: &UserId,
+        accept: bool,
+    ) -> Result<Option<Friendship>, UserError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Determine FriendStatus for proto
+        let status = if accept {
+            FriendStatus::Accepted
+        } else {
+            FriendStatus::Declined
+        };
+
+        // Call server (streaming response)
+        let friend_id_str = friend_id.to_string();
+        let mut stream = user_client
+            .respond_friend_request(&friend_id_str, status, None)
+            .await?;
+
+        // Consume stream for confirmation
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            if let Some(user_event::Event::FriendStatusChanged(ref _status_response)) = event.event
+            {
+                // Server confirmed the response
+                break;
+            }
+        }
+
+        if accept {
+            // Upsert friendship with Accepted status
+            let friendship = Friendship {
+                user_id: current_user,
+                friend_id: friend_id.clone(),
+                status: FriendshipStatus::Accepted,
+                created_at: Utc::now(),
+            };
+
+            // Try update first, then insert if not exists
+            if self.user_repo.update_friendship(&friendship).is_err() {
+                let _ = self.user_repo.insert_friendship(&friendship);
+            }
+
+            Ok(Some(friendship))
+        } else {
+            // Delete friendship from local storage if exists
+            let _ = self.user_repo.delete_friendship(&current_user, friend_id);
+            Ok(None)
+        }
+    }
 }
 
 // ============================================================================
@@ -264,6 +383,19 @@ fn domain_presence_to_proto(status: PresenceStatus) -> i32 {
         PresenceStatus::Online => 2,
         PresenceStatus::Away => 3,
         PresenceStatus::DoNotDisturb => 4,
+    }
+}
+
+/// Convert proto FriendStatus (i32) to domain FriendshipStatus.
+///
+/// Proto values:
+/// - 3 = Accepted
+/// - Others (including Pending=2, Declined=4) -> Pending
+fn proto_friend_status_to_domain(status: i32) -> FriendshipStatus {
+    match status {
+        3 => FriendshipStatus::Accepted,
+        5 => FriendshipStatus::Blocked,
+        _ => FriendshipStatus::Pending,
     }
 }
 
