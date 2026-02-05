@@ -18,9 +18,11 @@ pub mod video_recorder;
 // Re-exports for convenient access
 pub use audio_player::{AudioPlayer, PlaybackState};
 pub use audio_recorder::{AudioRecorder, RecordingState};
+pub use code_preview::{CodePreview, HighlightedLine, HighlightedSegment, SegmentStyle};
 pub use file_picker::{FileFilter, FilePicker, FilePickerConfig};
 pub use image_processor::{ImageProcessor, DEFAULT_THUMBNAIL_SIZE};
 pub use mime_detector::MimeDetector;
+pub use pdf_viewer::PdfViewer;
 pub use thumbnail_cache::ThumbnailCache;
 pub use video_player::VideoPlayer;
 pub use video_recorder::VideoRecorder;
