@@ -27,4 +27,8 @@ pub enum MediaError {
     /// Audio/video playback error.
     #[error("playback error: {0}")]
     PlaybackError(String),
+
+    /// Audio recording error.
+    #[error("recording error: {0}")]
+    RecordingError(String),
 }
