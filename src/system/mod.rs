@@ -11,5 +11,8 @@ pub mod notifications;
 pub mod open;
 pub mod tray;
 
+pub use dbus::DbusClient;
 pub use directories::Directories;
 pub use keyring::Keyring;
+pub use notifications::DesktopNotifications;
+pub use tray::{SystemTray, TrayHandle, TrayMessage, TrayStatus};
