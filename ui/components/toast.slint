@@ -1,0 +1,103 @@
+// Toast notification component
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component Toast inherits Rectangle {
+    in property <string> message: "";
+    in property <string> variant: "info";  // "success", "error", "warning", "info"
+    in property <bool> visible: false;
+
+    callback dismissed();
+
+    // Computed variant color
+    property <color> variant-color:
+        variant == "success" ? Colors.success :
+        variant == "error" ? Colors.error :
+        variant == "warning" ? Colors.warning :
+        Colors.info;
+
+    // Visibility and animation
+    opacity: root.visible ? 1 : 0;
+    animate opacity { duration: 200ms; }
+
+    // Toast container
+    width: 320px;
+    height: content-layout.preferred-height + Spacing.md * 2;
+    background: Colors.surface;
+    border-radius: Spacing.radius-md;
+
+    // Left accent border
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 4px;
+        height: parent.height;
+        background: variant-color;
+        border-radius: Spacing.radius-md;
+    }
+
+    // Subtle shadow effect via border
+    border-color: #00000040;
+    border-width: 1px;
+
+    content-layout := HorizontalLayout {
+        padding: Spacing.md;
+        padding-left: Spacing.lg;  // Extra padding for accent border
+        spacing: Spacing.md;
+
+        // Variant indicator circle
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: variant-color;
+            y: (parent.height - self.height) / 2;
+        }
+
+        // Message text
+        Text {
+            text: root.message;
+            color: Colors.text-primary;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+        }
+
+        // Dismiss button
+        Rectangle {
+            width: 20px;
+            height: 20px;
+            border-radius: Spacing.radius-sm;
+            background: dismiss-area.has-hover ? Colors.surface-hover : transparent;
+
+            // Small X icon
+            Rectangle {
+                width: 10px;
+                height: 2px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                background: Colors.text-muted;
+                rotation-angle: 45deg;
+            }
+            Rectangle {
+                width: 10px;
+                height: 2px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                background: Colors.text-muted;
+                rotation-angle: -45deg;
+            }
+
+            dismiss-area := TouchArea {
+                width: 100%;
+                height: 100%;
+                clicked => {
+                    root.dismissed();
+                }
+            }
+        }
+    }
+}
