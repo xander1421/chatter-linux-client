@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 36 of 66 (Services User)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-05 — Completed 36-02-PLAN.md (friend management operations)
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-02-05 — Completed 36-03-PLAN.md (blocking and local queries)
 
-Progress: ██████████████████████████████████████████████████████████████████░░░░░░ 88%
+Progress: ██████████████████████████████████████████████████████████████████░░░░░░ 89%
 
 ## Performance Metrics
 
@@ -62,10 +62,11 @@ Progress: ███████████████████████�
 | 33 | 2 | ~4m | ~2m |
 | 34 | 2 | ~6m | ~3m |
 | 35 | 3 | ~20m | ~7m |
+| 36 | 3 | ~19m | ~6m |
 
 **Recent Trend:**
-- Last 5 plans: 35-2 (~7m), 35-3 (~5m), 36-1 (~5m), 36-2 (~8m)
-- Trend: Phase 36 in progress
+- Last 5 plans: 35-3 (~5m), 36-1 (~5m), 36-2 (~8m), 36-3 (~6m)
+- Trend: Phase 36 complete
 
 ## Accumulated Context
 
@@ -179,6 +180,8 @@ Recent decisions affecting current work:
 - Streaming RPC consumption: while let loop with event variant matching
 - ChannelService follows MessageService pattern: &mut client, server-first, upsert locally
 - FriendRequestFilter enum mirrors proto; respond_friend_request returns Option<Friendship>
+- Local query methods skip auth check (get_user_local, get_profile_local, search_users_local)
+- Search results NOT stored locally (discovery pattern, not relationships)
 
 ### Deferred Issues
 
@@ -191,6 +194,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 36-02-PLAN.md (friend management operations)
-Resume file: .planning/phases/36-services-user/36-03-PLAN.md
-Next action: Execute 36-03-PLAN.md (blocking operations)
+Stopped at: Completed 36-03-PLAN.md (blocking and local queries)
+Resume file: None
+Next action: Plan Phase 37 (Services Presence)
