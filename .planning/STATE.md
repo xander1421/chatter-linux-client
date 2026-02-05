@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 60 of 66 (UI Sidebar)
-Plan: 2 of 2 in current phase
-Status: Phase complete
-Last activity: 2026-02-05 — Completed 60-02-PLAN.md (DM list, user profile bar)
+Phase: 61 of 66 (UI Chat Core)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-05 — Completed 61-01-PLAN.md (MessageItem, MessageList)
 
 Progress: █████████████████████████████████████████████████████████████████████████ 99%
 
@@ -90,9 +90,11 @@ Progress: ███████████████████████�
 | 59 | 2 | ~22m | ~11m |
 | 60 | 2 | ~5m | ~2.5m |
 
+| 61 | 1 | ~3m | ~3m |
+
 **Recent Trend:**
-- Last 5 plans: 59-1 (~6m), 59-2 (~16m), 60-1 (~2m), 60-2 (~3m)
-- Trend: Phase 60 complete; UI Sidebar with all sections
+- Last 5 plans: 59-2 (~16m), 60-1 (~2m), 60-2 (~3m), 61-1 (~3m)
+- Trend: Phase 61 in progress; MessageItem and MessageList components
 
 ## Accumulated Context
 
@@ -264,6 +266,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 60-02-PLAN.md (DM list, user profile bar)
+Stopped at: Completed 61-01-PLAN.md (MessageItem, MessageList)
 Resume file: None
-Next action: Plan Phase 61 (UI Chat Core)
+Next action: Execute 61-02-PLAN.md (ChatLayout integration)
