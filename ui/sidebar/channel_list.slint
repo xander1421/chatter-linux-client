@@ -1,9 +1,72 @@
 // Channel list component
+//
+// Displays a scrollable list of channels with section header.
 
 import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { ChannelListItem } from "channel_list_item.slint";
+
+// Data struct for channel items (mirrors Rust ChannelListItemData)
+export struct ChannelListItemData {
+    channel-id: string,
+    name: string,
+    channel-type: string,
+    unread-count: int,
+}
 
 export component ChannelList inherits Rectangle {
+    // Properties
+    in property <[ChannelListItemData]> channels: [];
+    in property <string> selected-channel-id: "";
+
+    // Callbacks
+    callback channel-selected(string);
+
+    // Layout
     background: Colors.surface;
 
-    // Placeholder for channel list
+    VerticalLayout {
+        // Section header
+        Rectangle {
+            height: 32px;
+            background: Colors.surface;
+
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                alignment: start;
+
+                Text {
+                    text: "CHANNELS";
+                    color: Colors.text-muted;
+                    font-size: 11px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Scrollable channel list
+        Flickable {
+            viewport-height: channel-layout.preferred-height;
+
+            channel-layout := VerticalLayout {
+                padding-left: Spacing.xs;
+                padding-right: Spacing.xs;
+                spacing: 2px;
+
+                for item in root.channels: ChannelListItem {
+                    name: item.name;
+                    channel-type: item.channel-type;
+                    unread-count: item.unread-count;
+                    selected: item.channel-id == root.selected-channel-id;
+
+                    clicked => {
+                        root.channel-selected(item.channel-id);
+                    }
+                }
+            }
+        }
+    }
 }
