@@ -23,4 +23,8 @@ pub enum MediaError {
     /// Cache operation failed.
     #[error("cache error: {0}")]
     CacheError(String),
+
+    /// Audio/video playback error.
+    #[error("playback error: {0}")]
+    PlaybackError(String),
 }
