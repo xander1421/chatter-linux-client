@@ -2,36 +2,54 @@
 //!
 //! Rust to Slint data bridge for reactive state synchronization.
 
-use slint::Weak;
-
 use crate::events::EventBus;
-use crate::state::{AuthState, UIState};
-
-// Include the generated Slint module to access MainWindow
-slint::include_modules!();
+use crate::state::{AuthState, UIState, UIStateData};
 
 /// UI bridge connecting Rust state stores to Slint UI.
 ///
 /// The bridge holds references to application state stores and the event bus,
 /// providing methods to:
-/// - Wire Slint callbacks to Rust handlers
-/// - Push state changes to Slint properties asynchronously
+/// - Access state for UI callback handlers
+/// - Subscribe to state changes for pushing to Slint properties
+///
+/// # Architecture
+///
+/// The bridge is designed to be used from the main binary where `slint::include_modules!()`
+/// is called. The main binary:
+/// 1. Creates the UiBridge with state stores
+/// 2. Creates the MainWindow (from slint::include_modules!)
+/// 3. Wires callbacks using bridge.ui_state(), bridge.auth_state(), etc.
+/// 4. Spawns a sync task using bridge.subscribe_ui_state()
+///
+/// This design avoids having the library depend on Slint-generated types,
+/// which would create duplicate type definitions.
 ///
 /// # Example
 ///
 /// ```ignore
-/// let ui_state = UIState::new();
-/// let auth_state = AuthState::new();
-/// let event_bus = EventBus::new();
+/// // In main.rs:
+/// slint::include_modules!();
 ///
 /// let bridge = UiBridge::new(ui_state, auth_state, event_bus);
-///
 /// let window = MainWindow::new().unwrap();
-/// bridge.setup_callbacks(&window);
 ///
-/// let weak = window.as_weak();
+/// // Wire callbacks
+/// let ui_state = bridge.ui_state().clone();
+/// window.on_toggle_sidebar(move || {
+///     ui_state.toggle_sidebar();
+/// });
+///
+/// // Spawn sync task
+/// let weak_window = window.as_weak();
+/// let mut rx = bridge.subscribe_ui_state();
 /// tokio::spawn(async move {
-///     bridge.start_state_sync(weak).await;
+///     while let Ok(state) = rx.recv().await {
+///         if let Some(w) = weak_window.upgrade() {
+///             // Push state to Slint
+///         } else {
+///             break;
+///         }
+///     }
 /// });
 ///
 /// window.run().unwrap();
@@ -60,109 +78,61 @@ impl UiBridge {
         }
     }
 
-    /// Wire Slint callbacks to Rust handlers.
-    ///
-    /// This sets up the callback connections between UI actions (button clicks,
-    /// input changes, etc.) and Rust business logic.
-    ///
-    /// Should be called once after creating the `MainWindow`.
-    ///
-    /// # Current Implementation
-    ///
-    /// This is a placeholder. As UI components are added in later phases,
-    /// this method will wire up callbacks like:
-    /// - Login button → AuthService::login
-    /// - Send message → MessageService::send
-    /// - Toggle sidebar → UIState::toggle_sidebar
-    pub fn setup_callbacks(&self, _window: &MainWindow) {
-        // Placeholder: callbacks will be wired as UI components are implemented
-        // Example pattern for later:
-        //
-        // let ui_state = self.ui_state.clone();
-        // window.on_toggle_sidebar(move || {
-        //     ui_state.toggle_sidebar();
-        // });
-        //
-        // let event_bus = self.event_bus.clone();
-        // window.on_send_message(move |text| {
-        //     event_bus.emit_ui(UiEvent::SendMessage { text: text.to_string() });
-        // });
-    }
-
-    /// Start the async state synchronization loop.
-    ///
-    /// This spawns a background task that listens for state changes from
-    /// Rust stores and pushes updates to Slint properties.
-    ///
-    /// Uses `Weak<MainWindow>` to allow the window to close normally.
-    /// When the window is dropped, the weak reference will fail to upgrade
-    /// and the sync loop will exit.
-    ///
-    /// # Current Implementation
-    ///
-    /// This is a placeholder. As Slint properties are defined in later phases,
-    /// this method will push updates like:
-    /// - UIStateData changes → theme, compact_mode, sidebar_collapsed properties
-    /// - AuthStateData changes → is_logged_in, display_name properties
-    pub async fn start_state_sync(&self, window: Weak<MainWindow>) {
-        // Clone state stores for the async block
-        let ui_state = self.ui_state.clone();
-        let _auth_state = self.auth_state.clone();
-
-        // Subscribe to UI state changes
-        let mut ui_rx = ui_state.subscribe();
-
-        // State sync loop
-        loop {
-            tokio::select! {
-                // UI state changes
-                result = ui_rx.recv() => {
-                    match result {
-                        Ok(_state) => {
-                            // Try to upgrade weak reference
-                            if let Some(_window) = window.upgrade() {
-                                // Push state to Slint properties
-                                // Example pattern for later:
-                                //
-                                // window.invoke_from_rust(move || {
-                                //     window.set_sidebar_collapsed(state.sidebar_collapsed);
-                                //     window.set_compact_mode(state.compact_mode);
-                                // });
-                            } else {
-                                // Window closed, exit sync loop
-                                break;
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            // Channel closed, exit sync loop
-                            break;
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            // Missed some updates, continue (we'll get the next one)
-                            tracing::warn!("UI state sync lagged by {} messages", n);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     /// Get a reference to the UI state.
+    ///
+    /// Use this to:
+    /// - Read current state: `bridge.ui_state().get()`
+    /// - Update state in callbacks: `bridge.ui_state().toggle_sidebar()`
     #[must_use]
     pub fn ui_state(&self) -> &UIState {
         &self.ui_state
     }
 
     /// Get a reference to the auth state.
+    ///
+    /// Use this to:
+    /// - Check login status: `bridge.auth_state().is_logged_in()`
+    /// - Read user info: `bridge.auth_state().get().display_name`
     #[must_use]
     pub fn auth_state(&self) -> &AuthState {
         &self.auth_state
     }
 
     /// Get a reference to the event bus.
+    ///
+    /// Use this to emit UI events or subscribe to domain events.
     #[must_use]
     pub fn event_bus(&self) -> &EventBus {
         &self.event_bus
+    }
+
+    /// Subscribe to UI state changes.
+    ///
+    /// Returns a receiver that emits `UIStateData` whenever the UI state changes.
+    /// Use this to push state updates to Slint properties.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut rx = bridge.subscribe_ui_state();
+    /// while let Ok(state) = rx.recv().await {
+    ///     window.set_sidebar_collapsed(state.sidebar_collapsed);
+    /// }
+    /// ```
+    #[must_use]
+    pub fn subscribe_ui_state(&self) -> tokio::sync::broadcast::Receiver<UIStateData> {
+        self.ui_state.subscribe()
+    }
+
+    /// Subscribe to auth state changes.
+    ///
+    /// Returns a receiver that emits `AuthStateData` whenever the auth state changes.
+    /// Use this to update login UI, show/hide authenticated views, etc.
+    #[must_use]
+    pub fn subscribe_auth_state(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::state::AuthStateData> {
+        self.auth_state.subscribe()
     }
 }
 
@@ -220,5 +190,44 @@ mod tests {
         let _ = bridge.ui_state();
         let _ = bridge.auth_state();
         let _ = bridge.event_bus();
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_ui_state() {
+        let ui_state = UIState::new();
+        let auth_state = AuthState::new();
+        let event_bus = EventBus::new();
+
+        let bridge = UiBridge::new(ui_state, auth_state, event_bus);
+        let mut rx = bridge.subscribe_ui_state();
+
+        // Update state
+        bridge.ui_state().set_compact_mode(true);
+
+        // Should receive the update
+        let state = rx.recv().await.unwrap();
+        assert!(state.compact_mode);
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_auth_state() {
+        use crate::domain::ids::UserId;
+
+        let ui_state = UIState::new();
+        let auth_state = AuthState::new();
+        let event_bus = EventBus::new();
+
+        let bridge = UiBridge::new(ui_state, auth_state, event_bus);
+        let mut rx = bridge.subscribe_auth_state();
+
+        // Update state
+        let user_id = UserId::new();
+        bridge
+            .auth_state()
+            .set_logged_in(user_id, 1, "Test".to_string());
+
+        // Should receive the update
+        let state = rx.recv().await.unwrap();
+        assert_eq!(state.current_user_id, Some(user_id));
     }
 }

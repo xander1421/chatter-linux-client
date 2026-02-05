@@ -9,4 +9,4 @@ pub mod handlers;
 pub mod widgets;
 
 // Re-export bridge types for convenience
-pub use bridge::{MainWindow, UiBridge};
+pub use bridge::UiBridge;
