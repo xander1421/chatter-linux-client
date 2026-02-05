@@ -1,0 +1,147 @@
+// ChannelTemplates component - Grid of channel template cards for selection
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+// Individual template card
+component TemplateCard inherits Rectangle {
+    in property <string> template-id;
+    in property <string> name;
+    in property <string> description;
+    in property <color> icon-color;
+    in property <bool> selected: false;
+
+    callback clicked();
+
+    property <bool> hovered: touch.has-hover;
+
+    width: 100%;
+    height: 120px;
+    border-radius: Spacing.radius-md;
+    background: hovered ? Colors.surface-hover : Colors.surface;
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    VerticalLayout {
+        padding: Spacing.md;
+        spacing: Spacing.sm;
+
+        // Icon placeholder
+        Rectangle {
+            width: 40px;
+            height: 40px;
+            border-radius: Spacing.radius-md;
+            background: root.icon-color.with-alpha(0.2);
+
+            // Inner icon indicator
+            Rectangle {
+                width: 20px;
+                height: 20px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: Spacing.radius-sm;
+                background: root.icon-color;
+            }
+        }
+
+        // Template name
+        Text {
+            text: root.name;
+            color: Colors.text-primary;
+            font-size: Typography.sm;
+            font-weight: Typography.semibold;
+        }
+
+        // Template description
+        Text {
+            text: root.description;
+            color: Colors.text-secondary;
+            font-size: Typography.xs;
+            wrap: word-wrap;
+            overflow: elide;
+        }
+    }
+}
+
+export component ChannelTemplates inherits Rectangle {
+    in-out property <string> selected-template: "";
+
+    callback template-selected(string);
+
+    background: transparent;
+
+    // Grid layout using nested HorizontalLayouts
+    VerticalLayout {
+        spacing: Spacing.md;
+
+        // Row 1: General and Project
+        HorizontalLayout {
+            spacing: Spacing.md;
+
+            TemplateCard {
+                template-id: "general";
+                name: "General";
+                description: "Open discussion for everyone";
+                icon-color: Colors.info;
+                selected: root.selected-template == "general";
+
+                clicked => {
+                    root.selected-template = "general";
+                    root.template-selected("general");
+                }
+            }
+
+            TemplateCard {
+                template-id: "project";
+                name: "Project";
+                description: "Focused team collaboration";
+                icon-color: Colors.success;
+                selected: root.selected-template == "project";
+
+                clicked => {
+                    root.selected-template = "project";
+                    root.template-selected("project");
+                }
+            }
+        }
+
+        // Row 2: Announcement and Ephemeral
+        HorizontalLayout {
+            spacing: Spacing.md;
+
+            TemplateCard {
+                template-id: "announcement";
+                name: "Announcement";
+                description: "One-way broadcast channel";
+                icon-color: Colors.warning;
+                selected: root.selected-template == "announcement";
+
+                clicked => {
+                    root.selected-template = "announcement";
+                    root.template-selected("announcement");
+                }
+            }
+
+            TemplateCard {
+                template-id: "ephemeral";
+                name: "Ephemeral";
+                description: "Messages auto-delete after 24h";
+                icon-color: Colors.error;
+                selected: root.selected-template == "ephemeral";
+
+                clicked => {
+                    root.selected-template = "ephemeral";
+                    root.template-selected("ephemeral");
+                }
+            }
+        }
+    }
+}
