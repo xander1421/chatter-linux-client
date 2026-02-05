@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 50 — System Tray & Notifications
+**Current focus:** Phase 51 — System Utilities
 
 ## Current Position
 
-Phase: 50 of 66 (System Tray & Notifications)
+Phase: 51 of 66 (System Utilities)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-05 — Completed 50-01-PLAN.md (system tray & notifications)
+Last activity: 2026-02-05 — Completed 51-01-PLAN.md (system utilities)
 
 Progress: ██████████████████████████████████████████████████████████████████████░░ 98%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 63
+- Total plans completed: 64
 - Average duration: ~4.6 min
-- Total execution time: ~287 min
+- Total execution time: ~292 min
 
 **By Phase:**
 
@@ -78,10 +78,11 @@ Progress: ███████████████████████�
 | 48 | 1 | ~18m | ~18m |
 | 49 | 1 | ~2m | ~2m |
 | 50 | 1 | ~3m | ~3m |
+| 51 | 1 | ~5m | ~5m |
 
 **Recent Trend:**
-- Last 5 plans: 47-1 (~4m), 48-1 (~18m), 49-1 (~2m), 50-1 (~3m)
-- Trend: System integration layer progressing; tray/notifications quick execution
+- Last 5 plans: 48-1 (~18m), 49-1 (~2m), 50-1 (~3m), 51-1 (~5m)
+- Trend: System integration layer complete; ready for media phase
 
 ## Accumulated Context
 
@@ -219,6 +220,10 @@ Recent decisions affecting current work:
 - Runtime directory is optional (best-effort creation)
 - Keyring entries created per-operation (not cached in struct)
 - Keyring tests marked #[ignore] for CI environments without Secret Service
+- arboard with wayland-data-control for native Wayland clipboard support (auto-fallback to X11)
+- ExternalOpener is stateless (struct as namespace, all methods independent)
+- AutostartManager uses dirs crate for config dir (independent of Directories struct)
+- URL validation limited to http/https/mailto for security
 
 ### Deferred Issues
 
@@ -231,6 +236,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 50-01-PLAN.md (system tray & notifications)
+Stopped at: Completed 51-01-PLAN.md (system utilities)
 Resume file: None
-Next action: Plan phase 51 (System Utilities)
+Next action: Plan phase 52 (Media File Handling)
