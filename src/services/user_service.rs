@@ -12,9 +12,37 @@ use crate::domain::ids::UserId;
 use crate::domain::user::{Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage};
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::user_client::UserClient;
-use crate::proto::chat_v1::{user_event, FriendStatus, UserProfile};
+use crate::proto::chat_v1::{friend_requests_filter, user_event, FriendStatus, UserProfile};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 use crate::storage::repositories::user_repo::UserRepository;
+
+/// Filter for friend request queries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FriendRequestFilter {
+    /// All friend requests.
+    All,
+    /// Pending requests only.
+    Pending,
+    /// Accepted requests only.
+    Accepted,
+    /// Requests sent by current user.
+    Sent,
+    /// Requests received by current user.
+    Received,
+}
+
+impl FriendRequestFilter {
+    /// Convert to proto filter enum value.
+    fn to_proto(self) -> friend_requests_filter::Filter {
+        match self {
+            FriendRequestFilter::All => friend_requests_filter::Filter::All,
+            FriendRequestFilter::Pending => friend_requests_filter::Filter::Pending,
+            FriendRequestFilter::Accepted => friend_requests_filter::Filter::Accepted,
+            FriendRequestFilter::Sent => friend_requests_filter::Filter::Sent,
+            FriendRequestFilter::Received => friend_requests_filter::Filter::Received,
+        }
+    }
+}
 
 /// User service errors.
 #[derive(Debug, thiserror::Error)]
@@ -304,6 +332,124 @@ impl UserService {
             let _ = self.user_repo.delete_friendship(&current_user, friend_id);
             Ok(None)
         }
+    }
+
+    /// List accepted friends.
+    ///
+    /// Fetches friends from server and upserts to local storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_client` - Mutable reference to user client
+    /// * `limit` - Maximum number of friends to return
+    /// * `offset` - Pagination offset
+    pub async fn list_friends(
+        &self,
+        user_client: &mut UserClient,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Friendship>, UserError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Call server (unary)
+        let response = user_client
+            .list_friends(limit as i32, offset as i32)
+            .await?;
+
+        // Convert each friend to domain Friendship and upsert
+        let mut friendships = Vec::with_capacity(response.friends.len());
+        for friend in &response.friends {
+            let friend_id: UserId = friend
+                .user_id
+                .parse()
+                .map_err(|_| UserError::InvalidInput("invalid friend user ID".to_string()))?;
+
+            let friendship = Friendship {
+                user_id: current_user.clone(),
+                friend_id,
+                status: FriendshipStatus::Accepted,
+                created_at: Utc::now(),
+            };
+
+            // Upsert to local storage
+            if self.user_repo.update_friendship(&friendship).is_err() {
+                let _ = self.user_repo.insert_friendship(&friendship);
+            }
+
+            friendships.push(friendship);
+        }
+
+        Ok(friendships)
+    }
+
+    /// List friend requests with optional filtering.
+    ///
+    /// Fetches friend requests from server and upserts to local storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `user_client` - Mutable reference to user client
+    /// * `filter` - Filter for request types
+    /// * `limit` - Maximum number of requests to return
+    /// * `offset` - Pagination offset
+    pub async fn list_friend_requests(
+        &self,
+        user_client: &mut UserClient,
+        filter: FriendRequestFilter,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Friendship>, UserError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Convert filter to proto
+        let proto_filter = filter.to_proto();
+
+        // Call server (unary)
+        let response = user_client
+            .list_friend_requests(proto_filter, limit as i32, offset as i32)
+            .await?;
+
+        // Convert each request to domain Friendship and upsert
+        let mut friendships = Vec::with_capacity(response.requests.len());
+        for request in &response.requests {
+            let friend_id: UserId = request
+                .user_id
+                .parse()
+                .map_err(|_| UserError::InvalidInput("invalid request user ID".to_string()))?;
+
+            let status = proto_friend_status_to_domain(request.status);
+
+            let friendship = Friendship {
+                user_id: current_user.clone(),
+                friend_id,
+                status,
+                created_at: Utc::now(),
+            };
+
+            // Upsert to local storage
+            if self.user_repo.update_friendship(&friendship).is_err() {
+                let _ = self.user_repo.insert_friendship(&friendship);
+            }
+
+            friendships.push(friendship);
+        }
+
+        Ok(friendships)
+    }
+
+    /// Get friends from local storage only.
+    ///
+    /// Does not make any network calls.
+    pub fn get_friends_local(&self) -> Result<Vec<Friendship>, UserError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Return from local storage
+        self.user_repo
+            .list_friends(&current_user)
+            .map_err(UserError::Storage)
     }
 }
 
