@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 42 — Services AI Integration
+**Current focus:** Phase 45 — State Chat Stores
 
 ## Current Position
 
-Phase: 44 of 66 (State Core Stores)
+Phase: 45 of 66 (State Chat Stores)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-05 — Completed 44-01-PLAN.md (core state stores)
+Last activity: 2026-02-05 — Completed 45-01-PLAN.md (chat state stores)
 
-Progress: █████████████████████████████████████████████████████████████████████░░░ 96%
+Progress: █████████████████████████████████████████████████████████████████████░░░ 97%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 59
+- Total plans completed: 60
 - Average duration: ~4.6 min
-- Total execution time: ~273 min
+- Total execution time: ~277 min
 
 **By Phase:**
 
@@ -72,10 +72,11 @@ Progress: ███████████████████████�
 | 42 | 1 | ~5m | ~5m |
 | 43 | 2 | ~8m | ~4m |
 | 44 | 1 | ~3m | ~3m |
+| 45 | 1 | ~4m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 42-1 (~5m), 43-1 (~4m), 43-2 (~4m), 44-1 (~3m)
-- Trend: Phase 44 started with core state stores
+- Last 5 plans: 43-1 (~4m), 43-2 (~4m), 44-1 (~3m), 45-1 (~4m)
+- Trend: State layer progressing smoothly
 
 ## Accumulated Context
 
@@ -196,6 +197,9 @@ Recent decisions affecting current work:
 - Local search does not require authentication (querying locally stored data)
 - Server search requires authentication, results NOT stored locally (discovery pattern)
 - Combined search gracefully degrades (local-only if not authenticated or network fails)
+- Max 3 concurrent thread panels enforced in ChatState
+- PaginationCursor uses (has_more, oldest_id, oldest_timestamp) tuple
+- Navigation wraparound in PinnedState (next after last goes to first)
 
 ### Deferred Issues
 
@@ -208,6 +212,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 44-01-PLAN.md (core state stores)
+Stopped at: Completed 45-01-PLAN.md (chat state stores)
 Resume file: None
-Next action: Continue Phase 44 or plan next phase
+Next action: Plan Phase 46 (State User Stores)
