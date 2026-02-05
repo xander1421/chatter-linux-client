@@ -34,4 +34,7 @@ pub use sidebar_data::{
 };
 
 // Re-export file data types
-pub use file_data::{category_icon, AttachmentItemData};
+pub use file_data::{
+    category_icon, flatten_code_lines, AttachmentItemData, CodeLineData, FilePreviewData,
+    PreviewType,
+};
