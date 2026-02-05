@@ -79,7 +79,7 @@ export component SettingsScreen inherits Rectangle {
                     { id: "account", label: "Account", enabled: true },
                     { id: "privacy", label: "Privacy", enabled: true },
                     { id: "encryption", label: "Encryption", enabled: true },
-                    { id: "appearance", label: "Appearance", enabled: false }
+                    { id: "appearance", label: "Appearance", enabled: true }
                 ]: Rectangle {
                     height: 40px;
                     border-radius: Spacing.radius-md;
@@ -763,10 +763,11 @@ export component SettingsScreen inherits Rectangle {
                             }
                         }
 
-                        // Appearance section placeholder (disabled)
+                        // Appearance section
                         if active-section == "appearance": VerticalLayout {
-                            spacing: Spacing.md;
+                            spacing: Spacing.lg;
 
+                            // Section header
                             Text {
                                 text: "Appearance";
                                 color: Colors.text-primary;
@@ -775,9 +776,129 @@ export component SettingsScreen inherits Rectangle {
                             }
 
                             Text {
-                                text: "Appearance settings are coming soon.";
+                                text: "Dark theme is the only theme for v1.";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
+                            }
+
+                            // Theme selector (grayed out for v1)
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                opacity: 0.5;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Theme";
+                                            color: Colors.text-secondary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Choose your preferred color theme";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                        }
+                                    }
+
+                                    // Disabled dropdown indicator
+                                    Rectangle {
+                                        width: 100px;
+                                        height: 36px;
+                                        border-radius: Spacing.radius-md;
+                                        background: Colors.background;
+
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            alignment: space-between;
+
+                                            Text {
+                                                text: "Dark";
+                                                color: Colors.text-secondary;
+                                                font-size: Typography.sm;
+                                                vertical-alignment: center;
+                                            }
+
+                                            Text {
+                                                text: "v";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Font Size placeholder (grayed out)
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                opacity: 0.5;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Font Size";
+                                            color: Colors.text-secondary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Coming soon";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            font-italic: true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Message Density placeholder (grayed out)
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                opacity: 0.5;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Message Density";
+                                            color: Colors.text-secondary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Coming soon";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            font-italic: true;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
