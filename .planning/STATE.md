@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 ## Current Position
 
 Phase: 58 of 66 (UI Basic Components)
-Plan: 1 of 2 in current phase
-Status: In progress
-Last activity: 2026-02-05 — Completed 58-01-PLAN.md (UI Basic Components)
+Plan: 2 of 2 in current phase
+Status: Phase complete
+Last activity: 2026-02-05 — Completed 58-02-PLAN.md (UI Overlay Components)
 
 Progress: █████████████████████████████████████████████████████████████████████████ 99%
 
@@ -86,11 +86,11 @@ Progress: ███████████████████████�
 | 55 | 1 | ~4m | ~4m |
 | 56 | 2 | ~12m | ~6m |
 | 57 | 1 | ~4m | ~4m |
-| 58 | 1 | ~1m | ~1m |
+| 58 | 2 | ~3m | ~1.5m |
 
 **Recent Trend:**
-- Last 5 plans: 56-1 (~8m), 56-2 (~4m), 57-1 (~4m), 58-1 (~1m)
-- Trend: UI components progressing quickly; basic components done
+- Last 5 plans: 56-2 (~4m), 57-1 (~4m), 58-1 (~1m), 58-2 (~2m)
+- Trend: UI components progressing quickly; Phase 58 complete
 
 ## Accumulated Context
 
@@ -241,6 +241,9 @@ Recent decisions affecting current work:
 - Avatar presence dot uses background border for contrast
 - Button computed bg-color property for variant/state combinations
 - Input uses separate placeholder Text element for styling control
+- Modal nested TouchAreas for backdrop dismiss vs content click blocking
+- Toast 4px left accent border in variant color
+- Skeleton shimmer via linear gradient with infinite animation
 
 ### Deferred Issues
 
@@ -253,6 +256,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 58-01-PLAN.md (UI Basic Components)
+Stopped at: Completed 58-02-PLAN.md (UI Overlay Components)
 Resume file: None
 Next action: Plan phase 59 (UI Pickers)

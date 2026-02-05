@@ -582,7 +582,7 @@ None (custom application, no pre-existing domain skills)
 | 55 | Media Previews | 1 | Done | 2026-02-05 |
 | 56 | Media GIF & Embeds | 2 | Done | 2026-02-05 |
 | 57 | UI Foundation | 1 | Done | 2026-02-05 |
-| 58 | UI Basic Components | 2 | In progress | - |
+| 58 | UI Basic Components | 2 | Done | 2026-02-05 |
 | 59 | UI Pickers | TBD | Not started | - |
 | 60 | UI Sidebar | TBD | Not started | - |
 | 61 | UI Chat Core | TBD | Not started | - |
