@@ -79,6 +79,124 @@ impl ChannelService {
             .parse()
             .map_err(|_| ChannelError::InvalidInput("invalid user ID in settings".to_string()))
     }
+
+    /// Create a new channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `name` - Channel name
+    /// * `channel_type` - Type of channel (Public, Private, DirectMessage)
+    /// * `config` - Optional channel configuration
+    /// * `description` - Optional channel description
+    /// * `image_url` - Optional channel image URL
+    /// * `password` - Optional password for private channels
+    /// * `initial_members` - Initial member user IDs
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_channel(
+        &self,
+        channel_client: &mut ChannelClient,
+        name: &str,
+        channel_type: ChannelType,
+        config: Option<ChannelConfig>,
+        description: Option<&str>,
+        image_url: Option<&str>,
+        password: Option<&str>,
+        initial_members: Vec<UserId>,
+    ) -> Result<Channel, ChannelError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Validate name
+        let trimmed_name = name.trim();
+        if trimmed_name.is_empty() {
+            return Err(ChannelError::InvalidInput(
+                "channel name cannot be empty".to_string(),
+            ));
+        }
+
+        // Convert to proto types
+        let proto_type = domain_channel_type_to_proto(channel_type);
+        let proto_config = config.as_ref().map(domain_config_to_proto);
+
+        // Call server (returns stream)
+        let mut stream = channel_client
+            .create_channel(
+                trimmed_name,
+                proto_type,
+                proto_config,
+                initial_members.iter().map(|id| id.to_string()).collect(),
+                password,
+                description,
+                image_url,
+            )
+            .await?;
+
+        // Consume stream to find ChannelCreated event
+        let mut channel_opt: Option<Channel> = None;
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            if let Some(channel_event::Event::ChannelCreated(proto_channel)) = event.event {
+                channel_opt = Some(proto_to_domain_channel(&proto_channel)?);
+                break;
+            }
+        }
+
+        let channel = channel_opt.ok_or_else(|| {
+            ChannelError::InvalidInput("no channel created event received".to_string())
+        })?;
+
+        // Store in local DB
+        self.channel_repo.insert(&channel)?;
+
+        // Create membership for current user as Owner
+        let membership = Membership {
+            channel_id: channel.id.clone(),
+            user_id: current_user,
+            role: MemberRole::Owner,
+            joined_at: channel.created_at,
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: NotificationPreference::All,
+        };
+        self.channel_repo.insert_membership(&membership)?;
+
+        Ok(channel)
+    }
+
+    /// Get a channel by ID.
+    ///
+    /// Fetches from server and upserts to local storage.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel to fetch
+    pub async fn get_channel(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+    ) -> Result<Channel, ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (unary, returns proto Channel directly)
+        let proto_channel = channel_client
+            .get_channel(&channel_id.to_string())
+            .await?;
+
+        // Convert to domain
+        let channel = proto_to_domain_channel(&proto_channel)?;
+
+        // Upsert to local storage (insert if missing, update if exists)
+        match self.channel_repo.get(channel_id)? {
+            Some(_) => self.channel_repo.update(&channel)?,
+            None => self.channel_repo.insert(&channel)?,
+        }
+
+        Ok(channel)
+    }
 }
 
 /// Convert a proto Channel to a domain Channel.
