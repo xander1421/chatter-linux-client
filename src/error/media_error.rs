@@ -39,4 +39,8 @@ pub enum MediaError {
     /// GIF API error.
     #[error("gif error: {0}")]
     GifError(String),
+
+    /// Embed extraction error.
+    #[error("embed error: {0}")]
+    EmbedError(String),
 }
