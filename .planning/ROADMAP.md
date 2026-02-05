@@ -584,7 +584,7 @@ None (custom application, no pre-existing domain skills)
 | 57 | UI Foundation | 1 | Done | 2026-02-05 |
 | 58 | UI Basic Components | 2 | Done | 2026-02-05 |
 | 59 | UI Pickers | 2 | Done | 2026-02-05 |
-| 60 | UI Sidebar | TBD | Not started | - |
+| 60 | UI Sidebar | 1+ | In progress | - |
 | 61 | UI Chat Core | TBD | Not started | - |
 | 62 | UI Chat Features | TBD | Not started | - |
 | 63 | UI File Components | TBD | Not started | - |
