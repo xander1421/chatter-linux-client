@@ -2,15 +2,21 @@
 //!
 //! Image, audio, video processing and playback.
 
-pub mod image_processor;
-pub mod audio_recorder;
-pub mod video_recorder;
 pub mod audio_player;
-pub mod video_player;
-pub mod file_picker;
-pub mod mime_detector;
-pub mod thumbnail_cache;
-pub mod pdf_viewer;
+pub mod audio_recorder;
 pub mod code_preview;
-pub mod gif;
 pub mod embed;
+pub mod file_picker;
+pub mod gif;
+pub mod image_processor;
+pub mod mime_detector;
+pub mod pdf_viewer;
+pub mod thumbnail_cache;
+pub mod video_player;
+pub mod video_recorder;
+
+// Re-exports for convenient access
+pub use file_picker::{FileFilter, FilePicker, FilePickerConfig};
+pub use image_processor::{ImageProcessor, DEFAULT_THUMBNAIL_SIZE};
+pub use mime_detector::MimeDetector;
+pub use thumbnail_cache::ThumbnailCache;
