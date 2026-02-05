@@ -22,6 +22,15 @@ export component SettingsScreen inherits Rectangle {
     in property <bool> password-changing: false;
     in property <string> password-error: "";
 
+    // Privacy settings
+    in-out property <bool> read-receipts-enabled: true;
+    in-out property <bool> typing-indicators-enabled: true;
+
+    // Encryption settings
+    in property <string> identity-fingerprint: "";
+    in-out property <bool> sealed-sender-unrestricted: false;
+    in property <int> prekey-count: 0;
+
     // Navigation state
     property <string> active-section: "account";  // "account", "privacy", "encryption", "appearance"
     property <bool> show-password-form: false;
@@ -33,6 +42,15 @@ export component SettingsScreen inherits Rectangle {
     callback logout-clicked();
     callback delete-account-clicked();
     callback close-settings();
+
+    // Privacy callbacks
+    callback read-receipts-changed(bool);
+    callback typing-indicators-changed(bool);
+
+    // Encryption callbacks
+    callback copy-fingerprint-clicked();
+    callback sealed-sender-changed(bool);
+    callback refresh-keys-clicked();
 
     background: Colors.background;
 
@@ -436,10 +454,11 @@ export component SettingsScreen inherits Rectangle {
                             }
                         }
 
-                        // Privacy section placeholder
+                        // Privacy section
                         if active-section == "privacy": VerticalLayout {
-                            spacing: Spacing.md;
+                            spacing: Spacing.lg;
 
+                            // Section header
                             Text {
                                 text: "Privacy";
                                 color: Colors.text-primary;
@@ -448,9 +467,116 @@ export component SettingsScreen inherits Rectangle {
                             }
 
                             Text {
-                                text: "Privacy settings will be available in a future update.";
+                                text: "Control what information you share with others";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
+                            }
+
+                            // Read Receipts setting
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Read Receipts";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Let others know when you've read their messages";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    Toggle {
+                                        checked: root.read-receipts-enabled;
+                                        toggled(value) => {
+                                            root.read-receipts-enabled = value;
+                                            root.read-receipts-changed(value);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Typing Indicators setting
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Typing Indicators";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Show when you're typing a message";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    Toggle {
+                                        checked: root.typing-indicators-enabled;
+                                        toggled(value) => {
+                                            root.typing-indicators-enabled = value;
+                                            root.typing-indicators-changed(value);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Profile Visibility placeholder (coming soon)
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+                                opacity: 0.5;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Profile Visibility";
+                                            color: Colors.text-secondary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Coming soon";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            font-italic: true;
+                                        }
+                                    }
+                                }
                             }
                         }
 
