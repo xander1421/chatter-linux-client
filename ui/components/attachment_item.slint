@@ -1,0 +1,229 @@
+// Single attachment item component
+//
+// Displays a file attachment with thumbnail/icon, file info, and action area
+// for upload/download progress or action buttons.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component AttachmentItem inherits Rectangle {
+    // Attachment identity
+    in property <string> attachment-id: "";
+
+    // File info
+    in property <string> file-name: "";
+    in property <string> file-size: "";
+    in property <string> category: "other";
+    in property <string> thumbnail-url: "";
+
+    // State
+    in property <bool> is-ready: false;
+    in property <bool> is-uploading: false;
+    in property <float> upload-progress: 0.0;
+    in property <bool> is-downloading: false;
+    in property <float> download-progress: 0.0;
+
+    // Callbacks
+    callback clicked(string);
+    callback download-clicked(string);
+    callback cancel-clicked(string);
+
+    // Computed properties
+    property <color> category-bg: root.category == "image" ? #4ade80 :
+                                  root.category == "video" ? #f472b6 :
+                                  root.category == "audio" ? #a78bfa :
+                                  root.category == "document" ? #60a5fa :
+                                  root.category == "code" ? #fbbf24 :
+                                  root.category == "archive" ? #fb923c :
+                                  Colors.text-muted;
+
+    property <string> category-emoji: root.category == "image" ? "\u{1F5BC}" :
+                                      root.category == "video" ? "\u{1F3AC}" :
+                                      root.category == "audio" ? "\u{1F3B5}" :
+                                      root.category == "document" ? "\u{1F4C4}" :
+                                      root.category == "code" ? "\u{1F4DD}" :
+                                      root.category == "archive" ? "\u{1F4E6}" :
+                                      "\u{1F4CE}";
+
+    // Styling
+    height: 56px;
+    min-width: 200px;
+    background: touch.has-hover ? Colors.surface-hover : Colors.surface;
+    border-radius: Spacing.radius-sm;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+
+        clicked => {
+            root.clicked(root.attachment-id);
+        }
+    }
+
+    HorizontalLayout {
+        padding: Spacing.sm;
+        spacing: Spacing.sm;
+        alignment: start;
+
+        // Thumbnail/Icon area (48x48)
+        Rectangle {
+            width: 48px;
+            height: 48px;
+            border-radius: Spacing.radius-sm;
+            background: root.category-bg.transparentize(0.8);
+
+            // Category icon (shown when no thumbnail)
+            if root.thumbnail-url == "": Text {
+                width: 100%;
+                height: 100%;
+                text: root.category-emoji;
+                font-size: Typography.xl;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            // Thumbnail placeholder (when thumbnail-url is provided)
+            // Note: Actual image loading requires Rust-side Image source binding
+            if root.thumbnail-url != "": Rectangle {
+                width: 100%;
+                height: 100%;
+                background: Colors.surface;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    text: root.category-emoji;
+                    font-size: Typography.sm;
+                    color: Colors.text-muted;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Info area (file name + size)
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            // File name (truncated with ellipsis)
+            Text {
+                text: root.file-name;
+                color: Colors.text-primary;
+                font-size: Typography.sm;
+                overflow: elide;
+                horizontal-alignment: left;
+            }
+
+            // File size
+            Text {
+                text: root.file-size;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: left;
+            }
+        }
+
+        // Action area
+        Rectangle {
+            width: 40px;
+            height: 40px;
+
+            // Progress bar (when uploading or downloading)
+            if root.is-uploading || root.is-downloading: VerticalLayout {
+                alignment: center;
+                spacing: Spacing.xs;
+
+                // Cancel button
+                Rectangle {
+                    height: 20px;
+                    width: 20px;
+                    x: 10px;
+                    background: Colors.error.transparentize(0.8);
+                    border-radius: Spacing.radius-full;
+
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: "\u{2715}"; // X mark
+                        font-size: Typography.xs;
+                        color: Colors.error;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    cancel-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.cancel-clicked(root.attachment-id);
+                        }
+                    }
+                }
+
+                // Progress bar
+                Rectangle {
+                    height: 4px;
+                    width: 36px;
+                    x: 2px;
+                    background: Colors.surface-hover;
+                    border-radius: 2px;
+
+                    Rectangle {
+                        height: 100%;
+                        width: parent.width * (root.is-uploading ? root.upload-progress : root.download-progress);
+                        background: root.is-uploading ? Colors.info : Colors.success;
+                        border-radius: 2px;
+                    }
+                }
+            }
+
+            // Download/open button (when ready)
+            if root.is-ready && !root.is-uploading && !root.is-downloading: Rectangle {
+                width: 32px;
+                height: 32px;
+                x: 4px;
+                y: 4px;
+                background: download-touch.has-hover ? Colors.primary-hover : Colors.primary;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    text: "\u{2193}"; // Down arrow
+                    font-size: Typography.sm;
+                    color: Colors.text-primary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                download-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.download-clicked(root.attachment-id);
+                    }
+                }
+            }
+
+            // Pending indicator (not ready, not uploading/downloading)
+            if !root.is-ready && !root.is-uploading && !root.is-downloading: Rectangle {
+                width: 24px;
+                height: 24px;
+                x: 8px;
+                y: 8px;
+                background: Colors.text-muted.transparentize(0.8);
+                border-radius: Spacing.radius-full;
+
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    text: "\u{23F3}"; // Hourglass
+                    font-size: Typography.xs;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
