@@ -476,6 +476,150 @@ impl ChannelService {
         Ok(())
     }
 
+    /// Invite a user to a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel to invite to
+    /// * `invitee_id` - User ID to invite
+    /// * `message` - Optional invitation message
+    pub async fn invite_user(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        invitee_id: &UserId,
+        message: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (streaming)
+        let channel_id_str = channel_id.to_string();
+        let invitee_id_str = invitee_id.to_string();
+        let mut stream = channel_client
+            .invite_user(&channel_id_str, &invitee_id_str, message)
+            .await?;
+
+        // Consume stream, look for invitation_sent event
+        let mut invited = false;
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            match event.event {
+                Some(channel_event::Event::InvitationSent(_invite)) => {
+                    invited = true;
+                    break;
+                }
+                Some(channel_event::Event::OperationFailed(failure)) => {
+                    let err_msg = failure
+                        .error
+                        .map(|e| format!("invite failed: {:?} - {}", e.code, e.message))
+                        .unwrap_or_else(|| "invite failed: unknown error".to_string());
+                    return Err(ChannelError::InvalidInput(err_msg));
+                }
+                _ => continue,
+            }
+        }
+
+        if !invited {
+            return Err(ChannelError::InvalidInput(
+                "no invitation_sent event received".to_string(),
+            ));
+        }
+
+        // No local storage update needed (invitation is server-side state)
+        Ok(())
+    }
+
+    /// Respond to a channel invitation.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - ID of channel being invited to
+    /// * `accept` - True to accept, false to decline
+    ///
+    /// # Returns
+    ///
+    /// If accepted, returns the channel. If declined, returns None.
+    pub async fn respond_to_invite(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        accept: bool,
+    ) -> Result<Option<Channel>, ChannelError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Call server (streaming)
+        let channel_id_str = channel_id.to_string();
+        let mut stream = channel_client
+            .respond_to_invite(&channel_id_str, accept)
+            .await?;
+
+        // Consume stream
+        let mut responded = false;
+        let mut joined = false;
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            match event.event {
+                Some(channel_event::Event::MemberAdded(member)) => {
+                    // If we accepted, we get member_added event
+                    if accept && member.user_id == current_user.to_string() {
+                        joined = true;
+                        responded = true;
+                        break;
+                    }
+                }
+                Some(channel_event::Event::InvitationResponse(_response)) => {
+                    // If we declined, we get invitation_response event
+                    if !accept {
+                        responded = true;
+                        break;
+                    }
+                }
+                Some(channel_event::Event::OperationFailed(failure)) => {
+                    let err_msg = failure
+                        .error
+                        .map(|e| format!("respond to invite failed: {:?} - {}", e.code, e.message))
+                        .unwrap_or_else(|| "respond to invite failed: unknown error".to_string());
+                    return Err(ChannelError::InvalidInput(err_msg));
+                }
+                _ => continue,
+            }
+        }
+
+        if !responded {
+            return Err(ChannelError::InvalidInput(
+                "no response event received".to_string(),
+            ));
+        }
+
+        // Drop stream before using channel_client again
+        drop(stream);
+
+        // If accepted, fetch channel details and create local membership
+        if joined {
+            let channel = self.get_channel(channel_client, channel_id).await?;
+
+            let membership = Membership {
+                channel_id: channel_id.clone(),
+                user_id: current_user,
+                role: MemberRole::Member,
+                joined_at: Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::All,
+            };
+            self.channel_repo.insert_membership(&membership)?;
+
+            Ok(Some(channel))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// List channels with pagination.
     ///
     /// Fetches from server and upserts each to local storage.
