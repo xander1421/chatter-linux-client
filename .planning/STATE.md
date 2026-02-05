@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 60 — UI Sidebar
+**Current focus:** Phase 62 — UI Chat Features
 
 ## Current Position
 
-Phase: 61 of 66 (UI Chat Core)
-Plan: 2 of 2 in current phase
-Status: Phase complete (all 2 plans done)
-Last activity: 2026-02-05 — Completed 61-02-PLAN.md (ChatLayout integration)
+Phase: 62 of 66 (UI Chat Features)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-02-05 — Completed 62-01-PLAN.md (PinnedBar and TypingIndicator)
 
 Progress: ████████████████████████████████████████████████████████████████████████ 99%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 70
+- Total plans completed: 71
 - Average duration: ~4.5 min
-- Total execution time: ~317 min
+- Total execution time: ~320 min
 
 **By Phase:**
 
@@ -91,10 +91,11 @@ Progress: ███████████████████████�
 | 60 | 2 | ~5m | ~2.5m |
 
 | 61 | 2 | ~7m | ~3.5m |
+| 62 | 1 | ~3m | ~3m |
 
 **Recent Trend:**
-- Last 5 plans: 60-1 (~2m), 60-2 (~3m), 61-1 (~3m), 61-2 (~4m)
-- Trend: Phase 61 complete; ChatLayout with header, list, composer
+- Last 5 plans: 60-2 (~3m), 61-1 (~3m), 61-2 (~4m), 62-1 (~3m)
+- Trend: PinnedBar and TypingIndicator components with Slint animations
 
 ## Accumulated Context
 
@@ -254,6 +255,9 @@ Recent decisions affecting current work:
 - GifPicker: preview_url for thumbnails, full_url for selection (Tenor API)
 - MentionAutocomplete: string-based type field for Slint compatibility
 - Tenor attribution footer required per API TOS
+- Slint animation via states with iteration-count -1 for infinite animation loop
+- Cosine function for smooth opacity wave pattern on typing dots
+- has-multiple flag for conditional navigation controls
 
 ### Deferred Issues
 
@@ -266,6 +270,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 61-02-PLAN.md (ChatLayout integration)
+Stopped at: Completed 62-01-PLAN.md (PinnedBar and TypingIndicator)
 Resume file: None
-Next action: Create plans for Phase 62 (UI Chat Features)
+Next action: Execute 62-02-PLAN.md
