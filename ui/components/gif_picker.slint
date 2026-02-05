@@ -1,0 +1,398 @@
+// GIF picker component with search, trending tabs, and preview grid
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Skeleton } from "skeleton.slint";
+
+// GIF data struct for the picker
+export struct GifData {
+    id: string,
+    preview-url: string,
+    full-url: string,
+    width: int,
+    height: int,
+}
+
+export component GifPicker inherits Rectangle {
+    // Picker visibility
+    in property <bool> visible: false;
+
+    // Loading state
+    in property <bool> loading: false;
+
+    // GIF results from Rust
+    in property <[GifData]> results: [];
+
+    // Search query
+    in-out property <string> search-query: "";
+
+    // Callbacks
+    callback gif-selected(string);  // Returns full GIF URL
+    callback search(string);
+    callback close();
+
+    // Internal state
+    property <bool> search-focused: search-input.has-focus;
+    property <bool> show-search-results: root.search-query != "";
+
+    // Forward focus to search
+    forward-focus: search-input;
+
+    // Only render when visible
+    opacity: root.visible ? 1 : 0;
+    visible: root.visible;
+
+    // Picker container
+    width: 320px;
+    height: 400px;
+    background: Colors.surface;
+    border-radius: Spacing.radius-lg;
+
+    // Drop shadow effect via border
+    border-width: 1px;
+    border-color: Colors.text-muted.with-alpha(0.2);
+
+    // Block clicks from passing through
+    TouchArea {
+        width: 100%;
+        height: 100%;
+    }
+
+    VerticalLayout {
+        padding: Spacing.sm;
+        spacing: Spacing.sm;
+
+        // Header with title and close button
+        HorizontalLayout {
+            height: 24px;
+            spacing: Spacing.sm;
+
+            Text {
+                text: "GIFs";
+                color: Colors.text-primary;
+                font-size: Typography.lg;
+                font-weight: Typography.semibold;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+
+            // Close button
+            Rectangle {
+                width: 24px;
+                height: 24px;
+                border-radius: Spacing.radius-sm;
+                background: close-area.has-hover ? Colors.surface-hover : transparent;
+
+                // X icon using two crossed lines
+                Rectangle {
+                    width: 12px;
+                    height: 2px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    background: Colors.text-secondary;
+                    rotation-angle: 45deg;
+                }
+                Rectangle {
+                    width: 12px;
+                    height: 2px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    background: Colors.text-secondary;
+                    rotation-angle: -45deg;
+                }
+
+                close-area := TouchArea {
+                    width: 100%;
+                    height: 100%;
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+        }
+
+        // Search input
+        Rectangle {
+            height: 36px;
+            border-radius: Spacing.radius-md;
+            background: Colors.background;
+            border-width: 1px;
+            border-color: search-focused ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+
+                // Search icon
+                Text {
+                    text: "🔍";
+                    font-size: Typography.sm;
+                    vertical-alignment: center;
+                }
+
+                // Search text input
+                search-input := TextInput {
+                    horizontal-stretch: 1;
+                    height: parent.height;
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    vertical-alignment: center;
+                    text <=> root.search-query;
+
+                    edited => {
+                        root.search(self.text);
+                    }
+                }
+
+                // Clear button (shown when search has text)
+                if root.search-query != "": Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: Spacing.radius-full;
+                    background: clear-area.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "✕";
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    clear-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            root.search-query = "";
+                            root.search("");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Tab bar
+        Rectangle {
+            height: 32px;
+            background: Colors.background;
+            border-radius: Spacing.radius-md;
+
+            HorizontalLayout {
+                padding: Spacing.xs;
+                spacing: Spacing.xs;
+
+                // Trending tab
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 24px;
+                    border-radius: Spacing.radius-sm;
+                    background: !show-search-results ? Colors.primary.with-alpha(0.2) : (trending-area.has-hover ? Colors.surface-hover : transparent);
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: Spacing.xs;
+
+                        Text {
+                            text: "🔥";
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "Trending";
+                            color: !show-search-results ? Colors.primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: !show-search-results ? Typography.medium : Typography.normal;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Selected indicator
+                    if !show-search-results: Rectangle {
+                        height: 2px;
+                        y: parent.height - 2px;
+                        width: parent.width * 60%;
+                        x: (parent.width - self.width) / 2;
+                        background: Colors.primary;
+                        border-radius: 1px;
+                    }
+
+                    trending-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            root.search-query = "";
+                            root.search("");
+                        }
+                    }
+                }
+
+                // Search Results tab (only active when searching)
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 24px;
+                    border-radius: Spacing.radius-sm;
+                    background: show-search-results ? Colors.primary.with-alpha(0.2) : (results-area.has-hover && root.search-query != "" ? Colors.surface-hover : transparent);
+                    opacity: root.search-query != "" ? 1.0 : 0.5;
+
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: Spacing.xs;
+
+                        Text {
+                            text: "🔎";
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: "Results";
+                            color: show-search-results ? Colors.primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: show-search-results ? Typography.medium : Typography.normal;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Selected indicator
+                    if show-search-results: Rectangle {
+                        height: 2px;
+                        y: parent.height - 2px;
+                        width: parent.width * 60%;
+                        x: (parent.width - self.width) / 2;
+                        background: Colors.primary;
+                        border-radius: 1px;
+                    }
+
+                    results-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        enabled: root.search-query != "";
+                    }
+                }
+            }
+        }
+
+        // GIF grid or loading/empty states
+        Rectangle {
+            vertical-stretch: 1;
+            clip: true;
+
+            // Loading state - show skeleton placeholders
+            if root.loading: VerticalLayout {
+                spacing: Spacing.sm;
+                padding: Spacing.xs;
+
+                // 2 columns, 3 rows of skeleton placeholders
+                for row in 3: HorizontalLayout {
+                    spacing: Spacing.sm;
+
+                    Skeleton {
+                        horizontal-stretch: 1;
+                        height: 80px;
+                        border-radius: Spacing.radius-md;
+                    }
+
+                    Skeleton {
+                        horizontal-stretch: 1;
+                        height: 80px;
+                        border-radius: Spacing.radius-md;
+                    }
+                }
+            }
+
+            // Empty state - no results
+            if !root.loading && root.results.length == 0: Rectangle {
+                width: 100%;
+                height: 100%;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: show-search-results ? "🔍" : "📭";
+                        font-size: 32px;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: show-search-results ? "No GIFs found" : "No trending GIFs";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                    }
+
+                    if show-search-results: Text {
+                        text: "Try a different search term";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            // GIF grid - 2 columns
+            if !root.loading && root.results.length > 0: Flickable {
+                width: 100%;
+                height: 100%;
+                viewport-height: Math.ceil(root.results.length / 2) * 90px;
+
+                Rectangle {
+                    width: parent.width;
+                    height: parent.viewport-height;
+
+                    for gif-data[index] in root.results: Rectangle {
+                        property <int> row: Math.floor(index / 2);
+                        property <int> col: mod(index, 2);
+                        property <length> item-width: (parent.width - Spacing.sm) / 2;
+
+                        x: col * (item-width + Spacing.sm);
+                        y: row * 90px;
+                        width: item-width;
+                        height: 85px;
+                        border-radius: Spacing.radius-md;
+                        background: gif-area.has-hover ? Colors.surface-hover : Colors.background;
+                        clip: true;
+
+                        // Hover glow effect
+                        border-width: gif-area.has-hover ? 2px : 0px;
+                        border-color: Colors.primary.with-alpha(0.5);
+
+                        // GIF preview image
+                        Image {
+                            width: parent.width;
+                            height: parent.height;
+                            source: @image-url(gif-data.preview-url);
+                            image-fit: cover;
+                        }
+
+                        gif-area := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            clicked => {
+                                root.gif-selected(gif-data.full-url);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Tenor attribution (required by API TOS)
+        HorizontalLayout {
+            height: 16px;
+            alignment: center;
+
+            Text {
+                text: "Powered by Tenor";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}
