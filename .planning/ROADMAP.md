@@ -587,7 +587,7 @@ None (custom application, no pre-existing domain skills)
 | 60 | UI Sidebar | 2 | Done | 2026-02-05 |
 | 61 | UI Chat Core | 2 | Done | 2026-02-05 |
 | 62 | UI Chat Features | 2 | Done | 2026-02-05 |
-| 63 | UI File Components | TBD | Not started | - |
+| 63 | UI File Components | 2 | In progress | - |
 | 64 | UI Modals | TBD | Not started | - |
 | 65 | UI Settings Screens | TBD | Not started | - |
 | 66 | UI Auth Screens | TBD | Not started | - |
