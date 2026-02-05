@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 67 — Main Binary Integration
+**Current focus:** Phase 68 — Build and Compile Verification
 
 ## Current Position
 
-Phase: 67 of 70 (Main Binary Integration - Plan 02 complete)
-Plan: 2 of 3 in current phase
-Status: In progress
-Last activity: 2026-02-06 — AppContext dependency container with ordered initialization
+Phase: 67 of 70 (Main Binary Integration - Complete)
+Plan: 3 of 3 in current phase
+Status: Phase complete
+Last activity: 2026-02-06 — main.rs entry point with auth callback wiring
 
-Progress: ██████████████████████████████████████████████████████████████████░░░░░░ 95%
+Progress: ██████████████████████████████████████████████████████████████████░░░░░░ 96%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 77
+- Total plans completed: 78
 - Average duration: ~4.6 min
-- Total execution time: ~355 min
+- Total execution time: ~358 min
 
 **By Phase:**
 
@@ -96,11 +96,11 @@ Progress: ███████████████████████�
 | 64 | 3 | ~13m | ~4.3m |
 | 65 | 2 | ~10m | ~5m |
 | 66 | 1 | ~1m | ~1m |
-| 67 | 2 | ~27m | ~13.5m |
+| 67 | 3 | ~30m | ~10m |
 
 **Recent Trend:**
-- Last 5 plans: 65-2 (~3m), 66-1 (~1m), 67-1 (~25m), 67-2 (~2m)
-- Trend: Integration phase, bootstrap module creation
+- Last 5 plans: 66-1 (~1m), 67-1 (~25m), 67-2 (~2m), 67-3 (~3m)
+- Trend: Phase 67 complete, integration finished
 
 ## Accumulated Context
 
@@ -282,6 +282,10 @@ Recent decisions affecting current work:
 - Toggle row pattern with label/description and aligned toggle
 - Auth form validation triggers on submit (not blur)
 - Three-dot rotating spinner for LoadingPage (more visual interest)
+- SharedString type annotations required for Slint callback parameters
+- Create AuthService fresh in each callback (stateless, cheap)
+- invoke_from_event_loop for all UI updates from async tasks
+- Graceful offline mode if server connection fails
 
 ### Deferred Issues
 
@@ -294,6 +298,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-06
-Stopped at: Phase 67-02 complete (AppContext dependency container)
+Stopped at: Phase 67-03 complete (main.rs entry point with auth callbacks)
 Resume file: None
-Next action: Execute Phase 67-03 (main.rs entry point)
+Next action: Plan Phase 68 (Build and Compile Verification)
