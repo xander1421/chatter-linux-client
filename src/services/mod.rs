@@ -59,3 +59,9 @@ pub use search_service::{CombinedSearchResults, SearchError, SearchService};
 
 // Re-exports for moderation service
 pub use moderation_service::{ModerationError, ModerationService, proto_moderation_action_to_domain};
+
+// Re-exports for AI service
+pub use ai_service::{AIError, AIService};
+
+// Re-exports for AI summarization service
+pub use ai_summarize::{AISummarizeService, SummarizeError};
