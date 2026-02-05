@@ -1,0 +1,244 @@
+// Emoji picker component with category tabs, search, and emoji grid
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+// Emoji data struct for the picker
+export struct EmojiData {
+    emoji: string,
+    name: string,
+    category: int,
+}
+
+export component EmojiPicker inherits Rectangle {
+    // Picker visibility
+    in property <bool> visible: false;
+
+    // Emoji list from Rust (filtered by category or search)
+    in property <[EmojiData]> emoji-list: [];
+
+    // Currently selected category (0=Smileys, 1=People, etc.)
+    in-out property <int> selected-category: 0;
+
+    // Search query
+    in-out property <string> search-query: "";
+
+    // Callbacks
+    callback emoji-selected(string);
+    callback close();
+    callback category-changed(int);
+    callback search-changed(string);
+
+    // Internal state
+    property <bool> search-focused: search-input.has-focus;
+
+    // Category icons (emoji representing each category)
+    property <[string]> category-icons: ["😀", "👋", "🐱", "🍎", "✈️", "⚽", "💡", "❤️", "🏳️"];
+
+    // Forward focus to search
+    forward-focus: search-input;
+
+    // Only render when visible
+    opacity: root.visible ? 1 : 0;
+    visible: root.visible;
+
+    // Picker container
+    width: 280px;
+    height: 320px;
+    background: Colors.surface;
+    border-radius: Spacing.radius-lg;
+
+    // Drop shadow effect via border
+    border-width: 1px;
+    border-color: Colors.text-muted.with-alpha(0.2);
+
+    // Block clicks from passing through
+    TouchArea {
+        width: 100%;
+        height: 100%;
+    }
+
+    VerticalLayout {
+        padding: Spacing.sm;
+        spacing: Spacing.sm;
+
+        // Search input
+        Rectangle {
+            height: 32px;
+            border-radius: Spacing.radius-md;
+            background: Colors.background;
+            border-width: 1px;
+            border-color: search-focused ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+
+                // Search icon
+                Text {
+                    text: "🔍";
+                    font-size: Typography.sm;
+                    vertical-alignment: center;
+                }
+
+                // Search text input
+                search-input := TextInput {
+                    horizontal-stretch: 1;
+                    height: parent.height;
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    vertical-alignment: center;
+                    text <=> root.search-query;
+
+                    edited => {
+                        root.search-changed(self.text);
+                    }
+                }
+
+                // Clear button (shown when search has text)
+                if root.search-query != "": Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: Spacing.radius-full;
+                    background: clear-area.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "✕";
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    clear-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            root.search-query = "";
+                            root.search-changed("");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Category tabs (only show when not searching)
+        if root.search-query == "": Rectangle {
+            height: 36px;
+            background: Colors.background;
+            border-radius: Spacing.radius-md;
+
+            HorizontalLayout {
+                padding: Spacing.xs;
+                spacing: 0;
+
+                for icon[index] in root.category-icons: Rectangle {
+                    horizontal-stretch: 1;
+                    height: 28px;
+                    border-radius: Spacing.radius-sm;
+                    background: index == root.selected-category ? Colors.primary.with-alpha(0.2) : (tab-area.has-hover ? Colors.surface-hover : transparent);
+
+                    Text {
+                        text: icon;
+                        font-size: Typography.base;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    // Selected indicator
+                    if index == root.selected-category: Rectangle {
+                        height: 2px;
+                        y: parent.height - 2px;
+                        width: parent.width * 60%;
+                        x: (parent.width - self.width) / 2;
+                        background: Colors.primary;
+                        border-radius: 1px;
+                    }
+
+                    tab-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            root.selected-category = index;
+                            root.category-changed(index);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Search results header (only show when searching)
+        if root.search-query != "": Text {
+            text: "Search results";
+            color: Colors.text-secondary;
+            font-size: Typography.xs;
+            height: 20px;
+            vertical-alignment: center;
+        }
+
+        // Emoji grid
+        Flickable {
+            vertical-stretch: 1;
+            viewport-height: Math.ceil(root.emoji-list.length / 6) * 36px;
+
+            // Grid container
+            Rectangle {
+                width: parent.width;
+                height: parent.viewport-height;
+
+                for emoji-data[index] in root.emoji-list: Rectangle {
+                    property <int> row: Math.floor(index / 6);
+                    property <int> col: mod(index, 6);
+
+                    x: col * 42px + 3px;
+                    y: row * 36px;
+                    width: 36px;
+                    height: 36px;
+                    border-radius: Spacing.radius-sm;
+                    background: emoji-area.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: emoji-data.emoji;
+                        font-size: Typography.xl;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    emoji-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            root.emoji-selected(emoji-data.emoji);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Empty state
+        if root.emoji-list.length == 0: Rectangle {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: Spacing.sm;
+
+                Text {
+                    text: "😕";
+                    font-size: 32px;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: root.search-query != "" ? "No emoji found" : "No emoji in this category";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}
