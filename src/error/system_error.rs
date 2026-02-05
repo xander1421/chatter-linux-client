@@ -16,4 +16,20 @@ pub enum SystemError {
     /// Keyring operation failed.
     #[error("Keyring error: {0}")]
     Keyring(String),
+
+    /// Failed to send notification.
+    #[error("Failed to send notification: {0}")]
+    NotificationSend(String),
+
+    /// Failed to initialize notification system.
+    #[error("Failed to initialize notification system: {0}")]
+    NotificationInit(String),
+
+    /// Failed to initialize system tray.
+    #[error("Failed to initialize system tray: {0}")]
+    TrayInit(String),
+
+    /// D-Bus communication error.
+    #[error("D-Bus error: {0}")]
+    Dbus(String),
 }
