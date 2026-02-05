@@ -45,5 +45,11 @@ pub use typing_service::{TypingError, TypingService};
 // Re-exports for read receipt service
 pub use read_receipt_service::{ReadReceiptError, ReadReceiptService};
 
+// Re-exports for reaction service
+pub use reaction_service::{ReactionError, ReactionService};
+
 // Re-export ReadState from aggregator for convenience
 pub use crate::network::streaming::read_receipt_stream::ReadState;
+
+// Re-export ReactionEvent from aggregator for convenience
+pub use crate::network::streaming::reaction_stream::ReactionEvent;
