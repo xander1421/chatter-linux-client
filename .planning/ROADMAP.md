@@ -519,9 +519,35 @@ None (custom application, no pre-existing domain skills)
 **Research topics**: Slint form validation, loading states
 **Plans**: TBD
 
+### Integration & Verification
+
+### Phase 67: Main Binary Integration
+**Goal**: Wire UI callbacks to services, create main.rs entry point, initialize all subsystems
+**Depends on**: Phase 66
+**Research**: Unlikely (wiring existing components)
+**Plans**: TBD
+
+### Phase 68: Build and Compile Verification
+**Goal**: Ensure full cargo build succeeds, fix any compilation errors, resolve dependencies
+**Depends on**: Phase 67
+**Research**: Unlikely (debugging existing code)
+**Plans**: TBD
+
+### Phase 69: Proto Generation Pipeline
+**Goal**: Set up buf generate for proto files, ensure proto types match server
+**Depends on**: Phase 68
+**Research**: Unlikely (buf tooling documented)
+**Plans**: TBD
+
+### Phase 70: End-to-End Smoke Test
+**Goal**: Verify basic auth and messaging flow against running Chatter server
+**Depends on**: Phase 69
+**Research**: Unlikely (testing existing functionality)
+**Plans**: TBD
+
 ## Progress
 
-**Execution Order:** Phases execute in numeric order (1 → 2 → ... → 66)
+**Execution Order:** Phases execute in numeric order (1 → 2 → ... → 70)
 
 | Phase | Name | Plans | Status | Completed |
 |-------|------|-------|--------|-----------|
@@ -591,3 +617,7 @@ None (custom application, no pre-existing domain skills)
 | 64 | UI Modals | 3 | Done | 2026-02-05 |
 | 65 | UI Settings Screens | 2 | Done | 2026-02-05 |
 | 66 | UI Auth Screens | 1 | Done | 2026-02-05 |
+| 67 | Main Binary Integration | 3 | In progress (2/3) | - |
+| 68 | Build and Compile Verification | TBD | Not started | - |
+| 69 | Proto Generation Pipeline | TBD | Not started | - |
+| 70 | End-to-End Smoke Test | TBD | Not started | - |
