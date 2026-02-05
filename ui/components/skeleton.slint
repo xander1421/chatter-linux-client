@@ -1,0 +1,45 @@
+// Skeleton loading placeholder component
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component Skeleton inherits Rectangle {
+    in property <length> width: 100px;
+    in property <length> height: 20px;
+    in property <length> border-radius: Spacing.radius-sm;
+
+    // Apply dimensions
+    self.width: root.width;
+    self.height: root.height;
+    self.border-radius: root.border-radius;
+
+    // Base color
+    background: Colors.surface;
+    clip: true;
+
+    // Shimmer overlay that animates across
+    Rectangle {
+        property <length> shimmer-offset;
+
+        // Start position off-screen left, animate to off-screen right
+        x: shimmer-offset - self.width;
+        y: 0;
+        width: parent.width * 0.5;
+        height: parent.height;
+
+        // Gradient-like shimmer using lighter surface color
+        background: @linear-gradient(90deg, transparent 0%, Colors.surface-hover 50%, transparent 100%);
+
+        // Continuous shimmer animation
+        shimmer-offset: 0px;
+        animate shimmer-offset {
+            duration: 1500ms;
+            iteration-count: -1;
+        }
+
+        // Trigger animation by setting final value
+        init => {
+            self.shimmer-offset = parent.width * 2;
+        }
+    }
+}

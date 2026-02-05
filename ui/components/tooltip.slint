@@ -1,0 +1,41 @@
+// Tooltip component for hover hints
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component Tooltip inherits Rectangle {
+    in property <string> text: "";
+    in property <bool> visible: false;
+    in property <length> x: 0px;
+    in property <length> y: 0px;
+
+    // Position at specified coordinates
+    self.x: root.x;
+    self.y: root.y;
+
+    // Size based on content with max width
+    width: Math.min(text-content.preferred-width + Spacing.sm * 2, 200px);
+    height: text-content.preferred-height + Spacing.sm * 2;
+
+    // Visibility
+    opacity: root.visible ? 1 : 0;
+    animate opacity { duration: 150ms; }
+
+    // Tooltip background - slightly darker than surface
+    background: #0a0a1a;
+    border-radius: Spacing.radius-sm;
+    border-color: Colors.surface-hover;
+    border-width: 1px;
+
+    // Tooltip text
+    text-content := Text {
+        x: Spacing.sm;
+        y: Spacing.sm;
+        width: parent.width - Spacing.sm * 2;
+        text: root.text;
+        color: Colors.text-primary;
+        font-size: Typography.xs;
+        wrap: word-wrap;
+    }
+}
