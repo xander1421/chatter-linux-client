@@ -1,0 +1,82 @@
+// Channel list item component
+//
+// Displays a single channel with icon, name, and unread count badge.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component ChannelListItem inherits Rectangle {
+    // Properties
+    in property <string> name: "channel";
+    in property <string> channel-type: "public"; // "public", "private", "dm"
+    in property <int> unread-count: 0;
+    in property <bool> selected: false;
+
+    // Callbacks
+    callback clicked();
+
+    // Layout
+    height: 44px;
+    border-radius: Spacing.radius-sm;
+
+    // Background states: default, hover, selected
+    background: root.selected ? Colors.primary.with-alpha(0.2)
+              : touch.has-hover ? Colors.surface-hover
+              : Colors.surface;
+
+    // Content layout
+    HorizontalLayout {
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
+        alignment: stretch;
+
+        // Channel icon (# for public, lock for private, @ for DM)
+        Text {
+            width: 20px;
+            text: root.channel-type == "public" ? "#"
+                : root.channel-type == "private" ? "\u{1F512}"
+                : "@";
+            color: root.selected ? Colors.primary : Colors.text-secondary;
+            font-size: 14px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+
+        // Channel name
+        Text {
+            text: root.name;
+            color: root.selected ? Colors.text-primary : Colors.text-secondary;
+            font-size: 14px;
+            font-weight: root.unread-count > 0 ? 600 : 400;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        // Unread count badge
+        if root.unread-count > 0: Rectangle {
+            width: max(20px, badge-text.preferred-width + 12px);
+            height: 20px;
+            border-radius: Spacing.radius-full;
+            background: Colors.primary;
+            vertical-alignment: center;
+
+            badge-text := Text {
+                text: root.unread-count > 99 ? "99+" : root.unread-count;
+                color: Colors.text-primary;
+                font-size: 11px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    // Touch area for click handling
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}

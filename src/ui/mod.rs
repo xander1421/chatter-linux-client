@@ -8,6 +8,7 @@ pub mod commands;
 pub mod emoji_data;
 pub mod handlers;
 pub mod picker_data;
+pub mod sidebar_data;
 pub mod widgets;
 
 // Re-export bridge types for convenience
@@ -18,3 +19,6 @@ pub use emoji_data::{get_emoji_by_category, get_emoji_list, search_emoji, EmojiE
 
 // Re-export picker data types
 pub use picker_data::{GifData, MentionSuggestionData};
+
+// Re-export sidebar data types
+pub use sidebar_data::ChannelListItemData;
