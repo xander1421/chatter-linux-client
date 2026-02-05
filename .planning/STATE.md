@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 46 — State User Stores
+**Current focus:** Phase 47 — State Streaming & Offline
 
 ## Current Position
 
-Phase: 46 of 66 (State User Stores)
+Phase: 47 of 66 (State Streaming & Offline)
 Plan: 1 of 1 in current phase
 Status: Phase complete
-Last activity: 2026-02-05 — Completed 46-01-PLAN.md (user state stores)
+Last activity: 2026-02-05 — Completed 47-01-PLAN.md (streaming & offline state)
 
-Progress: █████████████████████████████████████████████████████████████████████░░░ 97%
+Progress: ██████████████████████████████████████████████████████████████████████░░ 98%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 61
+- Total plans completed: 62
 - Average duration: ~4.6 min
-- Total execution time: ~281 min
+- Total execution time: ~285 min
 
 **By Phase:**
 
@@ -74,9 +74,10 @@ Progress: ███████████████████████�
 | 44 | 1 | ~3m | ~3m |
 | 45 | 1 | ~4m | ~4m |
 | 46 | 1 | ~4m | ~4m |
+| 47 | 1 | ~4m | ~4m |
 
 **Recent Trend:**
-- Last 5 plans: 43-2 (~4m), 44-1 (~3m), 45-1 (~4m), 46-1 (~4m)
+- Last 5 plans: 44-1 (~3m), 45-1 (~4m), 46-1 (~4m), 47-1 (~4m)
 - Trend: State layer progressing smoothly
 
 ## Accumulated Context
@@ -205,6 +206,9 @@ Recent decisions affecting current work:
 - PresenceStateData last_updated for staleness detection
 - PrivacyState global defaults apply when no per-conversation override exists
 - ConversationPrivacySettings.private() factory for disabling all privacy signals
+- StreamingState is simplified UI view, not raw aggregator data
+- OfflineState automatically updates last_connected on successful connection
+- set_queue_stats syncs total_operations to queue_count for convenience
 
 ### Deferred Issues
 
@@ -217,6 +221,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-02-05
-Stopped at: Completed 46-01-PLAN.md (user state stores)
+Stopped at: Completed 47-01-PLAN.md (streaming & offline state)
 Resume file: None
-Next action: Plan Phase 47 (State Streaming & Offline)
+Next action: Plan Phase 48 (Events Bus & Handlers)
