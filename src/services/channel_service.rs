@@ -877,6 +877,80 @@ impl ChannelService {
 
         Ok(channels)
     }
+
+    // ==================== Search & Local Queries ====================
+
+    /// Search for channels by query.
+    ///
+    /// Returns channels matching the search query. Results are NOT stored locally
+    /// (search is for discovery, not membership).
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `query` - Search query string
+    /// * `limit` - Maximum number of results
+    /// * `offset` - Pagination offset
+    /// * `type_filter` - Optional filter for channel types
+    pub async fn search_channels(
+        &self,
+        channel_client: &mut ChannelClient,
+        query: &str,
+        limit: u32,
+        offset: u32,
+        type_filter: Vec<ChannelType>,
+    ) -> Result<Vec<Channel>, ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Convert domain ChannelType to proto ChannelType
+        let proto_type_filter: Vec<chat_v1::ChannelType> = type_filter
+            .into_iter()
+            .map(domain_channel_type_to_proto)
+            .collect();
+
+        // Call server (unary)
+        let response = channel_client
+            .search_channels(query, limit as i32, offset as i32, vec![], proto_type_filter)
+            .await?;
+
+        // Convert each result to domain Channel
+        let mut channels = Vec::with_capacity(response.results.len());
+        for proto in &response.results {
+            let channel = proto_to_domain_channel(proto)?;
+            // Do NOT store locally - search results are discovery, not membership
+            channels.push(channel);
+        }
+
+        Ok(channels)
+    }
+
+    /// Get all channels the current user is a member of.
+    ///
+    /// This is a local-only query that returns cached channel data.
+    pub fn get_channels_for_user(&self) -> Result<Vec<Channel>, ChannelError> {
+        // Check logged in
+        let current_user = self.current_user_id()?;
+
+        // Get channels from local storage (sorted by last_message_at by repo)
+        let channels = self.channel_repo.list_for_user(&current_user)?;
+
+        Ok(channels)
+    }
+
+    /// Get a channel from local storage.
+    ///
+    /// This is a local-only query that returns cached channel data without
+    /// making a network request.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - ID of channel to retrieve
+    pub fn get_channel_local(&self, channel_id: &ChannelId) -> Result<Option<Channel>, ChannelError> {
+        // No auth check needed - local cache access
+        let channel = self.channel_repo.get(channel_id)?;
+        Ok(channel)
+    }
 }
 
 /// Convert a proto Channel to a domain Channel.
