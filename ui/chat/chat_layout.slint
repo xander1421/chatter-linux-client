@@ -1,15 +1,124 @@
 // Main chat layout component
+//
+// Integrates ChatHeader, MessageList, and MessageComposer into a complete chat view.
 
 import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { ChatHeader, ChatHeaderData } from "chat_header.slint";
+import { MessageList, MessageItemData } from "message_list.slint";
+import { MessageComposer } from "message_composer.slint";
 
 export component ChatLayout inherits Rectangle {
+    // Header properties
+    in property <string> channel-id: "";
+    in property <string> channel-name: "";
+    in property <string> channel-type: "public";
+    in property <int> member-count: 0;
+    in property <string> topic: "";
+    in property <bool> is-archived: false;
+    in property <string> typing-indicator: "";
+
+    // Message list properties
+    in property <[MessageItemData]> messages: [];
+    in property <bool> loading-messages: false;
+
+    // Composer properties
+    in-out property <string> composer-text: "";
+    in property <string> composer-placeholder: "Type a message...";
+    in property <bool> composer-disabled: false;
+
+    // Header callbacks
+    callback search-clicked();
+    callback pinned-clicked();
+    callback settings-clicked();
+
+    // Message list callbacks
+    callback message-clicked(string);
+    callback reply-clicked(string);
+    callback react-clicked(string);
+    callback thread-clicked(string);
+    callback more-clicked(string);
+    callback load-more();
+
+    // Composer callbacks
+    callback send(string);
+    callback attachment-clicked();
+    callback emoji-clicked();
+    callback gif-clicked();
+    callback mention-triggered(string);
+
+    // Layout
     background: Colors.background;
 
-    // Placeholder for chat layout
-    Text {
-        text: "Chat Area";
-        color: Colors.text-secondary;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    VerticalLayout {
+        // Header at top (fixed 56px)
+        ChatHeader {
+            channel-id: root.channel-id;
+            channel-name: root.channel-name;
+            channel-type: root.channel-type;
+            member-count: root.member-count;
+            topic: root.topic;
+            is-archived: root.is-archived;
+            typing-indicator: root.typing-indicator;
+
+            search-clicked => {
+                root.search-clicked();
+            }
+            pinned-clicked => {
+                root.pinned-clicked();
+            }
+            settings-clicked => {
+                root.settings-clicked();
+            }
+        }
+
+        // Message list in middle (fills remaining space)
+        MessageList {
+            vertical-stretch: 1;
+            messages: root.messages;
+            loading: root.loading-messages;
+
+            message-clicked(id) => {
+                root.message-clicked(id);
+            }
+            reply-clicked(id) => {
+                root.reply-clicked(id);
+            }
+            react-clicked(id) => {
+                root.react-clicked(id);
+            }
+            thread-clicked(id) => {
+                root.thread-clicked(id);
+            }
+            more-clicked(id) => {
+                root.more-clicked(id);
+            }
+            load-more => {
+                root.load-more();
+            }
+        }
+
+        // Composer at bottom (auto height, min 56px)
+        MessageComposer {
+            text <=> root.composer-text;
+            placeholder: root.composer-placeholder;
+            disabled: root.composer-disabled;
+
+            send(text) => {
+                root.send(text);
+            }
+            attachment-clicked => {
+                root.attachment-clicked();
+            }
+            emoji-clicked => {
+                root.emoji-clicked();
+            }
+            gif-clicked => {
+                root.gif-clicked();
+            }
+            mention-triggered(query) => {
+                root.mention-triggered(query);
+            }
+        }
     }
 }
