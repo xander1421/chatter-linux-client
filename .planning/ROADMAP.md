@@ -86,8 +86,8 @@ None (custom application, no pre-existing domain skills)
 ### Media
 - [x] **Phase 52: Media File Handling** - File picker, MIME, thumbnails
 - [x] **Phase 53: Media Playback** - Audio (rodio), video player
-- [ ] **Phase 54: Media Recording** - Voice, video recorder
-- [ ] **Phase 55: Media Previews** - PDF viewer, code preview
+- [x] **Phase 54: Media Recording** - Voice, video recorder
+- [x] **Phase 55: Media Previews** - PDF viewer, code preview
 - [ ] **Phase 56: Media GIF & Embeds** - GIF picker, YouTube/link embeds
 
 ### UI Layer
@@ -579,7 +579,7 @@ None (custom application, no pre-existing domain skills)
 | 52 | Media File Handling | 1 | Done | 2026-02-05 |
 | 53 | Media Playback | 1 | Done | 2026-02-05 |
 | 54 | Media Recording | 1 | Done | 2026-02-05 |
-| 55 | Media Previews | TBD | Not started | - |
+| 55 | Media Previews | 1 | Done | 2026-02-05 |
 | 56 | Media GIF & Embeds | TBD | Not started | - |
 | 57 | UI Foundation | TBD | Not started | - |
 | 58 | UI Basic Components | TBD | Not started | - |
