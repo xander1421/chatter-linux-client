@@ -1,0 +1,218 @@
+// Code preview panel component
+//
+// Displays syntax-highlighted code with line numbers in a scrollable panel.
+// Used as an overlay/modal for viewing code file attachments.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+// Single line of code for the preview
+export struct CodeLine {
+    line-number: int,
+    content: string,
+}
+
+export component CodePreviewPanel inherits Rectangle {
+    // File info
+    in property <string> file-name: "";
+    in property <string> language: "";
+    in property <int> line-count: 0;
+
+    // Code lines model
+    in property <[CodeLine]> lines: [];
+
+    // Callbacks
+    callback close-clicked();
+    callback copy-clicked();
+    callback open-external-clicked();
+
+    // Code preview background (base16-ocean.dark theme)
+    property <color> code-background: #1b2b34;
+    property <color> code-line-number: #65737e;
+    property <color> code-text: #c0c5ce;
+
+    // Panel styling
+    background: root.code-background;
+    border-radius: Spacing.radius-md;
+    clip: true;
+
+    VerticalLayout {
+        // Header bar
+        Rectangle {
+            height: 40px;
+            background: Colors.surface;
+
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+                alignment: space-between;
+
+                // Left side: file info
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: start;
+
+                    // File name
+                    Text {
+                        text: root.file-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                    }
+
+                    // Language badge
+                    if root.language != "": Rectangle {
+                        height: 20px;
+                        width: lang-text.preferred-width + Spacing.sm * 2;
+                        background: Colors.surface-hover;
+                        border-radius: Spacing.radius-sm;
+
+                        lang-text := Text {
+                            text: root.language;
+                            color: Colors.text-secondary;
+                            font-size: Typography.xs;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    // Line count
+                    if root.line-count > 0: Text {
+                        text: root.line-count + " lines";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Right side: action buttons
+                HorizontalLayout {
+                    spacing: Spacing.xs;
+                    alignment: end;
+
+                    // Copy button
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        background: copy-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "\u{1F4CB}"; // Clipboard
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        copy-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.copy-clicked();
+                            }
+                        }
+                    }
+
+                    // Open external button
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        background: open-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "\u{1F517}"; // Link
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        open-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.open-external-clicked();
+                            }
+                        }
+                    }
+
+                    // Close button
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        background: close-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "\u{2715}"; // X mark
+                            font-size: Typography.sm;
+                            color: close-touch.has-hover ? Colors.error : Colors.text-secondary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.close-clicked();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Code area with scrolling
+        Flickable {
+            vertical-stretch: 1;
+            viewport-height: code-content.preferred-height;
+            viewport-width: code-content.preferred-width;
+
+            code-content := VerticalLayout {
+                padding: Spacing.md;
+                spacing: 0px;
+
+                // Placeholder when no lines loaded
+                if root.lines.length == 0: Text {
+                    text: "Code preview loading...";
+                    color: root.code-text;
+                    font-size: Typography.sm;
+                    font-family: "monospace";
+                }
+
+                // Code lines
+                for line in root.lines: HorizontalLayout {
+                    spacing: Spacing.md;
+                    height: 20px;
+
+                    // Line number (fixed width, right-aligned)
+                    Text {
+                        width: 48px;
+                        text: line.line-number;
+                        color: root.code-line-number;
+                        font-size: Typography.sm;
+                        font-family: "monospace";
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+
+                    // Code content
+                    Text {
+                        text: line.content;
+                        color: root.code-text;
+                        font-size: Typography.sm;
+                        font-family: "monospace";
+                        vertical-alignment: center;
+                        overflow: clip;
+                    }
+                }
+            }
+        }
+    }
+}
