@@ -951,6 +951,140 @@ impl ChannelService {
         let channel = self.channel_repo.get(channel_id)?;
         Ok(channel)
     }
+
+    // ==================== Moderation Operations ====================
+
+    /// Kick a user from a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - Channel to kick from
+    /// * `user_id` - User to kick
+    /// * `reason` - Optional reason for the kick
+    pub async fn kick_user(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        reason: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (streaming)
+        let channel_id_str = channel_id.to_string();
+        let user_id_str = user_id.to_string();
+        let mut stream = channel_client
+            .kick_user(&channel_id_str, &user_id_str, reason)
+            .await?;
+
+        // Consume stream, look for member_removed_id event
+        let mut kicked = false;
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            match event.event {
+                Some(channel_event::Event::MemberRemovedId(removed_user_id)) => {
+                    if removed_user_id == user_id.to_string() {
+                        kicked = true;
+                        break;
+                    }
+                }
+                Some(channel_event::Event::OperationFailed(failure)) => {
+                    let err_msg = failure
+                        .error
+                        .map(|e| format!("kick failed: {:?} - {}", e.code, e.message))
+                        .unwrap_or_else(|| "kick failed: unknown error".to_string());
+                    return Err(ChannelError::InvalidInput(err_msg));
+                }
+                _ => continue,
+            }
+        }
+
+        if !kicked {
+            return Err(ChannelError::InvalidInput(
+                "no member_removed_id event received".to_string(),
+            ));
+        }
+
+        // Remove membership from local storage
+        let _ = self.channel_repo.delete_membership(channel_id, user_id);
+
+        Ok(())
+    }
+
+    /// Ban a user from a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - Channel to ban from
+    /// * `user_id` - User to ban
+    /// * `duration` - Optional ban duration (None = permanent)
+    /// * `reason` - Optional reason for the ban
+    pub async fn ban_user(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        duration: Option<std::time::Duration>,
+        reason: Option<&str>,
+    ) -> Result<(), ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (unary, returns ())
+        let channel_id_str = channel_id.to_string();
+        let user_id_str = user_id.to_string();
+        channel_client
+            .ban_user(&channel_id_str, &user_id_str, duration, reason)
+            .await?;
+
+        // Remove membership from local storage for banned user
+        let _ = self.channel_repo.delete_membership(channel_id, user_id);
+
+        Ok(())
+    }
+
+    /// Unban a user from a channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_client` - Mutable reference to channel client
+    /// * `channel_id` - Channel to unban from
+    /// * `user_id` - User to unban
+    pub async fn unban_user(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+    ) -> Result<(), ChannelError> {
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Call server (streaming)
+        let channel_id_str = channel_id.to_string();
+        let user_id_str = user_id.to_string();
+        let mut stream = channel_client
+            .unban_user(&channel_id_str, &user_id_str)
+            .await?;
+
+        // Consume stream for completion
+        // No specific event to check for - unban just removes ban status
+        while let Some(event_result) = stream.next().await {
+            let event = event_result?;
+            if let Some(channel_event::Event::OperationFailed(failure)) = event.event {
+                let err_msg = failure
+                    .error
+                    .map(|e| format!("unban failed: {:?} - {}", e.code, e.message))
+                    .unwrap_or_else(|| "unban failed: unknown error".to_string());
+                return Err(ChannelError::InvalidInput(err_msg));
+            }
+        }
+
+        // No local storage update needed - user can rejoin if they want
+        Ok(())
+    }
 }
 
 /// Convert a proto Channel to a domain Channel.
@@ -1203,5 +1337,137 @@ mod tests {
             let back = proto_role_to_domain(proto as i32);
             assert_eq!(back, role);
         }
+    }
+
+    #[test]
+    fn test_channel_type_roundtrip() {
+        // Test roundtrip: domain -> proto -> domain
+        for ct in [ChannelType::Public, ChannelType::Private, ChannelType::DirectMessage] {
+            let proto = domain_channel_type_to_proto(ct);
+            let back = proto_channel_type_to_domain(proto as i32);
+            assert_eq!(back, ct);
+        }
+    }
+
+    #[test]
+    fn test_proto_persistence_conversion() {
+        assert_eq!(proto_persistence_to_domain(0), MessagePersistence::Permanent); // Unspecified
+        assert_eq!(proto_persistence_to_domain(1), MessagePersistence::Ephemeral);
+        assert_eq!(proto_persistence_to_domain(2), MessagePersistence::Permanent);
+    }
+
+    #[test]
+    fn test_domain_persistence_conversion() {
+        assert_eq!(
+            domain_persistence_to_proto(MessagePersistence::Permanent),
+            chat_v1::channel::config::Persistence::Persistent
+        );
+        assert_eq!(
+            domain_persistence_to_proto(MessagePersistence::Ephemeral),
+            chat_v1::channel::config::Persistence::Ephemeral
+        );
+        assert_eq!(
+            domain_persistence_to_proto(MessagePersistence::Hybrid),
+            chat_v1::channel::config::Persistence::Persistent
+        );
+    }
+
+    #[test]
+    fn test_proto_config_to_domain_none() {
+        let config = proto_config_to_domain(None);
+        assert_eq!(config, ChannelConfig::default());
+    }
+
+    #[test]
+    fn test_proto_config_to_domain_full() {
+        let proto_config = chat_v1::channel::Config {
+            persistence: 1, // Ephemeral
+            ttl: Some(prost_types::Duration {
+                seconds: 3600,
+                nanos: 0,
+            }),
+            max_members: 100,
+            encrypted: true,
+            password_hash: String::new(),
+            friends_only: false,
+        };
+
+        let config = proto_config_to_domain(Some(&proto_config));
+        assert_eq!(config.persistence, MessagePersistence::Ephemeral);
+        assert_eq!(config.max_members, Some(100));
+        assert_eq!(config.default_ttl_seconds, Some(3600));
+        assert!(config.require_encryption);
+    }
+
+    #[test]
+    fn test_domain_config_to_proto() {
+        let config = ChannelConfig {
+            persistence: MessagePersistence::Ephemeral,
+            max_members: Some(50),
+            default_ttl_seconds: Some(1800),
+            allow_reactions: true,
+            allow_threads: true,
+            allow_attachments: true,
+            require_encryption: true,
+        };
+
+        let proto = domain_config_to_proto(&config);
+        assert_eq!(proto.persistence, chat_v1::channel::config::Persistence::Ephemeral as i32);
+        assert_eq!(proto.max_members, 50);
+        assert!(proto.encrypted);
+        assert!(proto.ttl.is_some());
+        assert_eq!(proto.ttl.unwrap().seconds, 1800);
+    }
+
+    #[test]
+    fn test_proto_to_domain_channel() {
+        let proto = chat_v1::Channel {
+            id: "00000000-0000-0000-0000-000000000001".to_string(),
+            r#type: 1, // Public
+            name: "test-channel".to_string(),
+            config: Some(chat_v1::channel::Config {
+                persistence: 2,
+                ttl: None,
+                max_members: 100,
+                encrypted: false,
+                password_hash: String::new(),
+                friends_only: false,
+            }),
+            owner_id: "00000000-0000-0000-0000-000000000002".to_string(),
+            members: vec![],
+            created_at: 1706140800000,
+            description: "A test channel".to_string(),
+            img_url: "https://example.com/img.png".to_string(),
+            archived: false,
+        };
+
+        let channel = proto_to_domain_channel(&proto).unwrap();
+        assert_eq!(channel.name, "test-channel");
+        assert_eq!(channel.channel_type, ChannelType::Public);
+        assert_eq!(channel.description, Some("A test channel".to_string()));
+        assert_eq!(channel.image_url, Some("https://example.com/img.png".to_string()));
+        assert!(!channel.archived);
+    }
+
+    #[test]
+    fn test_proto_to_domain_channel_empty_strings() {
+        let proto = chat_v1::Channel {
+            id: "00000000-0000-0000-0000-000000000001".to_string(),
+            r#type: 2, // Private
+            name: "private-channel".to_string(),
+            config: None,
+            owner_id: "00000000-0000-0000-0000-000000000002".to_string(),
+            members: vec![],
+            created_at: 1706140800000,
+            description: "".to_string(), // Empty
+            img_url: "".to_string(), // Empty
+            archived: true,
+        };
+
+        let channel = proto_to_domain_channel(&proto).unwrap();
+        assert_eq!(channel.channel_type, ChannelType::Private);
+        assert_eq!(channel.description, None);
+        assert_eq!(channel.image_url, None);
+        assert!(channel.archived);
     }
 }
