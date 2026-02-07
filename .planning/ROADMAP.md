@@ -556,7 +556,7 @@ None (custom application, no pre-existing domain skills)
 **Depends on**: Phase 70
 **Research**: Unlikely (connecting existing components)
 **Status**: In progress
-**Plans**: 3/5 complete
+**Plans**: 4/5 complete
 
 **Details:**
 Currently only auth callbacks (login, register, logout) and basic send are wired.
