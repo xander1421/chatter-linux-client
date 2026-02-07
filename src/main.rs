@@ -7,9 +7,11 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::channel::{Channel, ChannelType};
-use chatter_linux::domain::ids::ChannelId;
+use chatter_linux::domain::ids::{ChannelId, UserId};
 use chatter_linux::domain::message::Message;
 use chatter_linux::services::auth_service::AuthService;
+use chatter_linux::services::channel_service::ChannelService;
+use chatter_linux::services::user_service::UserService;
 use chatter_linux::storage::ChannelRepository;
 use chatter_linux::storage::MessageRepository;
 
@@ -77,6 +79,7 @@ async fn main() {
     wire_chat_action_callbacks(&window, &ctx);
     wire_header_callbacks(&window, &ctx);
     wire_composer_callbacks(&window, &ctx);
+    wire_modal_callbacks(&window, &ctx);
 
     // Run Slint event loop (blocks until window closes)
     window.run().expect("Failed to run application");
@@ -1326,6 +1329,682 @@ fn wire_composer_callbacks(window: &MainWindow, _ctx: &AppContext) {
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(_w) = weak.upgrade() {
                 tracing::info!("Mention search for '{}' (autocomplete not yet implemented)", query_str);
+            }
+        });
+    });
+}
+
+// ============================================================================
+// Modal Callbacks (create-channel, user profile, friend requests)
+// ============================================================================
+
+/// Wire modal callbacks for channel creation, user profile actions, and friend requests.
+fn wire_modal_callbacks(window: &MainWindow, ctx: &AppContext) {
+    // Clone dependencies for callbacks
+    let grpc_pool = ctx.grpc_pool.clone();
+    let settings_repo = ctx.settings_repo.clone();
+    let channel_repo = ctx.channel_repo.clone();
+    let user_repo = ctx.user_repo.clone();
+    let auth_state = ctx.auth_state.clone();
+    let chat_state = ctx.chat_state.clone();
+
+    // ========== create-channel callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_create = grpc_pool.clone();
+    let settings_repo_create = settings_repo.clone();
+    let channel_repo_create = channel_repo.clone();
+
+    window.on_create_channel(move |name: SharedString, description: SharedString, template: SharedString| {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_create.clone();
+        let settings_repo = settings_repo_create.clone();
+        let channel_repo = channel_repo_create.clone();
+        let name = name.to_string();
+        let description = description.to_string();
+        let template = template.to_string();
+
+        tokio::spawn(async move {
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_create_channel_loading(true);
+                    w.set_create_channel_error("".into());
+                }
+            });
+
+            // Determine channel type from template
+            let channel_type = match template.as_str() {
+                "announcement" => ChannelType::Private, // Announcements are typically restricted
+                "ephemeral" => ChannelType::Private,    // Ephemeral channels are private
+                _ => ChannelType::Public,               // general, project default to public
+            };
+
+            // Create channel service
+            let channel_service = ChannelService::new(settings_repo, channel_repo);
+
+            // Create channel client
+            let mut channel_client = chatter_linux::network::grpc::channel_client::ChannelClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Attempt channel creation
+            let description_opt = if description.is_empty() {
+                None
+            } else {
+                Some(description.as_str())
+            };
+
+            match channel_service
+                .create_channel(
+                    &mut channel_client,
+                    &name,
+                    channel_type,
+                    None, // Default config
+                    description_opt,
+                    None, // No image
+                    None, // No password
+                    vec![], // No initial members
+                )
+                .await
+            {
+                Ok(channel) => {
+                    let channel_id_str = channel.id.to_string();
+                    let channel_name = channel.name.clone();
+
+                    let weak_success = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_success.upgrade() {
+                            // Close modal and clear form
+                            w.set_create_channel_loading(false);
+                            w.set_create_channel_name("".into());
+                            w.set_create_channel_description("".into());
+                            w.set_create_channel_template("".into());
+                            w.set_active_modal("".into());
+
+                            // Select the new channel
+                            w.set_selected_channel_id(channel_id_str.into());
+                            w.set_channel_name(channel_name.into());
+                        }
+                    });
+
+                    tracing::info!("Created channel: {}", channel.id);
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    tracing::error!("Failed to create channel: {}", error_msg);
+
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_create_channel_loading(false);
+                            w.set_create_channel_error(error_msg.into());
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== profile-add-friend callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_friend = grpc_pool.clone();
+    let settings_repo_friend = settings_repo.clone();
+    let user_repo_friend = user_repo.clone();
+
+    window.on_profile_add_friend(move || {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_friend.clone();
+        let settings_repo = settings_repo_friend.clone();
+        let user_repo = user_repo_friend.clone();
+
+        // Get user ID synchronously from the window before spawning async task
+        let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
+
+        let profile_user_id = match profile_user_id {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                tracing::error!("Could not get profile user ID");
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_profile_loading(true);
+                }
+            });
+
+            // Parse user ID
+            let friend_id: UserId = match profile_user_id.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Create user service and client
+            let user_service = UserService::new(settings_repo, user_repo);
+            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Send friend request
+            match user_service.send_friend_request(&mut user_client, &friend_id, None).await {
+                Ok(_) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                            // Don't set is_friend yet - request is pending
+                            tracing::info!("Friend request sent to {}", friend_id);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to send friend request: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== profile-remove-friend callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_remove = grpc_pool.clone();
+    let settings_repo_remove = settings_repo.clone();
+    let user_repo_remove = user_repo.clone();
+
+    window.on_profile_remove_friend(move || {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_remove.clone();
+        let settings_repo = settings_repo_remove.clone();
+        let user_repo = user_repo_remove.clone();
+
+        // Get user ID synchronously from the window before spawning async task
+        let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
+
+        let profile_user_id = match profile_user_id {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                tracing::error!("Could not get profile user ID");
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_profile_loading(true);
+                }
+            });
+
+            // Parse user ID
+            let friend_id: UserId = match profile_user_id.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Create user service and client
+            let user_service = UserService::new(settings_repo, user_repo);
+            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Remove friend
+            match user_service.remove_friend(&mut user_client, &friend_id).await {
+                Ok(()) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                            w.set_profile_is_friend(false);
+                            tracing::info!("Removed friend: {}", friend_id);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to remove friend: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== profile-block-user callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_block = grpc_pool.clone();
+    let settings_repo_block = settings_repo.clone();
+    let user_repo_block = user_repo.clone();
+
+    window.on_profile_block_user(move || {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_block.clone();
+        let settings_repo = settings_repo_block.clone();
+        let user_repo = user_repo_block.clone();
+
+        // Get user ID synchronously from the window before spawning async task
+        let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
+
+        let profile_user_id = match profile_user_id {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                tracing::error!("Could not get profile user ID");
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_profile_loading(true);
+                }
+            });
+
+            // Parse user ID
+            let user_id: UserId = match profile_user_id.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Create user service and client
+            let user_service = UserService::new(settings_repo, user_repo);
+            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Block user
+            match user_service.block_user(&mut user_client, &user_id).await {
+                Ok(()) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                            w.set_profile_is_blocked(true);
+                            w.set_profile_is_friend(false); // Blocking removes friendship
+                            tracing::info!("Blocked user: {}", user_id);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to block user: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== profile-unblock-user callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_unblock = grpc_pool.clone();
+    let settings_repo_unblock = settings_repo.clone();
+    let user_repo_unblock = user_repo.clone();
+
+    window.on_profile_unblock_user(move || {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_unblock.clone();
+        let settings_repo = settings_repo_unblock.clone();
+        let user_repo = user_repo_unblock.clone();
+
+        // Get user ID synchronously from the window before spawning async task
+        let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
+
+        let profile_user_id = match profile_user_id {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                tracing::error!("Could not get profile user ID");
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_profile_loading(true);
+                }
+            });
+
+            // Parse user ID
+            let user_id: UserId = match profile_user_id.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Create user service and client
+            let user_service = UserService::new(settings_repo, user_repo);
+            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Unblock user
+            match user_service.unblock_user(&mut user_client, &user_id).await {
+                Ok(()) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                            w.set_profile_is_blocked(false);
+                            tracing::info!("Unblocked user: {}", user_id);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to unblock user: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== profile-send-message callback ==========
+    let weak_window = window.as_weak();
+    let auth_state_msg = auth_state.clone();
+    let chat_state_msg = chat_state.clone();
+
+    window.on_profile_send_message(move || {
+        let weak = weak_window.clone();
+        let _auth_state = auth_state_msg.clone();
+        let _chat_state = chat_state_msg.clone();
+
+        // For DMs, we would need to find or create a DM channel with this user
+        // For now, close the modal and log the intent
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                let profile_user_id = w.get_profile_user_id().to_string();
+                w.set_active_modal("".into());
+                tracing::info!("Send message to user: {} (DM channel creation not yet implemented)", profile_user_id);
+                // TODO: Create/find DM channel and navigate to it
+            }
+        });
+    });
+
+    // ========== friend-requests-switch-tab callback ==========
+    let weak_window = window.as_weak();
+    window.on_friend_requests_switch_tab(move |tab: SharedString| {
+        let weak = weak_window.clone();
+        let tab_str = tab.to_string();
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_friend_requests_tab(tab_str.into());
+                tracing::debug!("Switched to friend requests tab");
+            }
+        });
+    });
+
+    // ========== friend-request-accept callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_accept = grpc_pool.clone();
+    let settings_repo_accept = settings_repo.clone();
+    let user_repo_accept = user_repo.clone();
+
+    window.on_friend_request_accept(move |user_id: SharedString| {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_accept.clone();
+        let settings_repo = settings_repo_accept.clone();
+        let user_repo = user_repo_accept.clone();
+        let user_id_str = user_id.to_string();
+
+        tokio::spawn(async move {
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_friend_requests_loading(true);
+                }
+            });
+
+            // Parse user ID
+            let friend_id: UserId = match user_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friend_requests_loading(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Create user service and client
+            let user_service = UserService::new(settings_repo, user_repo);
+            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Accept friend request
+            match user_service.respond_friend_request(&mut user_client, &friend_id, true).await {
+                Ok(_) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friend_requests_loading(false);
+                            tracing::info!("Accepted friend request from {}", friend_id);
+                            // TODO: Refresh friend request list
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to accept friend request: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friend_requests_loading(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== friend-request-decline callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_decline = grpc_pool.clone();
+    let settings_repo_decline = settings_repo.clone();
+    let user_repo_decline = user_repo.clone();
+
+    window.on_friend_request_decline(move |user_id: SharedString| {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_decline.clone();
+        let settings_repo = settings_repo_decline.clone();
+        let user_repo = user_repo_decline.clone();
+        let user_id_str = user_id.to_string();
+
+        tokio::spawn(async move {
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_friend_requests_loading(true);
+                }
+            });
+
+            // Parse user ID
+            let friend_id: UserId = match user_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friend_requests_loading(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Create user service and client
+            let user_service = UserService::new(settings_repo, user_repo);
+            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Decline friend request
+            match user_service.respond_friend_request(&mut user_client, &friend_id, false).await {
+                Ok(_) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friend_requests_loading(false);
+                            tracing::info!("Declined friend request from {}", friend_id);
+                            // TODO: Refresh friend request list
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to decline friend request: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friend_requests_loading(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== friend-request-cancel callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_cancel = grpc_pool.clone();
+    let settings_repo_cancel = settings_repo.clone();
+    let user_repo_cancel = user_repo.clone();
+
+    window.on_friend_request_cancel(move |user_id: SharedString| {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_cancel.clone();
+        let settings_repo = settings_repo_cancel.clone();
+        let user_repo = user_repo_cancel.clone();
+        let user_id_str = user_id.to_string();
+
+        tokio::spawn(async move {
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_friend_requests_loading(true);
+                }
+            });
+
+            // Parse user ID
+            let friend_id: UserId = match user_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friend_requests_loading(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Create user service and client
+            // Cancel is the same as removing - we remove the pending request
+            let user_service = UserService::new(settings_repo, user_repo);
+            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Cancel outgoing friend request by removing friend (clears pending state)
+            match user_service.remove_friend(&mut user_client, &friend_id).await {
+                Ok(()) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friend_requests_loading(false);
+                            tracing::info!("Cancelled friend request to {}", friend_id);
+                            // TODO: Refresh friend request list
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to cancel friend request: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friend_requests_loading(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== forward-message callback ==========
+    let weak_window = window.as_weak();
+    window.on_forward_message(move |target_id: SharedString| {
+        let weak = weak_window.clone();
+        let target_id_str = target_id.to_string();
+
+        // For now, log the forward intent - actual message forwarding requires:
+        // 1. Getting the message to forward from message state
+        // 2. Sending it to the target channel
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_forward_loading(false);
+                w.set_active_modal("".into());
+                tracing::info!("Forward message to: {} (forwarding not yet implemented)", target_id_str);
+                // TODO: Implement actual message forwarding
             }
         });
     });
