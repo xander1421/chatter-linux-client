@@ -193,6 +193,17 @@ impl KeyStore {
         Ok(count as u32)
     }
 
+    /// Get the maximum pre-key ID currently stored.
+    ///
+    /// Returns 0 if no pre-keys exist. Used to determine the starting ID
+    /// for generating new pre-keys.
+    pub fn max_prekey_id(&self) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let max_id: Option<i64> =
+            conn.query_row("SELECT MAX(id) FROM prekeys", [], |row| row.get(0))?;
+        Ok(max_id.unwrap_or(0) as u32)
+    }
+
     // ========================================================================
     // Signed Pre-keys
     // ========================================================================

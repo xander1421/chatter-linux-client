@@ -21,6 +21,7 @@ use crate::storage::KeyStore;
 /// - One-time prekeys (consumed on first use)
 /// - Signed prekeys (rotated periodically)
 /// - Kyber prekeys (post-quantum resistance)
+#[derive(Clone)]
 pub struct PreKeyManager {
     key_store: Arc<KeyStore>,
 }
@@ -223,6 +224,17 @@ impl PreKeyManager {
         self.key_store
             .count_prekeys()
             .map_err(CryptoError::Storage)
+    }
+
+    /// Get the next available prekey ID.
+    ///
+    /// Returns the maximum existing prekey ID + 1, or 1 if no prekeys exist.
+    pub fn get_next_prekey_id(&self) -> Result<u32, CryptoError> {
+        let max_id = self
+            .key_store
+            .max_prekey_id()
+            .map_err(CryptoError::Storage)?;
+        Ok(max_id + 1)
     }
 
     /// Check if prekey refresh is needed.

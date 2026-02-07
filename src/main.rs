@@ -2008,4 +2008,509 @@ fn wire_modal_callbacks(window: &MainWindow, ctx: &AppContext) {
             }
         });
     });
+
+    // ========== settings-change-password callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_password = grpc_pool.clone();
+    let settings_repo_password = settings_repo.clone();
+    let auth_interceptor = ctx.auth_interceptor.clone();
+
+    window.on_settings_change_password(move |current: SharedString, new: SharedString| {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_password.clone();
+        let settings_repo = settings_repo_password.clone();
+        let auth_interceptor = auth_interceptor.clone();
+        let current = current.to_string();
+        let new = new.to_string();
+
+        tokio::spawn(async move {
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_settings_password_changing(true);
+                    w.set_settings_password_error("".into());
+                }
+            });
+
+            // Create account service
+            use chatter_linux::services::account_service::AccountService;
+            let account_service = AccountService::new(settings_repo.clone(), auth_interceptor);
+
+            // Create auth client
+            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            match account_service.change_password(&mut auth_client, &current, &new).await {
+                Ok(()) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_password_changing(false);
+                            // Clear form on success
+                            w.set_settings_current_password("".into());
+                            w.set_settings_new_password("".into());
+                            w.set_settings_confirm_password("".into());
+                        }
+                    });
+                    tracing::info!("Password changed successfully");
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    tracing::error!("Failed to change password: {}", error_msg);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_password_changing(false);
+                            w.set_settings_password_error(error_msg.into());
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== settings-read-receipts-changed callback ==========
+    let settings_repo_read = settings_repo.clone();
+
+    window.on_settings_read_receipts_changed(move |enabled: bool| {
+        let settings_repo = settings_repo_read.clone();
+
+        if let Err(e) = settings_repo.set(
+            chatter_linux::storage::settings_keys::SEND_READ_RECEIPTS,
+            &enabled,
+        ) {
+            tracing::error!("Failed to save read receipts setting: {}", e);
+        } else {
+            tracing::debug!("Read receipts setting changed to: {}", enabled);
+        }
+    });
+
+    // ========== settings-typing-indicators-changed callback ==========
+    let settings_repo_typing = settings_repo.clone();
+
+    window.on_settings_typing_indicators_changed(move |enabled: bool| {
+        let settings_repo = settings_repo_typing.clone();
+
+        if let Err(e) = settings_repo.set(
+            chatter_linux::storage::settings_keys::SHOW_TYPING_INDICATORS,
+            &enabled,
+        ) {
+            tracing::error!("Failed to save typing indicators setting: {}", e);
+        } else {
+            tracing::debug!("Typing indicators setting changed to: {}", enabled);
+        }
+    });
+
+    // ========== settings-copy-fingerprint callback ==========
+    let key_store_fingerprint = ctx.key_store.clone();
+
+    window.on_settings_copy_fingerprint(move || {
+        let key_store = key_store_fingerprint.clone();
+
+        // Get local identity public key and format as fingerprint
+        use chatter_linux::crypto::signal::IdentityKeyManager;
+        let identity_manager = IdentityKeyManager::new(key_store);
+
+        let fingerprint = match identity_manager.get_public_key() {
+            Ok(public_key) => {
+                // Format the public key bytes as hex with spaces for readability
+                let bytes = public_key.serialize();
+                bytes
+                    .chunks(4)
+                    .map(|chunk| {
+                        chunk.iter().map(|b| format!("{:02X}", b)).collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+            Err(e) => {
+                tracing::error!("Failed to get identity key for fingerprint: {}", e);
+                return;
+            }
+        };
+
+        // Copy to clipboard
+        use chatter_linux::system::Clipboard;
+        match Clipboard::new() {
+            Ok(mut clipboard) => {
+                if let Err(e) = clipboard.set_text(&fingerprint) {
+                    tracing::error!("Failed to copy fingerprint to clipboard: {}", e);
+                } else {
+                    tracing::info!("Fingerprint copied to clipboard");
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to access clipboard: {}", e);
+            }
+        }
+    });
+
+    // ========== settings-sealed-sender-changed callback ==========
+    let settings_repo_sealed = settings_repo.clone();
+
+    window.on_settings_sealed_sender_changed(move |unrestricted: bool| {
+        let settings_repo = settings_repo_sealed.clone();
+
+        // Store the sealed sender preference locally
+        // Note: This setting would need to be synced to server in a full implementation
+        if let Err(e) = settings_repo.set("privacy.sealed_sender_unrestricted", &unrestricted) {
+            tracing::error!("Failed to save sealed sender setting: {}", e);
+        } else {
+            tracing::debug!("Sealed sender unrestricted setting changed to: {}", unrestricted);
+        }
+    });
+
+    // ========== settings-refresh-keys callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_keys = grpc_pool.clone();
+    let key_store_refresh = ctx.key_store.clone();
+
+    window.on_settings_refresh_keys(move || {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_keys.clone();
+        let key_store = key_store_refresh.clone();
+
+        tokio::spawn(async move {
+            use chatter_linux::crypto::signal::PreKeyManager;
+            use chatter_linux::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord;
+            use rand::SeedableRng;
+
+            // Create prekey manager
+            let prekey_manager = PreKeyManager::new(key_store);
+
+            // Generate new batch of prekeys (100 is typical)
+            let mut rng = rand::rngs::StdRng::from_os_rng();
+
+            // Get next available prekey ID
+            let start_id = match prekey_manager.get_next_prekey_id() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Failed to get next prekey ID: {}", e);
+                    return;
+                }
+            };
+
+            // Generate prekeys locally
+            let prekeys = match prekey_manager.generate_prekeys(&mut rng, start_id, 100) {
+                Ok(pks) => pks,
+                Err(e) => {
+                    tracing::error!("Failed to generate prekeys: {}", e);
+                    return;
+                }
+            };
+
+            // Upload to server
+            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Convert prekeys to proto format
+            let proto_prekeys: Vec<PreKeyRecord> = prekeys
+                .iter()
+                .filter_map(|pk| {
+                    Some(PreKeyRecord {
+                        id: u32::from(pk.id().ok()?),
+                        public_key: pk.public_key().ok()?.serialize().to_vec(),
+                    })
+                })
+                .collect();
+
+            match auth_client.refresh_pre_keys(proto_prekeys).await {
+                Ok(()) => {
+                    // Get updated stats
+                    match auth_client.get_pre_key_stats(0).await {
+                        Ok(stats) => {
+                            let count = stats.available_count;
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_settings_prekey_count(count);
+                                }
+                            });
+                            tracing::info!("Refreshed prekeys, {} now available", count);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to get prekey stats after refresh: {}", e);
+                            // Still report success for the refresh
+                            tracing::info!("Prekeys refreshed successfully");
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to upload prekeys to server: {}", e);
+                }
+            }
+        });
+    });
+
+    // ========== settings-view-sessions callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_sessions = grpc_pool.clone();
+    let settings_repo_sessions = settings_repo.clone();
+
+    window.on_settings_view_sessions(move || {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_sessions.clone();
+        let settings_repo = settings_repo_sessions.clone();
+
+        tokio::spawn(async move {
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_sessions_loading(true);
+                    w.set_active_modal("sessions".into());
+                }
+            });
+
+            // Create session service
+            use chatter_linux::services::session_service::SessionService;
+            let session_service = SessionService::new(settings_repo);
+
+            // Create auth client
+            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            match session_service.list_sessions(&mut auth_client).await {
+                Ok(sessions) => {
+                    // Convert to Slint SessionInfo
+                    let slint_sessions: Vec<SessionInfo> = sessions
+                        .into_iter()
+                        .map(|s| SessionInfo {
+                            device_id: s.device_id as i32,
+                            device_info: s.device_info.into(),
+                            ip_address: s.ip_address.into(),
+                            last_used: s.last_used.format("%Y-%m-%d %H:%M").to_string().into(),
+                            created_at: s.created_at.format("%Y-%m-%d").to_string().into(),
+                            is_current: s.is_current,
+                        })
+                        .collect();
+
+                    let session_count = slint_sessions.len() as i32;
+
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_sessions(ModelRc::new(VecModel::from(slint_sessions)));
+                            w.set_sessions_loading(false);
+                            w.set_settings_session_count(session_count);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to list sessions: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_sessions_loading(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== revoke-session callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_revoke = grpc_pool.clone();
+    let settings_repo_revoke = settings_repo.clone();
+
+    window.on_revoke_session(move |device_id: i32| {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_revoke.clone();
+        let settings_repo = settings_repo_revoke.clone();
+
+        tokio::spawn(async move {
+            // Set revoking state
+            let weak_revoking = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_revoking.upgrade() {
+                    w.set_sessions_revoking(true);
+                }
+            });
+
+            // Create session service
+            use chatter_linux::services::session_service::SessionService;
+            let session_service = SessionService::new(settings_repo.clone());
+
+            // Create auth client
+            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            match session_service.revoke_session(&mut auth_client, device_id as u32).await {
+                Ok(()) => {
+                    // Refresh session list
+                    match session_service.list_sessions(&mut auth_client).await {
+                        Ok(sessions) => {
+                            let slint_sessions: Vec<SessionInfo> = sessions
+                                .into_iter()
+                                .map(|s| SessionInfo {
+                                    device_id: s.device_id as i32,
+                                    device_info: s.device_info.into(),
+                                    ip_address: s.ip_address.into(),
+                                    last_used: s.last_used.format("%Y-%m-%d %H:%M").to_string().into(),
+                                    created_at: s.created_at.format("%Y-%m-%d").to_string().into(),
+                                    is_current: s.is_current,
+                                })
+                                .collect();
+
+                            let session_count = slint_sessions.len() as i32;
+
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_sessions(ModelRc::new(VecModel::from(slint_sessions)));
+                                    w.set_sessions_revoking(false);
+                                    w.set_settings_session_count(session_count);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to refresh sessions after revoke: {}", e);
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_sessions_revoking(false);
+                                }
+                            });
+                        }
+                    }
+                    tracing::info!("Revoked session for device {}", device_id);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to revoke session: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_sessions_revoking(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== revoke-all-sessions callback ==========
+    let weak_window = window.as_weak();
+    let grpc_pool_revoke_all = grpc_pool.clone();
+    let settings_repo_revoke_all = settings_repo.clone();
+
+    window.on_revoke_all_sessions(move || {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool_revoke_all.clone();
+        let settings_repo = settings_repo_revoke_all.clone();
+
+        tokio::spawn(async move {
+            // Set revoking state
+            let weak_revoking = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_revoking.upgrade() {
+                    w.set_sessions_revoking(true);
+                }
+            });
+
+            // Create session service
+            use chatter_linux::services::session_service::SessionService;
+            let session_service = SessionService::new(settings_repo.clone());
+
+            // Create auth client
+            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            match session_service.revoke_all_other_sessions(&mut auth_client).await {
+                Ok(()) => {
+                    // Refresh session list (should only show current session now)
+                    match session_service.list_sessions(&mut auth_client).await {
+                        Ok(sessions) => {
+                            let slint_sessions: Vec<SessionInfo> = sessions
+                                .into_iter()
+                                .map(|s| SessionInfo {
+                                    device_id: s.device_id as i32,
+                                    device_info: s.device_info.into(),
+                                    ip_address: s.ip_address.into(),
+                                    last_used: s.last_used.format("%Y-%m-%d %H:%M").to_string().into(),
+                                    created_at: s.created_at.format("%Y-%m-%d").to_string().into(),
+                                    is_current: s.is_current,
+                                })
+                                .collect();
+
+                            let session_count = slint_sessions.len() as i32;
+
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_sessions(ModelRc::new(VecModel::from(slint_sessions)));
+                                    w.set_sessions_revoking(false);
+                                    w.set_settings_session_count(session_count);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to refresh sessions after revoke all: {}", e);
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_sessions_revoking(false);
+                                }
+                            });
+                        }
+                    }
+                    tracing::info!("Revoked all other sessions");
+                }
+                Err(e) => {
+                    tracing::error!("Failed to revoke all sessions: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_sessions_revoking(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // ========== settings-delete-account callback ==========
+    let weak_window = window.as_weak();
+    // Note: These will be used when delete confirmation modal is implemented
+    let _grpc_pool_delete = grpc_pool.clone();
+    let _settings_repo_delete = settings_repo.clone();
+    let _auth_interceptor_delete = ctx.auth_interceptor.clone();
+
+    window.on_settings_delete_account(move || {
+        let weak = weak_window.clone();
+
+        // For account deletion, we need to confirm with password
+        // For now, just log - a full implementation would show a confirmation modal
+        // and then call account_service.delete_account()
+        tracing::info!("Delete account requested - showing confirmation would be needed");
+
+        // In a full implementation:
+        // 1. Show confirmation modal with password input
+        // 2. On confirm, call:
+        //    let account_service = AccountService::new(settings_repo, auth_interceptor);
+        //    account_service.delete_account(&mut auth_client, &password).await
+        // 3. On success, clear auth state and navigate to login
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(_w) = weak.upgrade() {
+                // Future: Show delete confirmation modal
+                // w.set_active_modal("delete-account-confirm".into());
+            }
+        });
+    });
+
+    // ========== settings-edit-profile callback ==========
+    let weak_window = window.as_weak();
+
+    window.on_settings_edit_profile(move || {
+        let weak = weak_window.clone();
+
+        // Open profile edit modal (reuse user-profile modal in edit mode)
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_profile_is_self(true);
+                w.set_active_modal("user-profile".into());
+            }
+        });
+    });
 }
