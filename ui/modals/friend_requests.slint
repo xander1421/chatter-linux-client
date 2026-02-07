@@ -17,7 +17,7 @@ export struct FriendRequest {
 }
 
 export component FriendRequestsModal inherits Rectangle {
-    in property <bool> visible: false;
+    in property <bool> show-modal: false;
     in property <string> active-tab: "received";  // "received" or "sent"
     in property <[FriendRequest]> received-requests: [];
     in property <[FriendRequest]> sent-requests: [];
@@ -30,9 +30,9 @@ export component FriendRequestsModal inherits Rectangle {
     callback cancel(string);   // user_id - cancel sent request
 
     Modal {
-        visible: root.visible;
+        show: root.show-modal;
         title: "Friend Requests";
-        width: 480px;
+        modal-width: 480px;
 
         close => {
             root.close();
@@ -170,8 +170,7 @@ export component FriendRequestsModal inherits Rectangle {
                                     // Avatar
                                     Avatar {
                                         size: 40px;
-                                        fallback-text: request.display-name.character-count > 0 ?
-                                            request.display-name.to-upper-ascii() : "?";
+                                        fallback-text: request.display-name;
                                     }
 
                                     // Name, username, and time
@@ -280,8 +279,7 @@ export component FriendRequestsModal inherits Rectangle {
                                     // Avatar
                                     Avatar {
                                         size: 40px;
-                                        fallback-text: request.display-name.character-count > 0 ?
-                                            request.display-name.to-upper-ascii() : "?";
+                                        fallback-text: request.display-name;
                                     }
 
                                     // Name, username, and time

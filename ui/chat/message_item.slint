@@ -78,7 +78,7 @@ export component MessageItem inherits Rectangle {
                 text: root.content;
                 color: Colors.text-muted;
                 font-size: Typography.sm;
-                font-style: italic;
+                font-italic: true;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
@@ -93,7 +93,7 @@ export component MessageItem inherits Rectangle {
                 text: "[Message deleted]";
                 color: Colors.text-muted;
                 font-size: Typography.sm;
-                font-style: italic;
+                font-italic: true;
                 wrap: word-wrap;
             }
         }
@@ -158,7 +158,7 @@ export component MessageItem inherits Rectangle {
                             text: "(edited)";
                             color: Colors.text-muted;
                             font-size: Typography.xs;
-                            font-style: italic;
+                            font-italic: true;
                             vertical-alignment: center;
                         }
                     }

@@ -64,32 +64,45 @@ export component Button inherits Rectangle {
             vertical-alignment: center;
         }
 
-        // Loading spinner (simple rotating rectangle)
-        if loading: Rectangle {
-            width: 16px;
-            height: 16px;
-            border-radius: 8px;
-            border-width: 2px;
-            border-color: Colors.text-primary;
-            background: transparent;
-            opacity: 0.7;
+        // Loading spinner (simple animated dots)
+        if loading: HorizontalLayout {
+            spacing: 2px;
+            alignment: center;
 
-            // Spinner indicator
+            property <float> anim-progress;
+
+            // Three animated dots with staggered opacity
             Rectangle {
-                x: 6px;
-                y: 0px;
                 width: 4px;
                 height: 4px;
                 border-radius: 2px;
                 background: Colors.text-primary;
+                opacity: 0.4 + 0.6 * Math.cos(anim-progress * 360deg);
+            }
+            Rectangle {
+                width: 4px;
+                height: 4px;
+                border-radius: 2px;
+                background: Colors.text-primary;
+                opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.33) * 360deg);
+            }
+            Rectangle {
+                width: 4px;
+                height: 4px;
+                border-radius: 2px;
+                background: Colors.text-primary;
+                opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.66) * 360deg);
             }
 
-            animate rotation {
-                duration: 800ms;
+            anim-progress: 0;
+            animate anim-progress {
+                duration: 1000ms;
                 iteration-count: -1;
-                easing: linear;
             }
-            rotation: 360deg;
+
+            init => {
+                self.anim-progress = 1.0;
+            }
         }
 
         // Button text

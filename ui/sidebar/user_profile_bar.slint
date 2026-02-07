@@ -40,16 +40,19 @@ export component UserProfileBar inherits Rectangle {
                 spacing: Spacing.md;
 
                 // Avatar with presence
-                Avatar {
-                    size: 40px;
-                    source: root.avatar-source;
-                    fallback-text: root.initials;
-                    show-presence: true;
-                    presence-color: root.presence-status == "online" ? Colors.online
-                                 : root.presence-status == "away" ? Colors.away
-                                 : root.presence-status == "dnd" ? Colors.dnd
-                                 : Colors.offline;
-                    vertical-alignment: center;
+                VerticalLayout {
+                    alignment: center;
+
+                    Avatar {
+                        size: 40px;
+                        source: root.avatar-source;
+                        fallback-text: root.initials;
+                        show-presence: true;
+                        presence-color: root.presence-status == "online" ? Colors.online
+                                     : root.presence-status == "away" ? Colors.away
+                                     : root.presence-status == "dnd" ? Colors.dnd
+                                     : Colors.offline;
+                    }
                 }
 
                 // Name and status text
@@ -83,24 +86,29 @@ export component UserProfileBar inherits Rectangle {
         }
 
         // Settings gear icon
-        settings-button := Rectangle {
-            width: 32px;
-            height: 32px;
-            border-radius: Spacing.radius-sm;
-            background: settings-touch.has-hover ? Colors.surface-hover : transparent;
-            vertical-alignment: center;
+        VerticalLayout {
+            alignment: center;
 
-            Text {
-                text: "\u{2699}"; // Gear icon (Unicode)
-                color: Colors.text-secondary;
-                font-size: 20px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+            settings-button := Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: Spacing.radius-sm;
+                background: settings-touch.has-hover ? Colors.surface-hover : transparent;
 
-            settings-touch := TouchArea {
-                clicked => {
-                    root.settings-clicked();
+                Text {
+                    text: "\u{2699}"; // Gear icon (Unicode)
+                    color: Colors.text-secondary;
+                    font-size: 20px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+
+                settings-touch := TouchArea {
+                    clicked => {
+                        root.settings-clicked();
+                    }
                 }
             }
         }

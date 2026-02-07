@@ -168,8 +168,7 @@ export component SettingsScreen inherits Rectangle {
                                     Avatar {
                                         size: 64px;
                                         source: root.avatar;
-                                        fallback-text: root.display-name != "" ?
-                                            root.display-name.to-upper-ascii() : "?";
+                                        fallback-text: root.display-name;
                                     }
 
                                     // Name and username

@@ -17,7 +17,7 @@ export struct SessionInfo {
 }
 
 export component SessionsModal inherits Rectangle {
-    in property <bool> visible: false;
+    in property <bool> show-modal: false;
     in property <[SessionInfo]> sessions: [];
     in property <bool> loading: false;
     in property <bool> revoking: false;
@@ -27,9 +27,9 @@ export component SessionsModal inherits Rectangle {
     callback revoke-all-others();
 
     Modal {
-        visible: root.visible;
+        show: root.show-modal;
         title: "Active Sessions";
-        width: 520px;
+        modal-width: 520px;
 
         close => {
             root.close();
@@ -122,18 +122,16 @@ export component SessionsModal inherits Rectangle {
                                 padding: Spacing.md;
                                 spacing: Spacing.md;
 
-                                // Device icon
+                                // Device icon (device type detection done in Rust if needed)
                                 Rectangle {
                                     width: 40px;
                                     height: 40px;
                                     border-radius: Spacing.radius-md;
                                     background: Colors.surface-hover;
 
-                                    // Simple device icon (placeholder)
+                                    // Default desktop icon
                                     Text {
-                                        text: session.device-info.contains("mobile") || session.device-info.contains("Mobile") ? "📱" :
-                                              session.device-info.contains("tablet") || session.device-info.contains("Tablet") ? "📱" :
-                                              "💻";
+                                        text: "💻";
                                         font-size: Typography.lg;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;

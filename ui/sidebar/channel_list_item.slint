@@ -55,20 +55,25 @@ export component ChannelListItem inherits Rectangle {
         }
 
         // Unread count badge
-        if root.unread-count > 0: Rectangle {
-            width: max(20px, badge-text.preferred-width + 12px);
-            height: 20px;
-            border-radius: Spacing.radius-full;
-            background: Colors.primary;
-            vertical-alignment: center;
+        if root.unread-count > 0: VerticalLayout {
+            alignment: center;
 
-            badge-text := Text {
-                text: root.unread-count > 99 ? "99+" : root.unread-count;
-                color: Colors.text-primary;
-                font-size: 11px;
-                font-weight: 600;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            Rectangle {
+                width: max(20px, badge-text.preferred-width + 12px);
+                height: 20px;
+                border-radius: Spacing.radius-full;
+                background: Colors.primary;
+
+                badge-text := Text {
+                    text: root.unread-count > 99 ? "99+" : root.unread-count;
+                    color: Colors.text-primary;
+                    font-size: 11px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
             }
         }
     }

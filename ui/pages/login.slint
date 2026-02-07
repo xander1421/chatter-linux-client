@@ -99,14 +99,17 @@ export component LoginPage inherits Rectangle {
                 if error != "": Rectangle {
                     background: Colors.error.with-alpha(0.1);
                     border-radius: Spacing.radius-md;
-                    padding: Spacing.md;
 
-                    Text {
-                        text: root.error;
-                        color: Colors.error;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        wrap: word-wrap;
+                    HorizontalLayout {
+                        padding: Spacing.md;
+
+                        Text {
+                            text: root.error;
+                            color: Colors.error;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
                     }
                 }
 

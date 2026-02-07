@@ -8,6 +8,9 @@ import { ChatHeader, ChatHeaderData } from "chat_header.slint";
 import { MessageList, MessageItemData } from "message_list.slint";
 import { MessageComposer } from "message_composer.slint";
 
+// Re-export types for parent components
+export { MessageItemData }
+
 export component ChatLayout inherits Rectangle {
     // Header properties
     in property <string> channel-id: "";

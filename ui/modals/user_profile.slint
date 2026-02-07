@@ -8,7 +8,7 @@ import { Button } from "../components/button.slint";
 import { Avatar } from "../components/avatar.slint";
 
 export component UserProfileModal inherits Rectangle {
-    in property <bool> visible: false;
+    in property <bool> show-modal: false;
     in property <string> user-id: "";
     in property <string> display-name: "";
     in property <string> username: "";
@@ -55,9 +55,9 @@ export component UserProfileModal inherits Rectangle {
     }
 
     Modal {
-        visible: root.visible;
+        show: root.show-modal;
         title: "";  // No title - profile header is visual
-        width: 400px;
+        modal-width: 400px;
 
         close => {
             root.close();
@@ -73,8 +73,7 @@ export component UserProfileModal inherits Rectangle {
 
                 Avatar {
                     size: 96px;
-                    fallback-text: root.display-name.character-count > 0 ?
-                        root.display-name.to-upper-ascii() : "?";
+                    fallback-text: root.display-name;
                     show-presence: true;
                     presence-color: root.presence-color(root.presence);
                 }

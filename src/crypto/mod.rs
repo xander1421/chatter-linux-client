@@ -14,5 +14,5 @@ pub mod signal;
 
 pub use attachment_crypto::{AttachmentCrypto, EncryptedAttachment, KEY_SET_LENGTH};
 pub use device_credentials::{derive_uak, DeviceCredentials, DeviceToken};
-pub use saved_message_crypto::{SavedMessageCrypto, SavedMessageSourcePlain};
+pub use saved_message_crypto::{SavedMessageCrypto, SavedMessageSource};
 pub use signal::{IdentityKeyManager, PreKeyManager, SenderKeyManager, SessionManager, SignalStore};

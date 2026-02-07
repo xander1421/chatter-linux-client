@@ -17,7 +17,7 @@ export struct ForwardTarget {
 }
 
 export component ForwardMessageModal inherits Rectangle {
-    in property <bool> visible: false;
+    in property <bool> show-modal: false;
     in property <string> message-preview: "";
     in-out property <string> search-text: "";
     in property <[ForwardTarget]> targets: [];
@@ -30,17 +30,17 @@ export component ForwardMessageModal inherits Rectangle {
     property <string> selected-target-id: "";
 
     // Reset state when modal closes
-    changed visible => {
-        if !visible {
+    changed show-modal => {
+        if !show-modal {
             selected-target-id = "";
             search-text = "";
         }
     }
 
     Modal {
-        visible: root.visible;
+        show: root.show-modal;
         title: "Forward Message";
-        width: 480px;
+        modal-width: 480px;
 
         close => {
             root.close();
@@ -52,7 +52,6 @@ export component ForwardMessageModal inherits Rectangle {
             // Message preview section
             Rectangle {
                 height: 80px;
-                max-height: 80px;
                 background: Colors.surface-hover;
                 border-radius: Spacing.radius-md;
 
@@ -100,11 +99,10 @@ export component ForwardMessageModal inherits Rectangle {
                         padding: Spacing.xs;
 
                         for target[index] in root.targets: Rectangle {
-                            property <bool> matches: root.search-text == "" || target.name.to-lower-ascii().contains(root.search-text.to-lower-ascii());
+                            // Note: Search filtering is done in Rust before passing to UI
                             property <bool> is-selected: root.selected-target-id == target.id;
 
-                            visible: matches;
-                            height: matches ? 48px : 0;
+                            height: 48px;
                             background: is-selected ? Colors.primary.with-alpha(0.2) : target-touch.has-hover ? Colors.surface-hover : transparent;
                             border-radius: Spacing.radius-md;
 
@@ -116,7 +114,7 @@ export component ForwardMessageModal inherits Rectangle {
                                 // Avatar
                                 Avatar {
                                     size: 32px;
-                                    fallback-text: target.name.character-count > 0 ? target.name.to-upper-ascii() : "?";
+                                    fallback-text: target.name;
                                 }
 
                                 // Name and type
@@ -158,22 +156,15 @@ export component ForwardMessageModal inherits Rectangle {
                                     border-radius: 10px;
                                     background: Colors.primary;
 
-                                    // Checkmark
-                                    Rectangle {
-                                        x: 6px;
-                                        y: 8px;
-                                        width: 4px;
-                                        height: 2px;
-                                        background: Colors.text-primary;
-                                        rotation-angle: 45deg;
-                                    }
-                                    Rectangle {
-                                        x: 7px;
-                                        y: 6px;
-                                        width: 8px;
-                                        height: 2px;
-                                        background: Colors.text-primary;
-                                        rotation-angle: -45deg;
+                                    // Checkmark using Unicode
+                                    Text {
+                                        text: "\u{2713}";
+                                        color: Colors.text-primary;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        width: 100%;
+                                        height: 100%;
                                     }
                                 }
                             }

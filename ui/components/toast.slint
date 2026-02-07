@@ -73,22 +73,15 @@ export component Toast inherits Rectangle {
             border-radius: Spacing.radius-sm;
             background: dismiss-area.has-hover ? Colors.surface-hover : transparent;
 
-            // Small X icon
-            Rectangle {
-                width: 10px;
-                height: 2px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                background: Colors.text-muted;
-                rotation-angle: 45deg;
-            }
-            Rectangle {
-                width: 10px;
-                height: 2px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                background: Colors.text-muted;
-                rotation-angle: -45deg;
+            // Small X icon using Unicode
+            Text {
+                text: "\u{2715}";
+                color: Colors.text-muted;
+                font-size: 12px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
             }
 
             dismiss-area := TouchArea {

@@ -38,16 +38,19 @@ export component DMListItem inherits Rectangle {
         alignment: stretch;
 
         // Avatar with presence indicator
-        Avatar {
-            size: 32px;
-            source: root.avatar-source;
-            fallback-text: root.initials;
-            show-presence: true;
-            presence-color: root.presence-status == "online" ? Colors.online
-                         : root.presence-status == "away" ? Colors.away
-                         : root.presence-status == "dnd" ? Colors.dnd
-                         : Colors.offline;
-            vertical-alignment: center;
+        VerticalLayout {
+            alignment: center;
+
+            Avatar {
+                size: 32px;
+                source: root.avatar-source;
+                fallback-text: root.initials;
+                show-presence: true;
+                presence-color: root.presence-status == "online" ? Colors.online
+                             : root.presence-status == "away" ? Colors.away
+                             : root.presence-status == "dnd" ? Colors.dnd
+                             : Colors.offline;
+            }
         }
 
         // Name and last message
@@ -88,20 +91,25 @@ export component DMListItem inherits Rectangle {
             }
 
             // Unread count badge
-            if root.unread-count > 0: Rectangle {
-                width: max(20px, badge-text.preferred-width + 12px);
-                height: 20px;
-                border-radius: Spacing.radius-full;
-                background: Colors.primary;
-                horizontal-alignment: right;
+            if root.unread-count > 0: HorizontalLayout {
+                alignment: end;
 
-                badge-text := Text {
-                    text: root.unread-count > 99 ? "99+" : root.unread-count;
-                    color: Colors.text-primary;
-                    font-size: 11px;
-                    font-weight: 600;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Rectangle {
+                    width: max(20px, badge-text.preferred-width + 12px);
+                    height: 20px;
+                    border-radius: Spacing.radius-full;
+                    background: Colors.primary;
+
+                    badge-text := Text {
+                        text: root.unread-count > 99 ? "99+" : root.unread-count;
+                        color: Colors.text-primary;
+                        font-size: 11px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
                 }
             }
         }

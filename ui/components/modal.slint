@@ -5,15 +5,15 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component Modal inherits Rectangle {
-    in property <bool> visible: false;
+    in property <bool> show: false;
     in property <string> title: "";
-    in property <length> width: 480px;
+    in property <length> modal-width: 480px;
 
     callback close();
 
     // Only show when visible
-    opacity: root.visible ? 1 : 0;
-    visible: root.visible;
+    opacity: root.show ? 1 : 0;
+    visible: root.show;
 
     // Backdrop - full parent coverage
     background: #00000080;
@@ -29,8 +29,7 @@ export component Modal inherits Rectangle {
 
     // Modal container - centered
     Rectangle {
-        property <length> modal-width: root.width;
-        width: modal-width;
+        width: root.modal-width;
         min-height: 200px;
         max-height: parent.height * 80%;
         x: (parent.width - self.width) / 2;
@@ -70,22 +69,15 @@ export component Modal inherits Rectangle {
                     border-radius: Spacing.radius-sm;
                     background: close-area.has-hover ? Colors.surface-hover : transparent;
 
-                    // X icon using two crossed lines
-                    Rectangle {
-                        width: 14px;
-                        height: 2px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        background: Colors.text-secondary;
-                        rotation-angle: 45deg;
-                    }
-                    Rectangle {
-                        width: 14px;
-                        height: 2px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        background: Colors.text-secondary;
-                        rotation-angle: -45deg;
+                    // X icon using Unicode character
+                    Text {
+                        text: "\u{2715}";
+                        color: Colors.text-secondary;
+                        font-size: Typography.base;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
                     }
 
                     close-area := TouchArea {

@@ -8,6 +8,9 @@ import { ChannelList, ChannelListItemData } from "channel_list.slint";
 import { DMList, DMListItemData } from "dm_list.slint";
 import { UserProfileBar } from "user_profile_bar.slint";
 
+// Re-export types for parent components
+export { ChannelListItemData, DMListItemData }
+
 export component Sidebar inherits Rectangle {
     // Properties - Channel list
     in property <[ChannelListItemData]> channels: [];

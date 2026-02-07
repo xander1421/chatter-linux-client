@@ -4,14 +4,10 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 
 export component Skeleton inherits Rectangle {
-    in property <length> width: 100px;
-    in property <length> height: 20px;
-    in property <length> border-radius: Spacing.radius-sm;
-
-    // Apply dimensions
-    self.width: root.width;
-    self.height: root.height;
-    self.border-radius: root.border-radius;
+    // Default dimensions (can be overridden by parent)
+    width: 100px;
+    height: 20px;
+    border-radius: Spacing.radius-sm;
 
     // Base color
     background: Colors.surface;

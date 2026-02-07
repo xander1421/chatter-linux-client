@@ -84,22 +84,15 @@ export component GifPicker inherits Rectangle {
                 border-radius: Spacing.radius-sm;
                 background: close-area.has-hover ? Colors.surface-hover : transparent;
 
-                // X icon using two crossed lines
-                Rectangle {
-                    width: 12px;
-                    height: 2px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    background: Colors.text-secondary;
-                    rotation-angle: 45deg;
-                }
-                Rectangle {
-                    width: 12px;
-                    height: 2px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    background: Colors.text-secondary;
-                    rotation-angle: -45deg;
+                // X icon using Unicode
+                Text {
+                    text: "\u{2715}";
+                    color: Colors.text-secondary;
+                    font-size: 14px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
                 }
 
                 close-area := TouchArea {

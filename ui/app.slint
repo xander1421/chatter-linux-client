@@ -1,14 +1,483 @@
 // Chatter Application Component
-// Main application layout
+// Main application layout with view routing and modal overlay system
+
+import { Colors } from "theme/colors.slint";
+import { Spacing } from "theme/spacing.slint";
+
+// Import auth screens
+import { LoginPage } from "pages/login.slint";
+import { RegisterPage } from "pages/register.slint";
+import { LoadingPage } from "pages/loading.slint";
+
+// Import main layout components
+import { Sidebar, ChannelListItemData, DMListItemData } from "sidebar/sidebar.slint";
+import { ChatLayout, MessageItemData } from "chat/chat_layout.slint";
+
+// Import modals
+import { CreateChannelModal } from "modals/create_channel.slint";
+import { UserProfileModal } from "modals/user_profile.slint";
+import { FriendRequestsModal, FriendRequest } from "modals/friend_requests.slint";
+import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
+import { SessionsModal, SessionInfo } from "modals/sessions.slint";
+
+// Import settings
+import { SettingsScreen } from "settings/settings_screen.slint";
+
+// Re-export types for Rust binding
+export { ChannelListItemData, DMListItemData, MessageItemData, FriendRequest, ForwardTarget, SessionInfo }
 
 export component App inherits Rectangle {
-    background: #1a1a2e;
+    // ========== View routing ==========
+    // Views: "loading", "login", "register", "main"
+    in-out property <string> current-view: "loading";
 
-    Text {
-        text: "Chatter";
-        color: white;
-        font-size: 24px;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    // ========== Loading page properties ==========
+    in property <string> loading-message: "Loading...";
+    in property <string> loading-secondary-message: "";
+
+    // ========== Auth page properties ==========
+    in-out property <string> login-username: "";
+    in-out property <string> login-password: "";
+    in property <bool> login-loading: false;
+    in property <string> login-error: "";
+
+    in-out property <string> register-display-name: "";
+    in-out property <string> register-username: "";
+    in-out property <string> register-password: "";
+    in-out property <string> register-confirm-password: "";
+    in property <bool> register-loading: false;
+    in property <string> register-error: "";
+
+    // ========== Sidebar properties ==========
+    in property <[ChannelListItemData]> channels: [];
+    in property <string> selected-channel-id: "";
+    in property <[DMListItemData]> dm-conversations: [];
+    in property <string> selected-dm-id: "";
+    in property <string> user-display-name: "User";
+    in property <image> user-avatar-source;
+    in property <string> user-initials: "";
+    in property <string> user-presence-status: "online";
+    in property <string> user-custom-status: "";
+
+    // ========== Chat properties ==========
+    in property <string> channel-id: "";
+    in property <string> channel-name: "";
+    in property <string> channel-type: "public";
+    in property <int> member-count: 0;
+    in property <string> topic: "";
+    in property <bool> is-archived: false;
+    in property <string> typing-indicator: "";
+    in property <[MessageItemData]> messages: [];
+    in property <bool> loading-messages: false;
+    in-out property <string> composer-text: "";
+    in property <string> composer-placeholder: "Type a message...";
+    in property <bool> composer-disabled: false;
+
+    // ========== Modal state ==========
+    // Modals: "none", "settings", "create-channel", "user-profile", "friend-requests", "forward-message", "sessions"
+    in-out property <string> active-modal: "none";
+
+    // Create channel modal properties
+    in-out property <string> create-channel-name: "";
+    in-out property <string> create-channel-description: "";
+    in-out property <string> create-channel-template: "";
+    in property <string> create-channel-error: "";
+    in property <bool> create-channel-loading: false;
+
+    // User profile modal properties
+    in property <string> profile-user-id: "";
+    in property <string> profile-display-name: "";
+    in property <string> profile-username: "";
+    in property <string> profile-avatar-url: "";
+    in property <string> profile-status-text: "";
+    in property <string> profile-presence: "offline";
+    in property <string> profile-bio: "";
+    in property <bool> profile-is-friend: false;
+    in property <bool> profile-is-blocked: false;
+    in property <bool> profile-is-self: false;
+    in property <bool> profile-loading: false;
+
+    // Friend requests modal properties
+    in property <string> friend-requests-tab: "received";
+    in property <[FriendRequest]> received-friend-requests: [];
+    in property <[FriendRequest]> sent-friend-requests: [];
+    in property <bool> friend-requests-loading: false;
+
+    // Forward message modal properties
+    in property <string> forward-message-preview: "";
+    in-out property <string> forward-search-text: "";
+    in property <[ForwardTarget]> forward-targets: [];
+    in property <bool> forward-loading: false;
+
+    // Sessions modal properties
+    in property <[SessionInfo]> sessions: [];
+    in property <bool> sessions-loading: false;
+    in property <bool> sessions-revoking: false;
+
+    // Settings properties
+    in property <string> settings-display-name: "";
+    in property <string> settings-username: "";
+    in property <image> settings-avatar;
+    in property <int> settings-session-count: 0;
+    in-out property <string> settings-current-password: "";
+    in-out property <string> settings-new-password: "";
+    in-out property <string> settings-confirm-password: "";
+    in property <bool> settings-password-changing: false;
+    in property <string> settings-password-error: "";
+    in-out property <bool> settings-read-receipts: true;
+    in-out property <bool> settings-typing-indicators: true;
+    in property <string> settings-identity-fingerprint: "";
+    in-out property <bool> settings-sealed-sender-unrestricted: false;
+    in property <int> settings-prekey-count: 0;
+
+    // ========== Auth callbacks ==========
+    callback login(string, string);
+    callback register(string, string, string);
+    callback go-to-register();
+    callback go-to-login();
+
+    // ========== Sidebar callbacks ==========
+    callback channel-selected(string);
+    callback dm-selected(string);
+    callback saved-messages-clicked();
+    callback settings-clicked();
+    callback profile-clicked();
+
+    // ========== Chat callbacks ==========
+    callback search-clicked();
+    callback pinned-clicked();
+    callback chat-settings-clicked();
+    callback message-clicked(string);
+    callback reply-clicked(string);
+    callback react-clicked(string);
+    callback thread-clicked(string);
+    callback more-clicked(string);
+    callback load-more();
+    callback send(string);
+    callback attachment-clicked();
+    callback emoji-clicked();
+    callback gif-clicked();
+    callback mention-triggered(string);
+
+    // ========== Modal callbacks ==========
+    // Create channel
+    callback create-channel(string, string, string);
+
+    // User profile
+    callback profile-send-message();
+    callback profile-add-friend();
+    callback profile-remove-friend();
+    callback profile-block-user();
+    callback profile-unblock-user();
+
+    // Friend requests
+    callback friend-requests-switch-tab(string);
+    callback friend-request-accept(string);
+    callback friend-request-decline(string);
+    callback friend-request-cancel(string);
+
+    // Forward message
+    callback forward-message(string);
+
+    // Sessions
+    callback revoke-session(int);
+    callback revoke-all-sessions();
+
+    // Settings
+    callback settings-edit-profile();
+    callback settings-change-password(string, string);
+    callback settings-view-sessions();
+    callback settings-logout();
+    callback settings-delete-account();
+    callback settings-read-receipts-changed(bool);
+    callback settings-typing-indicators-changed(bool);
+    callback settings-copy-fingerprint();
+    callback settings-sealed-sender-changed(bool);
+    callback settings-refresh-keys();
+
+    background: Colors.background;
+
+    // ========== Main content layer ==========
+    Rectangle {
+        // Loading page
+        if current-view == "loading": LoadingPage {
+            message: root.loading-message;
+            secondary-message: root.loading-secondary-message;
+        }
+
+        // Login page
+        if current-view == "login": LoginPage {
+            username <=> root.login-username;
+            password <=> root.login-password;
+            loading: root.login-loading;
+            error: root.login-error;
+
+            login(u, p) => {
+                root.login(u, p);
+            }
+            register => {
+                root.go-to-register();
+            }
+        }
+
+        // Register page
+        if current-view == "register": RegisterPage {
+            display-name <=> root.register-display-name;
+            username <=> root.register-username;
+            password <=> root.register-password;
+            confirm-password <=> root.register-confirm-password;
+            loading: root.register-loading;
+            error: root.register-error;
+
+            register(u, p, d) => {
+                root.register(u, p, d);
+            }
+            go-to-login => {
+                root.go-to-login();
+            }
+        }
+
+        // Main chat layout
+        if current-view == "main": HorizontalLayout {
+            // Sidebar (fixed width via component)
+            Sidebar {
+                channels: root.channels;
+                selected-channel-id: root.selected-channel-id;
+                dm-conversations: root.dm-conversations;
+                selected-dm-id: root.selected-dm-id;
+                user-display-name: root.user-display-name;
+                user-avatar-source: root.user-avatar-source;
+                user-initials: root.user-initials;
+                user-presence-status: root.user-presence-status;
+                user-custom-status: root.user-custom-status;
+
+                channel-selected(id) => {
+                    root.channel-selected(id);
+                }
+                dm-selected(id) => {
+                    root.dm-selected(id);
+                }
+                saved-messages-clicked => {
+                    root.saved-messages-clicked();
+                }
+                settings-clicked => {
+                    root.active-modal = "settings";
+                    root.settings-clicked();
+                }
+                profile-clicked => {
+                    root.profile-clicked();
+                }
+            }
+
+            // Chat layout (fills remaining space)
+            ChatLayout {
+                horizontal-stretch: 1;
+                channel-id: root.channel-id;
+                channel-name: root.channel-name;
+                channel-type: root.channel-type;
+                member-count: root.member-count;
+                topic: root.topic;
+                is-archived: root.is-archived;
+                typing-indicator: root.typing-indicator;
+                messages: root.messages;
+                loading-messages: root.loading-messages;
+                composer-text <=> root.composer-text;
+                composer-placeholder: root.composer-placeholder;
+                composer-disabled: root.composer-disabled;
+
+                search-clicked => { root.search-clicked(); }
+                pinned-clicked => { root.pinned-clicked(); }
+                settings-clicked => { root.chat-settings-clicked(); }
+                message-clicked(id) => { root.message-clicked(id); }
+                reply-clicked(id) => { root.reply-clicked(id); }
+                react-clicked(id) => { root.react-clicked(id); }
+                thread-clicked(id) => { root.thread-clicked(id); }
+                more-clicked(id) => { root.more-clicked(id); }
+                load-more => { root.load-more(); }
+                send(text) => { root.send(text); }
+                attachment-clicked => { root.attachment-clicked(); }
+                emoji-clicked => { root.emoji-clicked(); }
+                gif-clicked => { root.gif-clicked(); }
+                mention-triggered(query) => { root.mention-triggered(query); }
+            }
+        }
+    }
+
+    // ========== Modal overlay layer ==========
+    // Semi-transparent backdrop when any modal is active
+    if active-modal != "none" && active-modal != "settings": Rectangle {
+        background: Colors.background.with-alpha(0.5);
+
+        // Block clicks from reaching content below
+        TouchArea {
+            clicked => {
+                // Close modal when clicking backdrop
+                root.active-modal = "none";
+            }
+        }
+    }
+
+    // Create Channel Modal
+    CreateChannelModal {
+        show-modal: root.active-modal == "create-channel";
+        channel-name <=> root.create-channel-name;
+        channel-description <=> root.create-channel-description;
+        selected-template <=> root.create-channel-template;
+        error-message: root.create-channel-error;
+        loading: root.create-channel-loading;
+
+        close => {
+            root.active-modal = "none";
+        }
+        create(name, desc, template) => {
+            root.create-channel(name, desc, template);
+        }
+    }
+
+    // User Profile Modal
+    UserProfileModal {
+        show-modal: root.active-modal == "user-profile";
+        user-id: root.profile-user-id;
+        display-name: root.profile-display-name;
+        username: root.profile-username;
+        avatar-url: root.profile-avatar-url;
+        status-text: root.profile-status-text;
+        presence: root.profile-presence;
+        bio: root.profile-bio;
+        is-friend: root.profile-is-friend;
+        is-blocked: root.profile-is-blocked;
+        is-self: root.profile-is-self;
+        loading: root.profile-loading;
+
+        close => {
+            root.active-modal = "none";
+        }
+        send-message => {
+            root.profile-send-message();
+        }
+        add-friend => {
+            root.profile-add-friend();
+        }
+        remove-friend => {
+            root.profile-remove-friend();
+        }
+        block-user => {
+            root.profile-block-user();
+        }
+        unblock-user => {
+            root.profile-unblock-user();
+        }
+    }
+
+    // Friend Requests Modal
+    FriendRequestsModal {
+        show-modal: root.active-modal == "friend-requests";
+        active-tab: root.friend-requests-tab;
+        received-requests: root.received-friend-requests;
+        sent-requests: root.sent-friend-requests;
+        loading: root.friend-requests-loading;
+
+        close => {
+            root.active-modal = "none";
+        }
+        switch-tab(tab) => {
+            root.friend-requests-switch-tab(tab);
+        }
+        accept(user-id) => {
+            root.friend-request-accept(user-id);
+        }
+        decline(user-id) => {
+            root.friend-request-decline(user-id);
+        }
+        cancel(user-id) => {
+            root.friend-request-cancel(user-id);
+        }
+    }
+
+    // Forward Message Modal
+    ForwardMessageModal {
+        show-modal: root.active-modal == "forward-message";
+        message-preview: root.forward-message-preview;
+        search-text <=> root.forward-search-text;
+        targets: root.forward-targets;
+        loading: root.forward-loading;
+
+        close => {
+            root.active-modal = "none";
+        }
+        forward(target-id) => {
+            root.forward-message(target-id);
+        }
+    }
+
+    // Sessions Modal
+    SessionsModal {
+        show-modal: root.active-modal == "sessions";
+        sessions: root.sessions;
+        loading: root.sessions-loading;
+        revoking: root.sessions-revoking;
+
+        close => {
+            root.active-modal = "none";
+        }
+        revoke-session(device-id) => {
+            root.revoke-session(device-id);
+        }
+        revoke-all-others => {
+            root.revoke-all-sessions();
+        }
+    }
+
+    // Settings screen (full screen overlay)
+    if active-modal == "settings": SettingsScreen {
+        display-name: root.settings-display-name;
+        username: root.settings-username;
+        avatar: root.settings-avatar;
+        session-count: root.settings-session-count;
+        current-password <=> root.settings-current-password;
+        new-password <=> root.settings-new-password;
+        confirm-password <=> root.settings-confirm-password;
+        password-changing: root.settings-password-changing;
+        password-error: root.settings-password-error;
+        read-receipts-enabled <=> root.settings-read-receipts;
+        typing-indicators-enabled <=> root.settings-typing-indicators;
+        identity-fingerprint: root.settings-identity-fingerprint;
+        sealed-sender-unrestricted <=> root.settings-sealed-sender-unrestricted;
+        prekey-count: root.settings-prekey-count;
+
+        edit-profile-clicked => {
+            root.settings-edit-profile();
+        }
+        change-password(current, new) => {
+            root.settings-change-password(current, new);
+        }
+        view-sessions-clicked => {
+            root.active-modal = "sessions";
+            root.settings-view-sessions();
+        }
+        logout-clicked => {
+            root.settings-logout();
+        }
+        delete-account-clicked => {
+            root.settings-delete-account();
+        }
+        close-settings => {
+            root.active-modal = "none";
+        }
+        read-receipts-changed(value) => {
+            root.settings-read-receipts-changed(value);
+        }
+        typing-indicators-changed(value) => {
+            root.settings-typing-indicators-changed(value);
+        }
+        copy-fingerprint-clicked => {
+            root.settings-copy-fingerprint();
+        }
+        sealed-sender-changed(value) => {
+            root.settings-sealed-sender-changed(value);
+        }
+        refresh-keys-clicked => {
+            root.settings-refresh-keys();
+        }
     }
 }

@@ -1,0 +1,19 @@
+version: v2
+
+plugins:
+  # Prost - generates Rust structs from protobuf
+  - remote: buf.build/community/neoeinstein-prost:v0.4.0
+    out: linux-client/src/proto
+    opt:
+      - file_descriptor_set
+
+  # Tonic - generates gRPC client code
+  - remote: buf.build/community/neoeinstein-tonic:v0.4.1
+    out: linux-client/src/proto
+    opt:
+      - no_server=true
+
+inputs:
+  - directory: .
+    paths:
+      - pkg/proto

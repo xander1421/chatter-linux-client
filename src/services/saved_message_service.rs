@@ -1,22 +1,18 @@
 //! Saved message service.
 //!
-//! Orchestrates saved message operations for the personal vault using the
-//! SavedMessagesClient for server-side operations. No local storage for v1 -
-//! all data is server-side and encrypted with the user's profile key.
+//! Orchestrates saved message operations for the personal vault.
+//! Saved messages are stored in a special channel where channel_id == user_id.
+//! Content is encrypted client-side with the user's profile key before sending.
 
 use std::sync::Arc;
 
 use base64::Engine;
 
-use crate::crypto::{SavedMessageCrypto, SavedMessageSourcePlain};
-use crate::domain::ids::{ChannelId, MessageId, SavedMessageId, UserId};
-use crate::domain::saved_message::{SavedContent, SavedMessage};
+use crate::crypto::{SavedMessageCrypto, SavedMessageSource};
+use crate::domain::ids::MessageId;
 use crate::error::{CryptoError, NetworkError};
-use crate::network::grpc::SavedMessagesClient;
-use crate::proto::saved_messages_v1::{
-    ListSavedMessagesResponse, PinnedSortBy, SavedMessage as ProtoSavedMessage,
-    SavedMessageContent, SavedMessageSource, SortDirection,
-};
+use crate::network::grpc::MessageClient;
+use crate::proto::chat_v1::{GetMessagesResponse, Message, MessageSortDirection};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
 /// Saved message service errors.
@@ -43,11 +39,26 @@ pub enum SavedMessageError {
     Encryption(#[from] CryptoError),
 }
 
+/// Decrypted saved message with metadata.
+#[derive(Debug, Clone)]
+pub struct DecryptedSavedMessage {
+    /// Message ID.
+    pub id: MessageId,
+    /// Decrypted text content.
+    pub text: String,
+    /// Optional source metadata (where the message came from).
+    pub source: Option<SavedMessageSource>,
+    /// Timestamp when saved (Unix ms).
+    pub saved_at: u64,
+    /// Whether message is pinned.
+    pub pinned: bool,
+}
+
 /// Saved message service.
 ///
-/// Orchestrates saved message operations for the personal vault using
-/// network client for server-side operations. Content is encrypted
-/// server-side with the user's profile key.
+/// Orchestrates saved message operations for the personal vault.
+/// Uses MessageClient to send/receive messages to the saved messages channel
+/// (channel_id == user_id). Content is encrypted with profile key.
 ///
 /// # Example
 ///
@@ -55,13 +66,13 @@ pub enum SavedMessageError {
 /// let service = SavedMessageService::new(settings_repo);
 ///
 /// // Save a message
-/// let saved = service.save_message(&mut client, content, None).await?;
+/// let saved = service.save_message(&mut client, "Important note", None).await?;
 ///
 /// // List saved messages
-/// let response = service.list_messages(&mut client, None, None, None, None).await?;
+/// let messages = service.list_messages(&mut client, 50, None).await?;
 ///
 /// // Pin a message
-/// let pinned = service.pin_message(&mut client, &message_id).await?;
+/// service.pin_message(&mut client, &message_id).await?;
 /// ```
 pub struct SavedMessageService {
     settings_repo: Arc<SettingsRepository>,
@@ -74,6 +85,7 @@ impl SavedMessageService {
     }
 
     /// Get the currently logged-in user ID.
+    /// This is also the saved messages channel ID.
     fn current_user_id(&self) -> Result<String, SavedMessageError> {
         self.settings_repo
             .get_string(keys::CURRENT_USER_ID)
@@ -108,98 +120,45 @@ impl SavedMessageService {
     }
 
     // ========================================================================
-    // Encryption Helpers
-    // ========================================================================
-
-    /// Encrypt text content for saving.
-    ///
-    /// Encrypts text using the user's profile key and wraps in SavedMessageContent.
-    ///
-    /// # Arguments
-    ///
-    /// * `text` - The plaintext content to encrypt
-    pub fn encrypt_text(&self, text: &str) -> Result<SavedMessageContent, SavedMessageError> {
-        let profile_key = self.get_profile_key()?;
-        SavedMessageCrypto::encrypt_text(text, &profile_key).map_err(SavedMessageError::Encryption)
-    }
-
-    /// Encrypt source metadata for saving.
-    ///
-    /// Encrypts source information using the user's profile key.
-    ///
-    /// # Arguments
-    ///
-    /// * `source` - The plaintext source metadata
-    pub fn encrypt_source(
-        &self,
-        source: &SavedMessageSourcePlain,
-    ) -> Result<SavedMessageSource, SavedMessageError> {
-        let profile_key = self.get_profile_key()?;
-        SavedMessageCrypto::encrypt_source(source, &profile_key)
-            .map_err(SavedMessageError::Encryption)
-    }
-
-    /// Decrypt message content after fetching.
-    ///
-    /// Decrypts content using the user's profile key.
-    ///
-    /// # Arguments
-    ///
-    /// * `content` - The encrypted SavedMessageContent
-    pub fn decrypt_content(
-        &self,
-        content: &SavedMessageContent,
-    ) -> Result<String, SavedMessageError> {
-        let profile_key = self.get_profile_key()?;
-        SavedMessageCrypto::decrypt_content(content, &profile_key)
-            .map_err(SavedMessageError::Encryption)
-    }
-
-    /// Decrypt source metadata after fetching.
-    ///
-    /// Decrypts source using the user's profile key.
-    ///
-    /// # Arguments
-    ///
-    /// * `source` - The encrypted SavedMessageSource
-    pub fn decrypt_source(
-        &self,
-        source: &SavedMessageSource,
-    ) -> Result<SavedMessageSourcePlain, SavedMessageError> {
-        let profile_key = self.get_profile_key()?;
-        SavedMessageCrypto::decrypt_source(source, &profile_key)
-            .map_err(SavedMessageError::Encryption)
-    }
-
-    // ========================================================================
     // Server Operations
     // ========================================================================
 
     /// Save a message to the personal vault.
     ///
-    /// Creates a new saved message with the provided content and optional source.
-    /// Generates a UUID for idempotency.
+    /// Encrypts the content with profile key and sends to saved messages channel.
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to saved messages client
-    /// * `content` - The content to save (already encrypted)
-    /// * `source` - Optional source information (where it came from)
+    /// * `client` - Mutable reference to message client
+    /// * `text` - The text content to save
+    /// * `source` - Optional source info (where the message came from)
     pub async fn save_message(
         &self,
-        client: &mut SavedMessagesClient,
-        content: SavedMessageContent,
-        source: Option<SavedMessageSource>,
-    ) -> Result<ProtoSavedMessage, SavedMessageError> {
-        // Check logged in
-        let _ = self.current_user_id()?;
+        client: &mut MessageClient,
+        text: &str,
+        source: Option<&SavedMessageSource>,
+    ) -> Result<Message, SavedMessageError> {
+        // Get user ID (which is also the channel ID)
+        let channel_id = self.current_user_id()?;
+        let profile_key = self.get_profile_key()?;
 
-        // Generate idempotency key
-        let client_request_id = uuid::Uuid::new_v4().to_string();
+        // Encrypt content
+        let content = SavedMessageCrypto::encrypt_text(text, &profile_key, source)?;
 
-        // Call server
+        // Send to saved messages channel
         let message = client
-            .save_message(content, source, &client_request_id)
+            .send_message(
+                &channel_id,
+                content,
+                None,   // parent_id
+                false,  // ephemeral
+                None,   // ephemeral_ttl
+                false,  // encrypt (already encrypted client-side)
+                None,   // crypto_options
+                vec![], // mentioned_integrations
+                false,  // targets_ai_bot
+                vec![], // mentioned_file_ids
+            )
             .await?;
 
         Ok(message)
@@ -207,42 +166,103 @@ impl SavedMessageService {
 
     /// List saved messages with pagination.
     ///
-    /// Returns saved messages sorted newest first by default.
+    /// Fetches messages from saved messages channel.
+    /// Note: Messages are still encrypted - use decrypt_message() to decrypt.
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to saved messages client
-    /// * `limit` - Maximum number of messages to return (default: 50)
-    /// * `page_token` - Cursor token for pagination
-    /// * `from_timestamp` - Optional start of time range filter (Unix ms)
-    /// * `to_timestamp` - Optional end of time range filter (Unix ms)
+    /// * `client` - Mutable reference to message client
+    /// * `limit` - Maximum number of messages to return
+    /// * `page_token` - Optional pagination token
     pub async fn list_messages(
         &self,
-        client: &mut SavedMessagesClient,
-        limit: Option<i32>,
+        client: &mut MessageClient,
+        limit: i32,
         page_token: Option<&str>,
-        from_timestamp: Option<u64>,
-        to_timestamp: Option<u64>,
-    ) -> Result<ListSavedMessagesResponse, SavedMessageError> {
-        // Check logged in
-        let _ = self.current_user_id()?;
+    ) -> Result<GetMessagesResponse, SavedMessageError> {
+        let channel_id = self.current_user_id()?;
 
-        // Use defaults
-        let limit = limit.unwrap_or(50);
-        let page_token = page_token.unwrap_or("");
-
-        // Call server with newest first
         let response = client
-            .list_messages(
+            .get_messages(
+                &channel_id,
                 limit,
+                None, // thread_root_id
                 page_token,
-                SortDirection::NewestFirst,
-                from_timestamp,
-                to_timestamp,
+                MessageSortDirection::SortNewestFirst,
+                None, // reference_message_id
+                None, // reference_time
             )
             .await?;
 
         Ok(response)
+    }
+
+    /// Decrypt a saved message.
+    ///
+    /// Decrypts the message content using the profile key.
+    ///
+    /// # Arguments
+    ///
+    /// * `message` - The encrypted message from the server
+    pub fn decrypt_message(&self, message: &Message) -> Result<DecryptedSavedMessage, SavedMessageError> {
+        let profile_key = self.get_profile_key()?;
+
+        let content = message
+            .content
+            .as_ref()
+            .ok_or_else(|| SavedMessageError::InvalidData("message has no content".to_string()))?;
+
+        let (text, source) = SavedMessageCrypto::decrypt_content(content, &profile_key)?;
+
+        let id: MessageId = message
+            .id
+            .parse()
+            .map_err(|_| SavedMessageError::InvalidData(format!("invalid message ID: {}", message.id)))?;
+
+        Ok(DecryptedSavedMessage {
+            id,
+            text,
+            source,
+            saved_at: message.timestamp,
+            pinned: message.pinned,
+        })
+    }
+
+    /// List and decrypt saved messages.
+    ///
+    /// Convenience method that fetches and decrypts messages in one call.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - Mutable reference to message client
+    /// * `limit` - Maximum number of messages to return
+    /// * `page_token` - Optional pagination token
+    pub async fn list_decrypted_messages(
+        &self,
+        client: &mut MessageClient,
+        limit: i32,
+        page_token: Option<&str>,
+    ) -> Result<(Vec<DecryptedSavedMessage>, Option<String>), SavedMessageError> {
+        let response = self.list_messages(client, limit, page_token).await?;
+
+        let mut decrypted = Vec::with_capacity(response.messages.len());
+        for msg in &response.messages {
+            match self.decrypt_message(msg) {
+                Ok(d) => decrypted.push(d),
+                Err(e) => {
+                    // Log error but continue with other messages
+                    tracing::warn!("Failed to decrypt saved message {}: {}", msg.id, e);
+                }
+            }
+        }
+
+        let next_page_token = if response.next_page_token.is_empty() {
+            None
+        } else {
+            Some(response.next_page_token)
+        };
+
+        Ok((decrypted, next_page_token))
     }
 
     /// Delete a saved message.
@@ -251,46 +271,36 @@ impl SavedMessageService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to saved messages client
+    /// * `client` - Mutable reference to message client
     /// * `message_id` - ID of the message to delete
     pub async fn delete_message(
         &self,
-        client: &mut SavedMessagesClient,
+        client: &mut MessageClient,
         message_id: &str,
     ) -> Result<(), SavedMessageError> {
-        // Check logged in
-        let _ = self.current_user_id()?;
+        let channel_id = self.current_user_id()?;
 
-        // Generate idempotency key
-        let request_id = uuid::Uuid::new_v4().to_string();
-
-        // Call server
-        client.delete_message(message_id, &request_id).await?;
+        client.delete_message(message_id, &channel_id).await?;
 
         Ok(())
     }
 
     /// Pin a saved message.
     ///
-    /// Pins a message for quick access. Returns the updated message.
+    /// Pins a message for quick access.
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to saved messages client
+    /// * `client` - Mutable reference to message client
     /// * `message_id` - ID of the message to pin
     pub async fn pin_message(
         &self,
-        client: &mut SavedMessagesClient,
+        client: &mut MessageClient,
         message_id: &str,
-    ) -> Result<ProtoSavedMessage, SavedMessageError> {
-        // Check logged in
-        let _ = self.current_user_id()?;
+    ) -> Result<Message, SavedMessageError> {
+        let channel_id = self.current_user_id()?;
 
-        // Generate idempotency key
-        let request_id = uuid::Uuid::new_v4().to_string();
-
-        // Call server
-        let message = client.pin_message(message_id, &request_id).await?;
+        let message = client.pin_message(message_id, &channel_id).await?;
 
         Ok(message)
     }
@@ -301,176 +311,64 @@ impl SavedMessageService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to saved messages client
+    /// * `client` - Mutable reference to message client
     /// * `message_id` - ID of the message to unpin
     pub async fn unpin_message(
         &self,
-        client: &mut SavedMessagesClient,
+        client: &mut MessageClient,
         message_id: &str,
     ) -> Result<(), SavedMessageError> {
-        // Check logged in
-        let _ = self.current_user_id()?;
+        let channel_id = self.current_user_id()?;
 
-        // Generate idempotency key
-        let request_id = uuid::Uuid::new_v4().to_string();
-
-        // Call server
-        client.unpin_message(message_id, &request_id).await?;
+        client.unpin_message(message_id, &channel_id).await?;
 
         Ok(())
     }
 
     /// List pinned saved messages.
     ///
-    /// Returns only pinned messages, sorted by pin time (newest first).
+    /// Returns only pinned messages from the saved messages channel.
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to saved messages client
-    /// * `limit` - Maximum number of messages to return (default: 50)
-    /// * `page_token` - Cursor token for pagination
+    /// * `client` - Mutable reference to message client
+    /// * `limit` - Maximum number of messages to return
     pub async fn list_pinned_messages(
         &self,
-        client: &mut SavedMessagesClient,
-        limit: Option<i32>,
-        page_token: Option<&str>,
-    ) -> Result<ListSavedMessagesResponse, SavedMessageError> {
-        // Check logged in
-        let _ = self.current_user_id()?;
+        client: &mut MessageClient,
+        limit: i32,
+    ) -> Result<Vec<Message>, SavedMessageError> {
+        let channel_id = self.current_user_id()?;
 
-        // Use defaults
-        let limit = limit.unwrap_or(50);
-        let page_token = page_token.unwrap_or("");
+        let response = client.list_pinned_messages(&channel_id, limit).await?;
 
-        // Call server with pin time sort, newest first
-        let response = client
-            .list_pinned_messages(
-                limit,
-                page_token,
-                PinnedSortBy::PinnedAt,
-                SortDirection::NewestFirst,
-            )
-            .await?;
-
-        Ok(response)
+        Ok(response.messages)
     }
-}
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/// Convert proto SavedMessage to domain SavedMessage.
-///
-/// Note: Proto content is encrypted, domain type expects decrypted.
-/// For v1, we parse the proto metadata and let the UI handle
-/// content display/decryption as needed.
-///
-/// This conversion is best-effort: if the proto lacks certain fields,
-/// they will be set to default values.
-pub fn proto_to_domain_saved_message(
-    proto: &ProtoSavedMessage,
-) -> Result<SavedMessage, SavedMessageError> {
-    // Parse IDs
-    let id: SavedMessageId = proto
-        .id
-        .parse()
-        .map_err(|_| SavedMessageError::InvalidData(format!("Invalid saved message ID: {}", proto.id)))?;
-
-    let user_id: UserId = proto
-        .user_id
-        .parse()
-        .map_err(|_| SavedMessageError::InvalidData(format!("Invalid user ID: {}", proto.user_id)))?;
-
-    // Convert timestamps (proto uses u64 millis)
-    let saved_at = chrono::DateTime::from_timestamp_millis(proto.created_at as i64)
-        .unwrap_or_else(chrono::Utc::now);
-
-    // For v1, we use placeholder content - actual content is encrypted in proto
-    // and UI layer handles decryption and display
-    let content = SavedContent::Text {
-        content: "[encrypted content]".to_string(),
-    };
-
-    // Build domain SavedMessage with minimal info
-    // Note: source info is encrypted in proto.source and not parsed here
-    let domain_msg = SavedMessage {
-        id,
-        user_id,
-        content,
-        source_channel_id: None,
-        source_message_id: None,
-        note: None,
-        tags: Vec::new(),
-        saved_at,
-    };
-
-    // If we could parse source, we would do it here
-    // For now, leave as None since source is encrypted
-    // Future enhancement: add decryption support here
-
-    Ok(domain_msg)
-}
-
-impl SavedMessageService {
-    /// Convert proto SavedMessage to domain SavedMessage with decryption.
+    /// Search saved messages.
     ///
-    /// Decrypts the content and source using the user's profile key.
+    /// Searches message content within the saved messages channel.
+    /// Note: Search is performed server-side on encrypted content,
+    /// which may have limitations depending on server implementation.
     ///
     /// # Arguments
     ///
-    /// * `proto` - The encrypted proto SavedMessage
-    pub fn proto_to_domain_saved_message_decrypted(
+    /// * `client` - Mutable reference to message client
+    /// * `query` - Search query
+    /// * `limit` - Maximum results to return
+    pub async fn search_messages(
         &self,
-        proto: &ProtoSavedMessage,
-    ) -> Result<SavedMessage, SavedMessageError> {
-        // Parse IDs
-        let id: SavedMessageId = proto
-            .id
-            .parse()
-            .map_err(|_| SavedMessageError::InvalidData(format!("Invalid saved message ID: {}", proto.id)))?;
+        client: &mut MessageClient,
+        query: &str,
+        limit: i32,
+    ) -> Result<Vec<Message>, SavedMessageError> {
+        let channel_id = self.current_user_id()?;
 
-        let user_id: UserId = proto
-            .user_id
-            .parse()
-            .map_err(|_| SavedMessageError::InvalidData(format!("Invalid user ID: {}", proto.user_id)))?;
+        let response = client
+            .search(Some(&channel_id), query, limit, 0, None, None)
+            .await?;
 
-        // Convert timestamps (proto uses u64 millis)
-        let saved_at = chrono::DateTime::from_timestamp_millis(proto.created_at as i64)
-            .unwrap_or_else(chrono::Utc::now);
-
-        // Decrypt content
-        let content = if let Some(ref proto_content) = proto.content {
-            let decrypted_text = self.decrypt_content(proto_content)?;
-            SavedContent::Text { content: decrypted_text }
-        } else {
-            SavedContent::Text {
-                content: String::new(),
-            }
-        };
-
-        // Decrypt source if present
-        let (source_channel_id, source_message_id) = if let Some(ref proto_source) = proto.source {
-            let decrypted_source = self.decrypt_source(proto_source)?;
-            let channel_id: Option<ChannelId> = decrypted_source.channel_id.parse().ok();
-            let message_id: Option<MessageId> = decrypted_source.message_id.parse().ok();
-            (channel_id, message_id)
-        } else {
-            (None, None)
-        };
-
-        let domain_msg = SavedMessage {
-            id,
-            user_id,
-            content,
-            source_channel_id,
-            source_message_id,
-            note: None,
-            tags: Vec::new(),
-            saved_at,
-        };
-
-        Ok(domain_msg)
+        Ok(response.results)
     }
 }
 
@@ -495,7 +393,7 @@ mod tests {
                 r#"
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
-                    value_json TEXT NOT NULL,
+                    value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
                 "#,
@@ -516,6 +414,21 @@ mod tests {
             .settings_repo
             .set_string(keys::CURRENT_USER_ID, user_id)
             .expect("Failed to set user ID");
+    }
+
+    /// Helper to set profile key for encryption tests.
+    fn set_profile_key(service: &SavedMessageService) {
+        // Generate a test profile key (32 bytes)
+        let mut key = [0u8; 32];
+        for (i, byte) in key.iter_mut().enumerate() {
+            *byte = (i as u8).wrapping_mul(7);
+        }
+        let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
+
+        service
+            .settings_repo
+            .set_string(keys::PROFILE_KEY, &key_b64)
+            .expect("Failed to set profile key");
     }
 
     #[test]
@@ -542,14 +455,6 @@ mod tests {
     }
 
     #[test]
-    fn test_saved_message_service_construction() {
-        // Verify the SavedMessageService struct type signatures compile correctly.
-        fn _verify_types(settings_repo: Arc<SettingsRepository>) {
-            let _service = SavedMessageService::new(settings_repo);
-        }
-    }
-
-    #[test]
     fn test_current_user_id_not_logged_in() {
         let (service, _temp_dir) = create_test_service();
 
@@ -565,137 +470,19 @@ mod tests {
         let user_id = "550e8400-e29b-41d4-a716-446655440000";
         set_logged_in_user(&service, user_id);
 
-        // Should return the user ID
+        // Should return the user ID (which is also the channel ID)
         let result = service.current_user_id();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), user_id);
     }
 
     #[test]
-    fn test_proto_to_domain_saved_message() {
-        let proto = ProtoSavedMessage {
-            id: "550e8400-e29b-41d4-a716-446655440001".to_string(),
-            user_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
-            content: None,
-            created_at: 1234567890000,
-            updated_at: 1234567890000,
-            pinned: false,
-            pinned_at: 0,
-            source: None,
-        };
-
-        let domain = proto_to_domain_saved_message(&proto).unwrap();
-        assert_eq!(domain.id.to_string(), proto.id);
-        assert_eq!(domain.user_id.to_string(), proto.user_id);
-        assert!(!domain.has_source());
-        assert!(!domain.has_tags());
-    }
-
-    #[test]
-    fn test_proto_to_domain_saved_message_invalid_id() {
-        let proto = ProtoSavedMessage {
-            id: "not-a-uuid".to_string(),
-            user_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
-            content: None,
-            created_at: 1234567890000,
-            updated_at: 1234567890000,
-            pinned: false,
-            pinned_at: 0,
-            source: None,
-        };
-
-        let result = proto_to_domain_saved_message(&proto);
-        assert!(matches!(result, Err(SavedMessageError::InvalidData(_))));
-    }
-
-    #[test]
-    fn test_proto_to_domain_saved_message_invalid_user_id() {
-        let proto = ProtoSavedMessage {
-            id: "550e8400-e29b-41d4-a716-446655440001".to_string(),
-            user_id: "invalid-user-id".to_string(),
-            content: None,
-            created_at: 1234567890000,
-            updated_at: 1234567890000,
-            pinned: false,
-            pinned_at: 0,
-            source: None,
-        };
-
-        let result = proto_to_domain_saved_message(&proto);
-        assert!(matches!(result, Err(SavedMessageError::InvalidData(_))));
-    }
-
-    // ========================================================================
-    // Encryption Tests
-    // ========================================================================
-
-    /// Helper to set profile key for encryption tests.
-    fn set_profile_key(service: &SavedMessageService) {
-        // Generate a test profile key (32 bytes)
-        let mut key = [0u8; 32];
-        for (i, byte) in key.iter_mut().enumerate() {
-            *byte = (i as u8).wrapping_mul(7);
-        }
-        let key_b64 = base64::engine::general_purpose::STANDARD.encode(key);
-
-        service
-            .settings_repo
-            .set_string(keys::PROFILE_KEY, &key_b64)
-            .expect("Failed to set profile key");
-    }
-
-    #[test]
-    fn test_encrypt_text_decrypt_content_roundtrip() {
-        let (service, _temp_dir) = create_test_service();
-        set_logged_in_user(&service, "550e8400-e29b-41d4-a716-446655440000");
-        set_profile_key(&service);
-
-        let text = "This is a saved message!";
-
-        // Encrypt
-        let encrypted = service.encrypt_text(text).expect("encrypt should succeed");
-
-        // Decrypt
-        let decrypted = service
-            .decrypt_content(&encrypted)
-            .expect("decrypt should succeed");
-
-        assert_eq!(decrypted, text);
-    }
-
-    #[test]
-    fn test_encrypt_source_decrypt_source_roundtrip() {
-        let (service, _temp_dir) = create_test_service();
-        set_logged_in_user(&service, "550e8400-e29b-41d4-a716-446655440000");
-        set_profile_key(&service);
-
-        let source = SavedMessageSourcePlain {
-            channel_id: "550e8400-e29b-41d4-a716-446655440001".to_string(),
-            message_id: "550e8400-e29b-41d4-a716-446655440002".to_string(),
-            author_id: "550e8400-e29b-41d4-a716-446655440003".to_string(),
-            timestamp: 1234567890000,
-        };
-
-        // Encrypt
-        let encrypted = service
-            .encrypt_source(&source)
-            .expect("encrypt should succeed");
-
-        // Decrypt
-        let decrypted = service
-            .decrypt_source(&encrypted)
-            .expect("decrypt should succeed");
-
-        assert_eq!(decrypted, source);
-    }
-
-    #[test]
-    fn test_encryption_error_when_profile_key_not_set() {
+    fn test_get_profile_key_not_set() {
         let (service, _temp_dir) = create_test_service();
         set_logged_in_user(&service, "550e8400-e29b-41d4-a716-446655440000");
         // Note: NOT setting profile key
 
-        let result = service.encrypt_text("test");
+        let result = service.get_profile_key();
         assert!(matches!(result, Err(SavedMessageError::NotLoggedIn)));
     }
 
@@ -712,7 +499,57 @@ mod tests {
             .set_string(keys::PROFILE_KEY, &key_b64)
             .expect("Failed to set profile key");
 
-        let result = service.encrypt_text("test");
+        let result = service.get_profile_key();
         assert!(matches!(result, Err(SavedMessageError::InvalidData(_))));
+    }
+
+    #[test]
+    fn test_get_profile_key_success() {
+        let (service, _temp_dir) = create_test_service();
+        set_logged_in_user(&service, "550e8400-e29b-41d4-a716-446655440000");
+        set_profile_key(&service);
+
+        let result = service.get_profile_key();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 32);
+    }
+
+    #[test]
+    fn test_decrypt_message_no_content() {
+        let (service, _temp_dir) = create_test_service();
+        set_logged_in_user(&service, "550e8400-e29b-41d4-a716-446655440000");
+        set_profile_key(&service);
+
+        let message = Message {
+            id: "msg-123".to_string(),
+            channel_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            author_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            content: None, // No content
+            timestamp: 1234567890000,
+            ..Default::default()
+        };
+
+        let result = service.decrypt_message(&message);
+        assert!(matches!(result, Err(SavedMessageError::InvalidData(_))));
+    }
+
+    #[test]
+    fn test_decrypted_saved_message_struct() {
+        let msg = DecryptedSavedMessage {
+            id: "550e8400-e29b-41d4-a716-446655440001".parse().unwrap(),
+            text: "Test message".to_string(),
+            source: Some(SavedMessageSource {
+                channel_id: "channel-123".to_string(),
+                message_id: "msg-456".to_string(),
+                author_id: "user-789".to_string(),
+                timestamp: 1234567890000,
+            }),
+            saved_at: 1234567890000,
+            pinned: false,
+        };
+
+        assert_eq!(msg.text, "Test message");
+        assert!(msg.source.is_some());
+        assert!(!msg.pinned);
     }
 }

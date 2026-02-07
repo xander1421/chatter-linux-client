@@ -1,12 +1,173 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, MessageItemData, FriendRequest, ForwardTarget, SessionInfo } from "app.slint";
+
+// Re-export all types for Rust binding
+export { ChannelListItemData, DMListItemData, MessageItemData, FriendRequest, ForwardTarget, SessionInfo }
 
 export component MainWindow inherits Window {
     title: "Chatter";
     min-width: 800px;
     min-height: 600px;
 
-    App {}
+    // Expose App properties through MainWindow for Rust binding
+    // ========== View routing ==========
+    in-out property <string> current-view <=> app.current-view;
+
+    // ========== Loading page properties ==========
+    in property <string> loading-message <=> app.loading-message;
+    in property <string> loading-secondary-message <=> app.loading-secondary-message;
+
+    // ========== Auth page properties ==========
+    in-out property <string> login-username <=> app.login-username;
+    in-out property <string> login-password <=> app.login-password;
+    in property <bool> login-loading <=> app.login-loading;
+    in property <string> login-error <=> app.login-error;
+
+    in-out property <string> register-display-name <=> app.register-display-name;
+    in-out property <string> register-username <=> app.register-username;
+    in-out property <string> register-password <=> app.register-password;
+    in-out property <string> register-confirm-password <=> app.register-confirm-password;
+    in property <bool> register-loading <=> app.register-loading;
+    in property <string> register-error <=> app.register-error;
+
+    // ========== Sidebar properties ==========
+    in property <[ChannelListItemData]> channels <=> app.channels;
+    in property <string> selected-channel-id <=> app.selected-channel-id;
+    in property <[DMListItemData]> dm-conversations <=> app.dm-conversations;
+    in property <string> selected-dm-id <=> app.selected-dm-id;
+    in property <string> user-display-name <=> app.user-display-name;
+    in property <image> user-avatar-source <=> app.user-avatar-source;
+    in property <string> user-initials <=> app.user-initials;
+    in property <string> user-presence-status <=> app.user-presence-status;
+    in property <string> user-custom-status <=> app.user-custom-status;
+
+    // ========== Chat properties ==========
+    in property <string> channel-id <=> app.channel-id;
+    in property <string> channel-name <=> app.channel-name;
+    in property <string> channel-type <=> app.channel-type;
+    in property <int> member-count <=> app.member-count;
+    in property <string> topic <=> app.topic;
+    in property <bool> is-archived <=> app.is-archived;
+    in property <string> typing-indicator <=> app.typing-indicator;
+    in property <[MessageItemData]> messages <=> app.messages;
+    in property <bool> loading-messages <=> app.loading-messages;
+    in-out property <string> composer-text <=> app.composer-text;
+    in property <string> composer-placeholder <=> app.composer-placeholder;
+    in property <bool> composer-disabled <=> app.composer-disabled;
+
+    // ========== Modal state ==========
+    in-out property <string> active-modal <=> app.active-modal;
+
+    // Create channel modal properties
+    in-out property <string> create-channel-name <=> app.create-channel-name;
+    in-out property <string> create-channel-description <=> app.create-channel-description;
+    in-out property <string> create-channel-template <=> app.create-channel-template;
+    in property <string> create-channel-error <=> app.create-channel-error;
+    in property <bool> create-channel-loading <=> app.create-channel-loading;
+
+    // User profile modal properties
+    in property <string> profile-user-id <=> app.profile-user-id;
+    in property <string> profile-display-name <=> app.profile-display-name;
+    in property <string> profile-username <=> app.profile-username;
+    in property <string> profile-avatar-url <=> app.profile-avatar-url;
+    in property <string> profile-status-text <=> app.profile-status-text;
+    in property <string> profile-presence <=> app.profile-presence;
+    in property <string> profile-bio <=> app.profile-bio;
+    in property <bool> profile-is-friend <=> app.profile-is-friend;
+    in property <bool> profile-is-blocked <=> app.profile-is-blocked;
+    in property <bool> profile-is-self <=> app.profile-is-self;
+    in property <bool> profile-loading <=> app.profile-loading;
+
+    // Friend requests modal properties
+    in property <string> friend-requests-tab <=> app.friend-requests-tab;
+    in property <[FriendRequest]> received-friend-requests <=> app.received-friend-requests;
+    in property <[FriendRequest]> sent-friend-requests <=> app.sent-friend-requests;
+    in property <bool> friend-requests-loading <=> app.friend-requests-loading;
+
+    // Forward message modal properties
+    in property <string> forward-message-preview <=> app.forward-message-preview;
+    in-out property <string> forward-search-text <=> app.forward-search-text;
+    in property <[ForwardTarget]> forward-targets <=> app.forward-targets;
+    in property <bool> forward-loading <=> app.forward-loading;
+
+    // Sessions modal properties
+    in property <[SessionInfo]> sessions <=> app.sessions;
+    in property <bool> sessions-loading <=> app.sessions-loading;
+    in property <bool> sessions-revoking <=> app.sessions-revoking;
+
+    // Settings properties
+    in property <string> settings-display-name <=> app.settings-display-name;
+    in property <string> settings-username <=> app.settings-username;
+    in property <image> settings-avatar <=> app.settings-avatar;
+    in property <int> settings-session-count <=> app.settings-session-count;
+    in-out property <string> settings-current-password <=> app.settings-current-password;
+    in-out property <string> settings-new-password <=> app.settings-new-password;
+    in-out property <string> settings-confirm-password <=> app.settings-confirm-password;
+    in property <bool> settings-password-changing <=> app.settings-password-changing;
+    in property <string> settings-password-error <=> app.settings-password-error;
+    in-out property <bool> settings-read-receipts <=> app.settings-read-receipts;
+    in-out property <bool> settings-typing-indicators <=> app.settings-typing-indicators;
+    in property <string> settings-identity-fingerprint <=> app.settings-identity-fingerprint;
+    in-out property <bool> settings-sealed-sender-unrestricted <=> app.settings-sealed-sender-unrestricted;
+    in property <int> settings-prekey-count <=> app.settings-prekey-count;
+
+    // ========== Auth callbacks ==========
+    callback login <=> app.login;
+    callback register <=> app.register;
+    callback go-to-register <=> app.go-to-register;
+    callback go-to-login <=> app.go-to-login;
+
+    // ========== Sidebar callbacks ==========
+    callback channel-selected <=> app.channel-selected;
+    callback dm-selected <=> app.dm-selected;
+    callback saved-messages-clicked <=> app.saved-messages-clicked;
+    callback settings-clicked <=> app.settings-clicked;
+    callback profile-clicked <=> app.profile-clicked;
+
+    // ========== Chat callbacks ==========
+    callback search-clicked <=> app.search-clicked;
+    callback pinned-clicked <=> app.pinned-clicked;
+    callback chat-settings-clicked <=> app.chat-settings-clicked;
+    callback message-clicked <=> app.message-clicked;
+    callback reply-clicked <=> app.reply-clicked;
+    callback react-clicked <=> app.react-clicked;
+    callback thread-clicked <=> app.thread-clicked;
+    callback more-clicked <=> app.more-clicked;
+    callback load-more <=> app.load-more;
+    callback send <=> app.send;
+    callback attachment-clicked <=> app.attachment-clicked;
+    callback emoji-clicked <=> app.emoji-clicked;
+    callback gif-clicked <=> app.gif-clicked;
+    callback mention-triggered <=> app.mention-triggered;
+
+    // ========== Modal callbacks ==========
+    callback create-channel <=> app.create-channel;
+    callback profile-send-message <=> app.profile-send-message;
+    callback profile-add-friend <=> app.profile-add-friend;
+    callback profile-remove-friend <=> app.profile-remove-friend;
+    callback profile-block-user <=> app.profile-block-user;
+    callback profile-unblock-user <=> app.profile-unblock-user;
+    callback friend-requests-switch-tab <=> app.friend-requests-switch-tab;
+    callback friend-request-accept <=> app.friend-request-accept;
+    callback friend-request-decline <=> app.friend-request-decline;
+    callback friend-request-cancel <=> app.friend-request-cancel;
+    callback forward-message <=> app.forward-message;
+    callback revoke-session <=> app.revoke-session;
+    callback revoke-all-sessions <=> app.revoke-all-sessions;
+
+    // ========== Settings callbacks ==========
+    callback settings-edit-profile <=> app.settings-edit-profile;
+    callback settings-change-password <=> app.settings-change-password;
+    callback settings-view-sessions <=> app.settings-view-sessions;
+    callback settings-logout <=> app.settings-logout;
+    callback settings-delete-account <=> app.settings-delete-account;
+    callback settings-read-receipts-changed <=> app.settings-read-receipts-changed;
+    callback settings-typing-indicators-changed <=> app.settings-typing-indicators-changed;
+    callback settings-copy-fingerprint <=> app.settings-copy-fingerprint;
+    callback settings-sealed-sender-changed <=> app.settings-sealed-sender-changed;
+    callback settings-refresh-keys <=> app.settings-refresh-keys;
+
+    app := App {}
 }

@@ -17,24 +17,11 @@ use crate::proto::chat_v1::{
     GetPreKeyBundleResponse, GetPreKeyStatsRequest, GetPreKeyStatsResponse,
     GetSenderCertificateRequest, GetSenderCertificateResponse, InvalidateAllSessionsRequest,
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
-    RefreshPreKeysRequest, RegisterRequest, RenameDeviceRequest, RequestPasswordResetRequest,
-    RequestSenderCertificateRequest, RequestSenderCertificateResponse,
-    ResendVerificationEmailRequest, RevokeDeviceRequest, ServerTrustRootResponse, Session,
-    SignalPreKeyBundle, UploadPreKeyBundleRequest, User as ProtoUser, VerifyEmailRequest,
+    RefreshPreKeysRequest, RegisterRequest, RegistrationResult, RenameDeviceRequest,
+    RequestPasswordResetRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
+    ResendVerificationEmailRequest, RevokeDeviceRequest, ServerTrustRootResponse,
+    SignalPreKeyBundle, UploadPreKeyBundleRequest, VerifyEmailRequest,
 };
-
-/// Result of a successful registration.
-///
-/// Contains both the user info (with user_id) and the session info.
-#[derive(Debug, Clone)]
-pub struct RegistrationResult {
-    /// User ID assigned by the server.
-    pub user_id: String,
-    /// Username.
-    pub username: String,
-    /// Session info with device_id and auth tokens.
-    pub session: Session,
-}
 
 /// Auth service client wrapper.
 ///
@@ -169,8 +156,12 @@ impl AuthClient {
     /// The stream yields AuthEvent messages with status updates:
     /// - AccountCreating
     /// - AuthzRelationsInitialized
-    /// - RegistrationCompleted (with session)
+    /// - RegistrationCompleted (with user_id and device_id)
     /// - RegistrationFailed (with error)
+    ///
+    /// # Arguments
+    ///
+    /// * `profile_key` - 32-byte profile key; server derives UAK from this
     pub async fn register(
         &mut self,
         username: &str,
@@ -179,7 +170,7 @@ impl AuthClient {
         public_key: &[u8],
         device_info: &str,
         device_auth_token: &[u8],
-        unidentified_access_key: &[u8; 16],
+        profile_key: &[u8; 32],
     ) -> Result<impl Stream<Item = Result<AuthEvent, NetworkError>>, NetworkError> {
         let request = RegisterRequest {
             username: username.to_string(),
@@ -190,9 +181,11 @@ impl AuthClient {
             device_info: device_info.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
             device_auth_token: device_auth_token.to_vec(),
-            unidentified_access_key: unidentified_access_key.to_vec(),
+            profile_key: profile_key.to_vec(),
             prekey_bundle: None,
             initial_one_time_prekeys: Vec::new(),
+            challenge_response: Vec::new(),
+            challenge_id: String::new(),
         };
 
         let response = self
@@ -209,7 +202,12 @@ impl AuthClient {
     /// Register and wait for completion.
     ///
     /// Convenience method that consumes the event stream and returns
-    /// the registration result with user_id and session on success.
+    /// the registration result with user_id and device_id on success.
+    /// Note: Client already has device_auth_token and derives UAK from profile_key.
+    ///
+    /// # Arguments
+    ///
+    /// * `profile_key` - 32-byte profile key; server derives UAK from this
     pub async fn register_and_wait(
         &mut self,
         username: &str,
@@ -218,7 +216,7 @@ impl AuthClient {
         public_key: &[u8],
         device_info: &str,
         device_auth_token: &[u8],
-        unidentified_access_key: &[u8; 16],
+        profile_key: &[u8; 32],
     ) -> Result<RegistrationResult, NetworkError> {
         let stream = self
             .register(
@@ -228,32 +226,23 @@ impl AuthClient {
                 public_key,
                 device_info,
                 device_auth_token,
-                unidentified_access_key,
+                profile_key,
             )
             .await?;
 
         tokio::pin!(stream);
 
-        // Capture user info when UserRegistered event arrives
-        let mut user_info: Option<ProtoUser> = None;
-
         while let Some(result) = stream.next().await {
             let event = result?;
             if let Some(payload) = event.payload {
                 match payload {
-                    auth_event::Payload::UserRegistered(user) => {
-                        user_info = Some(user);
+                    auth_event::Payload::UserRegistered(_) => {
+                        // Progress event, continue waiting for completion
                     }
-                    auth_event::Payload::SessionCreated(session) => {
-                        // We need the user_info for the user_id
-                        let user = user_info.ok_or_else(|| {
-                            NetworkError::Unknown("session created without user info".to_string())
-                        })?;
-                        return Ok(RegistrationResult {
-                            user_id: user.id,
-                            username: user.username,
-                            session,
-                        });
+                    auth_event::Payload::RegistrationComplete(result) => {
+                        // Server returns user_id and device_id
+                        // Client already has device_auth_token and UAK
+                        return Ok(result);
                     }
                     auth_event::Payload::RegistrationError(error) => {
                         return Err(NetworkError::ServerError(error.message));

@@ -205,7 +205,7 @@ impl AuthService {
         // Store user locally if not exists
         if self.user_repo.get(&user_id)?.is_none() {
             let user = User {
-                id: user_id.clone(),
+                id: user_id,
                 username: username.to_string(),
                 public_key: identity_public_key.to_vec(),
                 last_active: chrono::Utc::now(),
@@ -216,7 +216,7 @@ impl AuthService {
 
         // Create/update profile
         let profile = Profile {
-            user_id: user_id.clone(),
+            user_id: user_id,
             display_name: display_name.clone(),
             avatar_url: if user_profile.avatar_url.is_empty() {
                 None
@@ -287,6 +287,7 @@ impl AuthService {
         let password_hash = Sha256::digest(password.as_bytes());
 
         // Call server registration (wait for completion)
+        // Send profile_key - server derives UAK from it
         let identity_public_key = identity_key_pair.identity_key().serialize();
         let result = auth_client
             .register_and_wait(
@@ -296,21 +297,22 @@ impl AuthService {
                 identity_public_key.as_ref(),
                 device_info,
                 credentials.auth_token().as_bytes(),
-                credentials.unidentified_access_key(),
+                &profile_key,
             )
             .await
             .map_err(|e| AuthError::RegistrationFailed(e.to_string()))?;
 
-        // Extract user_id from registration result
+        // Extract user_id from registration result (server-assigned)
         let user_id: UserId = result.user_id.parse().map_err(|_| {
             AuthError::RegistrationFailed("invalid user_id format".to_string())
         })?;
 
-        // Persist auth state
+        // Persist auth state (device_id is server-assigned)
         self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
-        self.settings_repo.set(keys::CURRENT_DEVICE_ID, &result.session.device_id)?;
+        self.settings_repo.set(keys::CURRENT_DEVICE_ID, &result.device_id)?;
 
         // Configure auth interceptor for Basic auth
+        // Client already has device_auth_token and UAK (generated locally)
         self.auth_interceptor.set_basic(
             credentials.auth_username(&user_id.to_string()),
             credentials.auth_token_base64(),
@@ -318,7 +320,7 @@ impl AuthService {
 
         // Store user locally
         let user = User {
-            id: user_id.clone(),
+            id: user_id,
             username: username.to_string(),
             public_key: identity_public_key.to_vec(),
             last_active: chrono::Utc::now(),
@@ -326,11 +328,24 @@ impl AuthService {
         };
         self.user_repo.insert(&user)?;
 
-        // Create profile
+        // Create profile from server response or use provided display_name
+        let server_display_name = result
+            .user_profile
+            .as_ref()
+            .map(|p| p.display_name.clone())
+            .unwrap_or_else(|| display_name.to_string());
+        let avatar_url = result.user_profile.as_ref().and_then(|p| {
+            if p.avatar_url.is_empty() {
+                None
+            } else {
+                Some(p.avatar_url.clone())
+            }
+        });
+
         let profile = Profile {
-            user_id: user_id.clone(),
-            display_name: display_name.to_string(),
-            avatar_url: None,
+            user_id: user_id,
+            display_name: server_display_name.clone(),
+            avatar_url,
             status_message: None,
             presence: PresenceStatus::Online,
         };
@@ -338,8 +353,8 @@ impl AuthService {
 
         Ok(LoginResult {
             user_id,
-            device_id: result.session.device_id,
-            display_name: display_name.to_string(),
+            device_id: result.device_id,
+            display_name: server_display_name,
             needs_prekey_upload: false, // Prekeys already generated (upload them next)
         })
     }

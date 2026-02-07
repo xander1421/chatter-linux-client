@@ -9,7 +9,7 @@ import { Input } from "../components/input.slint";
 import { ChannelTemplates } from "channel_templates.slint";
 
 export component CreateChannelModal inherits Rectangle {
-    in property <bool> visible: false;
+    in property <bool> show-modal: false;
     in-out property <string> channel-name: "";
     in-out property <string> channel-description: "";
     in-out property <string> selected-template: "";
@@ -23,16 +23,16 @@ export component CreateChannelModal inherits Rectangle {
     property <int> current-step: 1;
 
     // Reset state when modal closes
-    changed visible => {
-        if !visible {
+    changed show-modal => {
+        if !show-modal {
             current-step = 1;
         }
     }
 
     Modal {
-        visible: root.visible;
+        show: root.show-modal;
         title: "Create Channel";
-        width: 560px;
+        modal-width: 560px;
 
         close => {
             root.close();
