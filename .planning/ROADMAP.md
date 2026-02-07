@@ -555,16 +555,14 @@ None (custom application, no pre-existing domain skills)
 **Goal**: Wire all remaining Slint UI callbacks to services (sidebar, chat, modals, settings)
 **Depends on**: Phase 70
 **Research**: Unlikely (connecting existing components)
-**Status**: In progress
-**Plans**: 4/5 complete
+**Status**: Done
+**Plans**: 5/5 complete
 
 **Details:**
-Currently only auth callbacks (login, register, logout) and basic send are wired.
-Missing callbacks to wire:
-- Sidebar: channel_selected, dm_selected, saved_messages, settings, profile clicks
-- Chat: load_more, message actions (reply, react, thread, more), attachment, emoji, gif, mention
-- Modals: create_channel, user_profile, friend_requests, forward, sessions
-- Settings: password change, delete account, privacy toggles, encryption settings
+All callbacks wired. Final plan (71-05) included major refactoring:
+- Extracted ~2500 line main.rs into modular `src/bin_ui/` structure
+- Created 8 feature modules: auth, navigation, sidebar, chat, chat_actions, header, composer, modals
+- Follows idiomatic Rust patterns with `wire()` functions per feature
 
 ## Progress
 
@@ -643,4 +641,4 @@ Missing callbacks to wire:
 | 68.1 | Signal Protocol Integration | TBD | In Progress | - |
 | 69 | Proto Generation Pipeline | 1 | Done | 2026-02-08 |
 | 70 | End-to-End Smoke Test | TBD | Not started | - |
-| 71 | Complete UI Callback Wiring | 5 | In Progress | - |
+| 71 | Complete UI Callback Wiring | 5 | Done | 2026-02-08 |
