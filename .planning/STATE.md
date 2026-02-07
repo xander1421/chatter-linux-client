@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 69 — Proto Generation Pipeline
+**Current focus:** Phase 71 — Complete UI Callback Wiring
 
 ## Current Position
 
-Phase: 68 of 70 (Build and Compile Verification - Complete)
-Plan: 1 of 1 in current phase
-Status: Phase complete
-Last activity: 2026-02-06 — Completed 68-01-PLAN.md
+Phase: 71 of 71 (Complete UI Callback Wiring)
+Plan: 2 of 5 in current phase
+Status: In progress
+Last activity: 2026-02-08 — Completed 71-02-PLAN.md
 
-Progress: █████████████████████████████████████████████████████████████████████░░░░ 97%
+Progress: █████████████████████████████████████████████████████████████████████░░░░ 98%
 
 ## Performance Metrics
 
@@ -296,9 +296,13 @@ None.
 
 None.
 
+### Roadmap Evolution
+
+- Phase 71 added: Complete UI Callback Wiring (wire all remaining Slint callbacks to services)
+
 ## Session Continuity
 
-Last session: 2026-02-06
-Stopped at: Completed 68-01-PLAN.md (Build and Compile Verification)
+Last session: 2026-02-08
+Stopped at: Completed 71-02-PLAN.md (Chat Interaction Callbacks)
 Resume file: None
-Next action: Plan Phase 69 (Proto Generation Pipeline)
+Next action: Execute 71-03-PLAN.md

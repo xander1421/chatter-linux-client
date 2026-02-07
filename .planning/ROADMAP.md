@@ -533,6 +533,12 @@ None (custom application, no pre-existing domain skills)
 **Research**: Unlikely (debugging existing code)
 **Plans**: TBD
 
+### Phase 68.1: Signal Protocol Integration (INSERTED)
+**Goal**: Integrate crypto primitives into MessageService and create SignalService
+**Depends on**: Phase 14, Phase 32
+**Research**: Unlikely (internal wiring)
+**Plans**: TBD
+
 ### Phase 69: Proto Generation Pipeline
 **Goal**: Set up buf generate for proto files, ensure proto types match server
 **Depends on**: Phase 68
@@ -544,6 +550,20 @@ None (custom application, no pre-existing domain skills)
 **Depends on**: Phase 69
 **Research**: Unlikely (testing existing functionality)
 **Plans**: TBD
+
+### Phase 71: Complete UI Callback Wiring
+**Goal**: Wire all remaining Slint UI callbacks to services (sidebar, chat, modals, settings)
+**Depends on**: Phase 70
+**Research**: Unlikely (connecting existing components)
+**Plans**: TBD
+
+**Details:**
+Currently only auth callbacks (login, register, logout) and basic send are wired.
+Missing callbacks to wire:
+- Sidebar: channel_selected, dm_selected, saved_messages, settings, profile clicks
+- Chat: load_more, message actions (reply, react, thread, more), attachment, emoji, gif, mention
+- Modals: create_channel, user_profile, friend_requests, forward, sessions
+- Settings: password change, delete account, privacy toggles, encryption settings
 
 ## Progress
 
@@ -619,5 +639,7 @@ None (custom application, no pre-existing domain skills)
 | 66 | UI Auth Screens | 1 | Done | 2026-02-05 |
 | 67 | Main Binary Integration | 3 | Done | 2026-02-06 |
 | 68 | Build and Compile Verification | 1 | Done | 2026-02-06 |
-| 69 | Proto Generation Pipeline | TBD | Not started | - |
+| 68.1 | Signal Protocol Integration | TBD | In Progress | - |
+| 69 | Proto Generation Pipeline | 1 | Done | 2026-02-08 |
 | 70 | End-to-End Smoke Test | TBD | Not started | - |
+| 71 | Complete UI Callback Wiring | 5 | In Progress | - |
