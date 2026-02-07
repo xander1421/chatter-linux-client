@@ -555,7 +555,8 @@ None (custom application, no pre-existing domain skills)
 **Goal**: Wire all remaining Slint UI callbacks to services (sidebar, chat, modals, settings)
 **Depends on**: Phase 70
 **Research**: Unlikely (connecting existing components)
-**Plans**: TBD
+**Status**: In progress
+**Plans**: 3/5 complete
 
 **Details:**
 Currently only auth callbacks (login, register, logout) and basic send are wired.
