@@ -7,29 +7,10 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItem } from "message_item.slint";
+import { MessageAttachmentData, MessageItemData } from "types.slint";
 
-// Data struct for message items (mirrors Rust MessageItemData)
-export struct MessageItemData {
-    message-id: string,
-    sender-id: string,
-    sender-name: string,
-    sender-initials: string,
-    sender-avatar-url: string,
-    content: string,
-    timestamp: string,
-    is-own: bool,
-    is-edited: bool,
-    is-deleted: bool,
-    is-system: bool,
-    is-ai: bool,
-    has-attachments: bool,
-    attachment-count: int,
-    has-reactions: bool,
-    reaction-summary: string,
-    reply-count: int,
-    is-thread-reply: bool,
-    show-sender: bool,
-}
+// Re-export types for parent components
+export { MessageAttachmentData, MessageItemData }
 
 export component MessageList inherits Rectangle {
     // Properties
@@ -44,8 +25,10 @@ export component MessageList inherits Rectangle {
     callback thread-clicked(string);
     callback more-clicked(string);
     callback load-more();
+    callback attachment-clicked(string);  // attachment ID
 
-    // Layout
+    // Layout - explicit width ensures text wrapping in message items
+    // Width flows: root → Flickable → messages-layout → MessageItem → Text
     background: Colors.background;
 
     // Loading state: skeleton placeholders
@@ -130,10 +113,15 @@ export component MessageList inherits Rectangle {
 
     // Message list
     if !root.loading && root.messages.length > 0: Flickable {
+        // 100% width for proper sizing
+        width: 100%;
+        height: 100%;
         viewport-height: messages-layout.preferred-height;
         viewport-y <=> root.scroll-position;
 
         messages-layout := VerticalLayout {
+            // 100% width - children will inherit through width: 100%
+            width: 100%;
             padding: Spacing.md;
             spacing: 2px;
 
@@ -148,6 +136,8 @@ export component MessageList inherits Rectangle {
             }
 
             for item in root.messages: MessageItem {
+                // 100% width for text wrapping to work
+                width: 100%;
                 message-id: item.message-id;
                 sender-id: item.sender-id;
                 sender-name: item.sender-name;
@@ -162,9 +152,11 @@ export component MessageList inherits Rectangle {
                 is-ai: item.is-ai;
                 has-attachments: item.has-attachments;
                 attachment-count: item.attachment-count;
+                attachments: item.attachments;
                 has-reactions: item.has-reactions;
                 reaction-summary: item.reaction-summary;
                 reply-count: item.reply-count;
+                reply-count-text: item.reply-count-text;
                 is-thread-reply: item.is-thread-reply;
                 show-sender: item.show-sender;
 
@@ -186,6 +178,10 @@ export component MessageList inherits Rectangle {
 
                 more-clicked(id) => {
                     root.more-clicked(id);
+                }
+
+                attachment-clicked(id) => {
+                    root.attachment-clicked(id);
                 }
             }
         }

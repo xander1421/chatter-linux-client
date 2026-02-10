@@ -14,7 +14,7 @@ use tonic::{Request, Status};
 #[derive(Clone)]
 #[derive(Default)]
 pub enum AuthMode {
-    /// Bearer token (JWT or device token).
+    /// Bearer token (device token).
     Bearer(String),
     /// Basic auth (Signal-style: {uuid}.{device_id}:token).
     Basic {
@@ -51,7 +51,7 @@ impl AuthInterceptor {
         }
     }
 
-    /// Set bearer token authentication (JWT or device token).
+    /// Set bearer token authentication (device token).
     pub fn set_bearer(&self, token: String) {
         *self.auth.write() = AuthMode::Bearer(token);
     }
@@ -147,10 +147,10 @@ mod tests {
     #[test]
     fn test_set_bearer() {
         let interceptor = AuthInterceptor::new();
-        interceptor.set_bearer("my-jwt-token".to_string());
+        interceptor.set_bearer("my-device-token".to_string());
 
         match interceptor.current_mode() {
-            AuthMode::Bearer(token) => assert_eq!(token, "my-jwt-token"),
+            AuthMode::Bearer(token) => assert_eq!(token, "my-device-token"),
             _ => panic!("Expected Bearer mode"),
         }
     }

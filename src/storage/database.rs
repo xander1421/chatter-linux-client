@@ -47,15 +47,9 @@ impl Database {
         conn.pragma_update(None, "key", passphrase)
             .map_err(|e| StorageError::Encryption(format!("Failed to set encryption key: {}", e)))?;
 
-        // Set SQLCipher 4.x compatibility mode
-        conn.pragma_update(None, "cipher_compatibility", 4)
-            .map_err(|e| {
-                StorageError::Encryption(format!("Failed to set cipher compatibility: {}", e))
-            })?;
-
-        // Verify the key is correct by querying the database
-        // This will fail if the key is wrong
-        conn.pragma_query(None, "cipher_version", |_row| Ok(()))
+        // Verify the key is correct by selecting from sqlite_master
+        // This works for both new and existing databases
+        conn.execute_batch("SELECT count(*) FROM sqlite_master;")
             .map_err(|e| StorageError::Encryption(format!("Invalid encryption key: {}", e)))?;
 
         // Enable foreign key constraints

@@ -553,7 +553,7 @@ fn call(&mut self, mut req: Request<()>) -> Result<Request<()>, Status> {
 
 2. **AuthInterceptor** (`interceptors.rs`)
    - Inject authorization header
-   - Support both Bearer JWT and Basic auth modes
+   - Support both Bearer and Basic auth modes (device tokens)
    - Support UAK/group-send-token for sealed sender
 
 3. **ConnectionStateMachine** (`connection.rs`)

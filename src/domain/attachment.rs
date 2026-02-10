@@ -160,6 +160,24 @@ impl FileMetadata {
         matches!(self.category(), FileCategory::Audio)
     }
 
+    /// Check if file is code/text (syntax-highlightable).
+    #[must_use]
+    pub fn is_code(&self) -> bool {
+        matches!(self.category(), FileCategory::Code)
+    }
+
+    /// Check if file is a PDF document.
+    #[must_use]
+    pub fn is_pdf(&self) -> bool {
+        self.mime_type == "application/pdf"
+    }
+
+    /// Check if file is a document (PDF, Word, etc).
+    #[must_use]
+    pub fn is_document(&self) -> bool {
+        matches!(self.category(), FileCategory::Document)
+    }
+
     /// Human-readable file size.
     #[must_use]
     pub fn formatted_size(&self) -> String {

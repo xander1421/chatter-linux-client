@@ -621,6 +621,57 @@ impl GroupMailboxManager {
         Ok(rows as u32)
     }
 
+    /// List all active groups (groups where we have a non-expired mailbox).
+    ///
+    /// Returns list of group IDs.
+    pub fn list_active_groups(&self) -> Result<Vec<ChannelId>, MailboxError> {
+        let conn = self
+            .db
+            .connection()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        let now = Utc::now().to_rfc3339();
+
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT group_id FROM group_mailboxes WHERE expires_at > ?1")
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        let mut rows = stmt
+            .query(rusqlite::params![now])
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        let mut results = Vec::new();
+
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| MailboxError::Storage(e.to_string()))?
+        {
+            let group_id_str: String = row
+                .get(0)
+                .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+            let group_id: ChannelId = group_id_str
+                .parse()
+                .map_err(|e: uuid::Error| MailboxError::Storage(format!("Invalid group_id: {}", e)))?;
+
+            results.push(group_id);
+        }
+
+        Ok(results)
+    }
+
+    /// Poll a group's mailbox for messages.
+    ///
+    /// This is a placeholder that returns the count of messages.
+    /// Actual implementation would call the mailbox client.
+    ///
+    /// Returns the number of messages retrieved.
+    pub async fn poll_group_mailbox(&self, _group_id: &ChannelId) -> Result<u32, MailboxError> {
+        // TODO: Implement actual mailbox polling via MailboxClient
+        // For now, return 0 messages (no-op poll)
+        Ok(0)
+    }
+
     /// Delete all state for a group.
     ///
     /// Useful when user leaves a group.

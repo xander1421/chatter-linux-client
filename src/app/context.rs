@@ -9,17 +9,23 @@ use std::sync::Arc;
 use crate::crypto::signal::{IdentityKeyManager, PreKeyManager, SenderKeyManager, SessionManager};
 use crate::error::{NetworkError, StorageError, SystemError};
 use crate::events::EventBus;
+use crate::mailbox::group::{GroupCoordinator, GroupFanout, GroupMailboxManager};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::services::auth_service::AuthService;
+use crate::services::signal_service::SignalService;
+use crate::services::message_service::MessageService;
+use crate::services::message_gateway::MessageGateway;
+use crate::services::mailbox_manager::MailboxManager;
+use crate::inbox::provider::DeviceInboxProvider;
 use crate::state::{
-    AuthState, ChatState, MessageState, OfflineState, PresenceState, PrivacyState, StreamingState,
-    UIState, UserState,
+    AuthState, ChatState, MessageState, OfflineState, PinnedState, PresenceState, PrivacyState,
+    StreamingState, UIState, UserState,
 };
 use crate::storage::{
     AttachmentRepository, ChannelRepository, Database, DraftRepository, KeyStore,
-    MessageRepository, ReactionRepository, SettingsRepository, UserRepository,
+    MessageRepository, ReactionRepository, SearchIndex, SettingsRepository, UserRepository,
 };
 use crate::system::{Directories, Keyring};
 use crate::ui::bridge::UiBridge;
@@ -98,6 +104,8 @@ pub struct AppContext {
     pub reaction_repo: Arc<ReactionRepository>,
     /// Message draft repository.
     pub draft_repo: Arc<DraftRepository>,
+    /// Full-text search index for messages.
+    pub search_index: Arc<SearchIndex>,
 
     // Crypto managers
     /// Identity key management.
@@ -114,6 +122,24 @@ pub struct AppContext {
     pub grpc_pool: Arc<GrpcClientPool>,
     /// Authentication interceptor for gRPC requests.
     pub auth_interceptor: AuthInterceptor,
+
+    // Services
+    /// Signal Protocol service.
+    pub signal_service: Arc<SignalService>,
+    /// Message service.
+    pub message_service: Arc<MessageService>,
+    /// Message gateway.
+    pub message_gateway: Arc<MessageGateway>,
+    /// Device inbox provider (initialized after connect).
+    pub device_inbox_provider: std::sync::OnceLock<Arc<DeviceInboxProvider>>,
+    /// Mailbox manager for privacy-preserving DM messaging.
+    pub mailbox_manager: Arc<MailboxManager>,
+    /// Group mailbox state persistence.
+    pub group_mailbox_manager: Arc<GroupMailboxManager>,
+    /// Group mailbox coordinator for setup and announcements.
+    pub group_coordinator: Arc<GroupCoordinator>,
+    /// Group fanout for N-way parallel delivery (initialized after connect).
+    pub group_fanout: std::sync::OnceLock<Arc<GroupFanout>>,
 
     // State stores
     /// UI preferences state.
@@ -134,6 +160,8 @@ pub struct AppContext {
     pub offline_state: OfflineState,
     /// Streaming aggregation state.
     pub streaming_state: StreamingState,
+    /// Pinned messages navigation state.
+    pub pinned_state: PinnedState,
     /// Event bus for domain/UI events.
     pub event_bus: EventBus,
 }
@@ -181,6 +209,7 @@ impl AppContext {
         let attachment_repo = Arc::new(AttachmentRepository::new(database.clone()));
         let reaction_repo = Arc::new(ReactionRepository::new(database.clone()));
         let draft_repo = Arc::new(DraftRepository::new(database.clone()));
+        let search_index = Arc::new(SearchIndex::new(database.clone()));
 
         // 6. Create crypto managers
         let identity_manager = Arc::new(IdentityKeyManager::new(key_store.clone()));
@@ -193,7 +222,42 @@ impl AppContext {
         let grpc_pool = Arc::new(GrpcClientPool::new(&server_url)?);
         let auth_interceptor = grpc_pool.auth_clone();
 
-        // 8. Create state stores
+        // 8. Create services
+        let signal_service = Arc::new(SignalService::new(
+            key_store.clone(),
+            settings_repo.clone(),
+        ));
+
+        let message_service = Arc::new(MessageService::new(
+            settings_repo.clone(),
+            message_repo.clone(),
+            channel_repo.clone(),
+            signal_service.clone(),
+        ));
+
+        let message_gateway = Arc::new(MessageGateway::new(
+            (*signal_service).clone(), // SignalService is Clone
+            message_repo.clone(),
+        ));
+
+        // 9. Device inbox provider will be initialized after connect()
+        let device_inbox_provider = std::sync::OnceLock::new();
+
+        // 10. Create mailbox manager for DM privacy
+        let mailbox_manager = Arc::new(MailboxManager::new(
+            grpc_pool.clone(),
+            settings_repo.clone(),
+        ));
+
+        // 11. Create group mailbox infrastructure
+        let group_mailbox_manager = Arc::new(GroupMailboxManager::new(database.clone()));
+        let group_coordinator = Arc::new(GroupCoordinator::new(
+            database.clone(),
+            group_mailbox_manager.clone(),
+        ));
+        let group_fanout = std::sync::OnceLock::new();
+
+        // 12. Create state stores
         let ui_state = UIState::new();
         let auth_state = AuthState::new();
         let chat_state = ChatState::new();
@@ -203,6 +267,7 @@ impl AppContext {
         let privacy_state = PrivacyState::new();
         let offline_state = OfflineState::new();
         let streaming_state = StreamingState::new();
+        let pinned_state = PinnedState::new();
         let event_bus = EventBus::new();
 
         Ok(Self {
@@ -217,12 +282,21 @@ impl AppContext {
             attachment_repo,
             reaction_repo,
             draft_repo,
+            search_index,
             identity_manager,
             prekey_manager,
             session_manager,
             sender_key_manager,
             grpc_pool,
             auth_interceptor,
+            signal_service,
+            message_service,
+            message_gateway,
+            device_inbox_provider,
+            mailbox_manager,
+            group_mailbox_manager,
+            group_coordinator,
+            group_fanout,
             ui_state,
             auth_state,
             chat_state,
@@ -232,6 +306,7 @@ impl AppContext {
             privacy_state,
             offline_state,
             streaming_state,
+            pinned_state,
             event_bus,
         })
     }
@@ -295,6 +370,73 @@ impl AppContext {
     /// Get the server URL being used.
     pub fn server_url(&self) -> String {
         env::var(SERVER_URL_ENV).unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string())
+    }
+
+    /// Get the message service.
+    pub fn message_service(&self) -> Arc<MessageService> {
+        self.message_service.clone()
+    }
+
+    /// Initialize the device inbox provider.
+    ///
+    /// Must be called after `grpc_pool.connect()` succeeds.
+    /// Safe to call multiple times - only initializes once.
+    pub fn init_device_inbox_provider(&self) {
+        self.device_inbox_provider.get_or_init(|| {
+            let message_client = crate::network::grpc::message_client::MessageClient::new(
+                self.grpc_pool.channel(),
+                self.grpc_pool.auth_clone(),
+            );
+            let mailbox_client = crate::network::grpc::mailbox_client::MailboxClient::new(
+                self.grpc_pool.channel(),
+                self.grpc_pool.auth_clone(),
+            );
+            let pipeline = Arc::new(crate::network::validation::MessageValidationPipeline::new());
+            Arc::new(DeviceInboxProvider::new(
+                crate::inbox::provider::InboxConfig::default(),
+                Arc::new(tokio::sync::Mutex::new(message_client)),
+                Arc::new(tokio::sync::Mutex::new(mailbox_client)),
+                pipeline,
+                self.message_gateway.clone(),
+                self.database.clone(),
+            ))
+        });
+    }
+
+    /// Get the device inbox provider.
+    ///
+    /// Returns None if not yet initialized (call `init_device_inbox_provider()` first).
+    pub fn get_device_inbox_provider(&self) -> Option<Arc<DeviceInboxProvider>> {
+        self.device_inbox_provider.get().cloned()
+    }
+
+    /// Initialize the group fanout for N-way parallel delivery.
+    ///
+    /// Must be called after `grpc_pool.connect()` succeeds.
+    /// Safe to call multiple times - only initializes once.
+    pub fn init_group_fanout(&self) {
+        self.group_fanout.get_or_init(|| {
+            let mailbox_client = crate::network::grpc::mailbox_client::MailboxClient::new(
+                self.grpc_pool.channel(),
+                self.grpc_pool.auth_clone(),
+            );
+            Arc::new(GroupFanout::new(
+                self.group_mailbox_manager.clone(),
+                Arc::new(tokio::sync::Mutex::new(mailbox_client)),
+            ))
+        });
+    }
+
+    /// Get the group fanout.
+    ///
+    /// Returns None if not yet initialized (call `init_group_fanout()` first).
+    pub fn get_group_fanout(&self) -> Option<Arc<GroupFanout>> {
+        self.group_fanout.get().cloned()
+    }
+
+    /// Get the group coordinator for mailbox setup and announcements.
+    pub fn group_coordinator(&self) -> Arc<GroupCoordinator> {
+        self.group_coordinator.clone()
     }
 }
 

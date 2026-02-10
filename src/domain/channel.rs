@@ -13,6 +13,7 @@ pub enum ChannelType {
     Public,
     Private,
     DirectMessage,
+    SavedMessages,
 }
 
 /// Message persistence policy.

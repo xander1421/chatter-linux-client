@@ -1,6 +1,7 @@
 // DM list component
 //
 // Displays a scrollable list of direct message conversations with section header.
+// Supports collapsed mode with hidden header.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -22,20 +23,23 @@ export component DMList inherits Rectangle {
     // Properties
     in property <[DMListItemData]> conversations: [];
     in property <string> selected-conversation-id: "";
+    in property <bool> collapsed: false;
 
     // Callbacks
     callback conversation-selected(string);
+    callback show-tooltip(string, length); // text, local-y within this component
+    callback hide-tooltip();
 
     // Layout
     background: Colors.surface;
 
     VerticalLayout {
-        // Section header
-        Rectangle {
-            height: 32px;
+        // Section header - hidden when collapsed
+        header := Rectangle {
+            height: root.collapsed ? 0px : 32px;
             background: Colors.surface;
 
-            HorizontalLayout {
+            if !root.collapsed: HorizontalLayout {
                 padding-left: Spacing.sm;
                 padding-right: Spacing.sm;
                 alignment: start;
@@ -52,7 +56,7 @@ export component DMList inherits Rectangle {
         }
 
         // Scrollable DM list
-        Flickable {
+        flickable := Flickable {
             viewport-height: dm-layout.preferred-height;
 
             dm-layout := VerticalLayout {
@@ -69,9 +73,17 @@ export component DMList inherits Rectangle {
                     timestamp: item.timestamp;
                     unread-count: item.unread-count;
                     selected: item.user-id == root.selected-conversation-id;
+                    collapsed: root.collapsed;
 
                     clicked => {
                         root.conversation-selected(item.user-id);
+                    }
+                    show-tooltip(text, item-y) => {
+                        // Adjust y position: header height + flickable offset + item position
+                        root.show-tooltip(text, header.height + item-y - flickable.viewport-y);
+                    }
+                    hide-tooltip => {
+                        root.hide-tooltip();
                     }
                 }
             }

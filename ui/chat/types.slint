@@ -1,0 +1,50 @@
+// Chat-related data types
+//
+// Shared structs used by message_list and message_item components.
+
+// Data struct for attachment items in messages
+export struct MessageAttachmentData {
+    id: string,
+    filename: string,
+    size-display: string,
+    mime-type: string,
+    category: string,       // "image", "video", "audio", "document", "code", "archive", "other"
+    thumbnail-url: string,  // URL for image preview or empty
+    download-url: string,   // URL to download full file
+    is-image: bool,
+    is-video: bool,
+    width: int,             // Original width for images/videos
+    height: int,            // Original height for images/videos
+    thumbnail: image,       // Actual image data for display (loaded from local_path)
+    has-thumbnail: bool,    // Whether thumbnail image is available
+    is-playing: bool,       // Whether this audio/video is currently playing
+    icon: string,           // Emoji icon for file type (set by Rust)
+    icon-color: color,      // Color for icon background (set by Rust)
+}
+
+// Data struct for message items (mirrors Rust MessageItemData)
+export struct MessageItemData {
+    message-id: string,
+    sender-id: string,
+    sender-name: string,
+    sender-initials: string,
+    sender-avatar-url: string,
+    content: string,
+    timestamp: string,
+    timestamp-ms: int,  // Raw timestamp in milliseconds for event matching
+    is-own: bool,
+    is-edited: bool,
+    is-deleted: bool,
+    is-system: bool,
+    is-ai: bool,
+    has-attachments: bool,
+    attachment-count: int,
+    attachments: [MessageAttachmentData],
+    has-reactions: bool,
+    reaction-summary: string,
+    reply-count: int,
+    reply-count-text: string,  // Pre-formatted "1 reply" or "N replies"
+    is-thread-reply: bool,
+    show-sender: bool,
+    delivery-status: string,  // "sent", "delivered", "read", or "" for non-own messages
+}

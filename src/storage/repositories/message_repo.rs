@@ -74,6 +74,55 @@ impl MessageRepository {
         Ok(())
     }
 
+    /// Insert a new message, ignoring if it already exists (for deduplication).
+    ///
+    /// Returns `true` if the message was inserted, `false` if it was skipped (duplicate).
+    pub fn insert_or_ignore(&self, message: &Message) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let content_json = serde_json::to_string(&message.content)
+            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize content: {}", e)))?;
+        let attachments_json = serde_json::to_string(&message.attachments)
+            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize attachments: {}", e)))?;
+        let reaction_counts_json = serde_json::to_string(&message.reaction_counts)
+            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize reactions: {}", e)))?;
+        let current_user_reactions_json = serde_json::to_string(&message.current_user_reactions)
+            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize user reactions: {}", e)))?;
+        let mentioned_integrations_json = serde_json::to_string(&message.mentioned_integrations)
+            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize integrations: {}", e)))?;
+
+        let rows = conn.execute(
+            "INSERT OR IGNORE INTO messages (
+                id, channel_id, sender_id, content_type, content_json,
+                thread_id, reply_to, attachments_json,
+                is_pinned, is_edited, is_deleted,
+                created_at, updated_at, edited_at,
+                reaction_counts_json, current_user_reactions_json,
+                mentioned_integrations_json, targets_ai_bot
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            params![
+                message.id.to_string(),
+                message.channel_id.to_string(),
+                message.sender_id.map(|id| id.to_string()),
+                content_type_discriminant(&message.content),
+                content_json,
+                message.thread_id.map(|id| id.to_string()),
+                message.reply_to.map(|id| id.to_string()),
+                attachments_json,
+                message.is_pinned as i32,
+                message.is_edited as i32,
+                message.is_deleted as i32,
+                message.created_at.to_rfc3339(),
+                message.updated_at.to_rfc3339(),
+                message.edited_at.map(|dt| dt.to_rfc3339()),
+                reaction_counts_json,
+                current_user_reactions_json,
+                mentioned_integrations_json,
+                message.targets_ai_bot as i32,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Get a message by ID.
     pub fn get(&self, id: &MessageId) -> Result<Option<Message>, StorageError> {
         let conn = self.db.connection()?;

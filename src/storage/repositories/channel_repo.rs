@@ -197,6 +197,34 @@ impl ChannelRepository {
         Ok(())
     }
 
+    /// Increment the unread count for a channel by 1.
+    ///
+    /// Returns the new unread count, or creates the channel with count 1 if it doesn't exist.
+    pub fn increment_unread_count(&self, id: &ChannelId) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+
+        // Atomically increment unread_count
+        let rows = conn.execute(
+            "UPDATE channels SET unread_count = unread_count + 1 WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+
+        if rows == 0 {
+            // Channel doesn't exist in local storage - this is expected for DMs
+            // where we might receive messages before the channel is synced
+            return Ok(1);
+        }
+
+        // Get the new count
+        let count: u32 = conn.query_row(
+            "SELECT unread_count FROM channels WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )?;
+
+        Ok(count)
+    }
+
     /// Update the last message timestamp for a channel.
     pub fn update_last_message(
         &self,
@@ -432,6 +460,7 @@ fn channel_type_to_i32(ct: ChannelType) -> i32 {
         ChannelType::Public => 0,
         ChannelType::Private => 1,
         ChannelType::DirectMessage => 2,
+        ChannelType::SavedMessages => 3,
     }
 }
 
@@ -439,6 +468,7 @@ fn channel_type_from_i32(value: i32) -> ChannelType {
     match value {
         1 => ChannelType::Private,
         2 => ChannelType::DirectMessage,
+        3 => ChannelType::SavedMessages,
         _ => ChannelType::Public,
     }
 }

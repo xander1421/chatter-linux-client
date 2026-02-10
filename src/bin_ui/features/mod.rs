@@ -10,6 +10,7 @@ pub mod header;
 pub mod modals;
 pub mod navigation;
 pub mod sidebar;
+pub mod thread;
 
 use chatter_linux::app::AppContext;
 use crate::MainWindow;
@@ -24,4 +25,5 @@ pub fn wire_all(window: &MainWindow, ctx: &AppContext) {
     header::wire(window, ctx);
     composer::wire(window, ctx);
     modals::wire(window, ctx);
+    thread::wire(window, ctx);
 }

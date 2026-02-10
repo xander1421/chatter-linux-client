@@ -7,25 +7,12 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component TypingIndicator inherits Rectangle {
-    // Properties
-    in property <[string]> typing-users: [];
-    in property <bool> visible: typing-users.length > 0;
+    // Properties - typing-text is pre-formatted by Rust
+    in property <string> typing-text: "";
+    in property <bool> visible: typing-text != "";
 
     // Animation timer (0.0 to 1.0 cycling)
     property <float> animation-progress: 0.0;
-
-    // Computed text based on user count
-    property <string> typing-text: {
-        if typing-users.length == 0 {
-            ""
-        } else if typing-users.length == 1 {
-            "\{typing-users[0]} is typing"
-        } else if typing-users.length == 2 {
-            "\{typing-users[0]}, \{typing-users[1]} are typing"
-        } else {
-            "\{typing-users.length} people are typing"
-        }
-    };
 
     // Animation: cycle through 0.0 to 1.0 over 600ms
     states [

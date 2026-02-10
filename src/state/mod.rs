@@ -44,7 +44,7 @@ pub mod user_state;
 
 // Re-export core state types
 pub use auth_state::{AuthState, AuthStateData};
-pub use chat_state::{ChatState, ChatStateData, ThreadPanel};
+pub use chat_state::{ChatState, ChatStateData, PendingAttachment, ThreadPanel};
 pub use message_state::{MessageState, MessageStateData, PaginationCursor};
 pub use pinned_state::{PinnedState, PinnedStateData};
 pub use presence_state::{PresenceState, PresenceStateData};

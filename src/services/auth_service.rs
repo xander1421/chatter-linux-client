@@ -259,21 +259,21 @@ impl AuthService {
         }
 
         // Generate new identity (always fresh for registration)
-        let (_registration_id, identity_key_pair) =
+        let (registration_id, identity_key_pair) =
             self.identity_manager.generate_identity(&mut rand::rng())?;
 
         // Generate signed prekey
-        let _signed_prekey = self
+        let signed_prekey = self
             .prekey_manager
             .generate_signed_prekey(&mut rand::rng(), 1, &identity_key_pair)?;
 
         // Generate Kyber prekey for post-quantum resistance
-        let _kyber_prekey = self
+        let kyber_prekey = self
             .prekey_manager
             .generate_kyber_prekey(1, &identity_key_pair)?;
 
         // Generate one-time prekeys (100 for initial batch)
-        let _one_time_prekeys = self.prekey_manager.generate_prekeys(&mut rand::rng(), 1, 100)?;
+        let one_time_prekeys = self.prekey_manager.generate_prekeys(&mut rand::rng(), 1, 100)?;
 
         // Generate profile key for UAK derivation
         let mut profile_key = [0u8; 32];
@@ -286,9 +286,73 @@ impl AuthService {
         // Hash password with SHA256
         let password_hash = Sha256::digest(password.as_bytes());
 
+        // Build Signal Protocol prekey bundle for server
+        use crate::proto::chat_v1::signal_pre_key_bundle::{
+            KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord as ProtoPreKey,
+            SignedPreKeyRecord as ProtoSignedPreKey,
+        };
+        use crate::proto::chat_v1::SignalPreKeyBundle;
+        use libsignal_protocol::GenericSignedPreKey;
+
+        let identity_public_key = identity_key_pair.identity_key().serialize();
+
+        // Extract values from signed prekey (these are infallible for freshly generated keys)
+        let signed_prekey_id: u32 = signed_prekey.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
+        let signed_prekey_public = signed_prekey.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
+        let signed_prekey_sig = signed_prekey.signature().map_err(|e| CryptoError::Protocol(e.to_string()))?;
+        let signed_prekey_ts = signed_prekey.timestamp().map_err(|e| CryptoError::Protocol(e.to_string()))?.epoch_millis();
+
+        // Extract Kyber prekey values
+        let kyber_id: u32 = kyber_prekey.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
+        let kyber_public = kyber_prekey.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
+        let kyber_sig = kyber_prekey.signature().map_err(|e| CryptoError::Protocol(e.to_string()))?;
+
+        let prekey_bundle = SignalPreKeyBundle {
+            identity_key: identity_public_key.as_ref().to_vec(),
+            registration_id,
+            device_id,
+            signed_prekey: Some(ProtoSignedPreKey {
+                id: signed_prekey_id,
+                public_key: signed_prekey_public.to_vec(),
+                signature: signed_prekey_sig,
+                timestamp: signed_prekey_ts,
+            }),
+            one_time_prekey: if let Some(pk) = one_time_prekeys.first() {
+                let pk_id: u32 = pk.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
+                let pk_public = pk.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
+                Some(ProtoPreKey {
+                    id: pk_id,
+                    public_key: pk_public.to_vec(),
+                })
+            } else {
+                None
+            },
+            kyber_prekey: Some(ProtoKyberPreKey {
+                id: kyber_id,
+                public_key: kyber_public.to_vec(),
+                signature: kyber_sig,
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("Time should move forward")
+                    .as_millis() as u64,
+            }),
+            unidentified_access_key: None, // Server derives from profile_key
+            unrestricted_unidentified_access: Some(false),
+        };
+
+        // Build initial one-time prekeys for server (skip first, it's in bundle)
+        let mut initial_prekeys: Vec<ProtoPreKey> = Vec::new();
+        for pk in one_time_prekeys.iter().skip(1) {
+            let pk_id: u32 = pk.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
+            let pk_public = pk.public_key().map_err(|e| CryptoError::Protocol(e.to_string()))?.serialize();
+            initial_prekeys.push(ProtoPreKey {
+                id: pk_id,
+                public_key: pk_public.to_vec(),
+            });
+        }
+
         // Call server registration (wait for completion)
         // Send profile_key - server derives UAK from it
-        let identity_public_key = identity_key_pair.identity_key().serialize();
         let result = auth_client
             .register_and_wait(
                 username,
@@ -298,6 +362,8 @@ impl AuthService {
                 device_info,
                 credentials.auth_token().as_bytes(),
                 &profile_key,
+                Some(prekey_bundle),
+                initial_prekeys,
             )
             .await
             .map_err(|e| AuthError::RegistrationFailed(e.to_string()))?;

@@ -1,6 +1,7 @@
 // DM list item component
 //
 // Displays a direct message conversation with avatar, presence, name, preview, and unread badge.
+// Supports collapsed mode showing avatar + presence + badge only.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -17,12 +18,15 @@ export component DMListItem inherits Rectangle {
     in property <string> timestamp: "";
     in property <int> unread-count: 0;
     in property <bool> selected: false;
+    in property <bool> collapsed: false;
 
     // Callbacks
     callback clicked();
+    callback show-tooltip(string, length); // text, local-y
+    callback hide-tooltip();
 
     // Layout
-    height: 52px;
+    height: root.collapsed ? 44px : 52px;
     border-radius: Spacing.radius-sm;
 
     // Background states: default, hover, selected
@@ -30,8 +34,8 @@ export component DMListItem inherits Rectangle {
               : touch.has-hover ? Colors.surface-hover
               : Colors.surface;
 
-    // Content layout
-    HorizontalLayout {
+    // Expanded content layout
+    if !root.collapsed: HorizontalLayout {
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: Spacing.sm;
@@ -115,10 +119,79 @@ export component DMListItem inherits Rectangle {
         }
     }
 
+    // Collapsed content layout - centered avatar with badge overlay
+    if root.collapsed: Rectangle {
+        width: 100%;
+        height: 100%;
+
+        HorizontalLayout {
+            alignment: center;
+
+            VerticalLayout {
+                alignment: center;
+
+                Avatar {
+                    size: 32px;
+                    source: root.avatar-source;
+                    fallback-text: root.initials;
+                    show-presence: true;
+                    presence-color: root.presence-status == "online" ? Colors.online
+                                 : root.presence-status == "away" ? Colors.away
+                                 : root.presence-status == "dnd" ? Colors.dnd
+                                 : Colors.offline;
+                }
+            }
+        }
+
+        // Badge overlay (top-right of avatar)
+        if root.unread-count > 0: Rectangle {
+            x: parent.width / 2 + 8px;
+            y: parent.height / 2 - 20px;
+            width: max(16px, collapsed-badge-text.preferred-width + 8px);
+            height: 16px;
+            border-radius: Spacing.radius-full;
+            background: Colors.primary;
+
+            collapsed-badge-text := Text {
+                text: root.unread-count > 99 ? "99+" : root.unread-count;
+                color: Colors.text-primary;
+                font-size: 10px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
+            }
+        }
+    }
+
+    // Internal state for tracking if tooltip is currently shown
+    property <bool> tooltip-shown: false;
+
     // Touch area for click handling
     touch := TouchArea {
         clicked => {
             root.clicked();
+        }
+    }
+
+    // Show tooltip when hovering in collapsed mode (transition from not-shown to shown)
+    if root.collapsed && touch.has-hover && !root.tooltip-shown: Rectangle {
+        width: 0;
+        height: 0;
+        init => {
+            root.tooltip-shown = true;
+            root.show-tooltip(root.display-name, root.y + root.height / 2 - 14px);
+        }
+    }
+
+    // Hide tooltip when hover ends (transition from shown to not-shown)
+    if root.tooltip-shown && !touch.has-hover: Rectangle {
+        width: 0;
+        height: 0;
+        init => {
+            root.tooltip-shown = false;
+            root.hide-tooltip();
         }
     }
 }

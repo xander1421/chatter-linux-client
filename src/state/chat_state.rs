@@ -2,9 +2,10 @@
 //!
 //! Active channel, threads (up to 3 concurrent).
 
+use std::path::PathBuf;
 use tokio::sync::broadcast;
 
-use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::state::store::Store;
 
 /// Maximum number of concurrent thread panels allowed.
@@ -19,6 +20,35 @@ pub struct ThreadPanel {
     pub root_message_id: MessageId,
     /// Number of replies in the thread.
     pub reply_count: u32,
+}
+
+/// A pending file attachment (uploaded but not yet sent).
+#[derive(Clone, Debug)]
+pub struct PendingAttachment {
+    /// The attachment ID from the server after upload.
+    pub id: AttachmentId,
+    /// Original filename.
+    pub filename: String,
+    /// Original file path (for display/reference).
+    pub path: PathBuf,
+    /// File size in bytes.
+    pub size: u64,
+    /// MIME type.
+    pub mime_type: String,
+}
+
+impl PendingAttachment {
+    /// Create a new pending attachment.
+    #[must_use]
+    pub fn new(id: AttachmentId, filename: String, path: PathBuf, size: u64, mime_type: String) -> Self {
+        Self {
+            id,
+            filename,
+            path,
+            size,
+            mime_type,
+        }
+    }
 }
 
 impl ThreadPanel {
@@ -45,7 +75,7 @@ impl ThreadPanel {
 
 /// Chat navigation state data.
 ///
-/// Tracks the currently active channel and open thread panels.
+/// Tracks the currently active channel, open thread panels, and pending attachments.
 #[derive(Clone, Debug, Default)]
 pub struct ChatStateData {
     /// Currently selected channel ID.
@@ -54,6 +84,8 @@ pub struct ChatStateData {
     pub open_threads: Vec<ThreadPanel>,
     /// Index of the focused thread panel (0, 1, or 2), if any.
     pub active_thread_index: Option<usize>,
+    /// Pending attachments for the current message being composed.
+    pub pending_attachments: Vec<PendingAttachment>,
 }
 
 /// Reactive chat navigation state manager.
@@ -217,6 +249,39 @@ impl ChatState {
             {
                 thread.reply_count = reply_count;
             }
+        });
+    }
+
+    /// Add a pending attachment for the current message.
+    pub fn add_pending_attachment(&self, attachment: PendingAttachment) {
+        self.store.update(|state| {
+            state.pending_attachments.push(attachment);
+        });
+    }
+
+    /// Get all pending attachment IDs.
+    #[must_use]
+    pub fn get_pending_attachment_ids(&self) -> Vec<AttachmentId> {
+        self.store.get().pending_attachments.iter().map(|a| a.id).collect()
+    }
+
+    /// Get all pending attachments.
+    #[must_use]
+    pub fn get_pending_attachments(&self) -> Vec<PendingAttachment> {
+        self.store.get().pending_attachments.clone()
+    }
+
+    /// Clear all pending attachments (called after message is sent).
+    pub fn clear_pending_attachments(&self) {
+        self.store.update(|state| {
+            state.pending_attachments.clear();
+        });
+    }
+
+    /// Remove a pending attachment by its ID.
+    pub fn remove_pending_attachment(&self, attachment_id: AttachmentId) {
+        self.store.update(|state| {
+            state.pending_attachments.retain(|a| a.id != attachment_id);
         });
     }
 }

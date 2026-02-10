@@ -53,6 +53,7 @@ pub enum ChannelError {
 pub struct ChannelService {
     settings_repo: Arc<SettingsRepository>,
     channel_repo: Arc<ChannelRepository>,
+    signal_service: Arc<crate::services::signal_service::SignalService>,
 }
 
 impl ChannelService {
@@ -60,10 +61,12 @@ impl ChannelService {
     pub fn new(
         settings_repo: Arc<SettingsRepository>,
         channel_repo: Arc<ChannelRepository>,
+        signal_service: Arc<crate::services::signal_service::SignalService>,
     ) -> Self {
         Self {
             settings_repo,
             channel_repo,
+            signal_service,
         }
     }
 
@@ -472,6 +475,15 @@ impl ChannelService {
 
         // Delete membership from local DB (ignore NotFound - may already be deleted)
         let _ = self.channel_repo.delete_membership(channel_id, &current_user);
+
+        // Clear our sender key for this channel (no longer need it)
+        if let Err(e) = self.signal_service.clear_channel_sender_keys(channel_id) {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to clear sender keys when leaving channel"
+            );
+        }
 
         Ok(())
     }
@@ -1010,6 +1022,25 @@ impl ChannelService {
         // Remove membership from local storage
         let _ = self.channel_repo.delete_membership(channel_id, user_id);
 
+        // Rotate our sender key so the kicked user can't decrypt future messages
+        // The new SKDM will be distributed with our next message
+        match self.signal_service.rotate_sender_key(channel_id).await {
+            Ok(_skdm) => {
+                tracing::info!(
+                    channel_id = %channel_id,
+                    kicked_user = %user_id,
+                    "Rotated sender key after kicking user"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    channel_id = %channel_id,
+                    error = %e,
+                    "Failed to rotate sender key after kick (will rotate on next message)"
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -1088,7 +1119,7 @@ impl ChannelService {
 }
 
 /// Convert a proto Channel to a domain Channel.
-fn proto_to_domain_channel(proto: &chat_v1::Channel) -> Result<Channel, ChannelError> {
+pub fn proto_to_domain_channel(proto: &chat_v1::Channel) -> Result<Channel, ChannelError> {
     // Parse channel ID
     let id: ChannelId = proto
         .id
@@ -1140,6 +1171,7 @@ fn proto_channel_type_to_domain(proto_type: i32) -> ChannelType {
         1 => ChannelType::Public,
         2 => ChannelType::Private,
         3 => ChannelType::DirectMessage,
+        4 => ChannelType::SavedMessages,
         _ => ChannelType::Public, // Default for unspecified
     }
 }
@@ -1150,6 +1182,7 @@ fn domain_channel_type_to_proto(channel_type: ChannelType) -> chat_v1::ChannelTy
         ChannelType::Public => chat_v1::ChannelType::ChannelPublic,
         ChannelType::Private => chat_v1::ChannelType::ChannelPrivate,
         ChannelType::DirectMessage => chat_v1::ChannelType::DirectMessage,
+        ChannelType::SavedMessages => chat_v1::ChannelType::SavedMessages,
     }
 }
 
@@ -1286,6 +1319,7 @@ mod tests {
         assert_eq!(proto_channel_type_to_domain(1), ChannelType::Public);
         assert_eq!(proto_channel_type_to_domain(2), ChannelType::Private);
         assert_eq!(proto_channel_type_to_domain(3), ChannelType::DirectMessage);
+        assert_eq!(proto_channel_type_to_domain(4), ChannelType::SavedMessages);
         assert_eq!(proto_channel_type_to_domain(0), ChannelType::Public); // Unspecified
     }
 

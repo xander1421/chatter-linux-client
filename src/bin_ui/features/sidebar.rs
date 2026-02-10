@@ -7,11 +7,14 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_linux::app::AppContext;
+use chatter_linux::domain::channel::ChannelType;
 use chatter_linux::domain::ids::ChannelId;
-use chatter_linux::storage::{ChannelRepository, MessageRepository, UserRepository};
+use chatter_linux::storage::{AttachmentRepository, ChannelRepository, MessageRepository, UserRepository};
 
-use crate::bin_ui::converters::{channel_type_to_string, message_to_slint};
-use crate::{MainWindow, MessageItemData};
+use crate::bin_ui::audio_state;
+use crate::bin_ui::converters::{channel_type_to_string, message_to_display_data, MessageDisplayData};
+use crate::bin_ui::features::chat::send_dm_read_receipts;
+use crate::MainWindow;
 
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ctx: &AppContext) {
@@ -20,6 +23,9 @@ pub fn wire(window: &MainWindow, ctx: &AppContext) {
     wire_saved_messages(window, ctx);
     wire_settings_clicked(window, ctx);
     wire_profile_clicked(window, ctx);
+    wire_create_join_channel(window);
+    wire_toggle_sidebar(window, ctx);
+    load_sidebar_collapsed_state(window, ctx);
 }
 
 fn wire_channel_selected(window: &MainWindow, ctx: &AppContext) {
@@ -27,6 +33,7 @@ fn wire_channel_selected(window: &MainWindow, ctx: &AppContext) {
     let channel_repo = ctx.channel_repo.clone();
     let message_repo = ctx.message_repo.clone();
     let user_repo = ctx.user_repo.clone();
+    let attachment_repo = ctx.attachment_repo.clone();
 
     let weak_window = window.as_weak();
 
@@ -37,6 +44,10 @@ fn wire_channel_selected(window: &MainWindow, ctx: &AppContext) {
         let channel_repo = channel_repo.clone();
         let message_repo = message_repo.clone();
         let user_repo = user_repo.clone();
+        let attachment_repo = attachment_repo.clone();
+
+        // Stop any playing audio when switching channels
+        stop_audio_playback();
 
         tokio::spawn(async move {
             // Set loading state
@@ -62,7 +73,7 @@ fn wire_channel_selected(window: &MainWindow, ctx: &AppContext) {
             chat_state.set_active_channel(channel_id);
 
             // Load channel and messages
-            load_channel_into_ui(weak, &channel_id, channel_repo, message_repo, user_repo).await;
+            load_channel_into_ui(weak, &channel_id, channel_repo, message_repo, user_repo, attachment_repo).await;
         });
     });
 }
@@ -72,6 +83,12 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
     let channel_repo = ctx.channel_repo.clone();
     let message_repo = ctx.message_repo.clone();
     let user_repo = ctx.user_repo.clone();
+    let attachment_repo = ctx.attachment_repo.clone();
+    let auth_state = ctx.auth_state.clone();
+    let database = ctx.database.clone();
+    let grpc_pool = ctx.grpc_pool.clone();
+    let signal_service = ctx.signal_service.clone();
+    let mailbox_manager = ctx.mailbox_manager.clone();
 
     let weak_window = window.as_weak();
 
@@ -82,6 +99,15 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
         let channel_repo = channel_repo.clone();
         let message_repo = message_repo.clone();
         let user_repo = user_repo.clone();
+        let attachment_repo = attachment_repo.clone();
+        let auth_state = auth_state.clone();
+        let database = database.clone();
+        let grpc_pool = grpc_pool.clone();
+        let signal_service = signal_service.clone();
+        let mailbox_manager = mailbox_manager.clone();
+
+        // Stop any playing audio when switching channels
+        stop_audio_playback();
 
         tokio::spawn(async move {
             // Set loading state
@@ -107,26 +133,102 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
             chat_state.set_active_channel(channel_id);
 
             // Load channel and messages
-            load_channel_into_ui(weak, &channel_id, channel_repo, message_repo, user_repo).await;
+            load_channel_into_ui(weak, &channel_id, channel_repo.clone(), message_repo.clone(), user_repo, attachment_repo).await;
+
+            // Send read receipts for unread messages from the peer
+            if auth_state.is_logged_in() {
+                // Get the peer's user ID from the DM channel
+                if let Ok(Some(channel)) = channel_repo.get(&channel_id) {
+                    if channel.channel_type == ChannelType::DirectMessage {
+                        // Get our user ID
+                        let my_user_id = auth_state.get().current_user_id.clone();
+
+                        // Get recent messages to find the peer and their message timestamps
+                        if let Ok(messages) = message_repo.list_for_channel(&channel_id, None, 50) {
+                            // Find peer ID (sender that isn't us)
+                            let peer_id = messages
+                                .iter()
+                                .filter_map(|m| m.sender_id.as_ref())
+                                .find(|sender| my_user_id.as_ref() != Some(*sender))
+                                .cloned();
+
+                            if let Some(peer_id) = peer_id {
+                                // Get timestamps of messages from the peer
+                                let unread_timestamps: Vec<u64> = messages
+                                    .iter()
+                                    .filter(|m| m.sender_id.as_ref() == Some(&peer_id))
+                                    .map(|m| m.created_at.timestamp_millis() as u64)
+                                    .collect();
+
+                                if !unread_timestamps.is_empty() {
+                                    send_dm_read_receipts(
+                                        peer_id,
+                                        unread_timestamps,
+                                        database,
+                                        grpc_pool,
+                                        signal_service,
+                                        mailbox_manager,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         });
     });
 }
 
-fn wire_saved_messages(window: &MainWindow, _ctx: &AppContext) {
+fn wire_saved_messages(window: &MainWindow, ctx: &AppContext) {
     let weak_window = window.as_weak();
+    let auth_state = ctx.auth_state.clone();
+    let chat_state = ctx.chat_state.clone();
+    let channel_repo = ctx.channel_repo.clone();
+    let message_repo = ctx.message_repo.clone();
+    let user_repo = ctx.user_repo.clone();
+    let attachment_repo = ctx.attachment_repo.clone();
 
     window.on_saved_messages_clicked(move || {
         let weak = weak_window.clone();
+        let auth_state = auth_state.clone();
+        let chat_state = chat_state.clone();
+        let channel_repo = channel_repo.clone();
+        let message_repo = message_repo.clone();
+        let user_repo = user_repo.clone();
+        let attachment_repo = attachment_repo.clone();
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_channel_name("Saved Messages".into());
-                w.set_channel_type("saved".into());
-                w.set_selected_channel_id("".into());
-                w.set_selected_dm_id("".into());
-                let empty_messages: Vec<MessageItemData> = Vec::new();
-                w.set_messages(ModelRc::new(VecModel::from(empty_messages)));
-            }
+        // Stop any playing audio when switching channels
+        stop_audio_playback();
+
+        tokio::spawn(async move {
+            // Get current user ID - saved messages channel_id = user_id
+            let user_id = match auth_state.get().current_user_id {
+                Some(id) => id,
+                None => {
+                    tracing::warn!("Cannot open saved messages: not logged in");
+                    return;
+                }
+            };
+
+            // The saved messages channel ID is the same as the user ID
+            let channel_id: ChannelId = user_id.into();
+
+            // Set loading state
+            let weak_loading = weak.clone();
+            let channel_id_str: SharedString = channel_id.to_string().into();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_loading_messages(true);
+                    w.set_selected_channel_id(channel_id_str);
+                    w.set_selected_dm_id("".into());
+                }
+            });
+
+            // Update chat state with active channel
+            chat_state.set_active_channel(channel_id);
+
+            // Load the saved messages channel and its messages
+            load_channel_into_ui(weak, &channel_id, channel_repo, message_repo, user_repo, attachment_repo).await;
         });
     });
 }
@@ -211,6 +313,51 @@ fn wire_profile_clicked(window: &MainWindow, ctx: &AppContext) {
     });
 }
 
+fn wire_create_join_channel(window: &MainWindow) {
+    // Open create channel modal (just logs for now, modal is opened via active-modal in Slint)
+    window.on_open_create_channel(|| {
+        tracing::debug!("Opening create channel modal");
+    });
+
+    // Open join channel modal (just logs for now, modal is opened via active-modal in Slint)
+    window.on_open_join_channel(|| {
+        tracing::debug!("Opening join channel modal");
+    });
+}
+
+fn wire_toggle_sidebar(window: &MainWindow, ctx: &AppContext) {
+    let settings_repo = ctx.settings_repo.clone();
+    let weak_window = window.as_weak();
+
+    window.on_toggle_sidebar(move || {
+        let settings_repo = settings_repo.clone();
+        let weak = weak_window.clone();
+
+        // Get the current collapsed state and persist it
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                let collapsed = w.get_sidebar_collapsed();
+                // Persist to settings
+                if let Err(e) = settings_repo.set_bool(
+                    chatter_linux::storage::settings_keys::SIDEBAR_COLLAPSED,
+                    collapsed,
+                ) {
+                    tracing::warn!("Failed to persist sidebar collapsed state: {}", e);
+                }
+            }
+        });
+    });
+}
+
+fn load_sidebar_collapsed_state(window: &MainWindow, ctx: &AppContext) {
+    // Load saved collapsed state on startup
+    if let Ok(Some(collapsed)) =
+        ctx.settings_repo.get::<bool>(chatter_linux::storage::settings_keys::SIDEBAR_COLLAPSED)
+    {
+        window.set_sidebar_collapsed(collapsed);
+    }
+}
+
 /// Load channel data and messages into UI properties.
 pub async fn load_channel_into_ui(
     window_weak: slint::Weak<MainWindow>,
@@ -218,6 +365,7 @@ pub async fn load_channel_into_ui(
     channel_repo: Arc<ChannelRepository>,
     message_repo: Arc<MessageRepository>,
     user_repo: Arc<UserRepository>,
+    attachment_repo: Arc<AttachmentRepository>,
 ) {
     // Get channel info from local repo
     let channel = match channel_repo.get(channel_id) {
@@ -253,8 +401,9 @@ pub async fn load_channel_into_ui(
         }
     };
 
-    // Convert messages to Slint model
-    let mut slint_messages: Vec<MessageItemData> = Vec::with_capacity(messages.len());
+    // Convert messages to display data (thread-safe, can be sent to event loop)
+    // Messages come from DB in DESC order (newest first), but chat UI shows oldest first
+    let mut display_messages: Vec<MessageDisplayData> = Vec::with_capacity(messages.len());
     for msg in &messages {
         let sender_name = if let Some(sender_id) = &msg.sender_id {
             user_repo
@@ -267,18 +416,67 @@ pub async fn load_channel_into_ui(
         } else {
             "Anonymous".to_string()
         };
-        slint_messages.push(message_to_slint(msg, &sender_name));
+
+        // Resolve attachments for this message
+        let resolved_attachments: Vec<_> = msg
+            .attachments
+            .iter()
+            .filter_map(|att_id| {
+                match attachment_repo.get(att_id) {
+                    Ok(Some(att)) => {
+                        tracing::debug!(
+                            "Resolved attachment {} for message {}: local_path={:?}",
+                            att_id, msg.id, att.local_path
+                        );
+                        Some(att)
+                    }
+                    Ok(None) => {
+                        tracing::warn!("Attachment {} not found in repo for message {}", att_id, msg.id);
+                        None
+                    }
+                    Err(e) => {
+                        tracing::error!("Error fetching attachment {}: {}", att_id, e);
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        if !msg.attachments.is_empty() {
+            tracing::debug!(
+                "Message {} has {} attachment IDs, resolved {} attachments",
+                msg.id, msg.attachments.len(), resolved_attachments.len()
+            );
+        }
+
+        display_messages.push(message_to_display_data(msg, &sender_name, &resolved_attachments));
     }
 
-    // Update UI
-    let channel_name = channel.name.clone();
+    // Reverse to show oldest first (newest at bottom, like chat apps)
+    display_messages.reverse();
+
+    // Update UI - special handling for SavedMessages
+    let is_saved_messages = channel.channel_type == ChannelType::SavedMessages;
+    let channel_name = if is_saved_messages {
+        "Saved Messages".to_string()
+    } else {
+        channel.name.clone()
+    };
     let channel_type = channel_type_to_string(channel.channel_type);
     let member_count = 0i32;
-    let topic = channel.description.clone().unwrap_or_default();
+    // Don't show topic/description for SavedMessages
+    let topic = if is_saved_messages {
+        String::new()
+    } else {
+        channel.description.clone().unwrap_or_default()
+    };
     let is_archived = channel.archived;
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = window_weak.upgrade() {
+            // Convert display data to Slint types (must be done on UI thread)
+            let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint()).collect();
+
             w.set_channel_name(channel_name.into());
             w.set_channel_type(channel_type.into());
             w.set_member_count(member_count);
@@ -288,4 +486,16 @@ pub async fn load_channel_into_ui(
             w.set_loading_messages(false);
         }
     });
+}
+
+/// Stop any currently playing audio and clear state.
+fn stop_audio_playback() {
+    // Stop the audio player
+    if let Ok(mut guard) = audio_state::get_audio_player().lock() {
+        if let Some(ref mut player) = *guard {
+            player.stop();
+        }
+    }
+    // Clear the audio state
+    audio_state::clear_state();
 }

@@ -71,3 +71,19 @@ pub use saved_message_service::{DecryptedSavedMessage, SavedMessageError, SavedM
 
 // Re-export SavedMessageSource from crypto for convenience
 pub use crate::crypto::SavedMessageSource;
+pub mod signal_service;
+pub mod mailbox_manager;
+
+pub use signal_service::SignalService;
+pub use mailbox_manager::{MailboxManager, MailboxError, ActiveMailbox};
+pub use message_gateway::{
+    DmContent, MessageGateway, RouteResult,
+    build_text_content, build_typing_content, build_typing_content_with_channel,
+    build_read_receipt_content, build_delivery_receipt_content,
+    build_reaction_content, build_reaction_content_with_channel,
+    build_pin_content, build_pin_content_with_channel,
+    build_edit_content, build_edit_content_with_channel,
+    build_delete_for_me_content,
+    build_delete_for_everyone_content, build_delete_for_everyone_content_with_channel,
+};
+pub use message_service::MessageService;

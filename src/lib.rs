@@ -20,3 +20,4 @@ pub mod events;
 pub mod error;
 pub mod util;
 pub mod proto;
+pub mod config;

@@ -17,3 +17,6 @@ pub use media_error::MediaError;
 pub use network_error::NetworkError;
 pub use storage_error::StorageError;
 pub use system_error::SystemError;
+pub use service_error::ServiceError;
+
+pub mod service_error;

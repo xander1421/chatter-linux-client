@@ -1,10 +1,11 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, MessageItemData, FriendRequest, ForwardTarget, SessionInfo } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData } from "app.slint";
+import { CodeLine } from "components/mod.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, FriendRequest, ForwardTarget, SessionInfo }
+export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, CodeLine, EmojiData }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -42,6 +43,7 @@ export component MainWindow inherits Window {
     in property <string> user-initials <=> app.user-initials;
     in property <string> user-presence-status <=> app.user-presence-status;
     in property <string> user-custom-status <=> app.user-custom-status;
+    in-out property <bool> sidebar-collapsed <=> app.sidebar-collapsed;
 
     // ========== Chat properties ==========
     in property <string> channel-id <=> app.channel-id;
@@ -56,6 +58,80 @@ export component MainWindow inherits Window {
     in-out property <string> composer-text <=> app.composer-text;
     in property <string> composer-placeholder <=> app.composer-placeholder;
     in property <bool> composer-disabled <=> app.composer-disabled;
+    in property <[PendingAttachmentData]> pending-attachments <=> app.pending-attachments;
+    in-out property <bool> composer-is-editing <=> app.composer-is-editing;
+    in-out property <string> composer-edit-message-id <=> app.composer-edit-message-id;
+
+    // ========== Image viewer state ==========
+    in-out property <bool> image-viewer-visible <=> app.image-viewer-visible;
+    in property <image> image-viewer-source <=> app.image-viewer-source;
+    in property <string> image-viewer-filename <=> app.image-viewer-filename;
+    in property <string> image-viewer-size <=> app.image-viewer-size;
+    callback close-image-viewer <=> app.close-image-viewer;
+
+    // ========== Code preview state ==========
+    in-out property <bool> code-preview-visible <=> app.code-preview-visible;
+    in property <string> code-preview-filename <=> app.code-preview-filename;
+    in property <string> code-preview-language <=> app.code-preview-language;
+    in property <int> code-preview-line-count <=> app.code-preview-line-count;
+    in property <[CodeLine]> code-preview-lines <=> app.code-preview-lines;
+    callback close-code-preview <=> app.close-code-preview;
+    callback copy-code <=> app.copy-code;
+    callback open-code-external <=> app.open-code-external;
+
+    // ========== PDF preview state ==========
+    in-out property <bool> pdf-preview-visible <=> app.pdf-preview-visible;
+    in property <string> pdf-preview-filename <=> app.pdf-preview-filename;
+    in property <int> pdf-preview-page-count <=> app.pdf-preview-page-count;
+    in property <string> pdf-preview-error <=> app.pdf-preview-error;
+    callback close-pdf-preview <=> app.close-pdf-preview;
+    callback open-pdf-external <=> app.open-pdf-external;
+
+    // ========== Reaction picker state ==========
+    in-out property <bool> reaction-picker-visible <=> app.reaction-picker-visible;
+    in-out property <string> reaction-picker-message-id <=> app.reaction-picker-message-id;
+    in property <[EmojiData]> reaction-picker-emojis <=> app.reaction-picker-emojis;
+    callback reaction-selected <=> app.reaction-selected;
+
+    // ========== Message context menu state ==========
+    in-out property <bool> context-menu-visible <=> app.context-menu-visible;
+    in-out property <string> context-menu-message-id <=> app.context-menu-message-id;
+    in-out property <length> context-menu-x <=> app.context-menu-x;
+    in-out property <length> context-menu-y <=> app.context-menu-y;
+    in property <bool> context-menu-is-own-message <=> app.context-menu-is-own-message;
+    in property <bool> context-menu-is-pinned <=> app.context-menu-is-pinned;
+    callback reply-message <=> app.reply-message;
+    callback edit-message <=> app.edit-message;
+    callback delete-message <=> app.delete-message;
+    callback delete-everyone-message <=> app.delete-everyone-message;
+    callback pin-message <=> app.pin-message;
+    callback forward-message-action <=> app.forward-message-action;
+    callback copy-message <=> app.copy-message;
+
+    // ========== Pinned bar state ==========
+    in property <bool> has-pinned-messages <=> app.has-pinned-messages;
+    in property <string> pinned-message-preview <=> app.pinned-message-preview;
+    in property <int> pinned-current-index <=> app.pinned-current-index;
+    in property <int> pinned-total-count <=> app.pinned-total-count;
+    in-out property <bool> pinned-is-expanded <=> app.pinned-is-expanded;
+    callback pinned-prev-clicked <=> app.pinned-prev-clicked;
+    callback pinned-next-clicked <=> app.pinned-next-clicked;
+    callback pinned-dismiss-clicked <=> app.pinned-dismiss-clicked;
+    callback pinned-go-to-message <=> app.pinned-go-to-message;
+
+    // ========== Thread panel state ==========
+    in property <bool> thread-panel-visible <=> app.thread-panel-visible;
+    in property <string> thread-root-message-id <=> app.thread-root-message-id;
+    in property <string> thread-root-sender-name <=> app.thread-root-sender-name;
+    in property <string> thread-root-content-preview <=> app.thread-root-content-preview;
+    in property <int> thread-reply-count <=> app.thread-reply-count;
+    in property <string> thread-channel-name <=> app.thread-channel-name;
+    in property <[MessageItemData]> thread-replies <=> app.thread-replies;
+    in property <bool> thread-loading <=> app.thread-loading;
+    in-out property <string> thread-composer-text <=> app.thread-composer-text;
+    callback close-thread-clicked <=> app.close-thread-clicked;
+    callback send-thread-reply <=> app.send-thread-reply;
+    callback load-more-thread-replies <=> app.load-more-thread-replies;
 
     // ========== Modal state ==========
     in-out property <string> active-modal <=> app.active-modal;
@@ -66,6 +142,19 @@ export component MainWindow inherits Window {
     in-out property <string> create-channel-template <=> app.create-channel-template;
     in property <string> create-channel-error <=> app.create-channel-error;
     in property <bool> create-channel-loading <=> app.create-channel-loading;
+
+    // Create channel AI config properties
+    in-out property <string> create-channel-ai-provider <=> app.create-channel-ai-provider;
+    in-out property <string> create-channel-ai-model <=> app.create-channel-ai-model;
+    in property <[AIModelOption]> create-channel-ai-models <=> app.create-channel-ai-models;
+
+    // Join channel modal properties
+    in-out property <string> join-channel-search-query <=> app.join-channel-search-query;
+    in property <[SearchResultChannel]> join-channel-results <=> app.join-channel-results;
+    in property <bool> join-channel-searching <=> app.join-channel-searching;
+    in property <string> join-channel-error <=> app.join-channel-error;
+    in-out property <string> join-channel-selected-id <=> app.join-channel-selected-id;
+    in property <bool> join-channel-joining <=> app.join-channel-joining;
 
     // User profile modal properties
     in property <string> profile-user-id <=> app.profile-user-id;
@@ -97,6 +186,13 @@ export component MainWindow inherits Window {
     in property <bool> sessions-loading <=> app.sessions-loading;
     in property <bool> sessions-revoking <=> app.sessions-revoking;
 
+    // Search modal properties
+    in-out property <string> search-query <=> app.search-query;
+    in property <[SearchResult]> search-results <=> app.search-results;
+    in property <bool> search-searching <=> app.search-searching;
+    in property <int> search-result-count <=> app.search-result-count;
+    in-out property <bool> search-all-channels <=> app.search-all-channels;
+
     // Settings properties
     in property <string> settings-display-name <=> app.settings-display-name;
     in property <string> settings-username <=> app.settings-username;
@@ -125,6 +221,9 @@ export component MainWindow inherits Window {
     callback saved-messages-clicked <=> app.saved-messages-clicked;
     callback settings-clicked <=> app.settings-clicked;
     callback profile-clicked <=> app.profile-clicked;
+    callback open-create-channel <=> app.open-create-channel;
+    callback open-join-channel <=> app.open-join-channel;
+    callback toggle-sidebar <=> app.toggle-sidebar;
 
     // ========== Chat callbacks ==========
     callback search-clicked <=> app.search-clicked;
@@ -135,15 +234,23 @@ export component MainWindow inherits Window {
     callback react-clicked <=> app.react-clicked;
     callback thread-clicked <=> app.thread-clicked;
     callback more-clicked <=> app.more-clicked;
+    callback view-attachment <=> app.view-attachment;
     callback load-more <=> app.load-more;
     callback send <=> app.send;
+    callback send-edit <=> app.send-edit;
+    callback cancel-edit <=> app.cancel-edit;
     callback attachment-clicked <=> app.attachment-clicked;
     callback emoji-clicked <=> app.emoji-clicked;
     callback gif-clicked <=> app.gif-clicked;
     callback mention-triggered <=> app.mention-triggered;
+    callback remove-attachment <=> app.remove-attachment;
+    callback typing-changed <=> app.typing-changed;
 
     // ========== Modal callbacks ==========
     callback create-channel <=> app.create-channel;
+    callback create-channel-provider-selected <=> app.create-channel-provider-selected;
+    callback search-channels <=> app.search-channels;
+    callback join-channel <=> app.join-channel;
     callback profile-send-message <=> app.profile-send-message;
     callback profile-add-friend <=> app.profile-add-friend;
     callback profile-remove-friend <=> app.profile-remove-friend;
@@ -156,6 +263,9 @@ export component MainWindow inherits Window {
     callback forward-message <=> app.forward-message;
     callback revoke-session <=> app.revoke-session;
     callback revoke-all-sessions <=> app.revoke-all-sessions;
+    callback search-messages <=> app.search-messages;
+    callback search-result-clicked <=> app.search-result-clicked;
+    callback search-toggle-scope <=> app.search-toggle-scope;
 
     // ========== Settings callbacks ==========
     callback settings-edit-profile <=> app.settings-edit-profile;
@@ -169,5 +279,9 @@ export component MainWindow inherits Window {
     callback settings-sealed-sender-changed <=> app.settings-sealed-sender-changed;
     callback settings-refresh-keys <=> app.settings-refresh-keys;
 
-    app := App {}
+    // App fills the entire window - explicit sizing ensures width flows to children
+    app := App {
+        width: root.width;
+        height: root.height;
+    }
 }

@@ -8,15 +8,15 @@ import { Skeleton } from "skeleton.slint";
 // GIF data struct for the picker
 export struct GifData {
     id: string,
-    preview-url: string,
-    full-url: string,
+    preview: image,       // Loaded from Rust
+    full-url: string,     // URL to send when selected
     width: int,
     height: int,
 }
 
 export component GifPicker inherits Rectangle {
     // Picker visibility
-    in property <bool> visible: false;
+    in property <bool> show: false;
 
     // Loading state
     in property <bool> loading: false;
@@ -40,8 +40,8 @@ export component GifPicker inherits Rectangle {
     forward-focus: search-input;
 
     // Only render when visible
-    opacity: root.visible ? 1 : 0;
-    visible: root.visible;
+    visible: root.show;
+    opacity: root.show ? 1 : 0;
 
     // Picker container
     width: 320px;
@@ -339,12 +339,12 @@ export component GifPicker inherits Rectangle {
                     height: parent.viewport-height;
 
                     for gif-data[index] in root.results: Rectangle {
-                        property <int> row: Math.floor(index / 2);
-                        property <int> col: mod(index, 2);
+                        property <int> grid-row: Math.floor(index / 2);
+                        property <int> grid-col: mod(index, 2);
                         property <length> item-width: (parent.width - Spacing.sm) / 2;
 
-                        x: col * (item-width + Spacing.sm);
-                        y: row * 90px;
+                        x: grid-col * (item-width + Spacing.sm);
+                        y: grid-row * 90px;
                         width: item-width;
                         height: 85px;
                         border-radius: Spacing.radius-md;
@@ -355,11 +355,11 @@ export component GifPicker inherits Rectangle {
                         border-width: gif-area.has-hover ? 2px : 0px;
                         border-color: Colors.primary.with-alpha(0.5);
 
-                        // GIF preview image
+                        // GIF preview image (loaded from Rust)
                         Image {
                             width: parent.width;
                             height: parent.height;
-                            source: @image-url(gif-data.preview-url);
+                            source: gif-data.preview;
                             image-fit: cover;
                         }
 

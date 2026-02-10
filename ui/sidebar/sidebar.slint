@@ -1,6 +1,7 @@
 // Main sidebar component
 //
 // Container with user profile bar, saved messages, channel list, and DM list.
+// Supports collapsing to icon-only mode (60px).
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -27,33 +28,52 @@ export component Sidebar inherits Rectangle {
     in property <string> user-presence-status: "online";
     in property <string> user-custom-status: "";
 
-    // Properties - General
-    in property <bool> collapsed: false;
+    // Properties - Collapsed state
+    in-out property <bool> collapsed: false;
 
     // Callbacks - Navigation
     callback channel-selected(string);
     callback dm-selected(string);
     callback saved-messages-clicked();
+    callback create-channel-clicked();
+    callback join-channel-clicked();
 
     // Callbacks - Profile
     callback settings-clicked();
     callback profile-clicked();
 
-    // Layout
-    width: Spacing.sidebar-width;
+    // Callback - Toggle collapsed
+    callback toggle-collapsed();
+
+    // Callbacks - Tooltip (bubble up to App for global rendering)
+    callback show-tooltip(string, length, length);
+    callback hide-tooltip();
+
+    // Layout - animated width transition
+    width: root.collapsed ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
     background: Colors.surface;
+
+    animate width {
+        duration: 200ms;
+        easing: ease-out;
+    }
 
     VerticalLayout {
         // User profile bar at top
-        UserProfileBar {
+        user-profile := UserProfileBar {
             display-name: root.user-display-name;
             avatar-source: root.user-avatar-source;
             initials: root.user-initials;
             presence-status: root.user-presence-status;
             custom-status: root.user-custom-status;
+            collapsed: root.collapsed;
 
             settings-clicked => { root.settings-clicked(); }
             profile-clicked => { root.profile-clicked(); }
+            show-tooltip(text) => {
+                root.show-tooltip(text, root.width + 8px, user-profile.y + user-profile.height / 2 - 14px);
+            }
+            hide-tooltip => { root.hide-tooltip(); }
         }
 
         // Separator
@@ -68,21 +88,25 @@ export component Sidebar inherits Rectangle {
             border-radius: Spacing.radius-sm;
             background: saved-touch.has-hover ? Colors.surface-hover : Colors.surface;
 
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                alignment: start;
+            // Internal state for tracking if tooltip is currently shown
+            property <bool> tooltip-shown: false;
 
-                // Bookmark icon
+            HorizontalLayout {
+                padding-left: root.collapsed ? 0px : Spacing.md;
+                padding-right: root.collapsed ? 0px : Spacing.md;
+                spacing: root.collapsed ? 0px : Spacing.sm;
+                alignment: root.collapsed ? center : start;
+
+                // Floppy disk icon
                 Text {
-                    text: "\u{1F516}"; // Bookmark ribbon
+                    text: "\u{1F4BE}"; // Floppy disk
                     font-size: 16px;
                     vertical-alignment: center;
+                    horizontal-alignment: center;
                 }
 
-                // Text
-                Text {
+                // Text (hidden when collapsed)
+                if !root.collapsed: Text {
                     text: "Saved Messages";
                     color: Colors.text-secondary;
                     font-size: 14px;
@@ -93,22 +117,25 @@ export component Sidebar inherits Rectangle {
             saved-touch := TouchArea {
                 clicked => { root.saved-messages-clicked(); }
             }
-        }
 
-        // Separator
-        Rectangle {
-            height: 1px;
-            background: Colors.surface-hover;
-        }
+            // Show tooltip when hovering in collapsed mode (transition from not-shown to shown)
+            if root.collapsed && saved-touch.has-hover && !tooltip-shown: Rectangle {
+                width: 0;
+                height: 0;
+                init => {
+                    saved-messages.tooltip-shown = true;
+                    root.show-tooltip("Saved Messages", root.width + 8px, saved-messages.y + saved-messages.height / 2 - 14px);
+                }
+            }
 
-        // Channel list (flexible height)
-        ChannelList {
-            vertical-stretch: 1;
-            channels: root.channels;
-            selected-channel-id: root.selected-channel-id;
-
-            channel-selected(id) => {
-                root.channel-selected(id);
+            // Hide tooltip when hover ends (transition from shown to not-shown)
+            if tooltip-shown && !saved-touch.has-hover: Rectangle {
+                width: 0;
+                height: 0;
+                init => {
+                    saved-messages.tooltip-shown = false;
+                    root.hide-tooltip();
+                }
             }
         }
 
@@ -118,15 +145,83 @@ export component Sidebar inherits Rectangle {
             background: Colors.surface-hover;
         }
 
+        // Channel list (flexible height)
+        channel-list := ChannelList {
+            vertical-stretch: 1;
+            channels: root.channels;
+            selected-channel-id: root.selected-channel-id;
+            collapsed: root.collapsed;
+
+            channel-selected(id) => {
+                root.channel-selected(id);
+            }
+            create-channel-clicked => {
+                root.create-channel-clicked();
+            }
+            join-channel-clicked => {
+                root.join-channel-clicked();
+            }
+            show-tooltip(text, local-y) => {
+                root.show-tooltip(text, root.width + 8px, channel-list.y + local-y);
+            }
+            hide-tooltip => { root.hide-tooltip(); }
+        }
+
+        // Separator
+        Rectangle {
+            height: 1px;
+            background: Colors.surface-hover;
+        }
+
         // DM list (flexible height, min 200px)
-        DMList {
+        dm-list := DMList {
             vertical-stretch: 1;
             min-height: 200px;
             conversations: root.dm-conversations;
             selected-conversation-id: root.selected-dm-id;
+            collapsed: root.collapsed;
 
             conversation-selected(id) => {
                 root.dm-selected(id);
+            }
+            show-tooltip(text, local-y) => {
+                root.show-tooltip(text, root.width + 8px, dm-list.y + local-y);
+            }
+            hide-tooltip => { root.hide-tooltip(); }
+        }
+
+        // Separator before toggle
+        Rectangle {
+            height: 1px;
+            background: Colors.surface-hover;
+        }
+
+        // Toggle button at bottom
+        Rectangle {
+            height: 36px;
+            background: toggle-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                alignment: root.collapsed ? center : end;
+
+                // Chevron icon
+                Text {
+                    text: root.collapsed ? "\u{276F}" : "\u{276E}"; // Right/left chevron
+                    color: Colors.text-muted;
+                    font-size: 14px;
+                    vertical-alignment: center;
+                    horizontal-alignment: center;
+                }
+            }
+
+            toggle-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.collapsed = !root.collapsed;
+                    root.toggle-collapsed();
+                }
             }
         }
     }

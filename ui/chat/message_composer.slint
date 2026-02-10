@@ -6,28 +6,89 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
+// Pending attachment data for the attachment tray
+export struct PendingAttachmentData {
+    id: string,
+    filename: string,
+    size-display: string,
+    category: string,   // "image", "video", "audio", "document", "code", "archive", "other"
+    is-ready: bool,
+    has-thumbnail: bool,
+    thumbnail: image,
+}
+
 export component MessageComposer inherits Rectangle {
     // Properties
     in property <string> placeholder: "Type a message...";
     in-out property <string> text: "";
     in property <bool> disabled: false;
+    in property <[PendingAttachmentData]> pending-attachments: [];
+
+    // Edit mode properties
+    in-out property <bool> is-editing: false;
+    in-out property <string> edit-message-id: "";
 
     // Computed properties
-    property <bool> can-send: text != "";
+    property <bool> can-send: text != "" || pending-attachments.length > 0;
+    property <bool> has-attachments: pending-attachments.length > 0;
+
+    // Line height and sizing constants
+    property <length> line-height: 22px;
+    property <length> min-input-height: 36px;
+    property <length> max-input-height: 160px;  // ~6-7 lines max
+    property <length> padding-vertical: Spacing.sm * 2;
+
+    // Count newlines in text to estimate line count
+    // This is an approximation - word wrap may add more lines
+    property <int> newline-count: count-newlines(root.text);
+    property <int> estimated-lines: max(1, newline-count + 1);
+
+    // Calculate input height based on content
+    property <length> content-height: max(min-input-height, min(max-input-height, estimated-lines * line-height + padding-vertical));
+
+    // Attachment tray height
+    property <length> attachment-tray-height: has-attachments ? 72px : 0px;
+
+    // Edit bar height
+    property <length> edit-bar-height: is-editing ? 36px : 0px;
+
+    // Calculate input width explicitly for text wrapping
+    // Layout: [pad-left][attach-btn][space][INPUT][space][emoji][space][gif][space?][send?][pad-right]
+    // Fixed elements: attachment(36) + emoji(36) + gif(36) + send?(36) + spacing + padding
+    property <length> button-size: 36px;
+    // Fixed width without send: 3 buttons + 3 spacings + 2 paddings
+    property <length> fixed-width-no-send: button-size * 3 + Spacing.sm * 3 + Spacing.md * 2;
+    // Fixed width with send: 4 buttons + 4 spacings + 2 paddings
+    property <length> fixed-width-with-send: button-size * 4 + Spacing.sm * 4 + Spacing.md * 2;
+    // Input gets remaining width (calculated from root, not from layout)
+    property <length> input-width: max(100px, root.width - (can-send ? fixed-width-with-send : fixed-width-no-send));
 
     // Callbacks
     callback send(string);
+    callback send-edit(string, string);  // (message_id, new_text)
+    callback cancel-edit();
     callback attachment-clicked();
     callback emoji-clicked();
     callback gif-clicked();
     callback mention-triggered(string);
+    callback remove-attachment(string);
+    callback typing-changed(bool);  // true when started typing, false when stopped
 
     // Forward focus to input
     forward-focus: text-input;
 
-    // Layout
-    min-height: 56px;
+    // Layout - dynamic height based on content
+    height: content-height + attachment-tray-height + edit-bar-height + Spacing.sm * 2 + 1px;  // +1px for top border
     background: Colors.surface;
+
+    // Count newlines in string
+    pure function count-newlines(s: string) -> int {
+        // Slint doesn't have string iteration, so we use a heuristic
+        // based on text length for word-wrap estimation
+        // Every ~50 chars might wrap, plus actual newlines
+        // This is approximate but works reasonably well
+        s.character-count / 50
+    }
 
     // Top border
     Rectangle {
@@ -37,163 +98,396 @@ export component MessageComposer inherits Rectangle {
         background: Colors.surface-hover;
     }
 
-    // Main layout
-    HorizontalLayout {
-        padding: Spacing.sm;
-        padding-left: Spacing.md;
-        padding-right: Spacing.md;
-        spacing: Spacing.sm;
+    VerticalLayout {
+        // 100% width for proper text wrapping in children
+        width: 100%;
+        padding-top: 1px;
 
-        // Attachment button
-        Rectangle {
-            width: 36px;
+        // Edit mode indicator bar
+        if root.is-editing: Rectangle {
+            width: 100%;
             height: 36px;
-            background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
-            border-radius: Spacing.radius-sm;
-            opacity: root.disabled ? 0.5 : 1.0;
+            background: Colors.primary.transparentize(0.9);
 
-            Text {
-                text: "\u{1F4CE}";  // Paperclip
-                font-size: Typography.lg;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                spacing: Spacing.sm;
+                alignment: space-between;
 
-            attachment-touch := TouchArea {
-                enabled: !root.disabled;
-                mouse-cursor: pointer;
-                clicked => {
-                    root.attachment-clicked();
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: start;
+
+                    Text {
+                        text: "\u{270F}";  // Pencil emoji
+                        font-size: Typography.base;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "Editing message";
+                        color: Colors.primary;
+                        font-size: Typography.sm;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Cancel button
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    background: cancel-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+                    border-radius: Spacing.radius-sm;
+
+                    Text {
+                        text: "\u{2715}";  // X mark
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    cancel-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.cancel-edit();
+                        }
+                    }
                 }
             }
         }
 
-        // Text input area
-        Rectangle {
-            horizontal-stretch: 1;
-            min-height: 36px;
+        // Attachment tray (shown when there are pending attachments)
+        if root.has-attachments: Rectangle {
+            width: 100%;
+            height: 72px;
             background: Colors.background;
-            border-radius: Spacing.radius-md;
-            border-width: 1px;
-            border-color: text-input.has-focus ? Colors.primary : Colors.surface-hover;
-            opacity: root.disabled ? 0.5 : 1.0;
 
-            // Placeholder text
-            if root.text == "" && !text-input.has-focus: Text {
-                x: Spacing.md;
-                width: parent.width - Spacing.md * 2;
-                text: root.placeholder;
-                color: Colors.text-muted;
-                font-size: Typography.base;
-                vertical-alignment: center;
+            Flickable {
+                width: 100%;
+                height: 100%;
+                viewport-width: self.width;
+                viewport-height: self.height;
+                interactive: true;
+
+                HorizontalLayout {
+                    padding: Spacing.sm;
+                    padding-left: Spacing.md;
+                    spacing: Spacing.sm;
+                    alignment: start;
+
+                    // Pending attachment items
+                    for attachment in root.pending-attachments: Rectangle {
+                        width: 180px;
+                        height: 56px;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-sm;
+
+                        property <color> category-bg: attachment.category == "image" ? #4ade80 :
+                                                      attachment.category == "video" ? #f472b6 :
+                                                      attachment.category == "audio" ? #a78bfa :
+                                                      attachment.category == "document" ? #60a5fa :
+                                                      attachment.category == "code" ? #fbbf24 :
+                                                      attachment.category == "archive" ? #fb923c :
+                                                      Colors.text-muted;
+
+                        property <string> category-emoji: attachment.category == "image" ? "\u{1F5BC}" :
+                                                          attachment.category == "video" ? "\u{1F3AC}" :
+                                                          attachment.category == "audio" ? "\u{1F3B5}" :
+                                                          attachment.category == "document" ? "\u{1F4C4}" :
+                                                          attachment.category == "code" ? "\u{1F4DD}" :
+                                                          attachment.category == "archive" ? "\u{1F4E6}" :
+                                                          "\u{1F4CE}";
+
+                        HorizontalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+
+                            // Icon or thumbnail
+                            Rectangle {
+                                width: 40px;
+                                height: 40px;
+                                border-radius: Spacing.radius-sm;
+                                background: attachment.has-thumbnail ? transparent : category-bg.transparentize(0.8);
+                                clip: true;
+
+                                // Show thumbnail for images
+                                if attachment.has-thumbnail: Image {
+                                    width: 100%;
+                                    height: 100%;
+                                    source: attachment.thumbnail;
+                                    image-fit: cover;
+                                }
+
+                                // Show icon for non-images
+                                if !attachment.has-thumbnail: Text {
+                                    width: 100%;
+                                    height: 100%;
+                                    text: category-emoji;
+                                    font-size: Typography.lg;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // File info
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 2px;
+
+                                Text {
+                                    text: attachment.filename;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.xs;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: attachment.size-display;
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                }
+                            }
+
+                            // Remove button
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                background: remove-touch.has-hover ? Colors.error.transparentize(0.7) : Colors.error.transparentize(0.9);
+                                border-radius: Spacing.radius-full;
+
+                                Text {
+                                    width: 100%;
+                                    height: 100%;
+                                    text: "\u{2715}";
+                                    font-size: Typography.xs;
+                                    color: Colors.error;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                remove-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.remove-attachment(attachment.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Add more button
+                    Rectangle {
+                        width: 56px;
+                        height: 56px;
+                        background: add-more-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-width: 2px;
+                        border-color: Colors.text-muted;
+                        border-radius: Spacing.radius-sm;
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "+";
+                            font-size: Typography.xxl;
+                            color: Colors.text-muted;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        add-more-touch := TouchArea {
+                            enabled: !root.disabled;
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.attachment-clicked();
+                            }
+                        }
+                    }
+                }
             }
+        }
 
-            // Text input
-            text-input := TextInput {
+        // Main input area - using absolute positioning to avoid layout binding loops
+        Rectangle {
+            width: 100%;
+            height: root.content-height + Spacing.sm * 2;
+
+            // Attachment button (left side)
+            Rectangle {
                 x: Spacing.md;
                 y: Spacing.sm;
-                width: parent.width - Spacing.md * 2;
-                height: parent.height - Spacing.sm * 2;
-                color: Colors.text-primary;
-                font-size: Typography.base;
-                text <=> root.text;
-                enabled: !root.disabled;
-                wrap: word-wrap;
+                width: 36px;
+                height: 36px;
+                background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+                opacity: root.disabled ? 0.5 : 1.0;
 
-                // Handle Enter key
-                accepted => {
-                    if (root.can-send) {
-                        root.send(root.text);
+                Text {
+                    text: "\u{1F4CE}";  // Paperclip
+                    font-size: Typography.lg;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                attachment-touch := TouchArea {
+                    enabled: !root.disabled;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.attachment-clicked();
+                    }
+                }
+            }
+
+            // Text input area - positioned absolutely with calculated width
+            Rectangle {
+                x: Spacing.md + 36px + Spacing.sm;  // After attachment button
+                y: Spacing.sm;
+                // Width: root - left(attach+spacing) - right(emoji+gif+send?+spacing+padding)
+                width: root.input-width;
+                height: root.content-height;
+                background: Colors.background;
+                border-radius: Spacing.radius-md;
+                border-width: 1px;
+                border-color: text-input.has-focus ? Colors.primary : Colors.surface-hover;
+                opacity: root.disabled ? 0.5 : 1.0;
+
+                // Placeholder text (shown when empty and not focused)
+                if root.text == "" && !text-input.has-focus: Text {
+                    x: Spacing.md;
+                    y: (parent.height - self.preferred-height) / 2;
+                    width: parent.width - Spacing.md * 2;
+                    text: root.placeholder;
+                    color: Colors.text-muted;
+                    font-size: Typography.base;
+                    wrap: word-wrap;
+                }
+
+                // Text input - width from parent for word-wrap
+                text-input := TextInput {
+                    x: Spacing.md;
+                    y: Spacing.sm;
+                    width: parent.width - Spacing.md * 2;
+                    color: Colors.text-primary;
+                    font-size: Typography.base;
+                    text <=> root.text;
+                    enabled: !root.disabled;
+                    wrap: word-wrap;
+                    single-line: false;
+
+                    // Handle Enter key - send on Enter, newline on Shift+Enter
+                    key-pressed(event) => {
+                        if (event.text == "\n" && !event.modifiers.shift) {
+                            // Enter without Shift - send message
+                            if (root.can-send) {
+                                if (root.is-editing) {
+                                    root.send-edit(root.edit-message-id, root.text);
+                                } else {
+                                    root.send(root.text);
+                                }
+                                root.text = "";
+                            }
+                            return accept;
+                        }
+                        return reject;
+                    }
+
+                    // Handle text changes for @ mention detection and typing indicator
+                    edited => {
+                        // Check for @ mention trigger
+                        if (self.text != "") {
+                            root.check-mention-trigger(self.text);
+                        }
+                        // Emit typing state change
+                        root.typing-changed(self.text != "");
+                    }
+                }
+            }
+
+            // Emoji button (positioned from right)
+            Rectangle {
+                x: parent.width - Spacing.md - (root.can-send ? 36px + Spacing.sm : 0px) - 36px - Spacing.sm - 36px;
+                y: Spacing.sm;
+                width: 36px;
+                height: 36px;
+                background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+                opacity: root.disabled ? 0.5 : 1.0;
+
+                Text {
+                    text: "\u{1F600}";  // Grinning face
+                    font-size: Typography.lg;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                emoji-touch := TouchArea {
+                    enabled: !root.disabled;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.emoji-clicked();
+                    }
+                }
+            }
+
+            // GIF button (positioned from right)
+            Rectangle {
+                x: parent.width - Spacing.md - (root.can-send ? 36px + Spacing.sm : 0px) - 36px;
+                y: Spacing.sm;
+                width: 36px;
+                height: 36px;
+                background: gif-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+                opacity: root.disabled ? 0.5 : 1.0;
+
+                Text {
+                    text: "GIF";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    font-weight: Typography.bold;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                gif-touch := TouchArea {
+                    enabled: !root.disabled;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.gif-clicked();
+                    }
+                }
+            }
+
+            // Send button (positioned at far right, visible when can send)
+            if root.can-send: Rectangle {
+                x: parent.width - Spacing.md - 36px;
+                y: Spacing.sm;
+                width: 36px;
+                height: 36px;
+                background: send-touch.has-hover ? Colors.primary-hover : Colors.primary;
+                border-radius: Spacing.radius-sm;
+                opacity: root.disabled ? 0.5 : 1.0;
+
+                Text {
+                    text: "\u{27A4}";  // Right arrow
+                    color: Colors.text-primary;
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                send-touch := TouchArea {
+                    enabled: !root.disabled && root.can-send;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (root.is-editing) {
+                            root.send-edit(root.edit-message-id, root.text);
+                        } else {
+                            root.send(root.text);
+                        }
                         root.text = "";
                     }
-                }
-
-                // Handle text changes for @ mention detection
-                edited => {
-                    // Check for @ mention trigger
-                    // Look for @ followed by characters at end of text
-                    if (self.text != "") {
-                        // Find last @ in text
-                        // Simple heuristic: if text ends with @something (no space after @)
-                        // This is a simplified version - real implementation would track cursor position
-                        root.check-mention-trigger(self.text);
-                    }
-                }
-            }
-        }
-
-        // Emoji button
-        Rectangle {
-            width: 36px;
-            height: 36px;
-            background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
-            border-radius: Spacing.radius-sm;
-            opacity: root.disabled ? 0.5 : 1.0;
-
-            Text {
-                text: "\u{1F600}";  // Grinning face
-                font-size: Typography.lg;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            emoji-touch := TouchArea {
-                enabled: !root.disabled;
-                mouse-cursor: pointer;
-                clicked => {
-                    root.emoji-clicked();
-                }
-            }
-        }
-
-        // GIF button
-        Rectangle {
-            width: 36px;
-            height: 36px;
-            background: gif-touch.has-hover ? Colors.surface-hover : transparent;
-            border-radius: Spacing.radius-sm;
-            opacity: root.disabled ? 0.5 : 1.0;
-
-            Text {
-                text: "GIF";
-                color: Colors.text-secondary;
-                font-size: Typography.xs;
-                font-weight: Typography.bold;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            gif-touch := TouchArea {
-                enabled: !root.disabled;
-                mouse-cursor: pointer;
-                clicked => {
-                    root.gif-clicked();
-                }
-            }
-        }
-
-        // Send button (visible when text is not empty)
-        if root.can-send: Rectangle {
-            width: 36px;
-            height: 36px;
-            background: send-touch.has-hover ? Colors.primary-hover : Colors.primary;
-            border-radius: Spacing.radius-sm;
-            opacity: root.disabled ? 0.5 : 1.0;
-
-            Text {
-                text: "\u{27A4}";  // Right arrow
-                color: Colors.text-primary;
-                font-size: Typography.base;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            send-touch := TouchArea {
-                enabled: !root.disabled && root.can-send;
-                mouse-cursor: pointer;
-                clicked => {
-                    root.send(root.text);
-                    root.text = "";
                 }
             }
         }

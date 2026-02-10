@@ -5,34 +5,30 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use ed25519_dalek::{Signer, SigningKey};
 use parking_lot::RwLock;
 use tokio::sync::{broadcast, watch, Mutex};
 
-use crate::network::grpc::MailboxClient;
-use crate::proto::mailbox_v1::EphemeralMessage;
+use crate::network::grpc::MessageClient;
+use crate::proto::chat_v1::DeviceMessage;
 
 use super::provider::{InboxConfig, InboxError, InboxEvent, InboxState, InboxStats};
 
 /// Poller for fetching messages from the device inbox.
 ///
-/// Implements the polling loop with challenge-response authentication:
-/// 1. Get challenge from server
-/// 2. Sign challenge with Ed25519 private key
-/// 3. Poll for messages with signature
-/// 4. Return messages or handle errors
+/// Implements the polling loop for fetching authenticated device messages:
+/// 1. Poll for messages using `get_device_messages`
+/// 2. Return messages or handle errors
 ///
 /// Uses adaptive polling intervals based on activity.
 pub struct InboxPoller {
     config: InboxConfig,
-    mailbox_client: Arc<Mutex<MailboxClient>>,
-    /// Ed25519 keypair: (public_key, private_key)
-    keypair: (Vec<u8>, Vec<u8>),
+    message_client: Arc<Mutex<MessageClient>>,
     shutdown_rx: watch::Receiver<bool>,
     event_tx: broadcast::Sender<InboxEvent>,
     stats: Arc<RwLock<InboxStats>>,
     state: Arc<RwLock<InboxState>>,
-    last_message_id: RwLock<Option<String>>,
+    // For device queue, we use queue_id (int64) for pagination, not string
+    last_queue_id: RwLock<i64>,
     last_activity: RwLock<Option<Instant>>,
 }
 
@@ -42,16 +38,14 @@ impl InboxPoller {
     /// # Arguments
     ///
     /// * `config` - Polling configuration
-    /// * `mailbox_client` - Client for mailbox RPCs
-    /// * `keypair` - (public_key, private_key) for mailbox authentication
+    /// * `message_client` - Client for message RPCs
     /// * `shutdown_rx` - Receiver for shutdown signal
     /// * `event_tx` - Sender for inbox events
     /// * `stats` - Shared statistics
     /// * `state` - Shared state
     pub fn new(
         config: InboxConfig,
-        mailbox_client: Arc<Mutex<MailboxClient>>,
-        keypair: (Vec<u8>, Vec<u8>),
+        message_client: Arc<Mutex<MessageClient>>,
         shutdown_rx: watch::Receiver<bool>,
         event_tx: broadcast::Sender<InboxEvent>,
         stats: Arc<RwLock<InboxStats>>,
@@ -59,13 +53,12 @@ impl InboxPoller {
     ) -> Self {
         Self {
             config,
-            mailbox_client,
-            keypair,
+            message_client,
             shutdown_rx,
             event_tx,
             stats,
             state,
-            last_message_id: RwLock::new(None),
+            last_queue_id: RwLock::new(0),
             last_activity: RwLock::new(None),
         }
     }
@@ -76,7 +69,7 @@ impl InboxPoller {
     /// - `Ok(Some(messages))` - Poll succeeded, messages received
     /// - `Ok(None)` - Shutdown requested, should exit loop
     /// - `Err(e)` - Poll failed, should retry
-    pub async fn run_once(&self) -> Result<Option<Vec<EphemeralMessage>>, InboxError> {
+    pub async fn run_once(&self) -> Result<Option<Vec<DeviceMessage>>, InboxError> {
         // Check for shutdown
         if *self.shutdown_rx.borrow() {
             return Ok(None);
@@ -127,7 +120,7 @@ impl InboxPoller {
 
                     // Update pagination cursor
                     if let Some(last_msg) = messages.last() {
-                        *self.last_message_id.write() = Some(last_msg.id.clone());
+                        *self.last_queue_id.write() = last_msg.queue_id;
                     }
                 }
 
@@ -146,32 +139,16 @@ impl InboxPoller {
         }
     }
 
-    /// Perform a single poll request with challenge-response auth.
-    async fn poll_once(&self) -> Result<(Vec<EphemeralMessage>, bool), InboxError> {
-        let (public_key, private_key) = &self.keypair;
-
-        // Get challenge
-        let challenge_response = {
-            let mut client = self.mailbox_client.lock().await;
-            client
-                .get_mailbox_challenge(public_key.clone())
-                .await
-                .map_err(|e| InboxError::PollFailed(e.to_string()))?
-        };
-
-        // Sign challenge
-        let signature = self.sign_challenge(&challenge_response.challenge, private_key)?;
-
+    /// Perform a single poll request.
+    async fn poll_once(&self) -> Result<(Vec<DeviceMessage>, bool), InboxError> {
         // Poll for messages
-        let after_message_id = self.last_message_id.read().clone();
+        let after_id = *self.last_queue_id.read();
+        
         let response = {
-            let mut client = self.mailbox_client.lock().await;
+            let mut client = self.message_client.lock().await;
             client
-                .poll_ephemeral_mailbox(
-                    public_key.clone(),
-                    signature,
-                    challenge_response.challenge,
-                    after_message_id.as_deref(),
+                .get_device_messages(
+                    after_id,
                     self.config.max_batch_size as i32,
                 )
                 .await
@@ -179,19 +156,6 @@ impl InboxPoller {
         };
 
         Ok((response.messages, response.has_more))
-    }
-
-    /// Sign a challenge with the private key.
-    fn sign_challenge(&self, challenge: &[u8], private_key: &[u8]) -> Result<Vec<u8>, InboxError> {
-        // Private key should be 32 bytes for Ed25519
-        let secret_bytes: [u8; 32] = private_key
-            .try_into()
-            .map_err(|_| InboxError::SigningFailed("invalid private key length".to_string()))?;
-
-        let signing_key = SigningKey::from_bytes(&secret_bytes);
-        let signature = signing_key.sign(challenge);
-
-        Ok(signature.to_bytes().to_vec())
     }
 
     /// Get the current polling interval based on activity.
@@ -227,33 +191,14 @@ impl InboxPoller {
             return Ok(());
         }
 
-        let (public_key, private_key) = &self.keypair;
-
-        // Get fresh challenge
-        let challenge_response = {
-            let mut client = self.mailbox_client.lock().await;
-            client
-                .get_mailbox_challenge(public_key.clone())
-                .await
-                .map_err(|e| InboxError::AuthFailed(e.to_string()))?
-        };
-
-        // Sign challenge
-        let signature = self.sign_challenge(&challenge_response.challenge, private_key)?;
-
         // Acknowledge in batches
         for chunk in message_ids.chunks(self.config.ack_batch_size as usize) {
             let chunk_ids: Vec<String> = chunk.to_vec();
 
             let result = {
-                let mut client = self.mailbox_client.lock().await;
+                let mut client = self.message_client.lock().await;
                 client
-                    .acknowledge_messages(
-                        public_key.clone(),
-                        signature.clone(),
-                        challenge_response.challenge.clone(),
-                        chunk_ids.clone(),
-                    )
+                    .acknowledge_messages(chunk_ids.clone())
                     .await
             };
 
@@ -278,41 +223,13 @@ impl InboxPoller {
     ///
     /// Call this to start polling from the beginning again.
     pub fn reset_cursor(&self) {
-        *self.last_message_id.write() = None;
+        *self.last_queue_id.write() = 0;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_sign_challenge() {
-        // Use a fixed test keypair (32 bytes private key)
-        use ed25519_dalek::SigningKey;
-
-        // Fixed test private key (32 bytes)
-        let private_key_bytes: [u8; 32] = [
-            0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec,
-            0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
-            0x1c, 0xae, 0x7f, 0x60,
-        ];
-
-        let signing_key = SigningKey::from_bytes(&private_key_bytes);
-        let _public_key = signing_key.verifying_key().to_bytes().to_vec();
-        let private_key = signing_key.to_bytes().to_vec();
-
-        // Test signing a challenge
-        let challenge = b"test challenge";
-        let secret_bytes: [u8; 32] = private_key.clone().try_into().unwrap();
-        let key = SigningKey::from_bytes(&secret_bytes);
-        let signature = key.sign(challenge);
-
-        // Verify the signature
-        use ed25519_dalek::Verifier;
-        let verifying_key = key.verifying_key();
-        assert!(verifying_key.verify(challenge, &signature).is_ok());
-    }
 
     #[test]
     fn test_current_interval_no_activity() {

@@ -8,7 +8,7 @@ Native Rust Linux desktop client for Chatter secure messaging. Full feature pari
 
 | Layer | Crate | Purpose |
 |-------|-------|---------|
-| UI | `iced` 0.13 | Native Rust, Elm-architecture, GPU-accelerated |
+| UI | `slint` 1.9 | Native, cross-platform, declarative UI |
 | Async | `tokio` | Async runtime |
 | gRPC | `tonic` + `prost` | Generated from buf protos |
 | Database | `rusqlite` + `bundled-sqlcipher` | Encrypted local storage |
@@ -124,18 +124,18 @@ Native Rust Linux desktop client for Chatter secure messaging. Full feature pari
 
 ---
 
-## Phase 4: Iced UI Shell
+## Phase 4: Slint UI Shell
 
 **Goal:** Basic windowed app with placeholder views.
 
 ### Tasks
 
 1. **App structure**
-   - [ ] `App` struct with state
-   - [ ] `Message` enum for all events
-   - [ ] `update()` state machine
-   - [ ] `view()` rendering
-   - [ ] Subscription for async events
+   - [ ] `App` struct with Slint backend
+   - [ ] `.slint` definitions for views
+   - [ ] Rust <-> Slint bindings
+   - [ ] Event handling callbacks
+   - [ ] Property binding updates
 
 2. **Theme**
    - [ ] Dark theme (default)

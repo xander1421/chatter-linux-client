@@ -28,6 +28,7 @@ pub struct TwoWayAnonymity {
 }
 
 /// Result of polling a mailbox.
+#[derive(Debug)]
 pub struct PollResult {
     /// Conversation this poll was for.
     pub peer_id: UserId,

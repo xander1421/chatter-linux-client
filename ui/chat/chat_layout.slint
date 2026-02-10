@@ -5,11 +5,11 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { ChatHeader, ChatHeaderData } from "chat_header.slint";
-import { MessageList, MessageItemData } from "message_list.slint";
-import { MessageComposer } from "message_composer.slint";
+import { MessageList, MessageItemData, MessageAttachmentData } from "message_list.slint";
+import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
 
 // Re-export types for parent components
-export { MessageItemData }
+export { MessageItemData, MessageAttachmentData, PendingAttachmentData }
 
 export component ChatLayout inherits Rectangle {
     // Header properties
@@ -29,6 +29,9 @@ export component ChatLayout inherits Rectangle {
     in-out property <string> composer-text: "";
     in property <string> composer-placeholder: "Type a message...";
     in property <bool> composer-disabled: false;
+    in property <[PendingAttachmentData]> pending-attachments: [];
+    in-out property <bool> composer-is-editing: false;
+    in-out property <string> composer-edit-message-id: "";
 
     // Header callbacks
     callback search-clicked();
@@ -41,19 +44,27 @@ export component ChatLayout inherits Rectangle {
     callback react-clicked(string);
     callback thread-clicked(string);
     callback more-clicked(string);
+    callback view-attachment(string);  // attachment ID - for viewing attachment in messages
     callback load-more();
 
     // Composer callbacks
     callback send(string);
+    callback send-edit(string, string);  // (message_id, new_text)
+    callback cancel-edit();
     callback attachment-clicked();
     callback emoji-clicked();
     callback gif-clicked();
     callback mention-triggered(string);
+    callback remove-attachment(string);
+    callback typing-changed(bool);  // true when started typing, false when stopped
 
     // Layout
     background: Colors.background;
 
+    // 100% width enables text wrapping to work throughout the chain
     VerticalLayout {
+        width: 100%;
+
         // Header at top (fixed 56px)
         ChatHeader {
             channel-id: root.channel-id;
@@ -76,7 +87,9 @@ export component ChatLayout inherits Rectangle {
         }
 
         // Message list in middle (fills remaining space)
+        // Width 100% flows to children for text wrapping
         MessageList {
+            width: 100%;
             vertical-stretch: 1;
             messages: root.messages;
             loading: root.loading-messages;
@@ -99,16 +112,30 @@ export component ChatLayout inherits Rectangle {
             load-more => {
                 root.load-more();
             }
+            attachment-clicked(id) => {
+                root.view-attachment(id);
+            }
         }
 
         // Composer at bottom (auto height, min 56px)
+        // Width 100% for consistent layout
         MessageComposer {
+            width: 100%;
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;
             disabled: root.composer-disabled;
+            pending-attachments: root.pending-attachments;
+            is-editing <=> root.composer-is-editing;
+            edit-message-id <=> root.composer-edit-message-id;
 
             send(text) => {
                 root.send(text);
+            }
+            send-edit(msg-id, text) => {
+                root.send-edit(msg-id, text);
+            }
+            cancel-edit => {
+                root.cancel-edit();
             }
             attachment-clicked => {
                 root.attachment-clicked();
@@ -121,6 +148,12 @@ export component ChatLayout inherits Rectangle {
             }
             mention-triggered(query) => {
                 root.mention-triggered(query);
+            }
+            remove-attachment(id) => {
+                root.remove-attachment(id);
+            }
+            typing-changed(is-typing) => {
+                root.typing-changed(is-typing);
             }
         }
     }

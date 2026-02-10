@@ -97,7 +97,7 @@ impl Emoji {
 // ============================================================================
 
 /// Emoji categories for picker organization.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EmojiCategory {
     /// Smileys and emotion.
     Smileys,

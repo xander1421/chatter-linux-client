@@ -13,6 +13,7 @@ use crate::storage::KeyStore;
 ///
 /// Handles generation, storage, and retrieval of the local device's
 /// identity key pair used for Signal Protocol encryption.
+#[derive(Clone)]
 pub struct IdentityKeyManager {
     key_store: Arc<KeyStore>,
 }

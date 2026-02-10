@@ -8,6 +8,30 @@ import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { ChannelTemplates } from "channel_templates.slint";
 
+// AI provider option
+export struct AIProviderOption {
+    id: string,
+    name: string,
+}
+
+// AI model option
+export struct AIModelOption {
+    id: string,
+    name: string,
+    provider: string,
+}
+
+// Channel configuration for creation (UI struct, distinct from domain::ChannelConfig)
+export struct CreateChannelConfig {
+    is-private: bool,
+    is-encrypted: bool,
+    is-ephemeral: bool,
+    ttl-hours: int,        // Message TTL in hours (if ephemeral)
+    max-members: int,      // 0 = unlimited
+    password: string,      // For password-protected channels
+    friends-only: bool,
+}
+
 export component CreateChannelModal inherits Rectangle {
     in property <bool> show-modal: false;
     in-out property <string> channel-name: "";
@@ -16,16 +40,51 @@ export component CreateChannelModal inherits Rectangle {
     in property <string> error-message: "";
     in property <bool> loading: false;
 
+    // Channel configuration
+    in-out property <bool> is-private: false;
+    in-out property <bool> is-encrypted: true;  // Default: encrypted
+    in-out property <bool> is-ephemeral: false;
+    in-out property <int> ttl-hours: 24;        // Default: 24h
+    in-out property <int> max-members: 0;       // 0 = unlimited
+    in-out property <string> password: "";
+    in-out property <bool> friends-only: false;
+
+    // AI configuration (for ai-assistant template)
+    in-out property <string> ai-provider: "";
+    in-out property <string> ai-model: "";
+    in property <[AIProviderOption]> ai-providers: [
+        { id: "claude", name: "Claude (Anthropic)" },
+        { id: "openai", name: "OpenAI" },
+        { id: "ollama", name: "Ollama (Local)" },
+    ];
+    in property <[AIModelOption]> ai-models: [];
+
     callback close();
-    callback create(string, string, string);  // name, description, template
+    // name, description, template, config, ai_provider, ai_model
+    callback create(string, string, string, CreateChannelConfig, string, string);
+    callback provider-selected(string);  // Callback to load models for provider
 
     // Internal state
     property <int> current-step: 1;
+    property <bool> is-ai-template: root.selected-template == "ai-assistant";
+    property <int> total-steps: is-ai-template ? 3 : 2;
 
     // Reset state when modal closes
     changed show-modal => {
         if !show-modal {
             current-step = 1;
+            root.channel-name = "";
+            root.channel-description = "";
+            root.selected-template = "";
+            root.is-private = false;
+            root.is-encrypted = true;
+            root.is-ephemeral = false;
+            root.ttl-hours = 24;
+            root.max-members = 0;
+            root.password = "";
+            root.friends-only = false;
+            root.ai-provider = "";
+            root.ai-model = "";
         }
     }
 
@@ -66,16 +125,16 @@ export component CreateChannelModal inherits Rectangle {
                 }
 
                 Text {
-                    text: "Choose Template";
+                    text: "Template";
                     color: current-step == 1 ? Colors.text-primary : Colors.text-secondary;
                     font-size: Typography.sm;
                     font-weight: current-step == 1 ? Typography.semibold : Typography.normal;
                     vertical-alignment: center;
                 }
 
-                // Connector line
+                // Connector line 1->2
                 Rectangle {
-                    width: 40px;
+                    width: 24px;
                     height: 2px;
                     background: current-step >= 2 ? Colors.primary : Colors.text-muted.with-alpha(0.3);
                     y: (parent.height - self.height) / 2;
@@ -101,10 +160,44 @@ export component CreateChannelModal inherits Rectangle {
                 }
 
                 Text {
-                    text: "Channel Details";
+                    text: "Details";
                     color: current-step == 2 ? Colors.text-primary : Colors.text-secondary;
                     font-size: Typography.sm;
                     font-weight: current-step == 2 ? Typography.semibold : Typography.normal;
+                    vertical-alignment: center;
+                }
+
+                // Step 3 indicator (AI template only)
+                if root.is-ai-template: Rectangle {
+                    width: 24px;
+                    height: 2px;
+                    background: current-step >= 3 ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                    y: (parent.height - self.height) / 2;
+                }
+
+                if root.is-ai-template: Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    border-radius: Spacing.radius-full;
+                    background: current-step >= 3 ? Colors.primary : Colors.surface-hover;
+
+                    Text {
+                        text: "3";
+                        color: Colors.text-primary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.medium;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+
+                if root.is-ai-template: Text {
+                    text: "AI Config";
+                    color: current-step == 3 ? Colors.text-primary : Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: current-step == 3 ? Typography.semibold : Typography.normal;
                     vertical-alignment: center;
                 }
             }
@@ -193,8 +286,324 @@ export component CreateChannelModal inherits Rectangle {
                         }
                     }
 
+                    // Visibility toggle (Public / Private)
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        Text {
+                            text: "Visibility";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+
+                            // Public option
+                            Rectangle {
+                                height: 40px;
+                                horizontal-stretch: 1;
+                                border-radius: Spacing.radius-md;
+                                border-width: !root.is-private ? 2px : 1px;
+                                border-color: !root.is-private ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                                background: public-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+                                HorizontalLayout {
+                                    padding-left: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "\u{1F310}";  // Globe
+                                        font-size: Typography.base;
+                                        vertical-alignment: center;
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 2px;
+
+                                        Text {
+                                            text: "Public";
+                                            color: !root.is-private ? Colors.primary : Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Anyone can join";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                        }
+                                    }
+                                }
+
+                                public-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.is-private = false;
+                                    }
+                                }
+                            }
+
+                            // Private option
+                            Rectangle {
+                                height: 40px;
+                                horizontal-stretch: 1;
+                                border-radius: Spacing.radius-md;
+                                border-width: root.is-private ? 2px : 1px;
+                                border-color: root.is-private ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                                background: private-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+                                HorizontalLayout {
+                                    padding-left: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "\u{1F512}";  // Lock
+                                        font-size: Typography.base;
+                                        vertical-alignment: center;
+                                    }
+
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 2px;
+
+                                        Text {
+                                            text: "Private";
+                                            color: root.is-private ? Colors.primary : Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Invite only";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                        }
+                                    }
+                                }
+
+                                private-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.is-private = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Password field (for private channels)
+                    if root.is-private: VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        Text {
+                            text: "Channel Password (optional)";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        Input {
+                            placeholder: "Leave empty for invite-only";
+                            text <=> root.password;
+                        }
+                    }
+
+                    // Advanced settings row
+                    HorizontalLayout {
+                        spacing: Spacing.md;
+
+                        // Encrypted toggle
+                        Rectangle {
+                            height: 32px;
+                            horizontal-stretch: 1;
+                            border-radius: Spacing.radius-md;
+                            border-width: root.is-encrypted ? 2px : 1px;
+                            border-color: root.is-encrypted ? Colors.success : Colors.text-muted.with-alpha(0.3);
+                            background: encrypted-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                spacing: Spacing.xs;
+
+                                Text {
+                                    text: root.is-encrypted ? "\u{1F512}" : "\u{1F513}";  // Lock/Unlock
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "Encrypted";
+                                    color: root.is-encrypted ? Colors.success : Colors.text-secondary;
+                                    font-size: Typography.xs;
+                                    font-weight: Typography.medium;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            encrypted-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.is-encrypted = !root.is-encrypted;
+                                }
+                            }
+                        }
+
+                        // Friends only toggle
+                        Rectangle {
+                            height: 32px;
+                            horizontal-stretch: 1;
+                            border-radius: Spacing.radius-md;
+                            border-width: root.friends-only ? 2px : 1px;
+                            border-color: root.friends-only ? Colors.info : Colors.text-muted.with-alpha(0.3);
+                            background: friends-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                spacing: Spacing.xs;
+
+                                Text {
+                                    text: "\u{1F465}";  // People
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: "Friends Only";
+                                    color: root.friends-only ? Colors.info : Colors.text-secondary;
+                                    font-size: Typography.xs;
+                                    font-weight: Typography.medium;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            friends-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.friends-only = !root.friends-only;
+                                }
+                            }
+                        }
+                    }
+
                     // Error message display
                     if root.error-message != "" && root.channel-name != "": Text {
+                        text: root.error-message;
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                    }
+                }
+
+                // Step 3: AI configuration (only for ai-assistant template)
+                if current-step == 3 && root.is-ai-template: VerticalLayout {
+                    spacing: Spacing.md;
+
+                    // Provider selection
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        Text {
+                            text: "AI Provider";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        // Provider buttons (simple button selection)
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+
+                            for provider in root.ai-providers: Rectangle {
+                                height: 36px;
+                                horizontal-stretch: 1;
+                                border-radius: Spacing.radius-md;
+                                border-width: root.ai-provider == provider.id ? 2px : 1px;
+                                border-color: root.ai-provider == provider.id ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                                background: provider-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+                                Text {
+                                    text: provider.name;
+                                    color: root.ai-provider == provider.id ? Colors.primary : Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    width: 100%;
+                                    height: 100%;
+                                }
+
+                                provider-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.ai-provider = provider.id;
+                                        root.ai-model = "";
+                                        root.provider-selected(provider.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Model selection (shown when provider is selected)
+                    if root.ai-provider != "": VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        Text {
+                            text: "Model";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        // Model list
+                        if root.ai-models.length == 0: Text {
+                            text: "Loading models...";
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                        }
+
+                        Flickable {
+                            max-height: 150px;
+                            viewport-height: model-layout.preferred-height;
+
+                            model-layout := VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                for model in root.ai-models: Rectangle {
+                                    height: 40px;
+                                    border-radius: Spacing.radius-md;
+                                    border-width: root.ai-model == model.id ? 2px : 1px;
+                                    border-color: root.ai-model == model.id ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                                    background: model-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+                                    HorizontalLayout {
+                                        padding-left: Spacing.md;
+                                        padding-right: Spacing.md;
+
+                                        Text {
+                                            text: model.name;
+                                            color: root.ai-model == model.id ? Colors.primary : Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    model-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.ai-model = model.id;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Error message
+                    if root.error-message != "": Text {
                         text: root.error-message;
                         color: Colors.error;
                         font-size: Typography.sm;
@@ -207,13 +616,13 @@ export component CreateChannelModal inherits Rectangle {
                 spacing: Spacing.md;
                 height: 40px;
 
-                // Back button (Step 2 only)
-                if current-step == 2: Button {
+                // Back button (Step 2 or 3)
+                if current-step > 1: Button {
                     text: "Back";
                     variant: "ghost";
 
                     clicked => {
-                        current-step = 1;
+                        current-step = current-step - 1;
                     }
                 }
 
@@ -232,7 +641,7 @@ export component CreateChannelModal inherits Rectangle {
                     }
                 }
 
-                // Next/Create button
+                // Next button (Step 1)
                 if current-step == 1: Button {
                     text: "Next";
                     variant: "primary";
@@ -245,7 +654,20 @@ export component CreateChannelModal inherits Rectangle {
                     }
                 }
 
-                if current-step == 2: Button {
+                // Next button (Step 2 for AI template) or Create button (Step 2 for non-AI)
+                if current-step == 2 && root.is-ai-template: Button {
+                    text: "Next";
+                    variant: "primary";
+                    disabled: root.channel-name == "";
+
+                    clicked => {
+                        if root.channel-name != "" {
+                            current-step = 3;
+                        }
+                    }
+                }
+
+                if current-step == 2 && !root.is-ai-template: Button {
                     text: root.loading ? "" : "Create";
                     variant: "primary";
                     disabled: root.channel-name == "" || root.loading;
@@ -253,7 +675,51 @@ export component CreateChannelModal inherits Rectangle {
 
                     clicked => {
                         if root.channel-name != "" && !root.loading {
-                            root.create(root.channel-name, root.channel-description, root.selected-template);
+                            root.create(
+                                root.channel-name,
+                                root.channel-description,
+                                root.selected-template,
+                                {
+                                    is-private: root.is-private,
+                                    is-encrypted: root.is-encrypted,
+                                    is-ephemeral: root.is-ephemeral || root.selected-template == "ephemeral",
+                                    ttl-hours: root.ttl-hours,
+                                    max-members: root.max-members,
+                                    password: root.password,
+                                    friends-only: root.friends-only,
+                                },
+                                "",
+                                ""
+                            );
+                        }
+                    }
+                }
+
+                // Create button (Step 3 for AI template)
+                if current-step == 3: Button {
+                    text: root.loading ? "" : "Create";
+                    variant: "primary";
+                    disabled: root.channel-name == "" || root.ai-provider == "" || root.ai-model == "" || root.loading;
+                    loading: root.loading;
+
+                    clicked => {
+                        if root.channel-name != "" && root.ai-provider != "" && root.ai-model != "" && !root.loading {
+                            root.create(
+                                root.channel-name,
+                                root.channel-description,
+                                root.selected-template,
+                                {
+                                    is-private: root.is-private,
+                                    is-encrypted: root.is-encrypted,
+                                    is-ephemeral: root.is-ephemeral,
+                                    ttl-hours: root.ttl-hours,
+                                    max-members: root.max-members,
+                                    password: root.password,
+                                    friends-only: root.friends-only,
+                                },
+                                root.ai-provider,
+                                root.ai-model
+                            );
                         }
                     }
                 }

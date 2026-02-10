@@ -9,12 +9,13 @@ export struct MentionSuggestion {
     id: string,
     name: string,
     mention-type: string,  // "user", "channel", "here", "all"
-    avatar-url: string,
+    avatar: image,         // Loaded from Rust (empty for non-users)
+    has-avatar: bool,      // Whether avatar image is available
 }
 
 export component MentionAutocomplete inherits Rectangle {
     // Popup visibility
-    in property <bool> visible: false;
+    in property <bool> show: false;
 
     // Suggestions from Rust (max 8 shown)
     in property <[MentionSuggestion]> suggestions: [];
@@ -27,8 +28,8 @@ export component MentionAutocomplete inherits Rectangle {
     callback close();
 
     // Only render when visible
-    opacity: root.visible ? 1 : 0;
-    visible: root.visible;
+    visible: root.show;
+    opacity: root.show ? 1 : 0;
 
     // Compact popup - width fixed, height based on suggestions
     width: 240px;
@@ -69,16 +70,16 @@ export component MentionAutocomplete inherits Rectangle {
                     border-radius: suggestion.mention-type == "user" ? Spacing.radius-full : Spacing.radius-sm;
                     background: suggestion.mention-type == "user" ? Colors.primary.with-alpha(0.3) : Colors.background;
 
-                    // User avatar (if URL provided) or fallback
-                    if suggestion.mention-type == "user" && suggestion.avatar-url != "": Image {
+                    // User avatar (if available) or fallback
+                    if suggestion.mention-type == "user" && suggestion.has-avatar: Image {
                         width: parent.width;
                         height: parent.height;
-                        source: @image-url(suggestion.avatar-url);
+                        source: suggestion.avatar;
                         image-fit: cover;
                     }
 
                     // User fallback icon (first letter)
-                    if suggestion.mention-type == "user" && suggestion.avatar-url == "": Text {
+                    if suggestion.mention-type == "user" && !suggestion.has-avatar: Text {
                         text: "@";
                         color: Colors.primary;
                         font-size: Typography.sm;

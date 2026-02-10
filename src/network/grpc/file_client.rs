@@ -93,6 +93,88 @@ impl FileClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
+    /// Upload a file with metadata headers (client streaming).
+    ///
+    /// Sends a stream of file chunks with channel-id, file-name, and mime-type headers.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Target channel ID (required for permission check)
+    /// * `filename` - Original filename
+    /// * `mime_type` - MIME type of the file
+    /// * `file_size` - Size of the file in bytes
+    /// * `chunks` - Stream of FileChunk to upload
+    pub async fn upload_file_with_metadata(
+        &mut self,
+        channel_id: &str,
+        filename: &str,
+        mime_type: &str,
+        file_size: u64,
+        chunks: impl Stream<Item = FileChunk> + Send + 'static,
+    ) -> Result<FileMetadata, NetworkError> {
+        tracing::debug!(
+            channel_id = %channel_id,
+            filename = %filename,
+            mime_type = %mime_type,
+            file_size = %file_size,
+            "Starting file upload with metadata"
+        );
+
+        let mut request = tonic::Request::new(chunks);
+
+        // Add required metadata headers
+        request.metadata_mut().insert(
+            "channel-id",
+            channel_id.parse().map_err(|_| NetworkError::InvalidRequest("invalid channel-id".to_string()))?,
+        );
+        request.metadata_mut().insert(
+            "file-name",
+            filename.parse().map_err(|_| NetworkError::InvalidRequest("invalid file-name".to_string()))?,
+        );
+        request.metadata_mut().insert(
+            "mime-type",
+            mime_type.parse().map_err(|_| NetworkError::InvalidRequest("invalid mime-type".to_string()))?,
+        );
+        // NOTE: Do NOT set content-length for streaming requests!
+        // The wire format includes protobuf framing overhead, so the actual
+        // bytes sent will exceed the raw file size and cause PROTOCOL_ERROR.
+        // The file_size is passed as a custom header for server-side validation.
+        request.metadata_mut().insert(
+            "x-file-size",
+            file_size.to_string().parse().map_err(|_| NetworkError::InvalidRequest("invalid file-size".to_string()))?,
+        );
+
+        tracing::debug!("Sending upload request to server...");
+        let start = std::time::Instant::now();
+
+        let result = self.inner.upload_file(request).await;
+        let elapsed = start.elapsed();
+
+        match &result {
+            Ok(response) => {
+                tracing::debug!(
+                    elapsed_ms = %elapsed.as_millis(),
+                    file_id = %response.get_ref().id,
+                    "Upload completed successfully"
+                );
+            }
+            Err(status) => {
+                tracing::error!(
+                    elapsed_ms = %elapsed.as_millis(),
+                    code = ?status.code(),
+                    message = %status.message(),
+                    details = ?status.details(),
+                    source = ?std::error::Error::source(status),
+                    "Upload failed with gRPC error"
+                );
+            }
+        }
+
+        result
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
     /// Delete a file.
     ///
     /// # Arguments

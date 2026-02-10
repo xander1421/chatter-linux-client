@@ -153,7 +153,6 @@ impl SavedMessageService {
                 None,   // parent_id
                 false,  // ephemeral
                 None,   // ephemeral_ttl
-                false,  // encrypt (already encrypted client-side)
                 None,   // crypto_options
                 vec![], // mentioned_integrations
                 false,  // targets_ai_bot

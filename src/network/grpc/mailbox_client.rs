@@ -125,11 +125,13 @@ impl MailboxClient {
         public_key: Vec<u8>,
         signature: Vec<u8>,
         ttl_seconds: u64,
+        message_randomizer: Vec<u8>,
     ) -> Result<CreateEphemeralMailboxResponse, NetworkError> {
         let request = CreateEphemeralMailboxRequest {
             public_key,
             signature,
             ttl_seconds,
+            message_randomizer,
         };
 
         self.inner
@@ -271,14 +273,16 @@ mod tests {
     fn test_create_ephemeral_mailbox_request_construction() {
         // Verify CreateEphemeralMailboxRequest can be constructed
         let request = CreateEphemeralMailboxRequest {
-            public_key: vec![0u8; 32], // Ed25519 public key
-            signature: vec![0u8; 256], // RSA-2048 unblinded signature
-            ttl_seconds: 86400,        // 1 day
+            public_key: vec![0u8; 32],        // Ed25519 public key
+            signature: vec![0u8; 256],        // RSA-2048 unblinded signature
+            ttl_seconds: 86400,               // 1 day
+            message_randomizer: vec![0u8; 32], // RFC 9474 randomizer
         };
 
         assert_eq!(request.public_key.len(), 32);
         assert_eq!(request.signature.len(), 256);
         assert_eq!(request.ttl_seconds, 86400);
+        assert_eq!(request.message_randomizer.len(), 32);
     }
 
     #[test]

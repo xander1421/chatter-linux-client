@@ -1,0 +1,305 @@
+// JoinChannelModal - Search and join public channels
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+
+// Search result channel data
+export struct SearchResultChannel {
+    id: string,
+    name: string,
+    description: string,
+    member-count: int,
+}
+
+// Individual search result item
+component SearchResultItem inherits Rectangle {
+    in property <string> channel-id;
+    in property <string> name;
+    in property <string> description;
+    in property <int> member-count;
+    in property <bool> selected: false;
+
+    callback clicked();
+
+    property <bool> hovered: touch.has-hover;
+
+    height: 64px;
+    border-radius: Spacing.radius-md;
+    background: selected ? Colors.primary.with-alpha(0.2) : (hovered ? Colors.surface-hover : Colors.surface);
+    border-width: selected ? 2px : 1px;
+    border-color: selected ? Colors.primary : Colors.text-muted.with-alpha(0.2);
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding: Spacing.md;
+        spacing: Spacing.md;
+
+        // Channel icon placeholder
+        Rectangle {
+            width: 40px;
+            height: 40px;
+            border-radius: Spacing.radius-md;
+            background: Colors.primary.with-alpha(0.2);
+
+            Text {
+                text: "#";
+                color: Colors.primary;
+                font-size: Typography.lg;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
+            }
+        }
+
+        // Channel info
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: Spacing.xs;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+
+                Text {
+                    text: root.name;
+                    color: selected ? Colors.primary : Colors.text-primary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.semibold;
+                }
+
+                Text {
+                    text: root.member-count > 0 ? "\u{2022} " + root.member-count + " members" : "";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                }
+            }
+
+            if root.description != "": Text {
+                text: root.description;
+                color: Colors.text-secondary;
+                font-size: Typography.xs;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+export component JoinChannelModal inherits Rectangle {
+    in property <bool> show-modal: false;
+    in-out property <string> search-query: "";
+    in property <[SearchResultChannel]> search-results: [];
+    in property <bool> searching: false;
+    in property <string> error-message: "";
+    in-out property <string> selected-channel-id: "";
+    in property <bool> joining: false;
+
+    callback close();
+    callback search(string);           // Triggered on input change
+    callback join-channel(string);     // Join selected channel by ID
+
+    // Reset state when modal closes
+    changed show-modal => {
+        if !show-modal {
+            root.search-query = "";
+            root.selected-channel-id = "";
+        }
+    }
+
+    Modal {
+        show: root.show-modal;
+        title: "Join Channel";
+        modal-width: 520px;
+
+        close => {
+            root.close();
+        }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            // Search input
+            VerticalLayout {
+                spacing: Spacing.xs;
+
+                Text {
+                    text: "Search channels or enter channel ID";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                }
+
+                Input {
+                    placeholder: "Search by name or paste channel ID...";
+                    text <=> root.search-query;
+
+                    edited(text) => {
+                        root.search(text);
+                    }
+
+                    accepted(text) => {
+                        // If text looks like a UUID, try to join directly
+                        if root.search-query.character-count >= 32 {
+                            root.join-channel(root.search-query);
+                        }
+                    }
+                }
+            }
+
+            // Results area
+            Rectangle {
+                vertical-stretch: 1;
+                min-height: 200px;
+                max-height: 320px;
+
+                // Loading state
+                if root.searching: Rectangle {
+                    width: 100%;
+                    height: 100%;
+
+                    Text {
+                        text: "Searching...";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+
+                // Error state
+                if !root.searching && root.error-message != "": Rectangle {
+                    width: 100%;
+                    height: 100%;
+
+                    Text {
+                        text: root.error-message;
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+
+                // Empty state
+                if !root.searching && root.error-message == "" && root.search-results.length == 0 && root.search-query != "": Rectangle {
+                    width: 100%;
+                    height: 100%;
+
+                    VerticalLayout {
+                        spacing: Spacing.sm;
+                        alignment: center;
+
+                        Text {
+                            text: "No channels found";
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Try a different search or paste a channel ID";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+
+                // Initial state (no search yet)
+                if !root.searching && root.search-query == "" && root.search-results.length == 0: Rectangle {
+                    width: 100%;
+                    height: 100%;
+
+                    VerticalLayout {
+                        spacing: Spacing.sm;
+                        alignment: center;
+
+                        Text {
+                            text: "Search for public channels";
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Enter a channel name or paste a channel ID to join directly";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+
+                // Results list
+                if !root.searching && root.search-results.length > 0: Flickable {
+                    viewport-height: results-layout.preferred-height;
+
+                    results-layout := VerticalLayout {
+                        spacing: Spacing.sm;
+
+                        for channel in root.search-results: SearchResultItem {
+                            channel-id: channel.id;
+                            name: channel.name;
+                            description: channel.description;
+                            member-count: channel.member-count;
+                            selected: channel.id == root.selected-channel-id;
+
+                            clicked => {
+                                root.selected-channel-id = channel.id;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Footer with action buttons
+            HorizontalLayout {
+                spacing: Spacing.md;
+                height: 40px;
+
+                // Spacer
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                // Cancel button
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+
+                    clicked => {
+                        root.close();
+                    }
+                }
+
+                // Join button
+                Button {
+                    text: root.joining ? "" : "Join";
+                    variant: "primary";
+                    disabled: root.selected-channel-id == "" || root.joining;
+                    loading: root.joining;
+
+                    clicked => {
+                        if root.selected-channel-id != "" && !root.joining {
+                            root.join-channel(root.selected-channel-id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

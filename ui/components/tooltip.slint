@@ -6,20 +6,21 @@ import { Typography } from "../theme/typography.slint";
 
 export component Tooltip inherits Rectangle {
     in property <string> text: "";
-    in property <bool> visible: false;
-    in property <length> x: 0px;
-    in property <length> y: 0px;
+    in property <bool> show: false;
+    in property <length> tip-x: 0px;
+    in property <length> tip-y: 0px;
 
     // Position at specified coordinates
-    self.x: root.x;
-    self.y: root.y;
+    x: root.tip-x;
+    y: root.tip-y;
+
+    // Visibility
+    visible: root.show;
+    opacity: root.show ? 1 : 0;
 
     // Size based on content with max width
     width: Math.min(text-content.preferred-width + Spacing.sm * 2, 200px);
     height: text-content.preferred-height + Spacing.sm * 2;
-
-    // Visibility
-    opacity: root.visible ? 1 : 0;
     animate opacity { duration: 150ms; }
 
     // Tooltip background - slightly darker than surface

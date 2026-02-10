@@ -11,7 +11,7 @@
 Thread-safe authentication interceptor for gRPC requests supporting multiple auth modes:
 
 **AuthMode Variants:**
-- `Bearer(String)` - JWT or device token → `Authorization: Bearer {token}`
+- `Bearer(String)` - Device token → `Authorization: Bearer {token}`
 - `Basic { username, password }` - Signal-style → `Authorization: Basic base64({user}:{pass})`
 - `SealedSender { access_key }` - Anonymous → `Unidentified-Access-Key: base64({16-byte-key})`
 - `None` - No authentication header
@@ -106,7 +106,7 @@ let pool = GrpcClientPool::new("http://localhost:50051")?;
 pool.connect().await?;
 
 // Set auth
-pool.auth().set_bearer(jwt_token);
+pool.auth().set_bearer(device_token);
 
 // Create service client with interceptor
 let channel = pool.channel();

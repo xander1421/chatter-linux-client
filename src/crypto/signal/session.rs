@@ -19,6 +19,7 @@ use crate::error::CryptoError;
 /// Note: This struct is stateless - all session operations are performed on
 /// the stores passed to each method. This design avoids mutable aliasing issues
 /// with libsignal's trait-based API.
+#[derive(Clone)]
 pub struct SessionManager;
 
 impl SessionManager {

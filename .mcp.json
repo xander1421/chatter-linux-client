@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "notebooklm": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "notebooklm-mcp@latest"
+      ],
+      "env": {
+        "PUPPETEER_EXECUTABLE_PATH": "/usr/bin/chromium"
+      }
+    }
+  }
+}

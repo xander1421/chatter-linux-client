@@ -415,4 +415,22 @@ impl KeyStore {
 
         Ok(())
     }
+
+    /// Delete a sender key record.
+    ///
+    /// Used when rotating keys (e.g., after a member leaves a channel).
+    pub fn delete_sender_key(
+        &self,
+        sender: &str,
+        distribution_id: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+
+        conn.execute(
+            "DELETE FROM sender_keys WHERE sender = ?1 AND distribution_id = ?2",
+            params![sender, distribution_id],
+        )?;
+
+        Ok(())
+    }
 }

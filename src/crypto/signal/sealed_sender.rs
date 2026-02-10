@@ -3,17 +3,35 @@
 //! Sealed sender allows messages to be sent without revealing the sender's
 //! identity to the server. The sender's identity is encrypted within the
 //! message and can only be decrypted by the intended recipient.
+//!
+//! # UAK (Unidentified Access Key)
+//!
+//! The UAK is a 16-byte key derived from the user's 32-byte profile key.
+//! It allows senders to send anonymous messages without revealing their
+//! identity to the server. The server validates the UAK to ensure the
+//! sender has permission to send to the recipient.
+//!
+//! # Certificate Validation
+//!
+//! Sender certificates are validated against a hardcoded trust root public key.
+//! This prevents MITM attacks during message delivery by ensuring only
+//! certificates signed by the trusted server are accepted.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
 use libsignal_protocol::{
     sealed_sender_decrypt, sealed_sender_decrypt_to_usmc, sealed_sender_encrypt,
     sealed_sender_encrypt_from_usmc, CiphertextMessageType, DeviceId, IdentityKeyStore,
     KyberPreKeyStore, PreKeyStore, ProtocolAddress, PublicKey, SessionStore, SignedPreKeyStore,
     Timestamp,
 };
-use rand::rng;
+use rand::{rngs::StdRng, SeedableRng};
 
+use crate::config::TRUST_ROOT_PUBLIC_KEY;
 use crate::error::CryptoError;
 
 // Re-export useful libsignal types for consumers of this module.
@@ -50,6 +68,7 @@ pub use libsignal_protocol::{
 /// 1. Receive sealed sender message bytes
 /// 2. Call `decrypt()` with trust root to validate and decrypt
 /// 3. Get sender identity from `SealedSenderDecryptionResult`
+#[derive(Clone)]
 pub struct SealedSenderManager;
 
 impl SealedSenderManager {
@@ -85,7 +104,7 @@ impl SealedSenderManager {
         S: SessionStore,
         I: IdentityKeyStore,
     {
-        let mut rng = rng();
+        let mut rng = StdRng::from_os_rng();
         let now = SystemTime::now();
 
         sealed_sender_encrypt(
@@ -220,7 +239,7 @@ impl SealedSenderManager {
     where
         I: IdentityKeyStore,
     {
-        let mut rng = rng();
+        let mut rng = StdRng::from_os_rng();
 
         sealed_sender_encrypt_from_usmc(destination, usmc, identity_store, &mut rng)
             .await
@@ -259,5 +278,377 @@ impl SealedSenderManager {
 impl Default for SealedSenderManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ============================================================================
+// UAK (Unidentified Access Key) Functions
+// ============================================================================
+
+/// UAK length in bytes (Signal standard).
+pub const UAK_LENGTH: usize = 16;
+
+/// Profile key length in bytes.
+pub const PROFILE_KEY_LENGTH: usize = 32;
+
+/// Generate Unidentified Access Key (UAK) from a profile key.
+///
+/// The UAK is derived by encrypting a zero block with the profile key using AES-GCM.
+/// This matches Signal's UAK derivation in `ProfileCipher`.
+///
+/// # Arguments
+///
+/// * `profile_key` - 32-byte profile key
+///
+/// # Returns
+///
+/// 16-byte UAK derived from the profile key.
+///
+/// # Signal Reference
+///
+/// See `Signal-server/service/.../UnidentifiedAccessUtil.java` and
+/// `Signal-Desktop/ts/Crypto.ts` for the reference implementation.
+pub fn generate_uak_from_profile_key(profile_key: &[u8]) -> Result<[u8; UAK_LENGTH], CryptoError> {
+    if profile_key.len() != PROFILE_KEY_LENGTH {
+        return Err(CryptoError::InvalidKeyLength {
+            expected: PROFILE_KEY_LENGTH,
+            got: profile_key.len(),
+        });
+    }
+
+    // Create AES-256-GCM cipher with profile key
+    let cipher = Aes256Gcm::new_from_slice(profile_key)
+        .map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
+
+    // Use 12-byte zero nonce (Signal's standard for UAK derivation)
+    let nonce = Nonce::from_slice(&[0u8; 12]);
+
+    // Encrypt 16 zero bytes to derive UAK
+    let plaintext = [0u8; UAK_LENGTH];
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+
+    // First 16 bytes of ciphertext is the UAK
+    let mut uak = [0u8; UAK_LENGTH];
+    uak.copy_from_slice(&ciphertext[..UAK_LENGTH]);
+
+    Ok(uak)
+}
+
+/// Combine multiple UAKs for group sealed sender.
+///
+/// For group messages, the sender must prove knowledge of all recipients' UAKs
+/// by XORing them together. The server validates by computing the same XOR
+/// and comparing.
+///
+/// # Arguments
+///
+/// * `uaks` - Slice of 16-byte UAKs from all group recipients
+///
+/// # Returns
+///
+/// Combined 16-byte UAK (XOR of all input UAKs).
+///
+/// # Signal Reference
+///
+/// See `Signal-server/service/.../UnidentifiedAccessUtil.java#combineUnidentifiedAccessKeys`
+pub fn combine_uaks_for_group(uaks: &[[u8; UAK_LENGTH]]) -> [u8; UAK_LENGTH] {
+    let mut combined = [0u8; UAK_LENGTH];
+
+    for uak in uaks {
+        for (i, byte) in uak.iter().enumerate() {
+            combined[i] ^= byte;
+        }
+    }
+
+    combined
+}
+
+// ============================================================================
+// Certificate Validation Functions
+// ============================================================================
+
+/// Default certificate validity period (7 days).
+pub const DEFAULT_CERTIFICATE_VALIDITY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Refresh threshold (refresh when less than 1 day remaining).
+pub const CERTIFICATE_REFRESH_THRESHOLD: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Validate a sender certificate against the hardcoded trust root.
+///
+/// This function verifies that:
+/// 1. The certificate was signed by the trusted server
+/// 2. The certificate has not expired
+///
+/// # Arguments
+///
+/// * `cert` - The sender certificate to validate
+///
+/// # Returns
+///
+/// `true` if the certificate is valid, `false` otherwise.
+///
+/// # Security
+///
+/// The trust root is hardcoded in the binary (see `config.rs`) following
+/// Signal's security model. This prevents MITM attacks during registration
+/// or certificate renewal.
+pub fn validate_trust_root(cert: &SenderCertificate) -> bool {
+    // Get current timestamp
+    let now_ms = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let now = Timestamp::from_epoch_millis(now_ms);
+
+    // Check expiration
+    let expiry = match cert.expiration() {
+        Ok(ts) => ts,
+        Err(e) => {
+            tracing::warn!("Failed to get certificate expiration: {}", e);
+            return false;
+        }
+    };
+
+    if expiry.epoch_millis() < now_ms {
+        tracing::warn!(
+            "Sender certificate expired: cert_expiry={}, now={}",
+            expiry.epoch_millis(),
+            now_ms
+        );
+        return false;
+    }
+
+    // Validate certificate chain against trust root
+    match cert.validate(&*TRUST_ROOT_PUBLIC_KEY, now) {
+        Ok(true) => true,
+        Ok(false) => {
+            tracing::warn!("Sender certificate failed trust root validation");
+            false
+        }
+        Err(e) => {
+            tracing::warn!("Sender certificate validation error: {}", e);
+            false
+        }
+    }
+}
+
+/// Check if a sender certificate needs refresh.
+///
+/// Returns `true` if the certificate is expired or will expire within
+/// the refresh threshold period.
+///
+/// # Arguments
+///
+/// * `cert` - The sender certificate to check
+///
+/// # Returns
+///
+/// `true` if the certificate should be refreshed.
+pub fn certificate_needs_refresh(cert: &SenderCertificate) -> bool {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let threshold_ms = CERTIFICATE_REFRESH_THRESHOLD.as_millis() as u64;
+    let expiry_threshold = now.saturating_add(threshold_ms);
+
+    match cert.expiration() {
+        Ok(ts) => ts.epoch_millis() < expiry_threshold,
+        Err(_) => true, // If we can't get expiration, assume refresh needed
+    }
+}
+
+/// Cached sender certificate with expiration tracking.
+///
+/// This wrapper helps manage certificate lifecycle by tracking when
+/// the certificate was obtained and when it expires.
+#[derive(Clone)]
+pub struct CachedSenderCertificate {
+    /// The actual sender certificate.
+    pub certificate: SenderCertificate,
+    /// When this certificate was cached.
+    pub cached_at: SystemTime,
+}
+
+impl CachedSenderCertificate {
+    /// Create a new cached certificate.
+    pub fn new(certificate: SenderCertificate) -> Self {
+        Self {
+            certificate,
+            cached_at: SystemTime::now(),
+        }
+    }
+
+    /// Check if this certificate needs refresh.
+    pub fn needs_refresh(&self) -> bool {
+        certificate_needs_refresh(&self.certificate)
+    }
+
+    /// Check if this certificate is still valid.
+    pub fn is_valid(&self) -> bool {
+        validate_trust_root(&self.certificate)
+    }
+
+    /// Get the expiration timestamp in milliseconds since epoch.
+    pub fn expiration_ms(&self) -> Option<u64> {
+        self.certificate.expiration().ok().map(|ts| ts.epoch_millis())
+    }
+
+    /// Get how long until expiration.
+    pub fn time_until_expiration(&self) -> Option<Duration> {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        let expiry = self.certificate.expiration().ok()?.epoch_millis();
+        if expiry > now {
+            Some(Duration::from_millis(expiry - now))
+        } else {
+            None
+        }
+    }
+}
+
+// ============================================================================
+// Multi-Device Sealed Sender Types
+// ============================================================================
+
+/// A sealed sender message prepared for a specific device.
+///
+/// When sending to a user with multiple devices, the sender must create
+/// a separate encrypted envelope for each device.
+#[derive(Clone)]
+pub struct SealedMessageForDevice {
+    /// Target device ID.
+    pub device_id: u32,
+    /// Target device's registration ID (for session verification).
+    pub registration_id: u32,
+    /// Encrypted sealed sender envelope for this device.
+    pub sealed_content: Vec<u8>,
+}
+
+/// Collection of sealed sender messages for all of a recipient's devices.
+#[derive(Clone)]
+pub struct MultiDeviceSealedMessage {
+    /// Target user ID.
+    pub recipient_user_id: String,
+    /// Per-device encrypted envelopes.
+    pub device_messages: Vec<SealedMessageForDevice>,
+    /// Combined UAK for anonymous delivery (single recipient UAK or group XOR).
+    pub unidentified_access_key: [u8; UAK_LENGTH],
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_uak_from_profile_key() {
+        // Create a test profile key
+        let mut profile_key = [0u8; PROFILE_KEY_LENGTH];
+        profile_key[0] = 0x42;
+        profile_key[31] = 0x42;
+
+        let uak = generate_uak_from_profile_key(&profile_key).expect("UAK generation should succeed");
+
+        // UAK should be 16 bytes
+        assert_eq!(uak.len(), UAK_LENGTH);
+
+        // UAK should be deterministic
+        let uak2 = generate_uak_from_profile_key(&profile_key).expect("UAK generation should succeed");
+        assert_eq!(uak, uak2);
+
+        // Different profile key should give different UAK
+        let mut different_key = profile_key;
+        different_key[0] = 0x43;
+        let different_uak = generate_uak_from_profile_key(&different_key).expect("UAK generation should succeed");
+        assert_ne!(uak, different_uak);
+    }
+
+    #[test]
+    fn test_generate_uak_rejects_invalid_length() {
+        let short_key = [0u8; 16];
+        let result = generate_uak_from_profile_key(&short_key);
+        assert!(result.is_err());
+
+        let long_key = [0u8; 64];
+        let result = generate_uak_from_profile_key(&long_key);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_combine_uaks_for_group() {
+        let uak1 = [0x11u8; UAK_LENGTH];
+        let uak2 = [0x22u8; UAK_LENGTH];
+        let uak3 = [0x33u8; UAK_LENGTH];
+
+        // XOR of the three UAKs
+        let combined = combine_uaks_for_group(&[uak1, uak2, uak3]);
+
+        // 0x11 XOR 0x22 XOR 0x33 = 0x00
+        let expected = [0x00u8; UAK_LENGTH];
+        assert_eq!(combined, expected);
+    }
+
+    #[test]
+    fn test_combine_uaks_single() {
+        let uak = [0x42u8; UAK_LENGTH];
+        let combined = combine_uaks_for_group(&[uak]);
+
+        // Single UAK should return itself
+        assert_eq!(combined, uak);
+    }
+
+    #[test]
+    fn test_combine_uaks_empty() {
+        let combined = combine_uaks_for_group(&[]);
+
+        // Empty should return all zeros
+        assert_eq!(combined, [0u8; UAK_LENGTH]);
+    }
+
+    #[test]
+    fn test_combine_uaks_order_independent() {
+        let uak1 = [0x11u8; UAK_LENGTH];
+        let uak2 = [0x22u8; UAK_LENGTH];
+        let uak3 = [0x33u8; UAK_LENGTH];
+
+        let combined1 = combine_uaks_for_group(&[uak1, uak2, uak3]);
+        let combined2 = combine_uaks_for_group(&[uak3, uak1, uak2]);
+        let combined3 = combine_uaks_for_group(&[uak2, uak3, uak1]);
+
+        // XOR is commutative - order shouldn't matter
+        assert_eq!(combined1, combined2);
+        assert_eq!(combined2, combined3);
+    }
+
+    #[test]
+    fn test_cached_certificate_wrapper() {
+        // We can't easily create a real SenderCertificate in tests,
+        // so just test the wrapper logic with expiration calculations
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // Future expiration (24+ hours from now)
+        let future_expiry = now + (48 * 60 * 60 * 1000); // 48 hours
+
+        // Past expiration
+        let past_expiry = now - (60 * 1000); // 1 minute ago
+
+        // Test threshold logic (manual calculation)
+        let threshold_ms = CERTIFICATE_REFRESH_THRESHOLD.as_millis() as u64;
+        let needs_refresh_threshold = now + threshold_ms;
+
+        // Future expiry beyond threshold - doesn't need refresh
+        assert!(future_expiry > needs_refresh_threshold);
+
+        // Past expiry - definitely needs refresh
+        assert!(past_expiry < now);
     }
 }

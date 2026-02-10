@@ -25,6 +25,19 @@ pub enum CryptoError {
     #[error("invalid key format")]
     InvalidKeyFormat,
 
+    /// Invalid key length provided.
+    #[error("invalid key length: expected {expected}, got {got}")]
+    InvalidKeyLength {
+        /// Expected key length in bytes.
+        expected: usize,
+        /// Actual key length in bytes.
+        got: usize,
+    },
+
+    /// Key derivation operation failed.
+    #[error("key derivation failed: {0}")]
+    KeyDerivationFailed(String),
+
     /// Untrusted identity key for a remote user.
     #[error("untrusted identity for {0}")]
     UntrustedIdentity(String),
@@ -87,4 +100,15 @@ pub enum CryptoError {
     /// Attachment digest verification failed.
     #[error("attachment digest mismatch")]
     AttachmentDigestMismatch,
+
+    // =========================================================================
+    // Blind Signature Errors (NDSS '21 Ephemeral Mailboxes)
+    // =========================================================================
+    /// Blind signature operation failed (blinding/unblinding).
+    #[error("blind signature error: {0}")]
+    BlindSignatureError(String),
+
+    /// Invalid key provided (RSA public key parsing, Ed25519 format, etc.).
+    #[error("invalid key: {0}")]
+    InvalidKey(String),
 }

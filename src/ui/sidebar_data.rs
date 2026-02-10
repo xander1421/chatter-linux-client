@@ -66,6 +66,7 @@ impl From<&Channel> for ChannelListItemData {
             ChannelType::Public => "public",
             ChannelType::Private => "private",
             ChannelType::DirectMessage => "dm",
+            ChannelType::SavedMessages => "saved",
         };
 
         Self {

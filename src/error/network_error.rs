@@ -2,6 +2,7 @@
 //!
 //! Errors related to network operations with gRPC status mapping.
 
+use std::error::Error as StdError;
 use thiserror::Error;
 use tonic::{Code, Status};
 
@@ -55,8 +56,27 @@ impl NetworkError {
     /// Maps gRPC status codes to appropriate error variants.
     pub fn from_status(status: &Status) -> Self {
         let message = status.message().to_string();
+        let code = status.code();
 
-        match status.code() {
+        // Log detailed error info for debugging
+        tracing::debug!(
+            code = ?code,
+            message = %message,
+            metadata = ?status.metadata(),
+            "gRPC error status"
+        );
+
+        // Check for h2/http2 errors in the message (these come from transport layer)
+        if message.contains("h2 protocol error") || message.contains("http2 error") {
+            tracing::warn!(
+                code = ?code,
+                message = %message,
+                source = ?StdError::source(status),
+                "HTTP/2 protocol error detected - this may be a transport issue"
+            );
+        }
+
+        match code {
             Code::Ok => NetworkError::Unknown("unexpected OK status as error".to_string()),
             Code::Cancelled => NetworkError::Unknown(format!("cancelled: {}", message)),
             Code::Unknown => NetworkError::Unknown(message),

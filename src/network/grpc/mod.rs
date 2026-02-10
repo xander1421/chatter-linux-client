@@ -2,6 +2,9 @@
 //!
 //! gRPC clients for all backend services.
 
+#[cfg(test)]
+mod upload_test;
+
 pub mod auth_client;
 pub mod call_client;
 pub mod channel_client;

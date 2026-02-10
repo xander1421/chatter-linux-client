@@ -1,21 +1,31 @@
 //! Modal callbacks.
 //!
 //! Handles modal dialogs (channel creation, profile actions, friend requests,
-//! settings, sessions).
+//! settings, sessions, join channel).
 
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use tokio::time::{sleep, Duration};
 
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::channel::ChannelType;
-use chatter_linux::domain::ids::UserId;
+use chatter_linux::domain::ids::{ChannelId, UserId};
+use chatter_linux::network::grpc::IntegrationClient;
+use chatter_linux::proto::chat_v1::IntegrationType;
+use chatter_linux::services::ai_service::AIService;
 use chatter_linux::services::channel_service::ChannelService;
 use chatter_linux::services::user_service::UserService;
 
-use crate::{MainWindow, SessionInfo};
+use crate::bin_ui::converters::channel_to_slint;
+use crate::bin_ui::features::sidebar::load_channel_into_ui;
+use crate::{ChannelListItemData, CreateChannelConfig, MainWindow, SearchResultChannel, SessionInfo};
 
 /// Wire modal callbacks.
 pub fn wire(window: &MainWindow, ctx: &AppContext) {
     wire_create_channel(window, ctx);
+    wire_join_channel(window, ctx);
     wire_profile_actions(window, ctx);
     wire_friend_requests(window, ctx);
     wire_settings_callbacks(window, ctx);
@@ -27,16 +37,42 @@ fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
     let grpc_pool = ctx.grpc_pool.clone();
     let settings_repo = ctx.settings_repo.clone();
     let channel_repo = ctx.channel_repo.clone();
+    let message_repo = ctx.message_repo.clone();
+    let user_repo = ctx.user_repo.clone();
+    let attachment_repo = ctx.attachment_repo.clone();
+    let chat_state = ctx.chat_state.clone();
+    let signal_service = ctx.signal_service.clone();
 
     window.on_create_channel(
-        move |name: SharedString, description: SharedString, template: SharedString| {
+        move |name: SharedString,
+              description: SharedString,
+              template: SharedString,
+              config: CreateChannelConfig,
+              ai_provider: SharedString,
+              ai_model: SharedString| {
             let weak = weak_window.clone();
             let grpc_pool = grpc_pool.clone();
             let settings_repo = settings_repo.clone();
             let channel_repo = channel_repo.clone();
+            let message_repo = message_repo.clone();
+            let user_repo = user_repo.clone();
+            let attachment_repo = attachment_repo.clone();
+            let chat_state = chat_state.clone();
+            let signal_service = signal_service.clone();
             let name = name.to_string();
             let description = description.to_string();
             let template = template.to_string();
+            let ai_provider = ai_provider.to_string();
+            let ai_model = ai_model.to_string();
+
+            // Extract config values
+            let is_private = config.is_private;
+            let is_encrypted = config.is_encrypted;
+            let is_ephemeral = config.is_ephemeral;
+            let ttl_hours = config.ttl_hours;
+            let max_members = config.max_members;
+            let password = config.password.to_string();
+            let _friends_only = config.friends_only; // TODO: pass to backend when API supports it
 
             tokio::spawn(async move {
                 let weak_loading = weak.clone();
@@ -47,13 +83,14 @@ fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
                     }
                 });
 
-                let channel_type = match template.as_str() {
-                    "announcement" => ChannelType::Private,
-                    "ephemeral" => ChannelType::Private,
-                    _ => ChannelType::Public,
+                // Determine channel type from config
+                let channel_type = if is_private {
+                    ChannelType::Private
+                } else {
+                    ChannelType::Public
                 };
 
-                let channel_service = ChannelService::new(settings_repo, channel_repo);
+                let channel_service = ChannelService::new(settings_repo.clone(), channel_repo.clone(), signal_service);
 
                 let mut channel_client =
                     chatter_linux::network::grpc::channel_client::ChannelClient::new(
@@ -67,37 +104,160 @@ fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
                     Some(description.as_str())
                 };
 
+                let password_opt = if password.is_empty() {
+                    None
+                } else {
+                    Some(password.as_str())
+                };
+
+                // Build domain ChannelConfig from UI config
+                let domain_config = chatter_linux::domain::channel::ChannelConfig {
+                    persistence: if is_ephemeral {
+                        chatter_linux::domain::channel::MessagePersistence::Ephemeral
+                    } else {
+                        chatter_linux::domain::channel::MessagePersistence::Permanent
+                    },
+                    max_members: if max_members > 0 {
+                        Some(max_members as u32)
+                    } else {
+                        None
+                    },
+                    default_ttl_seconds: if is_ephemeral {
+                        Some((ttl_hours as u32) * 3600)
+                    } else {
+                        None
+                    },
+                    allow_reactions: true,
+                    allow_threads: true,
+                    allow_attachments: true,
+                    require_encryption: is_encrypted,
+                };
+
                 match channel_service
                     .create_channel(
                         &mut channel_client,
                         &name,
                         channel_type,
-                        None,
+                        Some(domain_config),
                         description_opt,
                         None,
-                        None,
+                        password_opt,
                         vec![],
                     )
                     .await
                 {
                     Ok(channel) => {
-                        let channel_id_str = channel.id.to_string();
-                        let channel_name = channel.name.clone();
+                        let channel_id = channel.id;
+                        let channel_id_str: SharedString = channel_id.to_string().into();
 
-                        let weak_success = weak.clone();
+                        // If AI template, create and attach integration
+                        if template == "ai-assistant" && !ai_provider.is_empty() && !ai_model.is_empty() {
+                            let ai_service = AIService::new(settings_repo.clone());
+                            let mut integration_client = IntegrationClient::new(
+                                grpc_pool.channel(),
+                                grpc_pool.auth_clone(),
+                            );
+
+                            // Convert provider string to IntegrationType
+                            let provider_type = match ai_provider.as_str() {
+                                "claude" => IntegrationType::Claude,
+                                "openai" => IntegrationType::Openai,
+                                "ollama" => IntegrationType::Custom, // Ollama uses custom
+                                _ => IntegrationType::Custom,
+                            };
+
+                            // Create the integration
+                            let integration_name = format!("{} Assistant", name);
+                            match ai_service
+                                .create_integration(
+                                    &mut integration_client,
+                                    &integration_name,
+                                    provider_type,
+                                    Some(chatter_linux::proto::chat_v1::IntegrationConfig {
+                                        model: ai_model.clone(),
+                                        ..Default::default()
+                                    }),
+                                )
+                                .await
+                            {
+                                Ok(integration) => {
+                                    // Attach integration to channel
+                                    match ai_service
+                                        .add_integration_to_channel(
+                                            &mut integration_client,
+                                            &integration.id,
+                                            &channel_id.to_string(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(()) => {
+                                            tracing::info!(
+                                                "AI integration {} attached to channel {}",
+                                                integration.id,
+                                                channel_id
+                                            );
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "Failed to attach AI integration to channel: {}",
+                                                e
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to create AI integration: {}", e);
+                                }
+                            }
+                        }
+
+                        // Set the newly created channel as active
+                        chat_state.set_active_channel(channel_id);
+
+                        // Convert channel to Slint format for sidebar
+                        let slint_channel = channel_to_slint(&channel);
+
+                        // Close modal and add channel to sidebar
+                        let weak_modal = weak.clone();
+                        let channel_id_for_ui = channel_id_str.clone();
                         let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak_success.upgrade() {
+                            if let Some(w) = weak_modal.upgrade() {
+                                // Close modal and clear form
                                 w.set_create_channel_loading(false);
                                 w.set_create_channel_name("".into());
                                 w.set_create_channel_description("".into());
                                 w.set_create_channel_template("".into());
+                                w.set_create_channel_ai_provider("".into());
+                                w.set_create_channel_ai_model("".into());
                                 w.set_active_modal("".into());
-                                w.set_selected_channel_id(channel_id_str.into());
-                                w.set_channel_name(channel_name.into());
+
+                                // Add new channel to sidebar list
+                                let current_channels = w.get_channels();
+                                let mut channels: Vec<ChannelListItemData> = (0..current_channels.row_count())
+                                    .filter_map(|i| current_channels.row_data(i))
+                                    .collect();
+                                channels.push(slint_channel);
+                                w.set_channels(ModelRc::new(VecModel::from(channels)));
+
+                                // Set loading state for channel switch
+                                w.set_loading_messages(true);
+                                w.set_selected_channel_id(channel_id_for_ui);
+                                w.set_selected_dm_id("".into());
                             }
                         });
 
-                        tracing::info!("Created channel: {}", channel.id);
+                        // Load the new channel properly (clears messages, sets header)
+                        load_channel_into_ui(
+                            weak,
+                            &channel_id,
+                            channel_repo.clone(),
+                            message_repo.clone(),
+                            user_repo.clone(),
+                            attachment_repo.clone(),
+                        )
+                        .await;
+
+                        tracing::info!("Created channel: {}", channel_id);
                     }
                     Err(e) => {
                         let error_msg = e.to_string();
@@ -114,6 +274,384 @@ fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
             });
         },
     );
+
+    // AI provider selected callback - loads models from server
+    let weak_window = window.as_weak();
+    let grpc_pool = ctx.grpc_pool.clone();
+    let settings_repo = ctx.settings_repo.clone();
+
+    window.on_create_channel_provider_selected(move |provider: SharedString| {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool.clone();
+        let settings_repo = settings_repo.clone();
+        let provider_str = provider.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("Failed to create runtime for provider selection");
+
+            rt.block_on(async {
+                // Convert provider string to IntegrationType
+                let provider_type = match provider_str.as_str() {
+                    "claude" => IntegrationType::Claude,
+                    "openai" => IntegrationType::Openai,
+                    "ollama" => IntegrationType::Custom,
+                    _ => {
+                        // Unknown provider, clear models
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_create_channel_ai_models(ModelRc::new(VecModel::from(Vec::new())));
+                            }
+                        });
+                        return;
+                    }
+                };
+
+                // Create AI service and client
+                let ai_service = AIService::new(settings_repo);
+                let mut integration_client = IntegrationClient::new(
+                    grpc_pool.channel(),
+                    grpc_pool.auth_clone(),
+                );
+
+                // Fetch models from server
+                match ai_service.list_available_models(&mut integration_client, provider_type).await {
+                    Ok(available_models) => {
+                        use crate::AIModelOption;
+                        let models: Vec<AIModelOption> = available_models
+                            .into_iter()
+                            .map(|m| AIModelOption {
+                                id: m.id.into(),
+                                name: m.display_name.into(),
+                                provider: provider_str.clone().into(),
+                            })
+                            .collect();
+
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_create_channel_ai_models(ModelRc::new(VecModel::from(models)));
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to fetch models for provider {}: {}", provider_str, e);
+                        // Fall back to static models for common providers
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                use crate::AIModelOption;
+                                let fallback_models = match provider_str.as_str() {
+                                    "claude" => vec![
+                                        AIModelOption {
+                                            id: "claude-3-opus".into(),
+                                            name: "Claude 3 Opus".into(),
+                                            provider: "claude".into(),
+                                        },
+                                        AIModelOption {
+                                            id: "claude-3-sonnet".into(),
+                                            name: "Claude 3 Sonnet".into(),
+                                            provider: "claude".into(),
+                                        },
+                                        AIModelOption {
+                                            id: "claude-3-haiku".into(),
+                                            name: "Claude 3 Haiku".into(),
+                                            provider: "claude".into(),
+                                        },
+                                    ],
+                                    "openai" => vec![
+                                        AIModelOption {
+                                            id: "gpt-4".into(),
+                                            name: "GPT-4".into(),
+                                            provider: "openai".into(),
+                                        },
+                                        AIModelOption {
+                                            id: "gpt-4-turbo".into(),
+                                            name: "GPT-4 Turbo".into(),
+                                            provider: "openai".into(),
+                                        },
+                                        AIModelOption {
+                                            id: "gpt-3.5-turbo".into(),
+                                            name: "GPT-3.5 Turbo".into(),
+                                            provider: "openai".into(),
+                                        },
+                                    ],
+                                    "ollama" => vec![
+                                        AIModelOption {
+                                            id: "llama2".into(),
+                                            name: "Llama 2".into(),
+                                            provider: "ollama".into(),
+                                        },
+                                        AIModelOption {
+                                            id: "mistral".into(),
+                                            name: "Mistral".into(),
+                                            provider: "ollama".into(),
+                                        },
+                                    ],
+                                    _ => vec![],
+                                };
+                                w.set_create_channel_ai_models(ModelRc::new(VecModel::from(fallback_models)));
+                            }
+                        });
+                    }
+                }
+            });
+        });
+    });
+}
+
+fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
+    // Debounce counter for search
+    let search_counter = Arc::new(AtomicU64::new(0));
+
+    // Search channels callback (with debounce)
+    let weak_window = window.as_weak();
+    let grpc_pool = ctx.grpc_pool.clone();
+    let settings_repo = ctx.settings_repo.clone();
+    let channel_repo = ctx.channel_repo.clone();
+    let signal_service = ctx.signal_service.clone();
+    let search_counter_clone = search_counter.clone();
+
+    window.on_search_channels(move |query: SharedString| {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool.clone();
+        let settings_repo = settings_repo.clone();
+        let channel_repo = channel_repo.clone();
+        let signal_service = signal_service.clone();
+        let query = query.to_string();
+        let counter = search_counter_clone.clone();
+
+        // Increment counter for this search
+        let search_id = counter.fetch_add(1, Ordering::SeqCst) + 1;
+
+        tokio::spawn(async move {
+            // Debounce: wait 300ms before searching
+            sleep(Duration::from_millis(300)).await;
+
+            // Check if a newer search was triggered
+            if counter.load(Ordering::SeqCst) != search_id {
+                return;
+            }
+
+            // Empty query - clear results
+            if query.trim().is_empty() {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_join_channel_results(ModelRc::new(VecModel::from(
+                            Vec::<SearchResultChannel>::new(),
+                        )));
+                        w.set_join_channel_searching(false);
+                        w.set_join_channel_error("".into());
+                    }
+                });
+                return;
+            }
+
+            // Set searching state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_join_channel_searching(true);
+                    w.set_join_channel_error("".into());
+                }
+            });
+
+            // Check again after setting loading state
+            if counter.load(Ordering::SeqCst) != search_id {
+                return;
+            }
+
+            // Perform search
+            let channel_service = ChannelService::new(settings_repo, channel_repo, signal_service);
+            let mut channel_client =
+                chatter_linux::network::grpc::channel_client::ChannelClient::new(
+                    grpc_pool.channel(),
+                    grpc_pool.auth_clone(),
+                );
+
+            match channel_service
+                .search_channels(
+                    &mut channel_client,
+                    &query,
+                    20,
+                    0,
+                    vec![ChannelType::Public], // Only public channels
+                )
+                .await
+            {
+                Ok(channels) => {
+                    // Check if still the latest search
+                    if counter.load(Ordering::SeqCst) != search_id {
+                        return;
+                    }
+
+                    let results: Vec<SearchResultChannel> = channels
+                        .into_iter()
+                        .map(|ch| SearchResultChannel {
+                            id: ch.id.to_string().into(),
+                            name: ch.name.into(),
+                            description: ch.description.unwrap_or_default().into(),
+                            member_count: 0, // Would need additional API call
+                        })
+                        .collect();
+
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_join_channel_results(ModelRc::new(VecModel::from(results)));
+                            w.set_join_channel_searching(false);
+                        }
+                    });
+                }
+                Err(e) => {
+                    if counter.load(Ordering::SeqCst) != search_id {
+                        return;
+                    }
+
+                    let error_msg = format!("Search failed: {}", e);
+                    tracing::error!("{}", error_msg);
+
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_join_channel_searching(false);
+                            w.set_join_channel_error(error_msg.into());
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // Join channel callback
+    let weak_window = window.as_weak();
+    let grpc_pool = ctx.grpc_pool.clone();
+    let settings_repo = ctx.settings_repo.clone();
+    let channel_repo = ctx.channel_repo.clone();
+    let message_repo = ctx.message_repo.clone();
+    let user_repo = ctx.user_repo.clone();
+    let attachment_repo = ctx.attachment_repo.clone();
+    let chat_state = ctx.chat_state.clone();
+    let signal_service = ctx.signal_service.clone();
+
+    window.on_join_channel(move |channel_id_str: SharedString| {
+        let weak = weak_window.clone();
+        let grpc_pool = grpc_pool.clone();
+        let settings_repo = settings_repo.clone();
+        let channel_repo = channel_repo.clone();
+        let message_repo = message_repo.clone();
+        let user_repo = user_repo.clone();
+        let attachment_repo = attachment_repo.clone();
+        let chat_state = chat_state.clone();
+        let signal_service = signal_service.clone();
+        let channel_id_str = channel_id_str.to_string();
+
+        tokio::spawn(async move {
+            // Set joining state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_join_channel_joining(true);
+                    w.set_join_channel_error("".into());
+                }
+            });
+
+            // Parse channel ID
+            let channel_id: ChannelId = match channel_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    let error_msg = format!("Invalid channel ID: {}", e);
+                    tracing::error!("{}", error_msg);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_join_channel_joining(false);
+                            w.set_join_channel_error(error_msg.into());
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Join channel
+            let channel_service = ChannelService::new(settings_repo, channel_repo.clone(), signal_service);
+            let mut channel_client =
+                chatter_linux::network::grpc::channel_client::ChannelClient::new(
+                    grpc_pool.channel(),
+                    grpc_pool.auth_clone(),
+                );
+
+            match channel_service
+                .join_channel(&mut channel_client, &channel_id, None)
+                .await
+            {
+                Ok(channel) => {
+                    let channel_id = channel.id;
+                    let channel_id_str: SharedString = channel_id.to_string().into();
+
+                    // Set the joined channel as active
+                    chat_state.set_active_channel(channel_id);
+
+                    // Convert channel to Slint format for sidebar
+                    let slint_channel = channel_to_slint(&channel);
+
+                    // Close modal and add channel to sidebar
+                    let weak_modal = weak.clone();
+                    let channel_id_for_ui = channel_id_str.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_modal.upgrade() {
+                            // Close modal and clear form
+                            w.set_join_channel_joining(false);
+                            w.set_join_channel_search_query("".into());
+                            w.set_join_channel_selected_id("".into());
+                            w.set_join_channel_results(ModelRc::new(VecModel::from(
+                                Vec::<SearchResultChannel>::new(),
+                            )));
+                            w.set_active_modal("".into());
+
+                            // Add joined channel to sidebar list
+                            let current_channels = w.get_channels();
+                            let mut channels: Vec<ChannelListItemData> = (0..current_channels.row_count())
+                                .filter_map(|i| current_channels.row_data(i))
+                                .collect();
+                            channels.push(slint_channel);
+                            w.set_channels(ModelRc::new(VecModel::from(channels)));
+
+                            // Set loading state for channel switch
+                            w.set_loading_messages(true);
+                            w.set_selected_channel_id(channel_id_for_ui);
+                            w.set_selected_dm_id("".into());
+                        }
+                    });
+
+                    // Load the joined channel properly (loads messages, sets header)
+                    load_channel_into_ui(
+                        weak,
+                        &channel_id,
+                        channel_repo,
+                        message_repo,
+                        user_repo,
+                        attachment_repo,
+                    )
+                    .await;
+
+                    tracing::info!("Joined channel: {}", channel_id);
+                }
+                Err(e) => {
+                    let error_msg = if e.to_string().contains("not found") {
+                        "Channel not found or is private".to_string()
+                    } else {
+                        format!("Failed to join: {}", e)
+                    };
+                    tracing::error!("Failed to join channel: {}", e);
+
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_join_channel_joining(false);
+                            w.set_join_channel_error(error_msg.into());
+                        }
+                    });
+                }
+            }
+        });
+    });
 }
 
 fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
@@ -406,18 +944,128 @@ fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
 
     // Send message (open DM)
     let weak_window = window.as_weak();
+    let mailbox_manager = ctx.mailbox_manager.clone();
+    let user_repo_dm = user_repo.clone();
+    let chat_state = ctx.chat_state.clone();
 
     window.on_profile_send_message(move || {
         let weak = weak_window.clone();
+        let mailbox_manager = mailbox_manager.clone();
+        let user_repo = user_repo_dm.clone();
+        let _chat_state = chat_state.clone(); // Reserved for future DM state tracking
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                let profile_user_id = w.get_profile_user_id().to_string();
-                w.set_active_modal("".into());
-                tracing::info!(
-                    "Send message to user: {} (DM channel creation not yet implemented)",
-                    profile_user_id
-                );
+        // Get profile user ID synchronously before spawning
+        let profile_user_id = weak
+            .upgrade()
+            .map(|w| w.get_profile_user_id().to_string())
+            .unwrap_or_default();
+
+        if profile_user_id.is_empty() {
+            tracing::error!("No profile user ID for DM");
+            return;
+        }
+
+        tokio::spawn(async move {
+            // Show loading state and close modal
+            let weak_loading = weak.clone();
+            let profile_id_for_ui = profile_user_id.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_active_modal("".into());
+                    w.set_loading_messages(true);
+                }
+            });
+
+            // Parse user ID
+            let peer_id: UserId = match profile_user_id.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID for DM: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_loading_messages(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Use peer_id as conversation_id for 1:1 DMs
+            let conversation_id = peer_id.to_string();
+
+            // Initialize mailbox manager if needed
+            if let Err(e) = mailbox_manager.initialize().await {
+                tracing::warn!("Failed to initialize mailbox manager: {} (may already be initialized)", e);
+            }
+
+            // Ensure we have tokens available
+            if mailbox_manager.token_count().await == 0 {
+                if let Err(e) = mailbox_manager.acquire_tokens(5).await {
+                    tracing::error!("Failed to acquire mailbox tokens: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_loading_messages(false);
+                        }
+                    });
+                    return;
+                }
+            }
+
+            // Get or create mailbox for this DM conversation
+            // TTL: 7 days (604800 seconds)
+            match mailbox_manager.get_or_create_mailbox(&conversation_id, 604800).await {
+                Ok(mailbox) => {
+                    tracing::info!(
+                        "DM mailbox ready for conversation with {}: mailbox_id={}",
+                        peer_id,
+                        mailbox.mailbox_id
+                    );
+
+                    // Get peer display name
+                    let peer_name = user_repo
+                        .get_profile(&peer_id)
+                        .ok()
+                        .flatten()
+                        .map(|p| p.display_name)
+                        .or_else(|| {
+                            user_repo
+                                .get(&peer_id)
+                                .ok()
+                                .flatten()
+                                .map(|u| u.username)
+                        })
+                        .unwrap_or_else(|| "Unknown".to_string());
+
+                    // Update chat state to active DM
+                    // Note: For DMs, we use the peer_id as a pseudo-channel ID
+                    // A proper implementation would have a DM-specific state
+
+                    // Update UI to show the DM
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_loading_messages(false);
+                            w.set_selected_dm_id(profile_id_for_ui.into());
+                            w.set_selected_channel_id("".into());
+                            w.set_channel_name(peer_name.into());
+                            w.set_channel_type("dm".into());
+                            w.set_member_count(2);
+                            w.set_topic("".into());
+                            // Clear messages for new conversation
+                            use slint::ModelRc;
+                            use slint::VecModel;
+                            let empty: Vec<crate::MessageItemData> = vec![];
+                            w.set_messages(ModelRc::new(VecModel::from(empty)));
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create DM mailbox: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_loading_messages(false);
+                        }
+                    });
+                }
             }
         });
     });

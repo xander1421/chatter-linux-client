@@ -216,18 +216,21 @@ pub fn blind_key(
     server_pk: &ServerPublicKey,
     ephemeral_pk: &[u8],
 ) -> Result<BlindingOperation, MailboxError> {
-    // Use default options
-    let options = Options::default();
+    // Use deterministic options (no randomizer) for server-side verification compatibility
+    // Use deterministic options (no randomizer) for server-side verification compatibility
+    // The server can verify without needing to know the randomizer
+    // using salt_len=48 (standard for SHA-384-PSS)
+    let options = Options::new(blind_rsa_signatures::Hash::Sha384, true, 48);
 
     // Perform blinding - the API takes (msg, include_randomizer, options)
-    // Using randomized messages (true) for privacy
+    // Using deterministic mode (false) for server verification compatibility
     let BlindingResult {
         blind_msg,
         secret,
         msg_randomizer,
     } = server_pk
         .inner()
-        .blind(ephemeral_pk, true, &options)
+        .blind(ephemeral_pk, false, &options)
         .map_err(|e| MailboxError::BlindSignature(format!("blinding failed: {}", e)))?;
 
     Ok(BlindingOperation {
@@ -261,7 +264,8 @@ pub fn unblind(
     randomizer: &MessageRandomizer,
     original_message: &[u8],
 ) -> Result<Vec<u8>, MailboxError> {
-    let options = Options::default();
+    // Use deterministic options matching blind_key
+    let options = Options::new(blind_rsa_signatures::Hash::Sha384, true, 48);
 
     // Parse blinded signature
     let blind_sig = BlindSignature::from(blinded_sig.to_vec());
@@ -299,7 +303,10 @@ pub fn verify(
     signature: &[u8],
     randomizer: &MessageRandomizer,
 ) -> bool {
-    let options = Options::default();
+    // Use deterministic options (no randomizer) for server-side verification compatibility
+    // The server can verify without needing to know the randomizer
+    // using salt_len=48 (standard for SHA-384-PSS)
+    let options = Options::new(blind_rsa_signatures::Hash::Sha384, true, 48);
     let sig = blind_rsa_signatures::Signature::from(signature.to_vec());
     let msg_randomizer = randomizer.to_inner();
     server_pk

@@ -9,7 +9,7 @@ import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
 
 export component ReactionPicker inherits Rectangle {
     // Visibility
-    in property <bool> visible: false;
+    in property <bool> show: false;
 
     // Message being reacted to
     in property <string> message-id;
@@ -36,8 +36,8 @@ export component ReactionPicker inherits Rectangle {
     // thumbs up, heart, joy, surprised, crying, angry
 
     // Only render when visible
-    opacity: root.visible ? 1 : 0;
-    visible: root.visible;
+    opacity: root.show ? 1 : 0;
+    visible: root.show;
 
     // Full screen backdrop
     width: 100%;
@@ -75,7 +75,7 @@ export component ReactionPicker inherits Rectangle {
             Rectangle {
                 height: 32px;
                 background: Colors.surface-hover;
-                border-radius: Spacing.radius-lg Spacing.radius-lg 0 0;
+                border-radius: Spacing.radius-lg;
 
                 HorizontalLayout {
                     padding-left: Spacing.sm;

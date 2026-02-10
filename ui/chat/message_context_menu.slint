@@ -1,0 +1,128 @@
+// Message context menu component
+//
+// Shows actions for a message: reply, edit, delete, pin, forward, copy
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component MessageContextMenu inherits Rectangle {
+    // Visibility and position
+    in property <bool> show: false;
+    in property <length> position-x: 0;
+    in property <length> position-y: 0;
+
+    // Message context
+    in property <string> message-id;
+    in property <bool> is-own-message: false;  // Can edit/delete own messages
+    in property <bool> is-pinned: false;
+
+    // Callbacks
+    callback close();
+    callback reply-clicked(string);
+    callback edit-clicked(string);
+    callback delete-clicked(string);           // Delete for me (local only)
+    callback delete-everyone-clicked(string);  // Delete for everyone
+    callback pin-clicked(string);
+    callback forward-clicked(string);
+    callback copy-clicked(string);
+
+    // Menu items
+    property <[{icon: string, label: string, action: string, enabled: bool}]> menu-items: [
+        { icon: "\u{21A9}", label: "Reply", action: "reply", enabled: true },
+        { icon: "\u{270F}", label: "Edit", action: "edit", enabled: root.is-own-message },
+        { icon: "\u{1F4CC}", label: root.is-pinned ? "Unpin" : "Pin", action: "pin", enabled: true },
+        { icon: "\u{21AA}", label: "Forward", action: "forward", enabled: true },
+        { icon: "\u{1F4CB}", label: "Copy", action: "copy", enabled: true },
+        { icon: "\u{1F5D1}", label: "Delete for Everyone", action: "delete-everyone", enabled: root.is-own-message },
+        { icon: "\u{1F5D1}", label: "Delete for Me", action: "delete", enabled: true },
+    ];
+
+    // Only render when visible
+    visible: root.show;
+    opacity: root.show ? 1 : 0;
+
+    // Full screen backdrop
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    // Backdrop touch area
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.close(); }
+    }
+
+    // Menu container
+    Rectangle {
+        x: root.position-x;
+        y: root.position-y;
+        width: 160px;
+        height: menu-layout.preferred-height + Spacing.sm * 2;
+        background: Colors.surface;
+        border-radius: Spacing.radius-md;
+        border-width: 1px;
+        border-color: Colors.text-muted.with-alpha(0.2);
+        drop-shadow-blur: 8px;
+        drop-shadow-color: Colors.background.with-alpha(0.5);
+        drop-shadow-offset-y: 2px;
+
+        // Block backdrop clicks
+        TouchArea { }
+
+        menu-layout := VerticalLayout {
+            padding: Spacing.sm;
+            spacing: 2px;
+
+            for item in root.menu-items: Rectangle {
+                height: item.enabled ? 32px : 0px;
+                visible: item.enabled;
+                background: item-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.sm;
+                    alignment: start;
+
+                    Text {
+                        text: item.icon;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                        width: 20px;
+                    }
+
+                    Text {
+                        text: item.label;
+                        color: item.action == "delete" ? Colors.error : Colors.text-primary;
+                        font-size: Typography.sm;
+                        vertical-alignment: center;
+                    }
+                }
+
+                item-touch := TouchArea {
+                    clicked => {
+                        if item.action == "reply" {
+                            root.reply-clicked(root.message-id);
+                        } else if item.action == "edit" {
+                            root.edit-clicked(root.message-id);
+                        } else if item.action == "delete" {
+                            root.delete-clicked(root.message-id);
+                        } else if item.action == "delete-everyone" {
+                            root.delete-everyone-clicked(root.message-id);
+                        } else if item.action == "pin" {
+                            root.pin-clicked(root.message-id);
+                        } else if item.action == "forward" {
+                            root.forward-clicked(root.message-id);
+                        } else if item.action == "copy" {
+                            root.copy-clicked(root.message-id);
+                        }
+                        root.close();
+                    }
+                }
+            }
+        }
+    }
+}

@@ -360,7 +360,7 @@ mod tests {
                 r#"
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
-                    value_json TEXT NOT NULL,
+                    value TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS reactions (

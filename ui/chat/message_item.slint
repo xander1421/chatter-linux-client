@@ -1,12 +1,13 @@
 // Single message item component
 //
 // Displays an individual message with avatar, sender, content, timestamp,
-// reactions, and thread indicator.
+// reactions, thread indicator, and attachments.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
+import { MessageAttachmentData } from "types.slint";
 
 export component MessageItem inherits Rectangle {
     // Message identity
@@ -33,6 +34,7 @@ export component MessageItem inherits Rectangle {
     // Attachments
     in property <bool> has-attachments: false;
     in property <int> attachment-count: 0;
+    in property <[MessageAttachmentData]> attachments: [];
 
     // Reactions
     in property <bool> has-reactions: false;
@@ -40,10 +42,11 @@ export component MessageItem inherits Rectangle {
 
     // Thread
     in property <int> reply-count: 0;
+    in property <string> reply-count-text: "";
     in property <bool> is-thread-reply: false;
 
-    // Hover state
-    in-out property <bool> hovered: false;
+    // Internal hover state - true when hovering message OR action buttons
+    property <bool> is-hovered: touch.has-hover || action-buttons-touch.has-hover;
 
     // Callbacks
     callback reply-clicked(string);
@@ -51,10 +54,11 @@ export component MessageItem inherits Rectangle {
     callback thread-clicked(string);
     callback more-clicked(string);
     callback message-clicked(string);
+    callback attachment-clicked(string);  // attachment ID
 
-    // Styling
+    // Styling - no layout shift, just color change on hover
     min-height: main-layout.preferred-height;
-    background: touch.has-hover ? Colors.surface-hover : (root.is-own ? Colors.surface : transparent);
+    background: root.is-hovered ? Colors.surface-hover : (root.is-own ? Colors.surface : transparent);
     border-radius: Spacing.radius-sm;
 
     touch := TouchArea {
@@ -65,12 +69,109 @@ export component MessageItem inherits Rectangle {
         }
     }
 
+    // Action buttons overlay - positioned absolutely at top-right
+    // Always rendered but invisible when not hovered (no layout shift)
+    action-buttons-touch := TouchArea {
+        x: parent.width - action-buttons.width - Spacing.sm;
+        y: Spacing.xs;
+        width: action-buttons.width;
+        height: action-buttons.height;
+        visible: !root.is-system && !root.is-deleted;
+
+        action-buttons := Rectangle {
+            height: 28px;
+            width: 80px;
+            background: Colors.surface;
+            border-radius: Spacing.radius-sm;
+            border-width: 1px;
+            border-color: Colors.surface-hover;
+            opacity: root.is-hovered ? 1.0 : 0.0;
+            // Smooth transition would be nice but Slint doesn't support CSS transitions
+
+            HorizontalLayout {
+                padding: 2px;
+                spacing: 2px;
+                alignment: center;
+
+                // Reply button
+                Rectangle {
+                    height: 24px;
+                    width: 24px;
+                    background: reply-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-sm;
+
+                    Text {
+                        text: "\u{21A9}"; // Reply arrow
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    reply-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.reply-clicked(root.message-id);
+                        }
+                    }
+                }
+
+                // React button
+                Rectangle {
+                    height: 24px;
+                    width: 24px;
+                    background: react-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-sm;
+
+                    Text {
+                        text: "\u{1F642}"; // Smile emoji
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    react-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.react-clicked(root.message-id);
+                        }
+                    }
+                }
+
+                // More button
+                Rectangle {
+                    height: 24px;
+                    width: 24px;
+                    background: more-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-sm;
+
+                    Text {
+                        text: "\u{22EE}"; // Vertical ellipsis
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    more-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.more-clicked(root.message-id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     main-layout := VerticalLayout {
+        // 100% width enables text wrapping - flows from parent layout
+        width: 100%;
         padding: Spacing.sm;
         spacing: Spacing.xs;
 
         // System message (centered, italic)
         if root.is-system: Rectangle {
+            // 100% width for text wrapping
+            width: 100%;
             height: system-text.preferred-height;
 
             system-text := Text {
@@ -86,6 +187,8 @@ export component MessageItem inherits Rectangle {
 
         // Deleted message
         if !root.is-system && root.is-deleted: Rectangle {
+            // 100% width for text wrapping
+            width: 100%;
             height: deleted-text.preferred-height;
 
             deleted-text := Text {
@@ -100,6 +203,8 @@ export component MessageItem inherits Rectangle {
 
         // Normal message
         if !root.is-system && !root.is-deleted: VerticalLayout {
+            // 100% width for proper text wrapping in children
+            width: 100%;
             spacing: Spacing.xs;
 
             // Sender row (avatar + name + timestamp)
@@ -165,14 +270,19 @@ export component MessageItem inherits Rectangle {
                 }
             }
 
-            // Content area
-            content-area := Rectangle {
-                height: content-text.preferred-height;
+            // Content area - Text needs explicit width: 100% for wrap to work
+            // Per Slint docs: "width: 100%" fills available parent space
+            HorizontalLayout {
+                width: 100%;
 
-                // Add left padding when sender is shown (to align with avatar content)
+                // Left spacer for avatar alignment
+                if root.show-sender: Rectangle {
+                    width: Spacing.avatar-sm + Spacing.sm;
+                }
+
+                // Content text - width: 100% is required for word-wrap
                 content-text := Text {
-                    x: root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0;
-                    width: parent.width - (root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0);
+                    width: 100%;
                     text: root.content;
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
@@ -180,20 +290,315 @@ export component MessageItem inherits Rectangle {
                 }
             }
 
-            // Attachments indicator
-            if root.has-attachments: HorizontalLayout {
+            // Attachments display
+            if root.has-attachments: VerticalLayout {
                 padding-left: root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0;
-                spacing: Spacing.xs;
+                spacing: Spacing.sm;
+                alignment: start;
 
-                Text {
-                    text: "\u{1F4CE}"; // Paperclip emoji
-                    font-size: Typography.xs;
-                }
+                // Render each attachment
+                for attachment in root.attachments: HorizontalLayout {
+                    alignment: start;
 
-                Text {
-                    text: root.attachment-count == 1 ? "1 attachment" : "\{root.attachment-count} attachments";
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
+                    // Image attachments - show thumbnail or placeholder
+                    if attachment.is-image: Rectangle {
+                        // Calculate size based on actual image dimensions
+                        // Max width 300px, max height 200px, preserve aspect ratio
+                        property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.5;
+                        property <length> max-w: 300px;
+                        property <length> max-h: 200px;
+                        // If image is wider than tall, constrain by width
+                        // If image is taller than wide, constrain by height
+                        property <length> calc-w: aspect-ratio >= 1 ? min(max-w, attachment.width * 1px) : min(max-h * aspect-ratio, attachment.width * 1px);
+                        property <length> calc-h: aspect-ratio >= 1 ? min(max-h, calc-w / aspect-ratio) : min(max-h, attachment.height * 1px);
+                        // Final dimensions - use calculated or fallback for no-thumbnail
+                        width: attachment.has-thumbnail && attachment.width > 0 ? max(120px, min(max-w, calc-w)) : 200px;
+                        height: attachment.has-thumbnail && attachment.height > 0 ? max(80px, min(max-h, calc-h)) : 160px;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-md;
+                        clip: true;
+
+                        // Show actual thumbnail if available
+                        if attachment.has-thumbnail: Image {
+                            width: 100%;
+                            height: 100%;
+                            source: attachment.thumbnail;
+                            image-fit: cover;
+                        }
+
+                        // Show placeholder if no thumbnail
+                        if !attachment.has-thumbnail: Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            background: Colors.surface-hover;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: Spacing.xs;
+
+                                Text {
+                                    text: "\u{1F5BC}";  // Frame with picture
+                                    font-size: 40px;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: attachment.filename;
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    horizontal-alignment: center;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: attachment.size-display;
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: "Click to view";
+                                    color: Colors.primary;
+                                    font-size: Typography.xs;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+
+                        img-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.attachment-clicked(attachment.id);
+                            }
+                        }
+                    }
+
+                    // Audio attachments - show audio player
+                    if attachment.category == "audio": Rectangle {
+                        width: 320px;  // Fixed max width for audio player
+                        height: 72px;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-md;
+                        border-width: 1px;
+                        border-color: attachment.is-playing ? Colors.primary : Colors.surface-hover;
+
+                        HorizontalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+
+                            // Play/Pause button
+                            Rectangle {
+                                width: 48px;
+                                height: 48px;
+                                border-radius: 24px;
+                                background: audio-play-touch.has-hover ? Colors.primary.darker(0.1) : Colors.primary;
+
+                                Text {
+                                    width: 100%;
+                                    height: 100%;
+                                    // Show pause icon when playing, play icon otherwise
+                                    text: attachment.is-playing ? "\u{23F8}" : "\u{25B6}";  // Pause or Play
+                                    color: Colors.text-primary;
+                                    font-size: 20px;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                audio-play-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.attachment-clicked(attachment.id);
+                                    }
+                                }
+                            }
+
+                            // Waveform and info
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: Spacing.xs;
+
+                                // Filename
+                                Text {
+                                    text: attachment.filename;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    overflow: elide;
+                                }
+
+                                // Waveform placeholder (progress bar style)
+                                Rectangle {
+                                    height: 24px;
+                                    background: Colors.surface-hover;
+                                    border-radius: Spacing.radius-sm;
+                                    clip: true;
+
+                                    // Waveform bars visualization
+                                    HorizontalLayout {
+                                        padding: 4px;
+                                        spacing: 2px;
+                                        alignment: center;
+
+                                        for i in [3, 5, 8, 12, 7, 15, 10, 6, 11, 14, 9, 5, 13, 8, 6, 10, 12, 7, 4, 9, 11, 6, 8, 5]: Rectangle {
+                                            width: 3px;
+                                            height: i * 1px;
+                                            background: #a78bfa;
+                                            border-radius: 1px;
+                                        }
+                                    }
+                                }
+
+                                // Duration
+                                Text {
+                                    text: attachment.size-display;
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                }
+                            }
+                        }
+                    }
+
+                    // Video attachments - show video preview with play overlay
+                    if attachment.category == "video": Rectangle {
+                        width: 300px;  // Fixed max width for video preview
+                        height: 180px;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-md;
+                        clip: true;
+
+                        // Video thumbnail placeholder
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            background: #1a1a2e;
+
+                            // Film strip pattern
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: Spacing.xs;
+
+                                Text {
+                                    text: "\u{1F3AC}";  // Clapper board
+                                    font-size: 48px;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: attachment.filename;
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    horizontal-alignment: center;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: attachment.size-display;
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+
+                        // Play button overlay
+                        Rectangle {
+                            x: (parent.width - 64px) / 2;
+                            y: (parent.height - 64px) / 2 - 20px;
+                            width: 64px;
+                            height: 64px;
+                            border-radius: 32px;
+                            background: video-play-touch.has-hover ? Colors.primary : Colors.primary.transparentize(0.2);
+
+                            Text {
+                                width: 100%;
+                                height: 100%;
+                                text: "\u{25B6}";
+                                color: Colors.text-primary;
+                                font-size: 28px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        video-play-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.attachment-clicked(attachment.id);
+                            }
+                        }
+                    }
+
+                    // Other non-image/audio/video attachments - show file card
+                    if !attachment.is-image && attachment.category != "audio" && attachment.category != "video": Rectangle {
+                        width: 280px;  // Fixed max width for file cards
+                        height: 56px;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-sm;
+                        border-width: 1px;
+                        border-color: Colors.surface-hover;
+
+                        HorizontalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+
+                            // Icon
+                            Rectangle {
+                                width: 40px;
+                                height: 40px;
+                                border-radius: Spacing.radius-sm;
+                                background: attachment.icon-color.transparentize(0.85);
+
+                                Text {
+                                    width: 100%;
+                                    height: 100%;
+                                    text: attachment.icon;
+                                    font-size: Typography.lg;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // File info
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                alignment: center;
+                                spacing: 2px;
+
+                                Text {
+                                    text: attachment.filename;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: attachment.size-display;
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                }
+                            }
+
+                            // Download icon
+                            Rectangle {
+                                width: 32px;
+                                height: 32px;
+                                background: file-touch.has-hover ? Colors.surface-hover : transparent;
+                                border-radius: Spacing.radius-sm;
+
+                                Text {
+                                    width: 100%;
+                                    height: 100%;
+                                    text: "\u{2B07}";  // Down arrow
+                                    font-size: Typography.base;
+                                    color: Colors.primary;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        file-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.attachment-clicked(attachment.id);
+                            }
+                        }
+                    }
                 }
             }
 
@@ -242,7 +647,7 @@ export component MessageItem inherits Rectangle {
                         }
 
                         Text {
-                            text: root.reply-count == 1 ? "1 reply" : "\{root.reply-count} replies";
+                            text: root.reply-count-text;
                             color: Colors.primary;
                             font-size: Typography.xs;
                         }
@@ -258,81 +663,5 @@ export component MessageItem inherits Rectangle {
             }
         }
 
-        // Hover action buttons (reply, react, more)
-        if touch.has-hover && !root.is-system && !root.is-deleted: Rectangle {
-            height: 28px;
-
-            HorizontalLayout {
-                padding-left: root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0;
-                spacing: Spacing.xs;
-                alignment: start;
-
-                // Reply button
-                Rectangle {
-                    height: 24px;
-                    width: 24px;
-                    background: Colors.surface;
-                    border-radius: Spacing.radius-sm;
-
-                    Text {
-                        text: "\u{21A9}"; // Reply arrow
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    reply-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.reply-clicked(root.message-id);
-                        }
-                    }
-                }
-
-                // React button
-                Rectangle {
-                    height: 24px;
-                    width: 24px;
-                    background: Colors.surface;
-                    border-radius: Spacing.radius-sm;
-
-                    Text {
-                        text: "\u{1F642}"; // Smile emoji
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    react-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.react-clicked(root.message-id);
-                        }
-                    }
-                }
-
-                // More button
-                Rectangle {
-                    height: 24px;
-                    width: 24px;
-                    background: Colors.surface;
-                    border-radius: Spacing.radius-sm;
-
-                    Text {
-                        text: "\u{22EE}"; // Vertical ellipsis
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-
-                    more-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.more-clicked(root.message-id);
-                        }
-                    }
-                }
-            }
-        }
     }
 }

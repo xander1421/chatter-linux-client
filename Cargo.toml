@@ -111,6 +111,8 @@ hound = "3.5"                              # WAV encoding
 image = "0.25.9"
 once_cell = "1"                            # Lazy static initialization
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }  # Syntax highlighting (pure Rust)
+lazy_static = "1.5.0"
+async-stream = "0.3.6"
 
 [build-dependencies]
 slint-build = "1.9"

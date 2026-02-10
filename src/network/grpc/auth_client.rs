@@ -19,9 +19,10 @@ use crate::proto::chat_v1::{
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
     RefreshPreKeysRequest, RegisterRequest, RegistrationResult, RenameDeviceRequest,
     RequestPasswordResetRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
-    ResendVerificationEmailRequest, RevokeDeviceRequest, ServerTrustRootResponse,
-    SignalPreKeyBundle, UploadPreKeyBundleRequest, VerifyEmailRequest,
+    ResendVerificationEmailRequest, RevokeDeviceRequest, SignalPreKeyBundle,
+    UploadPreKeyBundleRequest, VerifyEmailRequest,
 };
+// NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
 
 /// Auth service client wrapper.
 ///
@@ -162,6 +163,8 @@ impl AuthClient {
     /// # Arguments
     ///
     /// * `profile_key` - 32-byte profile key; server derives UAK from this
+    /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
+    /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
     pub async fn register(
         &mut self,
         username: &str,
@@ -171,6 +174,8 @@ impl AuthClient {
         device_info: &str,
         device_auth_token: &[u8],
         profile_key: &[u8; 32],
+        prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
+        initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
     ) -> Result<impl Stream<Item = Result<AuthEvent, NetworkError>>, NetworkError> {
         let request = RegisterRequest {
             username: username.to_string(),
@@ -182,8 +187,8 @@ impl AuthClient {
             request_id: uuid::Uuid::new_v4().to_string(),
             device_auth_token: device_auth_token.to_vec(),
             profile_key: profile_key.to_vec(),
-            prekey_bundle: None,
-            initial_one_time_prekeys: Vec::new(),
+            prekey_bundle,
+            initial_one_time_prekeys,
             challenge_response: Vec::new(),
             challenge_id: String::new(),
         };
@@ -208,6 +213,8 @@ impl AuthClient {
     /// # Arguments
     ///
     /// * `profile_key` - 32-byte profile key; server derives UAK from this
+    /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
+    /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
     pub async fn register_and_wait(
         &mut self,
         username: &str,
@@ -217,6 +224,8 @@ impl AuthClient {
         device_info: &str,
         device_auth_token: &[u8],
         profile_key: &[u8; 32],
+        prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
+        initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
     ) -> Result<RegistrationResult, NetworkError> {
         let stream = self
             .register(
@@ -227,6 +236,8 @@ impl AuthClient {
                 device_info,
                 device_auth_token,
                 profile_key,
+                prekey_bundle,
+                initial_one_time_prekeys,
             )
             .await?;
 
@@ -605,18 +616,8 @@ impl AuthClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Get server's trust root public key.
-    ///
-    /// Used to verify sender certificate signatures.
-    /// This key should be cached as it rarely changes.
-    /// Returns the server's signing public key and key ID.
-    pub async fn get_server_trust_root(&mut self) -> Result<ServerTrustRootResponse, NetworkError> {
-        self.inner
-            .get_server_trust_root(())
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
+    // NOTE: get_server_trust_root() removed - trust root is hardcoded in config.rs
+    // per Signal's security model. See crate::config::TRUST_ROOT_PUBLIC_KEY
 }
 
 #[cfg(test)]

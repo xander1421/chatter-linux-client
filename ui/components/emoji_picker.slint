@@ -13,7 +13,7 @@ export struct EmojiData {
 
 export component EmojiPicker inherits Rectangle {
     // Picker visibility
-    in property <bool> visible: false;
+    in property <bool> show: false;
 
     // Emoji list from Rust (filtered by category or search)
     in property <[EmojiData]> emoji-list: [];
@@ -40,8 +40,8 @@ export component EmojiPicker inherits Rectangle {
     forward-focus: search-input;
 
     // Only render when visible
-    opacity: root.visible ? 1 : 0;
-    visible: root.visible;
+    visible: root.show;
+    opacity: root.show ? 1 : 0;
 
     // Picker container
     width: 280px;
@@ -190,11 +190,11 @@ export component EmojiPicker inherits Rectangle {
                 height: parent.viewport-height;
 
                 for emoji-data[index] in root.emoji-list: Rectangle {
-                    property <int> row: Math.floor(index / 6);
-                    property <int> col: mod(index, 6);
+                    property <int> grid-row: Math.floor(index / 6);
+                    property <int> grid-col: mod(index, 6);
 
-                    x: col * 42px + 3px;
-                    y: row * 36px;
+                    x: grid-col * 42px + 3px;
+                    y: grid-row * 36px;
                     width: 36px;
                     height: 36px;
                     border-radius: Spacing.radius-sm;

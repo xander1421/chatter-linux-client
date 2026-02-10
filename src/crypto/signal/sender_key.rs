@@ -9,7 +9,7 @@ use libsignal_protocol::{
     process_sender_key_distribution_message, ProtocolAddress, SenderKeyDistributionMessage,
     SenderKeyMessage, SenderKeyStore,
 };
-use rand::rng;
+use rand::{rngs::StdRng, SeedableRng};
 use uuid::Uuid;
 
 use crate::error::CryptoError;
@@ -59,7 +59,7 @@ impl SenderKeyManager {
         distribution_id: Uuid,
         sender_key_store: &mut dyn SenderKeyStore,
     ) -> Result<SenderKeyDistributionMessage, CryptoError> {
-        let mut rng = rng();
+        let mut rng = StdRng::from_os_rng();
         create_sender_key_distribution_message(sender, distribution_id, sender_key_store, &mut rng)
             .await
             .map_err(|e| CryptoError::Protocol(e.to_string()))
@@ -105,7 +105,7 @@ impl SenderKeyManager {
         plaintext: &[u8],
         sender_key_store: &mut dyn SenderKeyStore,
     ) -> Result<SenderKeyMessage, CryptoError> {
-        let mut rng = rng();
+        let mut rng = StdRng::from_os_rng();
         group_encrypt(sender_key_store, sender, distribution_id, plaintext, &mut rng)
             .await
             .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))

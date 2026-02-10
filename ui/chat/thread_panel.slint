@@ -37,9 +37,13 @@ export component ThreadPanel inherits Rectangle {
     width: 320px;
     background: Colors.surface;
 
-    // Left border to separate from main chat
-    border-width: 0 0 0 1px;
-    border-color: Colors.text-muted.with-alpha(0.2);
+    // Left border to separate from main chat (only left side)
+    Rectangle {
+        x: 0;
+        width: 1px;
+        height: 100%;
+        background: Colors.text-muted.with-alpha(0.2);
+    }
 
     VerticalLayout {
         // Header (48px)
@@ -340,7 +344,7 @@ export component ThreadPanel inherits Rectangle {
 
                     Text {
                         text: "\u{27A4}"; // Arrow symbol
-                        color: root.composer-text != "" ? Colors.text-on-primary : Colors.text-muted;
+                        color: root.composer-text != "" ? white : Colors.text-muted;
                         font-size: Typography.base;
                         horizontal-alignment: center;
                         vertical-alignment: center;

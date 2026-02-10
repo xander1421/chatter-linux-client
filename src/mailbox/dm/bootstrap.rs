@@ -166,6 +166,7 @@ impl DmBootstrap {
                 token.public_key.clone(),
                 token.signature.clone(),
                 DEFAULT_MAILBOX_TTL_SECONDS,
+                vec![],  // Empty randomizer for compatibility
             )
             .await
             .map_err(|e| MailboxError::Network(e.to_string()))?;
@@ -324,6 +325,7 @@ impl DmBootstrap {
                     token.public_key.clone(),
                     token.signature.clone(),
                     DEFAULT_MAILBOX_TTL_SECONDS,
+                    vec![],  // Empty randomizer for legacy tokens
                 )
                 .await
                 .map_err(|e| MailboxError::Network(e.to_string()))?;

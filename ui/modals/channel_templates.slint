@@ -143,5 +143,29 @@ export component ChannelTemplates inherits Rectangle {
                 }
             }
         }
+
+        // Row 3: AI Assistant
+        HorizontalLayout {
+            spacing: Spacing.md;
+
+            TemplateCard {
+                template-id: "ai-assistant";
+                name: "AI Assistant";
+                description: "Channel with AI bot integration";
+                icon-color: Colors.primary;
+                selected: root.selected-template == "ai-assistant";
+
+                clicked => {
+                    root.selected-template = "ai-assistant";
+                    root.template-selected("ai-assistant");
+                }
+            }
+
+            // Spacer to balance grid
+            Rectangle {
+                horizontal-stretch: 1;
+                background: transparent;
+            }
+        }
     }
 }

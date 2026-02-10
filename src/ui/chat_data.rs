@@ -92,6 +92,7 @@ impl From<&Channel> for ChatHeaderData {
             ChannelType::Public => "public",
             ChannelType::Private => "private",
             ChannelType::DirectMessage => "dm",
+            ChannelType::SavedMessages => "saved",
         };
 
         Self {
@@ -240,6 +241,8 @@ pub struct MessageItemData {
     pub content: String,
     /// Formatted timestamp (e.g., "2:34 PM", "Yesterday").
     pub timestamp: String,
+    /// Raw timestamp in milliseconds since epoch for event matching.
+    pub timestamp_ms: i64,
     /// Whether this is the current user's message.
     pub is_own: bool,
     /// Whether the message has been edited.
@@ -264,6 +267,8 @@ pub struct MessageItemData {
     pub is_thread_reply: bool,
     /// Whether to show sender info (false for consecutive same-sender).
     pub show_sender: bool,
+    /// Delivery status for own messages: "sent", "delivered", "read", or "" for non-own.
+    pub delivery_status: String,
 }
 
 impl MessageItemData {
@@ -309,6 +314,13 @@ impl MessageItemData {
     #[must_use]
     pub fn with_timestamp(mut self, timestamp: impl Into<String>) -> Self {
         self.timestamp = timestamp.into();
+        self
+    }
+
+    /// Set raw timestamp in milliseconds.
+    #[must_use]
+    pub fn with_timestamp_ms(mut self, timestamp_ms: i64) -> Self {
+        self.timestamp_ms = timestamp_ms;
         self
     }
 
@@ -376,6 +388,13 @@ impl MessageItemData {
     #[must_use]
     pub fn with_show_sender(mut self, show: bool) -> Self {
         self.show_sender = show;
+        self
+    }
+
+    /// Set delivery status for own messages.
+    #[must_use]
+    pub fn with_delivery_status(mut self, status: impl Into<String>) -> Self {
+        self.delivery_status = status.into();
         self
     }
 }
@@ -522,6 +541,7 @@ pub fn message_to_item_data(
         .with_sender_avatar(sender_avatar_url)
         .with_content(extract_content_text(&message.content))
         .with_timestamp(format_timestamp(message.created_at))
+        .with_timestamp_ms(message.created_at.timestamp_millis())
         .with_own(is_own)
         .with_edited(message.is_edited)
         .with_deleted(message.is_deleted)
@@ -550,6 +570,7 @@ mod tests {
     use super::*;
     use crate::domain::ids::{ChannelId, MessageId, UserId};
     use crate::domain::message::{Message, MessageContent, ReactionCount};
+    use crate::domain::SystemMessage;
 
     #[test]
     fn test_message_item_data_new() {

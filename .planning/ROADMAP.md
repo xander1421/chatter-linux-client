@@ -564,6 +564,40 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 - Created 8 feature modules: auth, navigation, sidebar, chat, chat_actions, header, composer, modals
 - Follows idiomatic Rust patterns with `wire()` functions per feature
 
+### Phase 72: Channel Creation, Search & Join UI
+**Goal**: Complete channel discovery and creation flows with AI channel support
+**Depends on**: Phase 71
+**Research**: Unlikely (wiring existing components)
+**Status**: Done
+**Plans**: 1/1 complete
+
+**Details:**
+- Enhanced CreateChannelModal with 3-step wizard for AI channels
+- Added 5th template (AI Assistant) to ChannelTemplates
+- Created JoinChannelModal with search and direct ID input
+- Wired `wire_create_channel()` and `wire_join_channel()` in modals.rs
+- Debounced channel search with atomic counter
+- Join button added to sidebar
+
+### Phase 73: Signal Protocol Encryption Wiring
+**Goal**: Connect existing crypto primitives to message flows for E2E encryption
+**Depends on**: Phase 72
+**Research**: Unlikely (wiring existing components)
+**Status**: Done
+**Plans**: 1/1
+
+**Details:**
+- DM encryption via Signal Protocol (sealed sender + mailbox) ✅
+- Channel encryption via Sender Keys ✅
+- SKDM distribution and rotation on member leave/kick ✅
+- Message storage with deduplication ✅
+- Sidebar updates for new DM messages and unread counts ✅
+- MessageGateway: central decryption router for all paths ✅
+- All Content types wired (typing, reactions, edit, delete, pin) ✅
+  - Send: `_with_channel` variants embed channel_id in encrypted payload
+  - Receive: `dispatch_channel_control_content` parses and emits proper events
+  - Server never sees channel context for control messages
+
 ## Progress
 
 **Execution Order:** Phases execute in numeric order (1 → 2 → ... → 70)
@@ -638,7 +672,9 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 | 66 | UI Auth Screens | 1 | Done | 2026-02-05 |
 | 67 | Main Binary Integration | 3 | Done | 2026-02-06 |
 | 68 | Build and Compile Verification | 1 | Done | 2026-02-06 |
-| 68.1 | Signal Protocol Integration | TBD | In Progress | - |
+| 68.1 | Signal Protocol Integration | 1 | Done | 2026-02-10 |
 | 69 | Proto Generation Pipeline | 1 | Done | 2026-02-08 |
-| 70 | End-to-End Smoke Test | TBD | Not started | - |
+| 70 | End-to-End Smoke Test | 1 | Done | 2026-02-10 |
 | 71 | Complete UI Callback Wiring | 5 | Done | 2026-02-08 |
+| 72 | Channel Creation, Search & Join UI | 1 | Done | 2026-02-10 |
+| 73 | Signal Protocol Encryption Wiring | 1 | Done | 2026-02-10 |

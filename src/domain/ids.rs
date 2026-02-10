@@ -185,6 +185,15 @@ impl ChannelId {
     }
 }
 
+/// Convert UserId to ChannelId.
+///
+/// Used for saved messages channels where channel_id = user_id.
+impl From<UserId> for ChannelId {
+    fn from(user_id: UserId) -> Self {
+        Self(user_id.0)
+    }
+}
+
 // ============================================================================
 // DeviceId implementation (u32-based)
 // ============================================================================

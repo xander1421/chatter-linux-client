@@ -7,7 +7,7 @@ import { Typography } from "../theme/typography.slint";
 export component Toast inherits Rectangle {
     in property <string> message: "";
     in property <string> variant: "info";  // "success", "error", "warning", "info"
-    in property <bool> visible: false;
+    in property <bool> show-toast: false;
 
     callback dismissed();
 
@@ -19,7 +19,8 @@ export component Toast inherits Rectangle {
         Colors.info;
 
     // Visibility and animation
-    opacity: root.visible ? 1 : 0;
+    visible: root.show-toast;
+    opacity: root.show-toast ? 1 : 0;
     animate opacity { duration: 200ms; }
 
     // Toast container

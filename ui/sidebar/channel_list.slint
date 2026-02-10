@@ -1,6 +1,7 @@
 // Channel list component
 //
 // Displays a scrollable list of channels with section header.
+// Supports collapsed mode with simplified header.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -18,23 +19,29 @@ export component ChannelList inherits Rectangle {
     // Properties
     in property <[ChannelListItemData]> channels: [];
     in property <string> selected-channel-id: "";
+    in property <bool> collapsed: false;
 
     // Callbacks
     callback channel-selected(string);
+    callback create-channel-clicked();
+    callback join-channel-clicked();
+    callback show-tooltip(string, length); // text, local-y within this component
+    callback hide-tooltip();
 
     // Layout
     background: Colors.surface;
 
     VerticalLayout {
-        // Section header
-        Rectangle {
+        // Section header - simplified when collapsed
+        header := Rectangle {
             height: 32px;
             background: Colors.surface;
 
-            HorizontalLayout {
+            // Expanded header
+            if !root.collapsed: HorizontalLayout {
                 padding-left: Spacing.sm;
                 padding-right: Spacing.sm;
-                alignment: start;
+                spacing: Spacing.sm;
 
                 Text {
                     text: "CHANNELS";
@@ -43,12 +50,93 @@ export component ChannelList inherits Rectangle {
                     font-weight: 600;
                     letter-spacing: 0.5px;
                     vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                // Join channel button
+                Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: Spacing.radius-sm;
+                    background: join-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "\u{1F50D}"; // Magnifying glass
+                        font-size: 11px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    join-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.join-channel-clicked();
+                        }
+                    }
+                }
+
+                // Create channel button
+                Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: Spacing.radius-sm;
+                    background: create-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "+";
+                        color: Colors.text-muted;
+                        font-size: 14px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    create-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.create-channel-clicked();
+                        }
+                    }
+                }
+            }
+
+            // Collapsed header - just + button centered
+            if root.collapsed: HorizontalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    border-radius: Spacing.radius-sm;
+                    background: collapsed-create-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "+";
+                        color: Colors.text-muted;
+                        font-size: 16px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    collapsed-create-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.create-channel-clicked();
+                        }
+                    }
                 }
             }
         }
 
         // Scrollable channel list
-        Flickable {
+        flickable := Flickable {
             viewport-height: channel-layout.preferred-height;
 
             channel-layout := VerticalLayout {
@@ -61,9 +149,17 @@ export component ChannelList inherits Rectangle {
                     channel-type: item.channel-type;
                     unread-count: item.unread-count;
                     selected: item.channel-id == root.selected-channel-id;
+                    collapsed: root.collapsed;
 
                     clicked => {
                         root.channel-selected(item.channel-id);
+                    }
+                    show-tooltip(text, item-y) => {
+                        // Adjust y position: header height + flickable offset + item position
+                        root.show-tooltip(text, header.height + item-y - flickable.viewport-y);
+                    }
+                    hide-tooltip => {
+                        root.hide-tooltip();
                     }
                 }
             }

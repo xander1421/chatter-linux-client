@@ -37,6 +37,7 @@ pub mod keys {
     pub const WINDOW_HEIGHT: &str = "ui.window_height";
     pub const WINDOW_MAXIMIZED: &str = "ui.window_maximized";
     pub const SIDEBAR_WIDTH: &str = "ui.sidebar_width";
+    pub const SIDEBAR_COLLAPSED: &str = "ui.sidebar_collapsed";
     pub const FONT_SIZE: &str = "ui.font_size";
     pub const MESSAGE_FONT_SIZE: &str = "ui.message_font_size";
     pub const COMPACT_MODE: &str = "ui.compact_mode";

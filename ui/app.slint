@@ -11,20 +11,30 @@ import { LoadingPage } from "pages/loading.slint";
 
 // Import main layout components
 import { Sidebar, ChannelListItemData, DMListItemData } from "sidebar/sidebar.slint";
-import { ChatLayout, MessageItemData } from "chat/chat_layout.slint";
+import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData } from "chat/chat_layout.slint";
+import { ThreadPanel } from "chat/thread_panel.slint";
+import { ReactionPicker } from "chat/reaction_picker.slint";
+import { MessageContextMenu } from "chat/message_context_menu.slint";
 
 // Import modals
-import { CreateChannelModal } from "modals/create_channel.slint";
+import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfig } from "modals/create_channel.slint";
 import { UserProfileModal } from "modals/user_profile.slint";
 import { FriendRequestsModal, FriendRequest } from "modals/friend_requests.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
 import { SessionsModal, SessionInfo } from "modals/sessions.slint";
+import { JoinChannelModal, SearchResultChannel } from "modals/join_channel.slint";
+import { SearchModal, SearchResult } from "modals/search_modal.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
 
+// Import components
+import { ImageViewer, EmojiData } from "components/mod.slint";
+import { CodePreviewPanel, CodeLine } from "components/mod.slint";
+import { PdfPreviewPanel } from "components/mod.slint";
+
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, FriendRequest, ForwardTarget, SessionInfo }
+export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData }
 
 export component App inherits Rectangle {
     // ========== View routing ==========
@@ -58,6 +68,13 @@ export component App inherits Rectangle {
     in property <string> user-initials: "";
     in property <string> user-presence-status: "online";
     in property <string> user-custom-status: "";
+    in-out property <bool> sidebar-collapsed: false;
+
+    // Tooltip state (for collapsed sidebar hover)
+    in-out property <string> tooltip-text: "";
+    in-out property <length> tooltip-x: 0px;
+    in-out property <length> tooltip-y: 0px;
+    in-out property <bool> tooltip-visible: false;
 
     // ========== Chat properties ==========
     in property <string> channel-id: "";
@@ -72,9 +89,83 @@ export component App inherits Rectangle {
     in-out property <string> composer-text: "";
     in property <string> composer-placeholder: "Type a message...";
     in property <bool> composer-disabled: false;
+    in property <[PendingAttachmentData]> pending-attachments: [];
+    in-out property <bool> composer-is-editing: false;
+    in-out property <string> composer-edit-message-id: "";
+
+    // ========== Image viewer state ==========
+    in-out property <bool> image-viewer-visible: false;
+    in property <image> image-viewer-source;
+    in property <string> image-viewer-filename: "";
+    in property <string> image-viewer-size: "";
+    callback close-image-viewer();
+
+    // ========== Code preview state ==========
+    in-out property <bool> code-preview-visible: false;
+    in property <string> code-preview-filename: "";
+    in property <string> code-preview-language: "";
+    in property <int> code-preview-line-count: 0;
+    in property <[CodeLine]> code-preview-lines: [];
+    callback close-code-preview();
+    callback copy-code();
+    callback open-code-external();
+
+    // ========== PDF preview state ==========
+    in-out property <bool> pdf-preview-visible: false;
+    in property <string> pdf-preview-filename: "";
+    in property <int> pdf-preview-page-count: 0;
+    in property <string> pdf-preview-error: "";
+    callback close-pdf-preview();
+    callback open-pdf-external();
+
+    // ========== Reaction picker state ==========
+    in-out property <bool> reaction-picker-visible: false;
+    in-out property <string> reaction-picker-message-id: "";
+    in property <[EmojiData]> reaction-picker-emojis: [];
+    callback reaction-selected(string, string);  // (message_id, emoji)
+
+    // ========== Message context menu state ==========
+    in-out property <bool> context-menu-visible: false;
+    in-out property <string> context-menu-message-id: "";
+    in-out property <length> context-menu-x: 0px;
+    in-out property <length> context-menu-y: 0px;
+    in property <bool> context-menu-is-own-message: false;
+    in property <bool> context-menu-is-pinned: false;
+    callback reply-message(string);           // message_id
+    callback edit-message(string);           // message_id
+    callback delete-message(string);         // message_id (delete for me)
+    callback delete-everyone-message(string); // message_id (delete for everyone)
+    callback pin-message(string);            // message_id
+    callback forward-message-action(string); // message_id (distinct from forward-message modal callback)
+    callback copy-message(string);           // message_id
+
+    // ========== Pinned bar state ==========
+    in property <bool> has-pinned-messages: false;
+    in property <string> pinned-message-preview: "";
+    in property <int> pinned-current-index: 1;
+    in property <int> pinned-total-count: 1;
+    in-out property <bool> pinned-is-expanded: false;
+    callback pinned-prev-clicked();
+    callback pinned-next-clicked();
+    callback pinned-dismiss-clicked();
+    callback pinned-go-to-message();
+
+    // ========== Thread panel state ==========
+    in property <bool> thread-panel-visible: false;
+    in property <string> thread-root-message-id: "";
+    in property <string> thread-root-sender-name: "";
+    in property <string> thread-root-content-preview: "";
+    in property <int> thread-reply-count: 0;
+    in property <string> thread-channel-name: "";
+    in property <[MessageItemData]> thread-replies: [];
+    in property <bool> thread-loading: false;
+    in-out property <string> thread-composer-text: "";
+    callback close-thread-clicked();
+    callback send-thread-reply(string);
+    callback load-more-thread-replies();
 
     // ========== Modal state ==========
-    // Modals: "none", "settings", "create-channel", "user-profile", "friend-requests", "forward-message", "sessions"
+    // Modals: "none", "settings", "create-channel", "join-channel", "user-profile", "friend-requests", "forward-message", "sessions"
     in-out property <string> active-modal: "none";
 
     // Create channel modal properties
@@ -83,6 +174,19 @@ export component App inherits Rectangle {
     in-out property <string> create-channel-template: "";
     in property <string> create-channel-error: "";
     in property <bool> create-channel-loading: false;
+
+    // Create channel AI config properties
+    in-out property <string> create-channel-ai-provider: "";
+    in-out property <string> create-channel-ai-model: "";
+    in property <[AIModelOption]> create-channel-ai-models: [];
+
+    // Join channel modal properties
+    in-out property <string> join-channel-search-query: "";
+    in property <[SearchResultChannel]> join-channel-results: [];
+    in property <bool> join-channel-searching: false;
+    in property <string> join-channel-error: "";
+    in-out property <string> join-channel-selected-id: "";
+    in property <bool> join-channel-joining: false;
 
     // User profile modal properties
     in property <string> profile-user-id: "";
@@ -114,6 +218,13 @@ export component App inherits Rectangle {
     in property <bool> sessions-loading: false;
     in property <bool> sessions-revoking: false;
 
+    // Search modal properties
+    in-out property <string> search-query: "";
+    in property <[SearchResult]> search-results: [];
+    in property <bool> search-searching: false;
+    in property <int> search-result-count: 0;
+    in-out property <bool> search-all-channels: false;
+
     // Settings properties
     in property <string> settings-display-name: "";
     in property <string> settings-username: "";
@@ -142,6 +253,11 @@ export component App inherits Rectangle {
     callback saved-messages-clicked();
     callback settings-clicked();
     callback profile-clicked();
+    callback open-create-channel();
+    callback open-join-channel();
+    callback toggle-sidebar();
+    callback display-tooltip(string, length, length);
+    callback hide-tooltip();
 
     // ========== Chat callbacks ==========
     callback search-clicked();
@@ -152,16 +268,26 @@ export component App inherits Rectangle {
     callback react-clicked(string);
     callback thread-clicked(string);
     callback more-clicked(string);
+    callback view-attachment(string);  // attachment ID - for viewing/opening attachments
     callback load-more();
     callback send(string);
+    callback send-edit(string, string);  // (message_id, new_text)
+    callback cancel-edit();
     callback attachment-clicked();
     callback emoji-clicked();
     callback gif-clicked();
     callback mention-triggered(string);
+    callback remove-attachment(string);
+    callback typing-changed(bool);  // true when started typing, false when stopped
 
     // ========== Modal callbacks ==========
-    // Create channel
-    callback create-channel(string, string, string);
+    // Create channel (name, description, template, ai_provider, ai_model)
+    callback create-channel(string, string, string, CreateChannelConfig, string, string);
+    callback create-channel-provider-selected(string);
+
+    // Join channel
+    callback search-channels(string);
+    callback join-channel(string);
 
     // User profile
     callback profile-send-message();
@@ -183,6 +309,11 @@ export component App inherits Rectangle {
     callback revoke-session(int);
     callback revoke-all-sessions();
 
+    // Search
+    callback search-messages(string);
+    callback search-result-clicked(string);
+    callback search-toggle-scope();
+
     // Settings
     callback settings-edit-profile();
     callback settings-change-password(string, string);
@@ -198,7 +329,11 @@ export component App inherits Rectangle {
     background: Colors.background;
 
     // ========== Main content layer ==========
+    // Explicit sizing ensures width flows to all child components for text wrapping
     Rectangle {
+        width: root.width;
+        height: root.height;
+
         // Loading page
         if current-view == "loading": LoadingPage {
             message: root.loading-message;
@@ -239,7 +374,7 @@ export component App inherits Rectangle {
 
         // Main chat layout
         if current-view == "main": HorizontalLayout {
-            // Sidebar (fixed width via component)
+            // Sidebar (width controlled by collapsed state)
             Sidebar {
                 channels: root.channels;
                 selected-channel-id: root.selected-channel-id;
@@ -250,6 +385,7 @@ export component App inherits Rectangle {
                 user-initials: root.user-initials;
                 user-presence-status: root.user-presence-status;
                 user-custom-status: root.user-custom-status;
+                collapsed <=> root.sidebar-collapsed;
 
                 channel-selected(id) => {
                     root.channel-selected(id);
@@ -267,11 +403,32 @@ export component App inherits Rectangle {
                 profile-clicked => {
                     root.profile-clicked();
                 }
+                create-channel-clicked => {
+                    root.active-modal = "create-channel";
+                    root.open-create-channel();
+                }
+                join-channel-clicked => {
+                    root.active-modal = "join-channel";
+                    root.open-join-channel();
+                }
+                toggle-collapsed => {
+                    root.toggle-sidebar();
+                }
+                show-tooltip(text, x, y) => {
+                    root.tooltip-text = text;
+                    root.tooltip-x = x;
+                    root.tooltip-y = y;
+                    root.tooltip-visible = true;
+                }
+                hide-tooltip => {
+                    root.tooltip-visible = false;
+                }
             }
 
             // Chat layout (fills remaining space)
+            // Explicit width calculation for proper text wrapping
             ChatLayout {
-                horizontal-stretch: 1;
+                width: root.width - (root.sidebar-collapsed ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width);
                 channel-id: root.channel-id;
                 channel-name: root.channel-name;
                 channel-type: root.channel-type;
@@ -284,21 +441,55 @@ export component App inherits Rectangle {
                 composer-text <=> root.composer-text;
                 composer-placeholder: root.composer-placeholder;
                 composer-disabled: root.composer-disabled;
+                pending-attachments: root.pending-attachments;
+                composer-is-editing <=> root.composer-is-editing;
+                composer-edit-message-id <=> root.composer-edit-message-id;
 
                 search-clicked => { root.search-clicked(); }
                 pinned-clicked => { root.pinned-clicked(); }
                 settings-clicked => { root.chat-settings-clicked(); }
                 message-clicked(id) => { root.message-clicked(id); }
                 reply-clicked(id) => { root.reply-clicked(id); }
-                react-clicked(id) => { root.react-clicked(id); }
+                react-clicked(id) => {
+                    root.reaction-picker-message-id = id;
+                    root.reaction-picker-visible = true;
+                    root.react-clicked(id);
+                }
                 thread-clicked(id) => { root.thread-clicked(id); }
                 more-clicked(id) => { root.more-clicked(id); }
+                view-attachment(id) => { root.view-attachment(id); }
                 load-more => { root.load-more(); }
                 send(text) => { root.send(text); }
+                send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
+                cancel-edit => { root.cancel-edit(); }
                 attachment-clicked => { root.attachment-clicked(); }
                 emoji-clicked => { root.emoji-clicked(); }
                 gif-clicked => { root.gif-clicked(); }
                 mention-triggered(query) => { root.mention-triggered(query); }
+                remove-attachment(id) => { root.remove-attachment(id); }
+                typing-changed(is-typing) => { root.typing-changed(is-typing); }
+            }
+
+            // Thread panel (appears to the right of chat when visible)
+            if root.thread-panel-visible: ThreadPanel {
+                root-message-id: root.thread-root-message-id;
+                root-sender-name: root.thread-root-sender-name;
+                root-content-preview: root.thread-root-content-preview;
+                reply-count: root.thread-reply-count;
+                channel-name: root.thread-channel-name;
+                replies: root.thread-replies;
+                loading: root.thread-loading;
+                composer-text <=> root.thread-composer-text;
+
+                close-clicked => { root.close-thread-clicked(); }
+                send-reply(text) => { root.send-thread-reply(text); }
+                load-more-replies => { root.load-more-thread-replies(); }
+                message-clicked(id) => { root.message-clicked(id); }
+                react-clicked(id) => {
+                    root.reaction-picker-message-id = id;
+                    root.reaction-picker-visible = true;
+                    root.react-clicked(id);
+                }
             }
         }
     }
@@ -325,12 +516,39 @@ export component App inherits Rectangle {
         selected-template <=> root.create-channel-template;
         error-message: root.create-channel-error;
         loading: root.create-channel-loading;
+        ai-provider <=> root.create-channel-ai-provider;
+        ai-model <=> root.create-channel-ai-model;
+        ai-models: root.create-channel-ai-models;
 
         close => {
             root.active-modal = "none";
         }
-        create(name, desc, template) => {
-            root.create-channel(name, desc, template);
+        create(name, desc, template, config, ai-provider, ai-model) => {
+            root.create-channel(name, desc, template, config, ai-provider, ai-model);
+        }
+        provider-selected(provider) => {
+            root.create-channel-provider-selected(provider);
+        }
+    }
+
+    // Join Channel Modal
+    JoinChannelModal {
+        show-modal: root.active-modal == "join-channel";
+        search-query <=> root.join-channel-search-query;
+        search-results: root.join-channel-results;
+        searching: root.join-channel-searching;
+        error-message: root.join-channel-error;
+        selected-channel-id <=> root.join-channel-selected-id;
+        joining: root.join-channel-joining;
+
+        close => {
+            root.active-modal = "none";
+        }
+        search(query) => {
+            root.search-channels(query);
+        }
+        join-channel(id) => {
+            root.join-channel(id);
         }
     }
 
@@ -428,6 +646,29 @@ export component App inherits Rectangle {
         }
     }
 
+    // Search Modal
+    SearchModal {
+        show-modal: root.active-modal == "search";
+        search-query <=> root.search-query;
+        search-results: root.search-results;
+        searching: root.search-searching;
+        result-count: root.search-result-count;
+        search-all-channels <=> root.search-all-channels;
+
+        close => {
+            root.active-modal = "none";
+        }
+        search(query) => {
+            root.search-messages(query);
+        }
+        result-clicked(message-id) => {
+            root.search-result-clicked(message-id);
+        }
+        toggle-scope => {
+            root.search-toggle-scope();
+        }
+    }
+
     // Settings screen (full screen overlay)
     if active-modal == "settings": SettingsScreen {
         display-name: root.settings-display-name;
@@ -479,5 +720,197 @@ export component App inherits Rectangle {
         refresh-keys-clicked => {
             root.settings-refresh-keys();
         }
+    }
+
+    // Image viewer overlay (rendered above modals)
+    ImageViewer {
+        show: root.image-viewer-visible;
+        source: root.image-viewer-source;
+        filename: root.image-viewer-filename;
+        size-display: root.image-viewer-size;
+
+        close => {
+            root.image-viewer-visible = false;
+            root.close-image-viewer();
+        }
+    }
+
+    // Code preview overlay
+    if root.code-preview-visible: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000cc;
+
+        // Click backdrop to close
+        TouchArea {
+            clicked => {
+                root.code-preview-visible = false;
+                root.close-code-preview();
+            }
+        }
+
+        // Centered code panel
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(parent.width - 80px, 900px);
+            height: min(parent.height - 80px, 700px);
+
+            // Block backdrop clicks
+            TouchArea { }
+
+            CodePreviewPanel {
+                width: 100%;
+                height: 100%;
+                file-name: root.code-preview-filename;
+                language: root.code-preview-language;
+                line-count: root.code-preview-line-count;
+                lines: root.code-preview-lines;
+
+                close-clicked => {
+                    root.code-preview-visible = false;
+                    root.close-code-preview();
+                }
+
+                copy-clicked => {
+                    root.copy-code();
+                }
+
+                open-external-clicked => {
+                    root.code-preview-visible = false;
+                    root.open-code-external();
+                }
+            }
+        }
+    }
+
+    // PDF preview overlay
+    if root.pdf-preview-visible: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000cc;
+
+        // Click backdrop to close
+        TouchArea {
+            clicked => {
+                root.pdf-preview-visible = false;
+                root.close-pdf-preview();
+            }
+        }
+
+        // Centered PDF panel
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: min(parent.width - 80px, 500px);
+            height: min(parent.height - 80px, 400px);
+
+            // Block backdrop clicks
+            TouchArea { }
+
+            PdfPreviewPanel {
+                width: 100%;
+                height: 100%;
+                file-name: root.pdf-preview-filename;
+                page-count: root.pdf-preview-page-count;
+                error-message: root.pdf-preview-error;
+
+                close-clicked => {
+                    root.pdf-preview-visible = false;
+                    root.close-pdf-preview();
+                }
+
+                open-external-clicked => {
+                    root.pdf-preview-visible = false;
+                    root.open-pdf-external();
+                }
+            }
+        }
+    }
+
+    // Reaction picker overlay
+    ReactionPicker {
+        show: root.reaction-picker-visible;
+        message-id: root.reaction-picker-message-id;
+        emoji-list: root.reaction-picker-emojis;
+        position-x: root.width / 2 - 140px;  // Center horizontally
+        position-y: root.height / 2 - 176px;  // Center vertically
+
+        reaction-selected(msg-id, emoji) => {
+            root.reaction-picker-visible = false;
+            root.reaction-selected(msg-id, emoji);
+        }
+
+        close => {
+            root.reaction-picker-visible = false;
+        }
+    }
+
+    // Message context menu overlay
+    MessageContextMenu {
+        show: root.context-menu-visible;
+        message-id: root.context-menu-message-id;
+        position-x: root.context-menu-x;
+        position-y: root.context-menu-y;
+        is-own-message: root.context-menu-is-own-message;
+        is-pinned: root.context-menu-is-pinned;
+
+        close => {
+            root.context-menu-visible = false;
+        }
+        reply-clicked(id) => {
+            root.context-menu-visible = false;
+            root.reply-message(id);
+        }
+        edit-clicked(id) => {
+            root.context-menu-visible = false;
+            root.edit-message(id);
+        }
+        delete-clicked(id) => {
+            root.context-menu-visible = false;
+            root.delete-message(id);
+        }
+        delete-everyone-clicked(id) => {
+            root.context-menu-visible = false;
+            root.delete-everyone-message(id);
+        }
+        pin-clicked(id) => {
+            root.context-menu-visible = false;
+            root.pin-message(id);
+        }
+        forward-clicked(id) => {
+            root.context-menu-visible = false;
+            root.forward-message-action(id);
+        }
+        copy-clicked(id) => {
+            root.context-menu-visible = false;
+            root.copy-message(id);
+        }
+    }
+
+    // Global tooltip layer (rendered above everything)
+    if root.tooltip-visible: Rectangle {
+        x: root.tooltip-x;
+        y: root.tooltip-y;
+        width: global-tooltip-text.preferred-width + 16px;
+        height: 28px;
+        border-radius: Spacing.radius-sm;
+        background: Colors.background;
+        drop-shadow-blur: 4px;
+        drop-shadow-color: Colors.background.with-alpha(0.5);
+        drop-shadow-offset-y: 2px;
+
+        global-tooltip-text := Text {
+            text: root.tooltip-text;
+            color: Colors.text-primary;
+            font-size: 12px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    // Wire tooltip callbacks
+    init => {
+        root.tooltip-visible = false;
     }
 }
