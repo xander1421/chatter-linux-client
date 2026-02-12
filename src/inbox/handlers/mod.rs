@@ -242,12 +242,13 @@ pub enum DomainEvent {
     },
     /// Message was deleted (delete for everyone).
     MessageDeleted {
-        /// ID of the deleted message (derived from timestamp).
+        /// ID of the deleted message (derived from author + timestamp).
         message_id: MessageId,
-        /// Author who deleted the message.
+        /// Author who deleted the message (also the message author for "delete for everyone").
         author_id: UserId,
         /// Channel containing the message.
-        channel_id: ChannelId,
+        /// None for DM deletes where channel is derived from author_id.
+        channel_id: Option<ChannelId>,
     },
     /// Attachment metadata ready (needs download).
     AttachmentReady {
@@ -344,13 +345,16 @@ pub enum DomainEvent {
         channel_id: ChannelId,
     },
     /// Key exchange received (mailbox DM encryption setup).
+    ///
+    /// Key can be 32 bytes (regular key exchange) or 64 bytes (DM bootstrap).
+    /// Bootstrap format: first 32 bytes = mailbox pk, next 32 = conversation ephemeral.
     KeyExchangeReceived {
         /// User who sent the key exchange.
         sender_id: UserId,
         /// Conversation/channel this key applies to.
         conversation_id: ChannelId,
-        /// Sender's ephemeral public key (32 bytes Ed25519).
-        ephemeral_public_key: [u8; 32],
+        /// Sender's ephemeral public key - either 32 bytes (regular) or 64 bytes (bootstrap).
+        ephemeral_public_key: Vec<u8>,
         /// When the key exchange was initiated (ms since epoch).
         timestamp: u64,
     },
@@ -387,7 +391,7 @@ impl DomainEvent {
         match self {
             DomainEvent::MessageReceived { message } => Some(message.channel_id),
             DomainEvent::MessageEdited { channel_id, .. } => Some(*channel_id),
-            DomainEvent::MessageDeleted { channel_id, .. } => Some(*channel_id),
+            DomainEvent::MessageDeleted { channel_id, .. } => *channel_id,
             DomainEvent::AttachmentReady { channel_id, .. } => Some(*channel_id),
             DomainEvent::TypingStarted { channel_id, .. } => Some(*channel_id),
             DomainEvent::TypingStopped { channel_id, .. } => Some(*channel_id),

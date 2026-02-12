@@ -188,6 +188,7 @@ fn wire_thread_clicked(window: &MainWindow, ctx: &AppContext) {
     let message_repo = ctx.message_repo.clone();
     let user_repo = ctx.user_repo.clone();
     let attachment_repo = ctx.attachment_repo.clone();
+    let channel_repo = ctx.channel_repo.clone();
 
     window.on_thread_clicked(move |message_id: SharedString| {
         let message_id_str = message_id.to_string();
@@ -196,6 +197,7 @@ fn wire_thread_clicked(window: &MainWindow, ctx: &AppContext) {
         let message_repo = message_repo.clone();
         let user_repo = user_repo.clone();
         let attachment_repo = attachment_repo.clone();
+        let channel_repo = channel_repo.clone();
 
         let msg_id: MessageId = match message_id_str.parse() {
             Ok(id) => id,
@@ -223,6 +225,7 @@ fn wire_thread_clicked(window: &MainWindow, ctx: &AppContext) {
             message_repo,
             user_repo,
             attachment_repo,
+            channel_repo,
             channel_id,
             msg_id,
         );

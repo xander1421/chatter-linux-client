@@ -1,14 +1,15 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "app.slint";
 import { CodeLine } from "components/mod.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, CodeLine, EmojiData }
+export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, CodeLine, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData }
 
 export component MainWindow inherits Window {
     title: "Chatter";
+    icon: @image-url("../assets/icon-256.png");
     min-width: 800px;
     min-height: 600px;
 
@@ -93,6 +94,29 @@ export component MainWindow inherits Window {
     in property <[EmojiData]> reaction-picker-emojis <=> app.reaction-picker-emojis;
     callback reaction-selected <=> app.reaction-selected;
 
+    // ========== Composer emoji picker state ==========
+    in-out property <bool> composer-emoji-picker-visible <=> app.composer-emoji-picker-visible;
+    in property <[EmojiData]> composer-emoji-list <=> app.composer-emoji-list;
+    in-out property <int> composer-emoji-category <=> app.composer-emoji-category;
+    in-out property <string> composer-emoji-search <=> app.composer-emoji-search;
+    callback composer-emoji-selected <=> app.composer-emoji-selected;
+    callback composer-emoji-category-changed <=> app.composer-emoji-category-changed;
+    callback composer-emoji-search-changed <=> app.composer-emoji-search-changed;
+
+    // ========== GIF picker state ==========
+    in-out property <bool> gif-picker-visible <=> app.gif-picker-visible;
+    in property <bool> gif-picker-loading <=> app.gif-picker-loading;
+    in property <[GifData]> gif-picker-results <=> app.gif-picker-results;
+    in-out property <string> gif-picker-search <=> app.gif-picker-search;
+    callback gif-selected <=> app.gif-selected;
+    callback gif-search <=> app.gif-search;
+
+    // ========== Mention autocomplete state ==========
+    in-out property <bool> mention-autocomplete-visible <=> app.mention-autocomplete-visible;
+    in property <[MentionSuggestion]> mention-suggestions <=> app.mention-suggestions;
+    in-out property <int> mention-selected-index <=> app.mention-selected-index;
+    callback mention-suggestion-selected <=> app.mention-suggestion-selected;
+
     // ========== Message context menu state ==========
     in-out property <bool> context-menu-visible <=> app.context-menu-visible;
     in-out property <string> context-menu-message-id <=> app.context-menu-message-id;
@@ -113,7 +137,6 @@ export component MainWindow inherits Window {
     in property <string> pinned-message-preview <=> app.pinned-message-preview;
     in property <int> pinned-current-index <=> app.pinned-current-index;
     in property <int> pinned-total-count <=> app.pinned-total-count;
-    in-out property <bool> pinned-is-expanded <=> app.pinned-is-expanded;
     callback pinned-prev-clicked <=> app.pinned-prev-clicked;
     callback pinned-next-clicked <=> app.pinned-next-clicked;
     callback pinned-dismiss-clicked <=> app.pinned-dismiss-clicked;
@@ -169,11 +192,23 @@ export component MainWindow inherits Window {
     in property <bool> profile-is-self <=> app.profile-is-self;
     in property <bool> profile-loading <=> app.profile-loading;
 
-    // Friend requests modal properties
+    // Friend requests modal properties (legacy)
     in property <string> friend-requests-tab <=> app.friend-requests-tab;
     in property <[FriendRequest]> received-friend-requests <=> app.received-friend-requests;
     in property <[FriendRequest]> sent-friend-requests <=> app.sent-friend-requests;
     in property <bool> friend-requests-loading <=> app.friend-requests-loading;
+
+    // Friends modal properties (comprehensive)
+    in-out property <string> friends-modal-tab <=> app.friends-modal-tab;
+    in property <[FriendData]> friends-list <=> app.friends-list;
+    in-out property <string> friends-search-query <=> app.friends-search-query;
+    in property <[UserSearchResult]> friends-search-results <=> app.friends-search-results;
+    in property <bool> friends-search-loading <=> app.friends-search-loading;
+    in-out property <string> friends-requests-sub-tab <=> app.friends-requests-sub-tab;
+    in property <[FriendRequestData]> friends-received-requests <=> app.friends-received-requests;
+    in property <[FriendRequestData]> friends-sent-requests <=> app.friends-sent-requests;
+    in property <[BlockedUserData]> friends-blocked-users <=> app.friends-blocked-users;
+    in property <bool> friends-loading <=> app.friends-loading;
 
     // Forward message modal properties
     in property <string> forward-message-preview <=> app.forward-message-preview;
@@ -227,7 +262,6 @@ export component MainWindow inherits Window {
 
     // ========== Chat callbacks ==========
     callback search-clicked <=> app.search-clicked;
-    callback pinned-clicked <=> app.pinned-clicked;
     callback chat-settings-clicked <=> app.chat-settings-clicked;
     callback message-clicked <=> app.message-clicked;
     callback reply-clicked <=> app.reply-clicked;
@@ -245,6 +279,7 @@ export component MainWindow inherits Window {
     callback mention-triggered <=> app.mention-triggered;
     callback remove-attachment <=> app.remove-attachment;
     callback typing-changed <=> app.typing-changed;
+    callback process-text <=> app.process-text;
 
     // ========== Modal callbacks ==========
     callback create-channel <=> app.create-channel;
@@ -260,6 +295,18 @@ export component MainWindow inherits Window {
     callback friend-request-accept <=> app.friend-request-accept;
     callback friend-request-decline <=> app.friend-request-decline;
     callback friend-request-cancel <=> app.friend-request-cancel;
+    // Friends modal callbacks
+    callback friends-modal-switch-tab <=> app.friends-modal-switch-tab;
+    callback friends-modal-switch-requests-sub-tab <=> app.friends-modal-switch-requests-sub-tab;
+    callback friends-view-profile <=> app.friends-view-profile;
+    callback friends-start-dm <=> app.friends-start-dm;
+    callback friends-remove-friend <=> app.friends-remove-friend;
+    callback friends-search-users <=> app.friends-search-users;
+    callback friends-send-request <=> app.friends-send-request;
+    callback friends-accept-request <=> app.friends-accept-request;
+    callback friends-decline-request <=> app.friends-decline-request;
+    callback friends-cancel-request <=> app.friends-cancel-request;
+    callback friends-unblock-user <=> app.friends-unblock-user;
     callback forward-message <=> app.forward-message;
     callback revoke-session <=> app.revoke-session;
     callback revoke-all-sessions <=> app.revoke-all-sessions;

@@ -13,8 +13,10 @@ use tokio::sync::RwLock;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
-use crate::crypto::blind_signature::{BlindSignature, BlindingResult};
 use crate::error::{CryptoError, NetworkError};
+use crate::mailbox::blind_signature::{
+    blind_key, unblind, BlindingOperation, BlindingSecret, MessageRandomizer, ServerPublicKey,
+};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::mailbox_client::MailboxClient;
 use crate::proto::mailbox_v1::{self, EnvelopeType};
@@ -55,13 +57,14 @@ struct MailboxToken {
     public_key: VerifyingKey,
     /// Private key for the ephemeral mailbox
     private_key: SigningKey,
-    /// Blinding result from the blind operation
-    blinding_result: BlindingResult,
+    /// Blinding secret needed for unblinding (kept until server responds)
+    blinding_secret: BlindingSecret,
+    /// Message randomizer from blinding operation
+    /// Note: With deterministic mode (NDSS '21 spec), this is typically None
+    /// and server verifies signature directly against public_key
+    msg_randomizer: MessageRandomizer,
     /// Unblinded signature (proof of authorization)
     signature: Option<Vec<u8>>,
-    /// Message randomizer from RFC 9474 (32-byte random prefix)
-    /// Required for server-side verification with randomized variants
-    msg_randomizer: Option<Vec<u8>>,
 }
 
 /// Represents an active ephemeral mailbox.
@@ -90,8 +93,8 @@ pub struct MailboxManager {
     client_pool: Arc<GrpcClientPool>,
     /// Settings repository (for persisting server public key)
     settings_repo: Arc<SettingsRepository>,
-    /// Cached server blind signature public key
-    server_pubkey: Arc<RwLock<Option<BlindSignature>>>,
+    /// Cached server blind signature public key (uses deterministic RSABSSA per NDSS '21)
+    server_pubkey: Arc<RwLock<Option<ServerPublicKey>>>,
     /// Pool of available unblinded tokens
     token_pool: Arc<RwLock<Vec<MailboxToken>>>,
     /// Active mailboxes per conversation
@@ -116,12 +119,15 @@ impl MailboxManager {
     /// Initialize the manager by loading or fetching the server's blind signature public key.
     ///
     /// First checks settings cache, then fetches from server if not cached.
+    /// Uses deterministic RSABSSA variant per NDSS '21 specification.
     pub async fn initialize(&self) -> Result<(), MailboxError> {
         // Try loading from cache first (stored as base64)
         if let Ok(Some(cached_b64)) = self.settings_repo.get_string(SERVER_BLIND_SIG_PUBKEY) {
             if let Ok(cached_key) = BASE64.decode(&cached_b64) {
-                if let Ok(blind_sig) = BlindSignature::new(&cached_key) {
-                    *self.server_pubkey.write().await = Some(blind_sig);
+                // Use a default key_id and far-future expiry for cached keys
+                // In production, these should be stored alongside the key
+                if let Ok(server_pk) = ServerPublicKey::from_der(&cached_key, "cached".to_string(), u64::MAX) {
+                    *self.server_pubkey.write().await = Some(server_pk);
                     tracing::debug!("Loaded blind signature public key from cache");
                     return Ok(());
                 }
@@ -132,9 +138,13 @@ impl MailboxManager {
         let mut client = self.create_mailbox_client();
         let response = client.get_blind_signature_public_key().await?;
 
-        // Parse and cache in memory
-        let blind_sig = BlindSignature::new(&response.public_key)?;
-        *self.server_pubkey.write().await = Some(blind_sig);
+        // Parse and cache in memory - use server-provided key_id and valid_until
+        let server_pk = ServerPublicKey::from_der(
+            &response.public_key,
+            response.key_id.clone(),
+            response.valid_until,
+        ).map_err(|e| MailboxError::Crypto(CryptoError::InvalidKey(e.to_string())))?;
+        *self.server_pubkey.write().await = Some(server_pk);
 
         // Persist to settings for next startup (as base64)
         let key_b64 = BASE64.encode(&response.public_key);
@@ -150,6 +160,7 @@ impl MailboxManager {
     ///
     /// Generates ephemeral keypairs, blinds them, requests blind signatures,
     /// and stores the unblinded tokens for later mailbox creation.
+    /// Uses deterministic RSABSSA per NDSS '21 / RFC 9474.
     ///
     /// # Arguments
     ///
@@ -162,7 +173,7 @@ impl MailboxManager {
         }
 
         // Get server public key (clone it so we can use it after releasing the lock)
-        let blind_sig = self
+        let server_pk = self
             .server_pubkey
             .read()
             .await
@@ -175,22 +186,27 @@ impl MailboxManager {
 
         for _ in 0..count {
             // Generate Ed25519 keypair for this mailbox
-            // Use manual generation to avoid RNG version conflicts
             let mut secret_bytes = [0u8; 32];
             rand::RngCore::fill_bytes(&mut rand::rng(), &mut secret_bytes);
             let private_key = SigningKey::from_bytes(&secret_bytes);
             let public_key = private_key.verifying_key();
 
-            // Blind the public key
-            let blinding_result = blind_sig.blind(public_key.as_bytes())?;
-            blinded_keys.push(blinding_result.blind_msg.clone().into());
+            // Blind the public key using deterministic RSABSSA
+            let BlindingOperation {
+                blinded_message,
+                secret,
+                randomizer,
+            } = blind_key(&server_pk, public_key.as_bytes())
+                .map_err(|e| MailboxError::Crypto(CryptoError::BlindSignatureError(e.to_string())))?;
+
+            blinded_keys.push(blinded_message);
 
             tokens.push(MailboxToken {
                 public_key,
                 private_key,
-                blinding_result,
+                blinding_secret: secret,
+                msg_randomizer: randomizer,
                 signature: None,
-                msg_randomizer: None,  // Will be set after unblinding
             });
         }
 
@@ -200,20 +216,17 @@ impl MailboxManager {
             .get_mailbox_tokens(count as i32, blinded_keys)
             .await?;
 
-        // Unblind the signatures and extract message randomizers
+        // Unblind the signatures
         for (token, blinded_sig) in tokens.iter_mut().zip(response.blinded_signatures.iter()) {
-            let signature = blind_sig.unblind(
+            let signature = unblind(
+                &server_pk,
                 blinded_sig,
-                &token.blinding_result,
+                &token.blinding_secret,
+                &token.msg_randomizer,
                 token.public_key.as_bytes(),
-            )?;
+            ).map_err(|e| MailboxError::Crypto(CryptoError::BlindSignatureError(e.to_string())))?;
+
             token.signature = Some(signature);
-            
-            // Extract the message randomizer (32-byte prefix from RFC 9474)
-            // This is needed for server-side verification
-            if let Some(randomizer) = &token.blinding_result.msg_randomizer {
-                token.msg_randomizer = Some(randomizer.as_ref().to_vec());
-            }
         }
 
         // Add to token pool
@@ -258,9 +271,11 @@ impl MailboxManager {
             pool.pop().ok_or(MailboxError::NoTokensAvailable)?
         };
 
-        // Create the mailbox anonymously using RFC 9474 blind signature proof
+        // Create the mailbox anonymously using deterministic RSABSSA proof
+        // Per NDSS '21 spec, server verifies signature directly against public_key
+        // (no message_randomizer needed with deterministic mode)
         let signature = token.signature.ok_or(MailboxError::NoTokensAvailable)?;
-        let message_randomizer = token.msg_randomizer.unwrap_or_default();
+        let message_randomizer = token.msg_randomizer.as_bytes().map(|b| b.to_vec()).unwrap_or_default();
         
         let mut client = self.create_mailbox_client();
         let response = client

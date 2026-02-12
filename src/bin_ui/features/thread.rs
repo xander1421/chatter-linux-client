@@ -12,7 +12,7 @@ use chatter_linux::network::grpc::auth_client::AuthClient;
 use chatter_linux::network::grpc::channel_client::ChannelClient;
 use chatter_linux::network::grpc::message_client::MessageClient;
 use chatter_linux::state::ChatState;
-use chatter_linux::storage::{AttachmentRepository, MessageRepository, UserRepository};
+use chatter_linux::storage::{AttachmentRepository, ChannelRepository, MessageRepository, UserRepository};
 
 use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
 use crate::MainWindow;
@@ -53,6 +53,7 @@ fn wire_send_thread_reply(window: &MainWindow, ctx: &AppContext) {
     let chat_state = ctx.chat_state.clone();
     let message_service = ctx.message_service.clone();
     let grpc_pool = ctx.grpc_pool.clone();
+    let group_fanout = ctx.get_group_fanout();
 
     window.on_send_thread_reply(move |text: SharedString| {
         let text = text.to_string();
@@ -64,6 +65,7 @@ fn wire_send_thread_reply(window: &MainWindow, ctx: &AppContext) {
         let chat_state = chat_state.clone();
         let message_service = message_service.clone();
         let grpc_pool = grpc_pool.clone();
+        let group_fanout = group_fanout.clone();
 
         // Use spawn_blocking with nested runtime for non-Send Signal futures
         tokio::task::spawn_blocking(move || {
@@ -101,6 +103,7 @@ fn wire_send_thread_reply(window: &MainWindow, ctx: &AppContext) {
                         &mut message_client,
                         &mut auth_client,
                         &mut channel_client,
+                        group_fanout.as_deref(),
                         &thread.channel_id,
                         &text,
                         vec![],                          // no attachments
@@ -225,7 +228,8 @@ pub fn load_thread_data(
     message_repo: Arc<MessageRepository>,
     user_repo: Arc<UserRepository>,
     attachment_repo: Arc<AttachmentRepository>,
-    _channel_id: ChannelId,
+    channel_repo: Arc<ChannelRepository>,
+    channel_id: ChannelId,
     root_message_id: MessageId,
 ) {
     tokio::spawn(async move {
@@ -278,6 +282,14 @@ pub fn load_thread_data(
 
         let reply_count = replies.len() as i32;
 
+        // Get channel name
+        let channel_name = channel_repo
+            .get(&channel_id)
+            .ok()
+            .flatten()
+            .map(|c| c.name)
+            .unwrap_or_else(|| "Unknown Channel".to_string());
+
         // Convert replies to display data
         let mut display_replies: Vec<MessageDisplayData> = Vec::with_capacity(replies.len());
         for msg in &replies {
@@ -310,7 +322,7 @@ pub fn load_thread_data(
                 w.set_thread_root_sender_name(sender_name.into());
                 w.set_thread_root_content_preview(content_preview.into());
                 w.set_thread_reply_count(reply_count);
-                w.set_thread_channel_name(SharedString::default()); // TODO: get channel name
+                w.set_thread_channel_name(channel_name.clone().into());
                 w.set_thread_loading(false);
 
                 let slint_replies: Vec<_> = display_replies.iter().map(|d| d.to_slint()).collect();

@@ -76,11 +76,14 @@ impl InboxHandler for KeyExchangeHandler {
             _ => return Ok(HandlerOutcome::Ignored),
         };
 
-        // Validate ephemeral_pk is exactly 32 bytes (Ed25519 public key)
-        if key_exchange.ephemeral_pk.len() != 32 {
+        // Validate ephemeral_pk is either 32 bytes (regular key exchange) or 64 bytes (DM bootstrap)
+        // - 32 bytes: Ed25519 public key for regular key exchange
+        // - 64 bytes: Combined key for DM bootstrap (32-byte mailbox pk + 32-byte conversation pk)
+        let key_len = key_exchange.ephemeral_pk.len();
+        if key_len != 32 && key_len != 64 {
             return Err(HandlerError::validation_failed(format!(
-                "ephemeral_pk must be 32 bytes, got {}",
-                key_exchange.ephemeral_pk.len()
+                "ephemeral_pk must be 32 or 64 bytes, got {}",
+                key_len
             )));
         }
 
@@ -109,9 +112,10 @@ impl InboxHandler for KeyExchangeHandler {
                 ChannelId::from_uuid(uuid_from_string(&key_exchange.conversation_id))
             });
 
-        // Convert ephemeral_pk to fixed-size array
-        let mut ephemeral_public_key = [0u8; 32];
-        ephemeral_public_key.copy_from_slice(&key_exchange.ephemeral_pk);
+        // Keep full ephemeral_pk (32 or 64 bytes)
+        // - 32 bytes: regular key exchange
+        // - 64 bytes: DM bootstrap (mailbox pk || conversation ephemeral pk)
+        let ephemeral_public_key = key_exchange.ephemeral_pk.clone();
 
         // Emit KeyExchangeReceived event
         ctx.emit(DomainEvent::KeyExchangeReceived {
@@ -196,8 +200,50 @@ mod tests {
         } = event
         {
             assert_eq!(conversation_id.to_string(), key_exchange.conversation_id);
-            assert_eq!(&ephemeral_public_key[..], &key_exchange.ephemeral_pk[..]);
+            assert_eq!(ephemeral_public_key, key_exchange.ephemeral_pk);
             assert_eq!(timestamp, 1704067200000);
+        } else {
+            panic!("Expected KeyExchangeReceived event");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_key_exchange_handler_valid_64_byte_bootstrap() {
+        let handler = KeyExchangeHandler::new();
+        let (ctx, mut rx) = make_context();
+
+        // Create valid 64-byte bootstrap key (mailbox pk || conversation pk)
+        let ephemeral_pk: Vec<u8> = (0..64).collect();
+
+        let key_exchange = KeyExchange {
+            ephemeral_pk: ephemeral_pk.clone(),
+            conversation_id: Uuid::new_v4().to_string(),
+            timestamp: 1704067200000,
+        };
+
+        let content = Content {
+            content: Some(content::Content::KeyExchange(key_exchange.clone())),
+            ephemeral_reply_to: None,
+            timestamp: 1704067200000,
+            padding: vec![],
+        };
+
+        let mut plaintext = Vec::new();
+        content.encode(&mut plaintext).unwrap();
+        let processed = make_processed_message(plaintext);
+
+        let result = handler.handle(&processed, &ctx).await.unwrap();
+        assert!(result.is_success());
+
+        // Verify event was emitted with full 64-byte key
+        let event = rx.try_recv().unwrap();
+        if let DomainEvent::KeyExchangeReceived {
+            ephemeral_public_key,
+            ..
+        } = event
+        {
+            assert_eq!(ephemeral_public_key.len(), 64);
+            assert_eq!(ephemeral_public_key, ephemeral_pk);
         } else {
             panic!("Expected KeyExchangeReceived event");
         }
@@ -231,7 +277,7 @@ mod tests {
         let result = handler.handle(&processed, &ctx).await;
         assert!(result.is_err());
         if let Err(HandlerError::ValidationFailed { reason }) = result {
-            assert!(reason.contains("32 bytes"));
+            assert!(reason.contains("32 or 64 bytes"));
             assert!(reason.contains("16"));
         } else {
             panic!("Expected ValidationFailed error");

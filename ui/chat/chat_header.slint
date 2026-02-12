@@ -29,7 +29,6 @@ export component ChatHeader inherits Rectangle {
 
     // Callbacks
     callback search-clicked();
-    callback pinned-clicked();
     callback settings-clicked();
 
     // Computed properties
@@ -166,28 +165,6 @@ export component ChatHeader inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => {
                         root.search-clicked();
-                    }
-                }
-            }
-
-            // Pinned messages button
-            Rectangle {
-                width: 32px;
-                height: 32px;
-                background: pin-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-
-                Text {
-                    text: "\u{1F4CC}";  // Pushpin
-                    font-size: Typography.base;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                pin-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.pinned-clicked();
                     }
                 }
             }

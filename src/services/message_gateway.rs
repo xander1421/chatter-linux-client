@@ -271,6 +271,18 @@ pub enum DmContent {
     DeleteForEveryone {
         target_sent_timestamp: u64,
     },
+    /// Key exchange for DM bootstrap (response from peer).
+    ///
+    /// When receiving a bootstrap response, this contains the peer's
+    /// mailbox public key and conversation ephemeral key.
+    KeyExchange {
+        /// Conversation ID this key exchange is for.
+        conversation_id: String,
+        /// Ephemeral public key (32 or 64 bytes).
+        ephemeral_pk: Vec<u8>,
+        /// Timestamp of the key exchange.
+        timestamp: u64,
+    },
 }
 
 /// Result of attempting to decrypt a group message.
@@ -309,6 +321,20 @@ pub enum RouteResult {
     },
 }
 
+/// Result of processing a sealed sender message.
+#[derive(Debug)]
+pub enum SealedSenderResult {
+    /// Regular message stored successfully.
+    MessageStored,
+    /// Key exchange message received - needs bootstrap handling.
+    KeyExchange {
+        sender_id: UserId,
+        conversation_id: String,
+        ephemeral_public_key: Vec<u8>,
+        timestamp: u64,
+    },
+}
+
 /// Message gateway for routing and validation.
 pub struct MessageGateway {
     signal_service: SignalService,
@@ -329,25 +355,70 @@ impl MessageGateway {
 
     /// Process an incoming sealed sender message.
     ///
-    /// Decrypts the message, parses the DataMessage proto, and stores it.
+    /// Decrypts the message and processes it based on content type:
+    /// - DataMessage: stores to repository
+    /// - KeyExchange: returns for bootstrap handling
     pub async fn process_incoming_message(
         &self,
         envelope: crate::proto::chat_v1::SealedSenderMessage,
-    ) -> Result<(), ServiceError> {
+    ) -> Result<SealedSenderResult, ServiceError> {
         // Decrypt the sealed sender envelope
         let (sender_address, plaintext) = self
             .signal_service
             .decrypt_message(&envelope.sealed_body)
             .await?;
 
-        // Parse the decrypted content as DataMessage proto
+        // Extract sender ID from protocol address
+        let sender_id: UserId = sender_address.name().parse().map_err(|e| {
+            ServiceError::Validation(format!("Invalid sender ID in Signal address: {}", e))
+        })?;
+
+        // First try to parse as Content proto (preferred, contains KeyExchange)
+        if let Ok(content_proto) = Content::decode(plaintext.as_slice()) {
+            // Check for KeyExchange
+            if let Some(content::Content::KeyExchange(key_exchange)) = content_proto.content {
+                tracing::debug!(
+                    sender_id = %sender_id,
+                    conversation_id = %key_exchange.conversation_id,
+                    key_len = key_exchange.ephemeral_pk.len(),
+                    "Received KeyExchange in sealed sender message"
+                );
+                return Ok(SealedSenderResult::KeyExchange {
+                    sender_id,
+                    conversation_id: key_exchange.conversation_id,
+                    ephemeral_public_key: key_exchange.ephemeral_pk,
+                    timestamp: key_exchange.timestamp,
+                });
+            }
+
+            // Handle DataMessage inside Content
+            if let Some(content::Content::DataMessage(data_message)) = content_proto.content {
+                return self.store_data_message(data_message, Some(sender_id)).await;
+            }
+
+            // Other content types in sealed sender (typing, receipt, etc.)
+            // For now just log and return success
+            tracing::debug!(
+                sender_id = %sender_id,
+                "Received non-data content in sealed sender (typing/receipt/etc)"
+            );
+            return Ok(SealedSenderResult::MessageStored);
+        }
+
+        // Fallback: Parse as raw DataMessage proto
         let data_message = DataMessage::decode(plaintext.as_slice()).map_err(|e| {
             ServiceError::Validation(format!("Failed to parse DataMessage: {}", e))
         })?;
 
-        // Extract sender ID from protocol address
-        let sender_id = sender_address.name().parse::<UserId>().ok();
+        self.store_data_message(data_message, Some(sender_id)).await
+    }
 
+    /// Store a DataMessage to the repository.
+    async fn store_data_message(
+        &self,
+        data_message: DataMessage,
+        sender_id: Option<UserId>,
+    ) -> Result<SealedSenderResult, ServiceError> {
         // Parse channel ID (required for group messages)
         let channel_id: ChannelId = if data_message.channel_id.is_empty() {
             // For DMs, derive channel from sender (would need conversation lookup)
@@ -372,6 +443,16 @@ impl MessageGateway {
         // Extract content
         let content = MessageContent::Text(data_message.body.clone());
 
+        // Convert attachments: extract attachment IDs from AttachmentPointers
+        let attachments: Vec<crate::domain::ids::AttachmentId> = data_message
+            .attachments
+            .iter()
+            .filter_map(|ptr| {
+                // cdn_key should be a UUID string
+                ptr.cdn_key.parse().ok()
+            })
+            .collect();
+
         // Create domain message
         let message = Message {
             id: message_id,
@@ -380,7 +461,7 @@ impl MessageGateway {
             content,
             thread_id: None,
             reply_to: None,
-            attachments: vec![], // TODO: convert data_message.attachments
+            attachments,
             is_pinned: false,
             is_edited: false,
             is_deleted: false,
@@ -406,7 +487,7 @@ impl MessageGateway {
             "Stored incoming message"
         );
 
-        Ok(())
+        Ok(SealedSenderResult::MessageStored)
     }
 
     /// Process an incoming DM message with layered decryption.
@@ -539,9 +620,13 @@ impl MessageGateway {
                     target_sent_timestamp: msg.target_sent_timestamp,
                 })
             }
-            Some(content::Content::KeyExchange(_)) => {
-                // Key exchange is handled separately during bootstrap
-                Err(ServiceError::Validation("KeyExchange should be handled during bootstrap".into()))
+            Some(content::Content::KeyExchange(kx)) => {
+                // Key exchange received in DM mailbox (bootstrap response from peer)
+                Ok(DmContent::KeyExchange {
+                    conversation_id: kx.conversation_id,
+                    ephemeral_pk: kx.ephemeral_pk,
+                    timestamp: kx.timestamp,
+                })
             }
             Some(content::Content::SenderKey(_)) |
             Some(content::Content::GroupEncrypted(_)) |
@@ -581,8 +666,20 @@ impl MessageGateway {
         sender_id: &UserId,
         sender_device_id: u32,
     ) -> Result<DecryptResult, ServiceError> {
+        tracing::info!(
+            sender_id = %sender_id,
+            sender_device_id = sender_device_id,
+            ciphertext_len = encrypted_data.ciphertext.len(),
+            associated_data = ?String::from_utf8_lossy(&encrypted_data.associated_data),
+            "[MSG_RECV] Processing group encrypted message"
+        );
+
         // Check if this is a sender key message
         if encrypted_data.associated_data != b"sender_key" {
+            tracing::warn!(
+                associated_data = ?String::from_utf8_lossy(&encrypted_data.associated_data),
+                "[MSG_RECV] Not a sender key message, rejecting"
+            );
             return Err(ServiceError::Validation(
                 "Not a sender key encrypted message".into(),
             ));
@@ -591,12 +688,29 @@ impl MessageGateway {
         // Deserialize the GroupEncrypted proto from ciphertext field
         let group_encrypted = GroupEncrypted::decode(encrypted_data.ciphertext.as_slice())
             .map_err(|e| {
+                tracing::error!(
+                    error = %e,
+                    "[MSG_RECV] Failed to decode GroupEncrypted proto"
+                );
                 ServiceError::Validation(format!("Failed to decode GroupEncrypted: {}", e))
             })?;
 
         let channel_id: ChannelId = group_encrypted.channel_id.parse().map_err(|e| {
+            tracing::error!(
+                channel_id_str = %group_encrypted.channel_id,
+                error = %e,
+                "[MSG_RECV] Invalid channel_id in GroupEncrypted"
+            );
             ServiceError::Validation(format!("Invalid channel_id in GroupEncrypted: {}", e))
         })?;
+
+        tracing::debug!(
+            channel_id = %channel_id,
+            sender_id = %sender_id,
+            sender_device_id = sender_device_id,
+            inner_ciphertext_len = group_encrypted.ciphertext.len(),
+            "[MSG_RECV] Extracted GroupEncrypted, attempting decryption"
+        );
 
         // Try to decrypt using sender keys
         match self
@@ -605,25 +719,32 @@ impl MessageGateway {
             .await
         {
             Ok(plaintext) => {
-                tracing::debug!(
+                tracing::info!(
                     sender_id = %sender_id,
                     channel_id = %channel_id,
                     plaintext_len = plaintext.len(),
-                    "Decrypted sender key message"
+                    "[MSG_RECV] Successfully decrypted sender key message"
                 );
                 Ok(DecryptResult::Plaintext(plaintext))
             }
             Err(e) => {
                 // Check if this is a "no sender key" error
                 let error_str = e.to_string();
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    channel_id = %channel_id,
+                    error = %error_str,
+                    "[MSG_RECV] Decryption failed, checking if sender key is missing"
+                );
+
                 if error_str.contains("no sender key")
                     || error_str.contains("SenderKeyRecord")
                     || error_str.contains("not found")
                 {
-                    tracing::info!(
+                    tracing::warn!(
                         sender_id = %sender_id,
                         channel_id = %channel_id,
-                        "Missing sender key, need to request SKDM"
+                        "[MSG_RECV] MISSING SENDER KEY - need to request SKDM from sender"
                     );
                     Ok(DecryptResult::NeedsSenderKey {
                         channel_id,
@@ -631,6 +752,12 @@ impl MessageGateway {
                     })
                 } else {
                     // Other decryption error
+                    tracing::error!(
+                        sender_id = %sender_id,
+                        channel_id = %channel_id,
+                        error = %error_str,
+                        "[MSG_RECV] Decryption failed with non-recoverable error"
+                    );
                     Err(e)
                 }
             }
@@ -670,8 +797,19 @@ impl MessageGateway {
     ) -> Result<(), ServiceError> {
         use crate::proto::content_v1::SenderKeyDistribution;
 
+        tracing::info!(
+            sender_id = %sender_id,
+            sender_device_id = sender_device_id,
+            ciphertext_len = encrypted_data.ciphertext.len(),
+            "[SKDM_RECV] Received sender key distribution message"
+        );
+
         // Check if this is a SKDM
         if encrypted_data.associated_data != b"sender_key_distribution" {
+            tracing::warn!(
+                associated_data = ?String::from_utf8_lossy(&encrypted_data.associated_data),
+                "[SKDM_RECV] Not a sender key distribution message"
+            );
             return Err(ServiceError::Validation(
                 "Not a sender key distribution message".into(),
             ));
@@ -680,18 +818,41 @@ impl MessageGateway {
         // Deserialize the SenderKeyDistribution proto
         let skdm = SenderKeyDistribution::decode(encrypted_data.ciphertext.as_slice())
             .map_err(|e| {
+                tracing::error!(
+                    sender_id = %sender_id,
+                    error = %e,
+                    "[SKDM_RECV] Failed to decode SenderKeyDistribution proto"
+                );
                 ServiceError::Validation(format!("Failed to decode SenderKeyDistribution: {}", e))
             })?;
+
+        tracing::debug!(
+            sender_id = %sender_id,
+            channel_id = %skdm.channel_id,
+            distribution_message_len = skdm.distribution_message.len(),
+            timestamp = skdm.timestamp,
+            "[SKDM_RECV] Decoded SKDM, processing sender key"
+        );
 
         // Process the SKDM so we can decrypt future messages from this sender
         self.signal_service
             .process_sender_key(sender_id, sender_device_id, &skdm)
-            .await?;
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    sender_id = %sender_id,
+                    channel_id = %skdm.channel_id,
+                    error = %e,
+                    "[SKDM_RECV] Failed to process sender key"
+                );
+                e
+            })?;
 
         tracing::info!(
             sender_id = %sender_id,
+            sender_device_id = sender_device_id,
             channel_id = %skdm.channel_id,
-            "Processed sender key distribution from channel member"
+            "[SKDM_RECV] Successfully stored sender key from channel member"
         );
 
         Ok(())
@@ -713,24 +874,57 @@ impl MessageGateway {
         sender_id: &UserId,
         sender_device_id: u32,
     ) -> Result<RouteResult, ServiceError> {
+        let associated_data_str = String::from_utf8_lossy(&encrypted_data.associated_data);
+        tracing::info!(
+            sender_id = %sender_id,
+            sender_device_id = sender_device_id,
+            associated_data = %associated_data_str,
+            ciphertext_len = encrypted_data.ciphertext.len(),
+            "[MSG_ROUTE] Routing encrypted message"
+        );
+
         // Check message type based on associated_data marker
         if Self::is_sender_key_distribution(encrypted_data) {
+            tracing::info!(
+                sender_id = %sender_id,
+                "[MSG_ROUTE] Detected SKDM (sender_key_distribution)"
+            );
             // Process SKDM - no plaintext returned
             self.process_sender_key_distribution(encrypted_data, sender_id, sender_device_id)
                 .await?;
             Ok(RouteResult::Processed)
         } else if Self::is_sender_key_message(encrypted_data) {
+            tracing::info!(
+                sender_id = %sender_id,
+                "[MSG_ROUTE] Detected sender key message (sender_key)"
+            );
             // Decrypt sender key message (DataMessage)
             match self
                 .process_group_encrypted_message(encrypted_data, sender_id, sender_device_id)
                 .await?
             {
-                DecryptResult::Plaintext(plaintext) => Ok(RouteResult::Decrypted(plaintext)),
+                DecryptResult::Plaintext(plaintext) => {
+                    tracing::info!(
+                        sender_id = %sender_id,
+                        plaintext_len = plaintext.len(),
+                        "[MSG_ROUTE] Decrypted sender key message successfully"
+                    );
+                    Ok(RouteResult::Decrypted(plaintext))
+                }
                 DecryptResult::NeedsSenderKey { channel_id, sender_id } => {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        channel_id = %channel_id,
+                        "[MSG_ROUTE] Cannot decrypt - missing sender key"
+                    );
                     Ok(RouteResult::NeedsSenderKey { channel_id, sender_id })
                 }
             }
         } else if Self::is_sender_key_control(encrypted_data) {
+            tracing::debug!(
+                sender_id = %sender_id,
+                "[MSG_ROUTE] Detected sender key control message"
+            );
             // Decrypt sender key control message (Content proto with typing, reaction, etc.)
             match self
                 .process_group_encrypted_message(encrypted_data, sender_id, sender_device_id)
@@ -742,6 +936,11 @@ impl MessageGateway {
                         if let Some(content::Content::GroupMailboxAddress(announcement)) = content.content {
                             // Parse channel_id from announcement
                             if let Ok(channel_id) = announcement.channel_id.parse::<ChannelId>() {
+                                tracing::info!(
+                                    sender_id = %sender_id,
+                                    channel_id = %channel_id,
+                                    "[MSG_ROUTE] Detected GroupMailboxAddress announcement"
+                                );
                                 return Ok(RouteResult::MailboxAnnouncement {
                                     channel_id,
                                     announcement,
@@ -750,18 +949,37 @@ impl MessageGateway {
                         }
                     }
                     // Not a mailbox announcement, return as control content
+                    tracing::debug!(
+                        sender_id = %sender_id,
+                        plaintext_len = plaintext.len(),
+                        "[MSG_ROUTE] Decrypted control content"
+                    );
                     Ok(RouteResult::ControlContent(plaintext))
                 }
                 DecryptResult::NeedsSenderKey { channel_id, sender_id } => {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        channel_id = %channel_id,
+                        "[MSG_ROUTE] Cannot decrypt control - missing sender key"
+                    );
                     Ok(RouteResult::NeedsSenderKey { channel_id, sender_id })
                 }
             }
         } else if Self::is_sender_key_request(encrypted_data) {
+            tracing::info!(
+                sender_id = %sender_id,
+                "[MSG_ROUTE] Detected sender key request"
+            );
             // Someone is requesting our sender key
             self.process_sender_key_request(encrypted_data, sender_id)
                 .await?;
             Ok(RouteResult::Processed)
         } else {
+            tracing::error!(
+                sender_id = %sender_id,
+                associated_data = %associated_data_str,
+                "[MSG_ROUTE] Unknown encrypted message type"
+            );
             Err(ServiceError::Validation(
                 "Unknown encrypted message type".into(),
             ))

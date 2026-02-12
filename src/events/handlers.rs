@@ -193,11 +193,33 @@ impl EventHandlers {
 
             DomainEvent::MessageDeleted {
                 message_id,
+                author_id,
                 channel_id,
-                ..
             } => {
-                trace!(?channel_id, ?message_id, "Removing message from state");
-                self.message_state.remove_message(&channel_id, &message_id);
+                // For DM deletes, channel_id may be None - derive from author_id
+                // (DM channel is the conversation with that author)
+                if let Some(ch_id) = channel_id {
+                    trace!(?ch_id, ?message_id, "Removing message from state");
+                    self.message_state.remove_message(&ch_id, &message_id);
+                } else {
+                    // DM delete - we need to find the message by ID across all channels
+                    // or derive DM channel from author. For now, try to find and remove.
+                    trace!(
+                        ?author_id,
+                        ?message_id,
+                        "DM delete: searching for message to remove"
+                    );
+                    // Try to find the channel containing this message
+                    if let Some(ch_id) = self.message_state.find_channel_for_message(&message_id) {
+                        self.message_state.remove_message(&ch_id, &message_id);
+                    } else {
+                        tracing::warn!(
+                            ?author_id,
+                            ?message_id,
+                            "Could not find channel for deleted message"
+                        );
+                    }
+                }
             }
 
             // ================================================================
@@ -515,7 +537,7 @@ mod tests {
         handlers.handle_domain_event(DomainEvent::MessageDeleted {
             message_id,
             author_id,
-            channel_id,
+            channel_id: Some(channel_id),
         });
 
         assert!(handlers.message_state.get_messages(&channel_id).is_empty());

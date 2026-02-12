@@ -87,7 +87,7 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
     let auth_state = ctx.auth_state.clone();
     let database = ctx.database.clone();
     let grpc_pool = ctx.grpc_pool.clone();
-    let signal_service = ctx.signal_service.clone();
+    let message_service = ctx.message_service();
     let mailbox_manager = ctx.mailbox_manager.clone();
 
     let weak_window = window.as_weak();
@@ -103,7 +103,7 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
         let auth_state = auth_state.clone();
         let database = database.clone();
         let grpc_pool = grpc_pool.clone();
-        let signal_service = signal_service.clone();
+        let message_service = message_service.clone();
         let mailbox_manager = mailbox_manager.clone();
 
         // Stop any playing audio when switching channels
@@ -166,7 +166,7 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
                                         unread_timestamps,
                                         database,
                                         grpc_pool,
-                                        signal_service,
+                                        message_service,
                                         mailbox_manager,
                                     );
                                 }

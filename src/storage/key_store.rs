@@ -377,6 +377,12 @@ impl KeyStore {
         sender: &str,
         distribution_id: &str,
     ) -> Result<Option<Vec<u8>>, StorageError> {
+        tracing::debug!(
+            sender = sender,
+            distribution_id = distribution_id,
+            "[KEY_STORE] Loading sender key"
+        );
+
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT record FROM sender_keys WHERE sender = ?1 AND distribution_id = ?2",
@@ -386,9 +392,32 @@ impl KeyStore {
             stmt.query_row(params![sender, distribution_id], |row| row.get(0));
 
         match result {
-            Ok(record) => Ok(Some(record)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
+            Ok(record) => {
+                tracing::info!(
+                    sender = sender,
+                    distribution_id = distribution_id,
+                    record_len = record.len(),
+                    "[KEY_STORE] Loaded sender key successfully"
+                );
+                Ok(Some(record))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                tracing::warn!(
+                    sender = sender,
+                    distribution_id = distribution_id,
+                    "[KEY_STORE] No sender key found for sender/distribution"
+                );
+                Ok(None)
+            }
+            Err(e) => {
+                tracing::error!(
+                    sender = sender,
+                    distribution_id = distribution_id,
+                    error = %e,
+                    "[KEY_STORE] Database error loading sender key"
+                );
+                Err(StorageError::Database(e))
+            }
         }
     }
 
@@ -401,6 +430,13 @@ impl KeyStore {
         distribution_id: &str,
         record: &[u8],
     ) -> Result<(), StorageError> {
+        tracing::info!(
+            sender = sender,
+            distribution_id = distribution_id,
+            record_len = record.len(),
+            "[KEY_STORE] Storing sender key"
+        );
+
         let conn = self.db.connection()?;
         let now = Utc::now().to_rfc3339();
 
@@ -412,6 +448,12 @@ impl KeyStore {
                  updated_at = excluded.updated_at",
             params![sender, distribution_id, record, now],
         )?;
+
+        tracing::info!(
+            sender = sender,
+            distribution_id = distribution_id,
+            "[KEY_STORE] Sender key stored successfully"
+        );
 
         Ok(())
     }

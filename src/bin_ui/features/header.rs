@@ -13,7 +13,6 @@ use crate::MainWindow;
 pub fn wire(window: &MainWindow, ctx: &AppContext) {
     wire_search_clicked(window);
     wire_search_callbacks(window, ctx);
-    wire_pinned_clicked(window, ctx);
     wire_pinned_navigation(window, ctx);
     wire_chat_settings_clicked(window, ctx);
     wire_load_more(window, ctx);
@@ -206,34 +205,6 @@ fn wire_search_callbacks(window: &MainWindow, ctx: &AppContext) {
     });
 }
 
-fn wire_pinned_clicked(window: &MainWindow, ctx: &AppContext) {
-    let weak_window = window.as_weak();
-    let chat_state = ctx.chat_state.clone();
-
-    window.on_pinned_clicked(move || {
-        let weak = weak_window.clone();
-        let chat_state = chat_state.clone();
-
-        tokio::spawn(async move {
-            let channel_id = match chat_state.get().active_channel_id {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Cannot show pinned messages: no active channel");
-                    return;
-                }
-            };
-
-            tracing::debug!("Pinned messages clicked for channel: {}", channel_id);
-
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(_w) = weak.upgrade() {
-                    tracing::info!("Pinned messages bar toggled for channel: {}", channel_id);
-                }
-            });
-        });
-    });
-}
-
 fn wire_pinned_navigation(window: &MainWindow, ctx: &AppContext) {
     // Previous pinned message
     let pinned_state = ctx.pinned_state.clone();
@@ -260,11 +231,11 @@ fn wire_pinned_navigation(window: &MainWindow, ctx: &AppContext) {
     let weak_window = window.as_weak();
 
     window.on_pinned_dismiss_clicked(move || {
-        pinned_state.set_expanded(false);
+        pinned_state.dismiss();
         let weak = weak_window.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                w.set_pinned_is_expanded(false);
+                w.set_has_pinned_messages(false);
             }
         });
         tracing::debug!("Pinned bar dismissed");

@@ -2,9 +2,11 @@
 //!
 //! All encryption, decryption, and key management operations.
 //! Wraps libsignal with proper storage backends.
+//!
+//! Note: For blind signatures, use `crate::mailbox::blind_signature` which implements
+//! deterministic RSABSSA per NDSS '21 spec, compatible with the Go server.
 
 pub mod attachment_crypto;
-pub mod blind_signature;
 pub mod device_credentials;
 pub mod dm_crypto;
 pub mod group_encryption;

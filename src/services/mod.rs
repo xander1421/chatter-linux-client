@@ -8,7 +8,7 @@ pub mod account_service;
 pub mod device_service;
 pub mod message_service;
 pub mod message_gateway;
-pub mod channel_service;
+pub mod channel;
 pub mod channel_template;
 pub mod user_service;
 pub mod status_service;
@@ -74,6 +74,9 @@ pub use crate::crypto::SavedMessageSource;
 pub mod signal_service;
 pub mod mailbox_manager;
 
+// Re-exports for user service
+pub use user_service::{FriendResponseResult, UserError, UserService};
+
 pub use signal_service::SignalService;
 pub use mailbox_manager::{MailboxManager, MailboxError, ActiveMailbox};
 pub use message_gateway::{
@@ -87,3 +90,4 @@ pub use message_gateway::{
     build_delete_for_everyone_content, build_delete_for_everyone_content_with_channel,
 };
 pub use message_service::MessageService;
+pub use attachment_service::{AttachmentService, AttachmentError, UploadResult};

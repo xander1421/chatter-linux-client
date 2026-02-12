@@ -73,6 +73,7 @@ export component MessageComposer inherits Rectangle {
     callback mention-triggered(string);
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
+    callback process-text(string) -> string;  // Insert word breaks for wrapping
 
     // Forward focus to input
     forward-focus: text-input;
@@ -309,15 +310,19 @@ export component MessageComposer inherits Rectangle {
             }
         }
 
-        // Main input area - using absolute positioning to avoid layout binding loops
-        Rectangle {
+        // Main input area - using HorizontalLayout for proper width distribution
+        HorizontalLayout {
             width: 100%;
             height: root.content-height + Spacing.sm * 2;
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            padding-top: Spacing.sm;
+            padding-bottom: Spacing.sm;
+            spacing: Spacing.sm;
+            alignment: stretch;
 
             // Attachment button (left side)
             Rectangle {
-                x: Spacing.md;
-                y: Spacing.sm;
                 width: 36px;
                 height: 36px;
                 background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
@@ -340,18 +345,16 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Text input area - positioned absolutely with calculated width
+            // Text input area - stretches to fill remaining space
             Rectangle {
-                x: Spacing.md + 36px + Spacing.sm;  // After attachment button
-                y: Spacing.sm;
-                // Width: root - left(attach+spacing) - right(emoji+gif+send?+spacing+padding)
-                width: root.input-width;
+                horizontal-stretch: 1;
                 height: root.content-height;
                 background: Colors.background;
                 border-radius: Spacing.radius-md;
                 border-width: 1px;
                 border-color: text-input.has-focus ? Colors.primary : Colors.surface-hover;
                 opacity: root.disabled ? 0.5 : 1.0;
+                clip: true;  // Prevent text from overflowing outside input bounds
 
                 // Placeholder text (shown when empty and not focused)
                 if root.text == "" && !text-input.has-focus: Text {
@@ -393,8 +396,12 @@ export component MessageComposer inherits Rectangle {
                         return reject;
                     }
 
-                    // Handle text changes for @ mention detection and typing indicator
+                    // Handle text changes for @ mention detection, typing indicator, and word breaks
                     edited => {
+                        // Process text to insert word breaks for wrapping
+                        // The callback checks if processing is needed to avoid infinite loops
+                        root.text = root.process-text(self.text);
+
                         // Check for @ mention trigger
                         if (self.text != "") {
                             root.check-mention-trigger(self.text);
@@ -405,10 +412,8 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Emoji button (positioned from right)
+            // Emoji button
             Rectangle {
-                x: parent.width - Spacing.md - (root.can-send ? 36px + Spacing.sm : 0px) - 36px - Spacing.sm - 36px;
-                y: Spacing.sm;
                 width: 36px;
                 height: 36px;
                 background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
@@ -431,10 +436,8 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // GIF button (positioned from right)
+            // GIF button
             Rectangle {
-                x: parent.width - Spacing.md - (root.can-send ? 36px + Spacing.sm : 0px) - 36px;
-                y: Spacing.sm;
                 width: 36px;
                 height: 36px;
                 background: gif-touch.has-hover ? Colors.surface-hover : transparent;
@@ -459,10 +462,8 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Send button (positioned at far right, visible when can send)
+            // Send button (visible when can send)
             if root.can-send: Rectangle {
-                x: parent.width - Spacing.md - 36px;
-                y: Spacing.sm;
                 width: 36px;
                 height: 36px;
                 background: send-touch.has-hover ? Colors.primary-hover : Colors.primary;

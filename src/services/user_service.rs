@@ -31,6 +31,15 @@ pub enum FriendRequestFilter {
     Received,
 }
 
+/// Result of responding to a friend request.
+#[derive(Clone, Debug)]
+pub struct FriendResponseResult {
+    /// The friendship if accepted, None if declined.
+    pub friendship: Option<Friendship>,
+    /// The DM channel ID created when accepting a friend request.
+    pub dm_channel_id: Option<String>,
+}
+
 impl FriendRequestFilter {
     /// Convert to proto filter enum value.
     fn to_proto(self) -> friend_requests_filter::Filter {
@@ -285,7 +294,7 @@ impl UserService {
         user_client: &mut UserClient,
         friend_id: &UserId,
         accept: bool,
-    ) -> Result<Option<Friendship>, UserError> {
+    ) -> Result<FriendResponseResult, UserError> {
         // Check logged in
         let current_user = self.current_user_id()?;
 
@@ -302,11 +311,20 @@ impl UserService {
             .respond_friend_request(&friend_id_str, status, None)
             .await?;
 
-        // Consume stream for confirmation
+        // Consume stream for confirmation and extract channel_id
+        let mut dm_channel_id = None;
         while let Some(event_result) = stream.next().await {
             let event = event_result?;
-            if let Some(user_event::Event::FriendStatusChanged(ref _status_response)) = event.event
+            if let Some(user_event::Event::FriendStatusChanged(ref status_response)) = event.event
             {
+                // Extract channel_id if present
+                if !status_response.channel_id.is_empty() {
+                    dm_channel_id = Some(status_response.channel_id.clone());
+                    tracing::info!(
+                        "Friend response returned DM channel ID: {}",
+                        status_response.channel_id
+                    );
+                }
                 // Server confirmed the response
                 break;
             }
@@ -326,11 +344,17 @@ impl UserService {
                 let _ = self.user_repo.insert_friendship(&friendship);
             }
 
-            Ok(Some(friendship))
+            Ok(FriendResponseResult {
+                friendship: Some(friendship),
+                dm_channel_id,
+            })
         } else {
             // Delete friendship from local storage if exists
             let _ = self.user_repo.delete_friendship(&current_user, friend_id);
-            Ok(None)
+            Ok(FriendResponseResult {
+                friendship: None,
+                dm_channel_id: None,
+            })
         }
     }
 

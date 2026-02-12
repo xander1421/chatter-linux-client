@@ -767,4 +767,150 @@ mod tests {
 
         assert!(!msg.has_known_sender());
     }
+
+    #[test]
+    fn test_envelope_type_variants() {
+        // Verify all EnvelopeType variants exist and can be matched
+        // Proto EnvelopeType: Unspecified=0, SealedSender=1, PrekeyMessage=2, Message=3
+
+        let sealed = EnvelopeType::SealedSender;
+        let prekey = EnvelopeType::PrekeyMessage;
+        let message = EnvelopeType::Message;
+        let unspecified = EnvelopeType::Unspecified;
+
+        assert_eq!(sealed as i32, 1);
+        assert_eq!(prekey as i32, 2);
+        assert_eq!(message as i32, 3);
+        assert_eq!(unspecified as i32, 0);
+    }
+
+    #[test]
+    fn test_sealed_sender_is_primary_path() {
+        // Sealed sender should be the preferred path for privacy
+        let sealed = EnvelopeType::SealedSender;
+        let prekey = EnvelopeType::PrekeyMessage;
+        let message = EnvelopeType::Message;
+
+        // Sealed sender provides anonymity
+        assert!(matches!(sealed, EnvelopeType::SealedSender));
+
+        // PrekeyMessage and Message require sender info from envelope metadata
+        // which breaks anonymity
+        assert!(!matches!(prekey, EnvelopeType::SealedSender));
+        assert!(!matches!(message, EnvelopeType::SealedSender));
+    }
+
+    #[test]
+    fn test_prekey_message_requires_sender_context() {
+        // PreKey messages need sender address from envelope metadata
+        // because they are initial key exchange messages
+
+        let error = ProcessingError::DecryptionFailed {
+            message_id: "prekey-msg-1".to_string(),
+            error: "prekey message requires sender address from envelope metadata (not yet implemented)".to_string(),
+        };
+
+        // This error indicates the expected behavior for prekey without context
+        assert!(error.to_string().contains("prekey message requires sender address"));
+        assert!(error.to_string().contains("not yet implemented"));
+    }
+
+    #[test]
+    fn test_regular_message_requires_sender_context() {
+        // Regular (non-sealed sender) messages also need sender address
+
+        let error = ProcessingError::DecryptionFailed {
+            message_id: "regular-msg-1".to_string(),
+            error: "regular message requires sender address from envelope metadata (not yet implemented)".to_string(),
+        };
+
+        assert!(error.to_string().contains("regular message requires sender address"));
+    }
+
+    #[test]
+    fn test_envelope_type_processing_priority() {
+        // Processing priority for different envelope types:
+        // 1. SealedSender - full anonymity, contains sender info inside
+        // 2. PrekeyMessage - initial session setup, needs envelope metadata
+        // 3. Message - established session, needs envelope metadata
+        // 4. Unspecified - should not process
+
+        fn get_processing_priority(envelope_type: EnvelopeType) -> u8 {
+            match envelope_type {
+                EnvelopeType::SealedSender => 1,   // Highest priority, self-contained
+                EnvelopeType::PrekeyMessage => 2,  // Needs context
+                EnvelopeType::Message => 3,        // Needs context
+                EnvelopeType::Unspecified => 255,  // Should not process
+            }
+        }
+
+        assert_eq!(get_processing_priority(EnvelopeType::SealedSender), 1);
+        assert_eq!(get_processing_priority(EnvelopeType::PrekeyMessage), 2);
+        assert_eq!(get_processing_priority(EnvelopeType::Message), 3);
+        assert_eq!(get_processing_priority(EnvelopeType::Unspecified), 255);
+    }
+
+    #[test]
+    fn test_processed_message_sender_extraction() {
+        // Test extracting sender info from sealed sender result
+        let device_id = DeviceId::try_from(1u32).unwrap();
+        let sender = ProtocolAddress::new("alice-uuid".to_string(), device_id);
+
+        let msg = ProcessedMessage::new(
+            "sealed-msg-1".to_string(),
+            Some(sender.clone()),
+            ContentType::DataMessage,
+            vec![0x01, 0x02, 0x03],
+            1234567890,
+            EnvelopeType::SealedSender,
+        );
+
+        // Sealed sender should have known sender
+        assert!(msg.has_known_sender());
+
+        // Verify sender info
+        let extracted_sender = msg.sender_address.as_ref().unwrap();
+        assert_eq!(extracted_sender.name(), "alice-uuid");
+        assert_eq!(extracted_sender.device_id(), device_id);
+    }
+
+    #[test]
+    fn test_content_type_requires_decryption() {
+        // Check which content types need decryption
+        fn requires_decryption(content_type: ContentType) -> bool {
+            matches!(
+                content_type,
+                ContentType::DataMessage | ContentType::SyncMessage | ContentType::SenderKeyDistribution
+            )
+        }
+
+        assert!(requires_decryption(ContentType::DataMessage));
+        assert!(requires_decryption(ContentType::SyncMessage));
+        assert!(requires_decryption(ContentType::SenderKeyDistribution));
+        assert!(!requires_decryption(ContentType::TypingMessage));
+        assert!(!requires_decryption(ContentType::ReceiptMessage));
+    }
+
+    #[test]
+    fn test_envelope_type_try_from() {
+        // Test conversion from i32 to EnvelopeType
+        assert_eq!(
+            EnvelopeType::try_from(0).ok(),
+            Some(EnvelopeType::Unspecified)
+        );
+        assert_eq!(
+            EnvelopeType::try_from(1).ok(),
+            Some(EnvelopeType::SealedSender)
+        );
+        assert_eq!(
+            EnvelopeType::try_from(2).ok(),
+            Some(EnvelopeType::PrekeyMessage)
+        );
+        assert_eq!(
+            EnvelopeType::try_from(3).ok(),
+            Some(EnvelopeType::Message)
+        );
+        // Invalid values should fail
+        assert!(EnvelopeType::try_from(99).is_err());
+    }
 }

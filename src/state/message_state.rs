@@ -170,6 +170,21 @@ impl MessageState {
         });
     }
 
+    /// Find which channel contains a message.
+    ///
+    /// Searches all cached channels for a message with the given ID.
+    /// Returns None if the message is not in any cached channel.
+    #[must_use]
+    pub fn find_channel_for_message(&self, message_id: &MessageId) -> Option<ChannelId> {
+        let state = self.store.get();
+        for (channel_id, messages) in &state.messages {
+            if messages.iter().any(|m| &m.id == message_id) {
+                return Some(*channel_id);
+            }
+        }
+        None
+    }
+
     /// Clear all messages for a channel.
     pub fn clear_channel(&self, channel_id: &ChannelId) {
         self.store.update(|state| {

@@ -270,23 +270,31 @@ export component MessageItem inherits Rectangle {
                 }
             }
 
-            // Content area - Text needs explicit width: 100% for wrap to work
-            // Per Slint docs: "width: 100%" fills available parent space
-            HorizontalLayout {
+            // Content area - wrapped in Rectangle for clipping
+            Rectangle {
                 width: 100%;
+                height: content-layout.preferred-height;
+                clip: true;  // Prevent overflow beyond container
 
-                // Left spacer for avatar alignment
-                if root.show-sender: Rectangle {
-                    width: Spacing.avatar-sm + Spacing.sm;
-                }
-
-                // Content text - width: 100% is required for word-wrap
-                content-text := Text {
+                content-layout := HorizontalLayout {
                     width: 100%;
-                    text: root.content;
-                    color: Colors.text-secondary;
-                    font-size: Typography.sm;
-                    wrap: word-wrap;
+
+                    // Left spacer for avatar alignment
+                    if root.show-sender: Rectangle {
+                        width: Spacing.avatar-sm + Spacing.sm;
+                    }
+
+                    // Content text - width: 100% is required for word-wrap
+                    // Note: word-wrap only breaks at spaces. Long strings without spaces
+                    // need zero-width spaces inserted in Rust code to create break points.
+                    content-text := Text {
+                        width: 100%;
+                        text: root.content;
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        wrap: word-wrap;
+                        overflow: clip;  // Clip any remaining overflow
+                    }
                 }
             }
 

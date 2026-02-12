@@ -40,7 +40,11 @@ export component Sidebar inherits Rectangle {
 
     // Callbacks - Profile
     callback settings-clicked();
+    callback friends-clicked();
     callback profile-clicked();
+
+    // Properties - Friend requests badge
+    in property <int> pending-friend-requests: 0;
 
     // Callback - Toggle collapsed
     callback toggle-collapsed();
@@ -67,8 +71,10 @@ export component Sidebar inherits Rectangle {
             presence-status: root.user-presence-status;
             custom-status: root.user-custom-status;
             collapsed: root.collapsed;
+            pending-friend-requests: root.pending-friend-requests;
 
             settings-clicked => { root.settings-clicked(); }
+            friends-clicked => { root.friends-clicked(); }
             profile-clicked => { root.profile-clicked(); }
             show-tooltip(text) => {
                 root.show-tooltip(text, root.width + 8px, user-profile.y + user-profile.height / 2 - 14px);

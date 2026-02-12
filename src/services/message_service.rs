@@ -6,12 +6,20 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
 
+use crate::crypto::encrypt_dm_bytes;
 use crate::domain::ephemeral::MessageTTL;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use crate::domain::message::{Message, MessageContent, MixedContent, ReactionCount};
 use crate::error::{NetworkError, StorageError};
+use crate::mailbox::dm::{DmBootstrap, DmConversationManager};
+use crate::mailbox::group::GroupFanout;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::chat_v1;
+use crate::network::grpc::MailboxClient;
+use crate::proto::chat_v1::{self, SealedSenderMessage};
+use crate::proto::mailbox_v1::EnvelopeType;
+use crate::services::mailbox_manager::MailboxManager;
+use crate::storage::Database;
 
 use crate::domain::channel::ChannelType;
 use crate::network::grpc::auth_client::AuthClient;
@@ -54,6 +62,14 @@ pub enum MessageError {
     /// Encryption failed.
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),
+
+    /// DM conversation error.
+    #[error("dm error: {0}")]
+    DmError(String),
+
+    /// DM bootstrap was initiated - message will be sent after key exchange completes.
+    #[error("DM bootstrap initiated - secure channel being established")]
+    BootstrapInitiated,
 }
 
 /// Message service for all message operations.
@@ -111,7 +127,7 @@ impl MessageService {
             .map_err(MessageError::Network)?;
 
         // Convert and cache locally
-        let channel = crate::services::channel_service::proto_to_domain_channel(&proto_channel)
+        let channel = crate::services::channel::proto_to_domain_channel(&proto_channel)
             .map_err(|e| MessageError::InvalidContent(format!("Invalid channel data: {}", e)))?;
 
         // Store in local repo for future lookups
@@ -144,18 +160,27 @@ impl MessageService {
     /// * `message_client` - Mutable reference to message client
     /// * `auth_client` - Mutable reference to auth client
     /// * `channel_client` - Mutable reference to channel client for encryption settings
+    /// * `group_fanout` - Optional GroupFanout for NDSS '21 mailbox delivery
     /// * `channel_id` - Target channel ID
     /// * `text` - Message text content
     /// * `attachment_ids` - Optional attachment IDs
     /// * `thread_id` - Optional parent message ID for threading
     /// * `mentioned_integrations` - AI integrations mentioned in message
     /// * `targets_ai_bot` - Whether message targets AI bot
+    ///
+    /// # Group Mailbox Delivery
+    ///
+    /// If `group_fanout` is provided and the channel has mailboxes configured,
+    /// the message will be delivered to member mailboxes IN ADDITION to the
+    /// channel-based delivery. This provides traffic analysis resistance per
+    /// NDSS '21 paper.
     #[allow(clippy::too_many_arguments)]
     pub async fn send_message(
         &self,
         message_client: &mut MessageClient,
         auth_client: &mut AuthClient,
         channel_client: &mut crate::network::grpc::channel_client::ChannelClient,
+        group_fanout: Option<&GroupFanout>,
         channel_id: &ChannelId,
         text: &str,
         attachment_ids: Vec<AttachmentId>,
@@ -202,7 +227,7 @@ impl MessageService {
         let proto_message = message_client
             .send_message(
                 &channel_id.to_string(),
-                content_to_send,
+                content_to_send.clone(),
                 thread_id.map(|id| id.to_string()).as_deref(),
                 false, // ephemeral (Phase 34)
                 None,  // ephemeral_ttl
@@ -213,9 +238,23 @@ impl MessageService {
             )
             .await?;
 
+        // Also send via group mailboxes if available (NDSS '21 paper)
+        if let Some(fanout) = group_fanout {
+            if require_encryption {
+                // Extract ciphertext from content for mailbox delivery
+                if let Some(chat_v1::message::content::Type::Encrypted(ref encrypted)) = content_to_send.r#type {
+                    self.send_via_group_mailboxes(fanout, channel_id, &encrypted.ciphertext, &sender_id)
+                        .await?;
+                }
+            }
+        }
+
         // Convert to domain message and preserve attachment IDs
         let mut message = proto_to_domain_message(&proto_message, sender_id)?;
         message.attachments = attachment_ids;
+
+        // For sent messages, store original plaintext locally (not encrypted server response)
+        message.content = MessageContent::Text(trimmed_text.to_string());
 
         // Store locally
         self.message_repo.insert(&message)?;
@@ -319,6 +358,235 @@ impl MessageService {
                 Err(MessageError::EncryptionFailed(e.to_string()))
             }
         }
+    }
+
+    /// Send a GroupMailboxAddress announcement to a channel.
+    ///
+    /// Wraps the announcement in a Content proto and sends it via `send_control_content`.
+    /// This is used after creating/joining a channel to announce our group mailbox
+    /// for the NDSS '21 ephemeral mailbox routing.
+    ///
+    /// # Arguments
+    ///
+    /// * `message_client` - Message client for sending
+    /// * `auth_client` - Auth client for key fetching
+    /// * `channel_client` - Channel client for encryption settings
+    /// * `channel_id` - Target channel
+    /// * `announcement` - The GroupMailboxAddress proto to send
+    pub async fn send_group_mailbox_announcement(
+        &self,
+        message_client: &mut MessageClient,
+        auth_client: &mut AuthClient,
+        channel_client: &mut crate::network::grpc::channel_client::ChannelClient,
+        channel_id: &ChannelId,
+        announcement: crate::proto::content_v1::GroupMailboxAddress,
+    ) -> Result<(), MessageError> {
+        use crate::proto::content_v1::{content, Content};
+
+        let content = Content {
+            content: Some(content::Content::GroupMailboxAddress(announcement)),
+            ephemeral_reply_to: None,
+            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+            padding: vec![],
+        };
+
+        self.send_control_content(message_client, auth_client, channel_client, channel_id, content)
+            .await
+    }
+
+    // ==================== DM Operations ====================
+
+    /// Send a Content proto to a DM peer via two-layer encryption.
+    ///
+    /// Uses two encryption layers for privacy:
+    /// 1. Signal Protocol (forward secrecy via Double Ratchet)
+    /// 2. Mailbox encryption (sender anonymity via XChaCha20-Poly1305)
+    ///
+    /// # Arguments
+    ///
+    /// * `auth_client` - Auth client for key fetching
+    /// * `peer_id` - The peer's user ID
+    /// * `content` - The Content proto to send
+    /// * `database` - Database for conversation state
+    /// * `mailbox_manager` - For sending to the peer's mailbox
+    /// * `grpc_pool` - Optional gRPC pool for bootstrap (needed for first DM)
+    pub async fn send_dm_content(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        content: crate::proto::content_v1::Content,
+        database: Arc<Database>,
+        mailbox_manager: &MailboxManager,
+        grpc_pool: Option<&Arc<GrpcClientPool>>,
+    ) -> Result<(), MessageError> {
+        use prost::Message as ProstMessage;
+
+        // Load conversation to get peer's mailbox and shared secret
+        let conversation_manager = DmConversationManager::new(database.clone());
+        let conversation = conversation_manager.load_conversation(peer_id).map_err(|e| {
+            MessageError::DmError(format!("Failed to load conversation: {}", e))
+        })?;
+
+        // Check if conversation exists and is ready
+        let needs_bootstrap = match &conversation {
+            None => true,
+            Some(conv) => !conv.is_ready_to_send(),
+        };
+
+        if needs_bootstrap {
+            // Auto-trigger bootstrap for first-time DM
+            tracing::info!(peer_id = %peer_id, "Conversation not ready, initiating DM bootstrap");
+
+            // Need grpc_pool for bootstrap
+            let grpc_pool = grpc_pool.ok_or_else(|| {
+                MessageError::DmError("gRPC pool required for DM bootstrap".into())
+            })?;
+
+            let dm_bootstrap = DmBootstrap::new(database.clone());
+            let mut mailbox_client =
+                MailboxClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+
+            match dm_bootstrap.initiate_dm(*peer_id, &mut mailbox_client).await {
+                Ok(bootstrap_result) => {
+                    // Send bootstrap message via sealed sender (device inbox)
+                    let peer_device_id = 1u32;
+                    let peer_id_str = peer_id.to_string();
+
+                    match self
+                        .signal_service
+                        .encrypt_message(
+                            auth_client,
+                            &peer_id_str,
+                            peer_device_id,
+                            &bootstrap_result.bootstrap_message,
+                        )
+                        .await
+                    {
+                        Ok(sealed_ciphertext) => {
+                            // Send to peer's device inbox via MessageClient
+                            let mut message_client =
+                                MessageClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+
+                            let sealed_msg = SealedSenderMessage {
+                                sealed_body: sealed_ciphertext,
+                                server_key_id: 1, // Default server key
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                            };
+
+                            if let Err(e) = message_client
+                                .send_sealed_message(&peer_id_str, peer_device_id, sealed_msg)
+                                .await
+                            {
+                                tracing::error!("Failed to send bootstrap to device inbox: {}", e);
+                                return Err(MessageError::DmError(format!(
+                                    "Failed to send bootstrap: {}",
+                                    e
+                                )));
+                            }
+                            tracing::info!(
+                                peer_id = %peer_id,
+                                "DM bootstrap sent - waiting for key exchange response"
+                            );
+                            return Err(MessageError::BootstrapInitiated);
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to encrypt bootstrap message: {}", e);
+                            return Err(MessageError::EncryptionFailed(format!(
+                                "Bootstrap encrypt: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+                Err(crate::error::MailboxError::ConversationExists) => {
+                    // Conversation exists but not ready - waiting for key exchange
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        "Conversation exists, waiting for key exchange"
+                    );
+                    return Err(MessageError::DmError(
+                        "Waiting for peer to respond to key exchange".into(),
+                    ));
+                }
+                Err(e) => {
+                    tracing::error!("Failed to initiate DM bootstrap: {}", e);
+                    return Err(MessageError::DmError(format!("Bootstrap failed: {}", e)));
+                }
+            }
+        }
+
+        // Conversation is ready - proceed with sending
+        let conversation = conversation.unwrap();
+
+        let peer_mailbox = conversation
+            .peer_mailbox
+            .as_ref()
+            .ok_or_else(|| MessageError::DmError("No peer mailbox address".into()))?;
+
+        let shared_secret = conversation
+            .conversation_key
+            .as_ref()
+            .and_then(|k| k.get_shared_secret())
+            .ok_or_else(|| MessageError::DmError("No shared secret".into()))?;
+
+        // Serialize Content proto
+        let plaintext = content.encode_to_vec();
+
+        // Layer 1: Signal Protocol encryption (forward secrecy)
+        let peer_device_id = 1u32; // Primary device
+        let peer_id_str = peer_id.to_string();
+
+        let signal_ciphertext = self
+            .signal_service
+            .encrypt_message(auth_client, &peer_id_str, peer_device_id, &plaintext)
+            .await
+            .map_err(|e| MessageError::EncryptionFailed(format!("Signal encrypt: {}", e)))?;
+
+        // Layer 2: Mailbox encryption (sender anonymity)
+        let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, shared_secret)
+            .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
+
+        // Send to peer's mailbox
+        mailbox_manager
+            .send_to_mailbox(&peer_mailbox.public_key, mailbox_encrypted, EnvelopeType::SealedSender)
+            .await
+            .map_err(|e| MessageError::DmError(format!("Failed to send to mailbox: {}", e)))?;
+
+        tracing::debug!(peer_id = %peer_id, "Sent DM via two-layer encryption");
+        Ok(())
+    }
+
+    /// Send a text message to a DM peer.
+    ///
+    /// Convenience wrapper around `send_dm_content` that builds the Content proto.
+    ///
+    /// # Arguments
+    ///
+    /// * `auth_client` - Auth client for key fetching
+    /// * `peer_id` - The peer's user ID
+    /// * `text` - Message text
+    /// * `database` - Database for conversation state
+    /// * `mailbox_manager` - For sending to the peer's mailbox
+    /// * `grpc_pool` - gRPC pool for bootstrap (needed for first DM)
+    pub async fn send_dm_text(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        text: &str,
+        database: Arc<Database>,
+        mailbox_manager: &MailboxManager,
+        grpc_pool: &Arc<GrpcClientPool>,
+    ) -> Result<(), MessageError> {
+        let content = crate::services::build_text_content(text);
+        self.send_dm_content(
+            auth_client,
+            peer_id,
+            content,
+            database,
+            mailbox_manager,
+            Some(grpc_pool),
+        )
+        .await
     }
 
     /// Send an ephemeral (self-destructing) message to a channel.
@@ -722,6 +990,10 @@ impl MessageService {
         message.reply_to = Some(*reply_to_id);
         message.attachments = attachment_ids;
 
+        // For sent messages, store original plaintext locally (not encrypted server response)
+        // Forward secrecy deletes keys after encryption, so we can't decrypt our own ciphertext
+        message.content = MessageContent::Text(trimmed_text.to_string());
+
         // Store locally with reply_to set
         self.message_repo.insert(&message)?;
 
@@ -824,6 +1096,10 @@ impl MessageService {
         let mut message = proto_to_domain_message(&proto_message, sender_id)?;
         message.attachments = source.attachments.clone();
 
+        // For sent messages, store original plaintext locally (not encrypted server response)
+        // Forward secrecy deletes keys after encryption, so we can't decrypt our own ciphertext
+        message.content = MessageContent::Text(forwarded_text);
+
         // Store locally
         self.message_repo.insert(&message)?;
 
@@ -912,6 +1188,10 @@ impl MessageService {
         // Convert to domain message and preserve attachment IDs
         let mut message = proto_to_domain_message(&proto_message, sender_id)?;
         message.attachments = attachment_ids;
+
+        // For sent messages, store original plaintext locally (not encrypted server response)
+        // Forward secrecy deletes keys after encryption, so we can't decrypt our own ciphertext
+        message.content = MessageContent::Text(trimmed_text.to_string());
 
         // Store locally
         self.message_repo.insert(&message)?;
@@ -1028,6 +1308,17 @@ impl MessageService {
     ) -> Result<(), MessageError> {
         use prost::Message;
 
+        // Check if there are other members to distribute to
+        let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
+        if members.len() <= 1 {
+            tracing::debug!(
+                channel_id = %channel_id,
+                member_count = members.len(),
+                "Skipping sender key distribution (no other members)"
+            );
+            return Ok(());
+        }
+
         // Serialize SKDM and send as encrypted message with special marker
         let skdm_bytes = skdm.encode_to_vec();
 
@@ -1063,10 +1354,106 @@ impl MessageService {
 
         tracing::info!(
             channel_id = %channel_id,
+            member_count = members.len(),
             "Distributed sender key to channel members"
         );
 
         Ok(())
+    }
+
+    /// Send encrypted content to group member mailboxes via GroupFanout.
+    ///
+    /// This implements the NDSS '21 paper's per-group ephemeral mailboxes for
+    /// privacy-preserving group messaging. Messages are fan-out to N member
+    /// mailboxes, preventing server-side correlation of group membership.
+    ///
+    /// # Arguments
+    ///
+    /// * `group_fanout` - GroupFanout for N-way parallel delivery
+    /// * `channel_id` - Target channel
+    /// * `encrypted_content` - Pre-encrypted content (sender key ciphertext)
+    /// * `sender_id` - Our user ID for associated_data
+    ///
+    /// # Note
+    ///
+    /// This is called IN ADDITION to channel-based sending during the transition
+    /// period. Once all members have migrated to mailbox-based receiving, the
+    /// channel send can be removed.
+    pub async fn send_via_group_mailboxes(
+        &self,
+        group_fanout: &GroupFanout,
+        channel_id: &ChannelId,
+        encrypted_content: &[u8],
+        sender_id: &UserId,
+    ) -> Result<(), MessageError> {
+        // Check if group mailboxes are ready
+        match group_fanout.is_ready_to_send(channel_id) {
+            Ok(true) => {
+                // Build associated_data with sender info for recipient to extract
+                let associated_data = format!("sender:{}:channel:{}", sender_id, channel_id);
+
+                // Wrap in EncryptedData for mailbox delivery
+                use prost::Message as ProstMessage;
+                let mailbox_envelope = chat_v1::EncryptedData {
+                    version: chat_v1::CryptoVersion::SignalProtocol as i32,
+                    ciphertext: encrypted_content.to_vec(),
+                    associated_data: associated_data.into_bytes(),
+                    nonce: vec![],
+                    auth_tag: vec![],
+                    signature: vec![],
+                    device_id: String::new(),
+                };
+                let envelope_bytes = mailbox_envelope.encode_to_vec();
+
+                // Fan-out to all member mailboxes
+                match group_fanout
+                    .send_to_group(channel_id, &envelope_bytes, EnvelopeType::Message)
+                    .await
+                {
+                    Ok(result) => {
+                        if result.is_complete_success() {
+                            tracing::debug!(
+                                channel_id = %channel_id,
+                                total = result.total_members,
+                                "Sent message to all group mailboxes"
+                            );
+                        } else {
+                            tracing::warn!(
+                                channel_id = %channel_id,
+                                successful = result.successful,
+                                failed = result.failed,
+                                "Partial delivery to group mailboxes"
+                            );
+                        }
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            channel_id = %channel_id,
+                            error = %e,
+                            "Failed to send to group mailboxes (channel delivery still succeeded)"
+                        );
+                        // Don't fail - channel delivery already succeeded
+                        Ok(())
+                    }
+                }
+            }
+            Ok(false) => {
+                tracing::debug!(
+                    channel_id = %channel_id,
+                    "Group mailboxes not ready - skipping fanout"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::debug!(
+                    channel_id = %channel_id,
+                    error = %e,
+                    "Could not check group mailbox readiness - skipping fanout"
+                );
+                Ok(())
+            }
+        }
     }
 
     /// Send a message to the SavedMessages channel (Note to Self).
@@ -1607,5 +1994,121 @@ mod tests {
         let millis = 1706140800000u64; // 2024-01-25 00:00:00 UTC
         let dt = millis_to_datetime(millis);
         assert_eq!(dt.timestamp_millis(), millis as i64);
+    }
+
+    #[test]
+    fn test_proto_content_to_domain_encrypted() {
+        use chat_v1::message::content::Type;
+        use chat_v1::message::Content;
+
+        // Encrypted content should return placeholder text
+        let proto_content = Content {
+            r#type: Some(Type::Encrypted(chat_v1::EncryptedData {
+                version: 1,
+                nonce: vec![0x12, 0x34, 0x56, 0x78],
+                ciphertext: vec![0xDE, 0xAD, 0xBE, 0xEF],
+                auth_tag: vec![0xAA, 0xBB],
+                associated_data: vec![],
+                signature: vec![],
+                device_id: "device-1".to_string(),
+            })),
+        };
+
+        let result = proto_content_to_domain(Some(&proto_content)).unwrap();
+        match result {
+            MessageContent::Text(text) => {
+                assert_eq!(text, "[Encrypted message]");
+            }
+            _ => panic!("Expected Text variant with placeholder"),
+        }
+    }
+
+    #[test]
+    fn test_proto_content_to_domain_file() {
+        use chat_v1::message::content::Type;
+        use chat_v1::message::Content;
+
+        let file_id = AttachmentId::new();
+        let proto_content = Content {
+            r#type: Some(Type::File(chat_v1::FileMetadata {
+                id: file_id.to_string(),
+                name: "test.pdf".to_string(),
+                mime_type: "application/pdf".to_string(),
+                size: 1024,
+                sha256: vec![0xAB, 0xCD, 0xEF], // Vec<u8>, not String
+                chunk_size: 256,
+            })),
+        };
+
+        let result = proto_content_to_domain(Some(&proto_content)).unwrap();
+        match result {
+            MessageContent::Mixed(mixed) => {
+                assert!(mixed.text.is_none());
+                assert_eq!(mixed.attachment_ids.len(), 1);
+                assert_eq!(mixed.attachment_ids[0], file_id);
+            }
+            _ => panic!("Expected Mixed variant for file content"),
+        }
+    }
+
+    #[test]
+    fn test_proto_content_to_domain_empty_type() {
+        use chat_v1::message::Content;
+
+        // Content with no type should return empty text
+        let proto_content = Content { r#type: None };
+
+        let result = proto_content_to_domain(Some(&proto_content)).unwrap();
+        match result {
+            MessageContent::Text(text) => {
+                assert!(text.is_empty());
+            }
+            _ => panic!("Expected empty Text variant"),
+        }
+    }
+
+    #[test]
+    fn test_proto_content_to_domain_reaction() {
+        use chat_v1::message::content::Type;
+        use chat_v1::message::Content;
+
+        // Reaction content should return placeholder
+        let proto_content = Content {
+            r#type: Some(Type::Reaction(chat_v1::ReactionUpdate {
+                message_id: "msg-123".to_string(),
+                emoji: "👍".to_string(),
+                add: true,
+                proof_of_work: vec![],
+            })),
+        };
+
+        let result = proto_content_to_domain(Some(&proto_content)).unwrap();
+        match result {
+            MessageContent::Text(text) => {
+                assert_eq!(text, "[Special message]");
+            }
+            _ => panic!("Expected Text variant with placeholder"),
+        }
+    }
+
+    #[test]
+    fn test_file_id_parsing_error() {
+        use chat_v1::message::content::Type;
+        use chat_v1::message::Content;
+
+        // Invalid file ID should return error
+        let proto_content = Content {
+            r#type: Some(Type::File(chat_v1::FileMetadata {
+                id: "not-a-valid-uuid".to_string(),
+                name: "test.pdf".to_string(),
+                mime_type: "application/pdf".to_string(),
+                size: 1024,
+                sha256: vec![0xAB, 0xCD],
+                chunk_size: 256,
+            })),
+        };
+
+        let result = proto_content_to_domain(Some(&proto_content));
+        assert!(result.is_err());
     }
 }

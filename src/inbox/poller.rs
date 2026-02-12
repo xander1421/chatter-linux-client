@@ -11,7 +11,10 @@ use tokio::sync::{broadcast, watch, Mutex};
 use crate::network::grpc::MessageClient;
 use crate::proto::chat_v1::DeviceMessage;
 
-use super::provider::{InboxConfig, InboxError, InboxEvent, InboxState, InboxStats};
+use super::config::InboxConfig;
+use super::error::InboxError;
+use super::events::InboxEvent;
+use super::state::{InboxState, InboxStats};
 
 /// Poller for fetching messages from the device inbox.
 ///

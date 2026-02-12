@@ -13,6 +13,15 @@
 //! - `InboxEvent` - Events for monitoring message flow
 //! - `HandlerRegistry` - Routes messages to type-specific handlers
 //!
+//! # Module Organization
+//!
+//! - `config` - Polling configuration (intervals, batch sizes, retries)
+//! - `events` - Event types emitted by the inbox system
+//! - `state` - Inbox state and statistics tracking
+//! - `error` - Error types for inbox operations
+//! - `polling` - Handlers for device, DM, and group mailbox polling
+//! - `handlers` - Content-type specific message handlers
+//!
 //! # Handler Flow
 //!
 //! 1. `MessageProcessor` decrypts envelope, determines `ContentType`
@@ -35,20 +44,27 @@
 //! 5. `HandlerRegistry` routes to appropriate handler
 //! 6. Processed messages are acknowledged to server
 
+pub mod config;
+pub mod error;
+pub mod events;
 pub mod handlers;
 pub mod poller;
+pub mod polling;
 pub mod processor;
 pub mod provider;
 pub mod queue;
+pub mod state;
+pub mod streaming;
 
 // Re-export main types for convenience
+pub use config::{InboxConfig, InboxConfigBuilder};
+pub use error::InboxError;
+pub use events::InboxEvent;
 pub use poller::InboxPoller;
 pub use processor::{ContentType, MessageProcessor, ProcessedMessage, ProcessingError, ProcessingResult};
-pub use provider::{
-    DeviceInboxProvider, InboxConfig, InboxConfigBuilder, InboxError, InboxEvent, InboxState,
-    InboxStats,
-};
+pub use provider::DeviceInboxProvider;
 pub use queue::{LocalQueue, QueuedInboxMessage};
+pub use state::{InboxState, InboxStats};
 
 // Re-export handler types
 pub use handlers::{
@@ -56,3 +72,6 @@ pub use handlers::{
     HandlerRegistry, HandlerResult, InboxHandler, KeyExchangeHandler, PinHandler, ReactionHandler,
     ReceiptHandler, SenderKeyHandler, SyncHandler, TypingHandler,
 };
+
+// Re-export streaming handlers
+pub use streaming::{spawn_dm_bootstrap_handler_from_bus, spawn_user_events_stream};

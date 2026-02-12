@@ -123,8 +123,6 @@ pub struct PinnedBarData {
     pub current_index: i32,
     /// Total number of pinned messages.
     pub total_count: i32,
-    /// Whether the pinned bar is expanded (shows full preview).
-    pub is_expanded: bool,
     /// Whether there are multiple pinned messages (show navigation controls).
     pub has_multiple: bool,
 }
@@ -149,13 +147,6 @@ impl PinnedBarData {
         self.current_index = current;
         self.total_count = total;
         self.has_multiple = total >= 2;
-        self
-    }
-
-    /// Set the expanded state.
-    #[must_use]
-    pub fn with_expanded(mut self, expanded: bool) -> Self {
-        self.is_expanded = expanded;
         self
     }
 }

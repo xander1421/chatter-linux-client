@@ -19,8 +19,9 @@ pub struct PinnedStateData {
     pub pinned_message_ids: Vec<MessageId>,
     /// Current navigation position (0-based).
     pub current_index: usize,
-    /// Whether the pinned bar is expanded.
-    pub is_expanded: bool,
+    /// Whether the pinned bar has been dismissed by user.
+    /// Resets when switching channels or when new message is pinned.
+    pub is_dismissed: bool,
 }
 
 /// Reactive pinned messages state manager.
@@ -28,7 +29,7 @@ pub struct PinnedStateData {
 /// Provides Telegram-style navigation through pinned messages:
 /// - Navigate next/prev with wraparound
 /// - Jump to specific index
-/// - Toggle expanded view
+/// - Dismiss bar (resets on channel switch)
 ///
 /// # Example
 ///
@@ -74,13 +75,13 @@ impl PinnedState {
 
     /// Set pinned messages for a channel.
     ///
-    /// Resets the navigation index to 0.
+    /// Resets the navigation index to 0 and clears dismissed state.
     pub fn set_pinned_messages(&self, channel_id: ChannelId, message_ids: Vec<MessageId>) {
         self.store.update(|state| {
             state.channel_id = Some(channel_id);
             state.pinned_message_ids = message_ids;
             state.current_index = 0;
-            // Keep expanded state unchanged
+            state.is_dismissed = false; // Reset on channel change
         });
     }
 
@@ -90,7 +91,7 @@ impl PinnedState {
             state.channel_id = None;
             state.pinned_message_ids.clear();
             state.current_index = 0;
-            state.is_expanded = false;
+            state.is_dismissed = false;
         });
     }
 
@@ -131,18 +132,28 @@ impl PinnedState {
         });
     }
 
-    /// Toggle the expanded state of the pinned bar.
-    pub fn toggle_expanded(&self) {
+    /// Dismiss the pinned bar.
+    ///
+    /// The bar will reappear when switching channels or when a new message is pinned.
+    pub fn dismiss(&self) {
         self.store.update(|state| {
-            state.is_expanded = !state.is_expanded;
+            state.is_dismissed = true;
         });
     }
 
-    /// Set the expanded state of the pinned bar.
-    pub fn set_expanded(&self, expanded: bool) {
-        self.store.update(|state| {
-            state.is_expanded = expanded;
-        });
+    /// Check if the pinned bar is dismissed.
+    #[must_use]
+    pub fn is_dismissed(&self) -> bool {
+        self.store.get().is_dismissed
+    }
+
+    /// Check if the pinned bar should be visible.
+    ///
+    /// Returns true if there are pinned messages and the bar is not dismissed.
+    #[must_use]
+    pub fn should_show(&self) -> bool {
+        let state = self.store.get();
+        !state.pinned_message_ids.is_empty() && !state.is_dismissed
     }
 
     /// Get the currently focused pinned message ID.
@@ -222,7 +233,7 @@ mod tests {
         assert!(data.channel_id.is_none());
         assert!(data.pinned_message_ids.is_empty());
         assert_eq!(data.current_index, 0);
-        assert!(!data.is_expanded);
+        assert!(!data.is_dismissed);
     }
 
     #[test]
@@ -260,14 +271,14 @@ mod tests {
         let channel_id = ChannelId::new();
 
         state.set_pinned_messages(channel_id, vec![MessageId::new()]);
-        state.set_expanded(true);
+        state.dismiss();
         state.clear();
 
         let data = state.get();
         assert!(data.channel_id.is_none());
         assert!(data.pinned_message_ids.is_empty());
         assert_eq!(data.current_index, 0);
-        assert!(!data.is_expanded);
+        assert!(!data.is_dismissed);
     }
 
     #[test]
@@ -345,27 +356,38 @@ mod tests {
     }
 
     #[test]
-    fn test_toggle_expanded() {
+    fn test_dismiss() {
         let state = PinnedState::new();
+        let channel_id = ChannelId::new();
 
-        assert!(!state.get().is_expanded);
+        state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+        assert!(!state.is_dismissed());
+        assert!(state.should_show());
 
-        state.toggle_expanded();
-        assert!(state.get().is_expanded);
-
-        state.toggle_expanded();
-        assert!(!state.get().is_expanded);
+        state.dismiss();
+        assert!(state.is_dismissed());
+        assert!(!state.should_show());
     }
 
     #[test]
-    fn test_set_expanded() {
+    fn test_should_show() {
         let state = PinnedState::new();
+        let channel_id = ChannelId::new();
 
-        state.set_expanded(true);
-        assert!(state.get().is_expanded);
+        // No pinned messages - should not show
+        assert!(!state.should_show());
 
-        state.set_expanded(false);
-        assert!(!state.get().is_expanded);
+        // Has pinned messages - should show
+        state.set_pinned_messages(channel_id, vec![MessageId::new()]);
+        assert!(state.should_show());
+
+        // Dismissed - should not show
+        state.dismiss();
+        assert!(!state.should_show());
+
+        // New channel resets dismissed
+        state.set_pinned_messages(ChannelId::new(), vec![MessageId::new()]);
+        assert!(state.should_show());
     }
 
     #[test]

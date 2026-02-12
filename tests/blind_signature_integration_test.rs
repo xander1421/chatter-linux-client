@@ -12,7 +12,7 @@ use blind_rsa_signatures::{KeyPair, Options};
 use ed25519_dalek::SigningKey;
 use rsa::PublicKeyParts;
 
-use chatter_linux::crypto::blind_signature::BlindSignature;
+use chatter_linux::mailbox::blind_signature::BlindSignature;
 use chatter_linux::proto::mailbox_v1::CreateEphemeralMailboxRequest;
 
 #[test]

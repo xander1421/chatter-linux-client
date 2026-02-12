@@ -64,13 +64,32 @@ async fn main() {
         let attachment_repo = ctx.attachment_repo.clone();
         let settings_repo = ctx.settings_repo.clone();
         let signal_service = ctx.signal_service.clone();
+        let group_coordinator = ctx.group_coordinator.clone();
         let auth_state = ctx.auth_state.clone();
+
+        let user_repo_for_events = user_repo.clone();
+        let weak_for_events = weak_window.clone();
 
         tokio::spawn(async move {
             // Start inbox provider if available
             if let Some(provider) = inbox_provider {
                 if let Err(e) = provider.start().await {
                     tracing::error!("Failed to start inbox provider on startup: {}", e);
+                } else {
+                    // Subscribe to inbox events for real-time updates (DMs, friend requests, etc.)
+                    let mut event_rx = provider.subscribe();
+                    let weak_events = weak_for_events.clone();
+                    let user_repo_events = user_repo_for_events.clone();
+
+                    tokio::spawn(async move {
+                        while let Ok(event) = event_rx.recv().await {
+                            bin_ui::features::auth::handle_inbox_event(
+                                event,
+                                &weak_events,
+                                &user_repo_events,
+                            );
+                        }
+                    });
                 }
             } else {
                 tracing::warn!("Inbox provider not available (offline mode)");
@@ -86,6 +105,7 @@ async fn main() {
                 attachment_repo,
                 settings_repo,
                 signal_service,
+                group_coordinator,
                 auth_state,
             )
             .await;
@@ -100,5 +120,20 @@ async fn main() {
     // Run Slint event loop (blocks until window closes)
     window.run().expect("Failed to run application");
 
-    tracing::info!("Application closed");
+    tracing::info!("Application closed, shutting down services...");
+
+    // Graceful shutdown of background services
+    if let Some(provider) = ctx.get_device_inbox_provider() {
+        if let Err(e) = provider.stop().await {
+            tracing::warn!("Failed to stop inbox provider: {}", e);
+        } else {
+            tracing::debug!("Inbox provider stopped");
+        }
+    }
+
+    // Disconnect from server
+    ctx.grpc_pool.disconnect();
+    tracing::debug!("Disconnected from server");
+
+    tracing::info!("Shutdown complete");
 }

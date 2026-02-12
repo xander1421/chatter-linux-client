@@ -14,6 +14,37 @@ use crate::bin_ui::audio_state;
 // Import Slint-generated types from crate root (where slint::include_modules! is called)
 use crate::{ChannelListItemData, DMListItemData, MessageAttachmentData, MessageItemData, PendingAttachmentData};
 
+/// Maximum characters in a word before inserting a break point.
+/// Slint's word-wrap only breaks at spaces, so we insert zero-width spaces
+/// to allow long strings without spaces to wrap.
+const MAX_WORD_LENGTH: usize = 50;
+
+/// Insert zero-width spaces (U+200B) into long sequences without whitespace.
+/// This allows Slint's word-wrap to break long strings that have no natural break points.
+fn insert_word_breaks(text: &str) -> String {
+    const ZWSP: char = '\u{200B}';  // Zero-width space
+
+    let mut result = String::with_capacity(text.len() + text.len() / MAX_WORD_LENGTH);
+    let mut word_len = 0;
+
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            word_len = 0;
+            result.push(ch);
+        } else {
+            word_len += 1;
+            result.push(ch);
+            // Insert zero-width space after MAX_WORD_LENGTH consecutive non-whitespace chars
+            if word_len >= MAX_WORD_LENGTH {
+                result.push(ZWSP);
+                word_len = 0;
+            }
+        }
+    }
+
+    result
+}
+
 /// Convert a domain Channel to Slint ChannelListItemData.
 pub fn channel_to_slint(channel: &Channel) -> ChannelListItemData {
     ChannelListItemData {
@@ -213,18 +244,28 @@ impl MessageDisplayData {
 /// Convert a domain Message to thread-safe MessageDisplayData.
 ///
 /// If `resolved_attachments` is provided, attachment details will be included.
+/// If `reply_count` is provided, it will be used; otherwise defaults to 0.
 pub fn message_to_display_data(
     msg: &Message,
     sender_name: &str,
     resolved_attachments: &[Attachment],
+) -> MessageDisplayData {
+    message_to_display_data_with_replies(msg, sender_name, resolved_attachments, None)
+}
+
+/// Convert a domain Message to thread-safe MessageDisplayData with reply count.
+pub fn message_to_display_data_with_replies(
+    msg: &Message,
+    sender_name: &str,
+    resolved_attachments: &[Attachment],
+    reply_count: Option<i32>,
 ) -> MessageDisplayData {
     let attachment_data: Vec<AttachmentDisplayData> = resolved_attachments
         .iter()
         .map(attachment_to_display_data)
         .collect();
 
-    // TODO: Get reply_count from ThreadInfo when thread support is complete
-    let reply_count = 0i32;
+    let reply_count = reply_count.unwrap_or(0);
     let reply_count_text = format_count(reply_count, "reply", "replies");
 
     MessageDisplayData {
@@ -232,7 +273,7 @@ pub fn message_to_display_data(
         sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
         sender_name: sender_name.to_string(),
         sender_initials: get_initials(sender_name),
-        content: msg.as_text().unwrap_or("").to_string(),
+        content: insert_word_breaks(msg.as_text().unwrap_or("")),
         timestamp: msg.created_at.format("%H:%M").to_string(),
         timestamp_ms: msg.created_at.timestamp_millis(),
         is_edited: msg.is_edited,

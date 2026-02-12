@@ -18,9 +18,13 @@ export component UserProfileBar inherits Rectangle {
 
     // Callbacks
     callback settings-clicked();
+    callback friends-clicked();
     callback profile-clicked();
     callback show-tooltip(string);
     callback hide-tooltip();
+
+    // Friend request badge count
+    in property <int> pending-friend-requests: 0;
 
     // Layout
     height: 64px;
@@ -85,6 +89,55 @@ export component UserProfileBar inherits Rectangle {
                         color: Colors.text-secondary;
                         font-size: 12px;
                         overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // Friends icon with badge
+        VerticalLayout {
+            alignment: center;
+
+            friends-button := Rectangle {
+                width: 32px;
+                height: 32px;
+                border-radius: Spacing.radius-sm;
+                background: friends-touch.has-hover ? Colors.surface-hover : transparent;
+
+                Text {
+                    text: "\u{1F465}"; // Two people icon (Unicode)
+                    color: Colors.text-secondary;
+                    font-size: 18px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+
+                // Notification badge for pending requests
+                if root.pending-friend-requests > 0: Rectangle {
+                    x: parent.width - 12px;
+                    y: 2px;
+                    width: root.pending-friend-requests > 9 ? 18px : 14px;
+                    height: 14px;
+                    border-radius: 7px;
+                    background: Colors.error;
+
+                    Text {
+                        text: root.pending-friend-requests > 9 ? "9+" : root.pending-friend-requests;
+                        color: Colors.text-primary;
+                        font-size: 10px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+
+                friends-touch := TouchArea {
+                    clicked => {
+                        root.friends-clicked();
                     }
                 }
             }

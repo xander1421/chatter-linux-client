@@ -296,6 +296,13 @@ impl SignalService {
             .parse()
             .map_err(|_| ServiceError::Validation("Invalid channel ID format".into()))?;
 
+        tracing::info!(
+            channel_id = %channel_id,
+            our_address = %our_address,
+            distribution_id = %distribution_id,
+            "[GROUP_MSG] Creating sender key for channel"
+        );
+
         let mut store = SignalStore::new(self.key_store.clone());
 
         let skdm = SenderKeyManager::create_distribution_message(
@@ -304,12 +311,19 @@ impl SignalService {
             &mut store,
         )
         .await
-        .map_err(ServiceError::Crypto)?;
+        .map_err(|e| {
+            tracing::error!(
+                channel_id = %channel_id,
+                error = %e,
+                "[GROUP_MSG] Failed to create sender key"
+            );
+            ServiceError::Crypto(e)
+        })?;
 
-        tracing::debug!(
+        tracing::info!(
             channel_id = %channel_id,
             skdm_len = skdm.serialized().len(),
-            "Created sender key for channel"
+            "[GROUP_MSG] Created sender key for channel successfully"
         );
 
         Ok(SenderKeyDistribution {
@@ -329,23 +343,53 @@ impl SignalService {
         sender_device_id: u32,
         skdm: &SenderKeyDistribution,
     ) -> Result<(), ServiceError> {
+        tracing::info!(
+            sender_id = %sender_id,
+            sender_device_id = sender_device_id,
+            channel_id = %skdm.channel_id,
+            skdm_len = skdm.distribution_message.len(),
+            "[GROUP_MSG] Processing sender key distribution from member"
+        );
+
         let device_id = DeviceId::try_from(sender_device_id)
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let sender_address = ProtocolAddress::new(sender_id.to_string(), device_id);
 
+        tracing::debug!(
+            sender_address = %sender_address,
+            "[GROUP_MSG] Constructed sender address for SKDM processing"
+        );
+
         let skdm_msg = SenderKeyDistributionMessage::try_from(skdm.distribution_message.as_slice())
-            .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(
+                    sender_id = %sender_id,
+                    channel_id = %skdm.channel_id,
+                    error = %e,
+                    "[GROUP_MSG] Failed to deserialize SKDM"
+                );
+                CryptoError::Protocol(e.to_string())
+            })?;
 
         let mut store = SignalStore::new(self.key_store.clone());
 
         SenderKeyManager::process_distribution_message(&sender_address, &skdm_msg, &mut store)
             .await
-            .map_err(ServiceError::Crypto)?;
+            .map_err(|e| {
+                tracing::error!(
+                    sender_id = %sender_id,
+                    channel_id = %skdm.channel_id,
+                    error = %e,
+                    "[GROUP_MSG] Failed to process SKDM"
+                );
+                ServiceError::Crypto(e)
+            })?;
 
-        tracing::debug!(
+        tracing::info!(
             sender_id = %sender_id,
+            sender_device_id = sender_device_id,
             channel_id = %skdm.channel_id,
-            "Processed sender key from member"
+            "[GROUP_MSG] Successfully stored sender key from member"
         );
 
         Ok(())
@@ -373,18 +417,48 @@ impl SignalService {
             .parse()
             .map_err(|_| ServiceError::Validation("Invalid channel ID format".into()))?;
 
+        tracing::info!(
+            channel_id = %channel_id,
+            our_address = %our_address,
+            plaintext_len = plaintext.len(),
+            "[GROUP_MSG] Encrypting message for group"
+        );
+
         let mut store = SignalStore::new(self.key_store.clone());
 
         // Check if we need to create a sender key and return SKDM for distribution
-        let skdm_to_distribute = if !self.has_sender_key(channel_id)? {
-            tracing::debug!(channel_id = %channel_id, "Creating sender key for channel");
+        let has_key = self.has_sender_key(channel_id)?;
+        tracing::debug!(
+            channel_id = %channel_id,
+            has_sender_key = has_key,
+            "[GROUP_MSG] Sender key check"
+        );
+
+        let skdm_to_distribute = if !has_key {
+            tracing::info!(
+                channel_id = %channel_id,
+                "[GROUP_MSG] No sender key found, creating new SKDM"
+            );
             let skdm = SenderKeyManager::create_distribution_message(
                 &our_address,
                 distribution_id,
                 &mut store,
             )
             .await
-            .map_err(ServiceError::Crypto)?;
+            .map_err(|e| {
+                tracing::error!(
+                    channel_id = %channel_id,
+                    error = %e,
+                    "[GROUP_MSG] Failed to create SKDM for encryption"
+                );
+                ServiceError::Crypto(e)
+            })?;
+
+            tracing::info!(
+                channel_id = %channel_id,
+                skdm_len = skdm.serialized().len(),
+                "[GROUP_MSG] Created new SKDM to distribute"
+            );
 
             Some(SenderKeyDistribution {
                 channel_id: channel_id.to_string(),
@@ -392,20 +466,31 @@ impl SignalService {
                 timestamp: chrono::Utc::now().timestamp_millis() as u64,
             })
         } else {
+            tracing::debug!(
+                channel_id = %channel_id,
+                "[GROUP_MSG] Using existing sender key"
+            );
             None
         };
 
         let ciphertext =
             SenderKeyManager::encrypt(&our_address, distribution_id, plaintext, &mut store)
                 .await
-                .map_err(ServiceError::Crypto)?;
+                .map_err(|e| {
+                    tracing::error!(
+                        channel_id = %channel_id,
+                        error = %e,
+                        "[GROUP_MSG] Sender key encryption failed"
+                    );
+                    ServiceError::Crypto(e)
+                })?;
 
-        tracing::trace!(
+        tracing::info!(
             channel_id = %channel_id,
             plaintext_len = plaintext.len(),
             ciphertext_len = ciphertext.serialized().len(),
             skdm_created = skdm_to_distribute.is_some(),
-            "Encrypted message for group"
+            "[GROUP_MSG] Encrypted message for group successfully"
         );
 
         let group_encrypted = GroupEncrypted {
@@ -426,22 +511,44 @@ impl SignalService {
         sender_device_id: u32,
         encrypted: &GroupEncrypted,
     ) -> Result<Vec<u8>, ServiceError> {
+        tracing::info!(
+            sender_id = %sender_id,
+            sender_device_id = sender_device_id,
+            channel_id = %encrypted.channel_id,
+            ciphertext_len = encrypted.ciphertext.len(),
+            "[GROUP_MSG] Decrypting message from group"
+        );
+
         let device_id = DeviceId::try_from(sender_device_id)
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let sender_address = ProtocolAddress::new(sender_id.to_string(), device_id);
+
+        tracing::debug!(
+            sender_address = %sender_address,
+            "[GROUP_MSG] Constructed sender address for decryption"
+        );
 
         let mut store = SignalStore::new(self.key_store.clone());
 
         let plaintext =
             SenderKeyManager::decrypt(&encrypted.ciphertext, &sender_address, &mut store)
                 .await
-                .map_err(ServiceError::Crypto)?;
+                .map_err(|e| {
+                    tracing::error!(
+                        sender_id = %sender_id,
+                        sender_device_id = sender_device_id,
+                        channel_id = %encrypted.channel_id,
+                        error = %e,
+                        "[GROUP_MSG] Group decryption failed - sender key may be missing"
+                    );
+                    ServiceError::Crypto(e)
+                })?;
 
-        tracing::trace!(
+        tracing::info!(
             sender_id = %sender_id,
             channel_id = %encrypted.channel_id,
             plaintext_len = plaintext.len(),
-            "Decrypted message from group"
+            "[GROUP_MSG] Decrypted message from group successfully"
         );
 
         Ok(plaintext)
@@ -461,7 +568,16 @@ impl SignalService {
             .load_sender_key(&our_address.to_string(), &distribution_id.to_string())
             .map_err(ServiceError::Storage)?;
 
-        Ok(key.is_some())
+        let has_key = key.is_some();
+        tracing::debug!(
+            channel_id = %channel_id,
+            our_address = %our_address,
+            distribution_id = %distribution_id,
+            has_key = has_key,
+            "[GROUP_MSG] Checked sender key existence"
+        );
+
+        Ok(has_key)
     }
 
     /// Rotate our sender key for a channel.
@@ -531,6 +647,83 @@ impl SignalService {
         );
 
         Ok(())
+    }
+
+    // ==================== Identity & PreKey Management ====================
+
+    /// Get the local identity key fingerprint.
+    ///
+    /// Returns the public key formatted as a hex fingerprint string
+    /// with 4-byte chunks separated by spaces (e.g., "6BB8D7AC EF0B47A2 ...").
+    pub fn get_identity_fingerprint(&self) -> Result<String, ServiceError> {
+        use crate::crypto::signal::IdentityKeyManager;
+
+        let identity_manager = IdentityKeyManager::new(self.key_store.clone());
+        let public_key = identity_manager
+            .get_public_key()
+            .map_err(ServiceError::Crypto)?;
+
+        let bytes = public_key.serialize();
+        let fingerprint = bytes
+            .chunks(4)
+            .map(|chunk| chunk.iter().map(|b| format!("{:02X}", b)).collect::<String>())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        Ok(fingerprint)
+    }
+
+    /// Generate and upload new one-time prekeys.
+    ///
+    /// Generates `count` new prekeys and uploads them to the server.
+    /// Returns the number of keys successfully uploaded.
+    pub async fn refresh_prekeys(
+        &self,
+        auth_client: &mut AuthClient,
+        count: u32,
+    ) -> Result<u32, ServiceError> {
+        use crate::crypto::signal::PreKeyManager;
+        use crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord as ProtoPreKeyRecord;
+
+        let prekey_manager = PreKeyManager::new(self.key_store.clone());
+        let mut rng = rand::rngs::StdRng::from_os_rng();
+
+        // Get the next prekey ID to start from
+        let start_id = prekey_manager
+            .get_next_prekey_id()
+            .map_err(ServiceError::Crypto)?;
+
+        // Generate prekeys
+        let prekeys = prekey_manager
+            .generate_prekeys(&mut rng, start_id, count)
+            .map_err(ServiceError::Crypto)?;
+
+        // Convert to proto format
+        let proto_prekeys: Vec<ProtoPreKeyRecord> = prekeys
+            .iter()
+            .filter_map(|pk| {
+                Some(ProtoPreKeyRecord {
+                    id: u32::from(pk.id().ok()?),
+                    public_key: pk.public_key().ok()?.serialize().to_vec(),
+                })
+            })
+            .collect();
+
+        let uploaded_count = proto_prekeys.len() as u32;
+
+        // Upload to server
+        auth_client
+            .refresh_pre_keys(proto_prekeys)
+            .await
+            .map_err(ServiceError::Network)?;
+
+        tracing::info!(
+            count = uploaded_count,
+            start_id = start_id,
+            "Refreshed prekeys"
+        );
+
+        Ok(uploaded_count)
     }
 }
 

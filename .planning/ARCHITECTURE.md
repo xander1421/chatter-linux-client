@@ -19,10 +19,19 @@
 11. [UI Wiring Patterns](#ui-wiring-patterns)
 12. [Network Layer](#network-layer)
 13. [Key Storage](#key-storage)
-14. [Common Mistakes](#common-mistakes)
-15. [Quick Reference](#quick-reference)
+14. [Separation of Concerns](#separation-of-concerns)
+15. [Common Mistakes](#common-mistakes)
+16. [Quick Reference](#quick-reference)
+17. [Summary](#summary)
+18. [What's Still Missing / Future Work](#whats-still-missing--future-work)
 
-**Related**: [Signal Protocol Audit](./SIGNAL_PROTOCOL_AUDIT.md) - Detailed verification against Signal spec
+**Related Documentation**:
+- [Signal Protocol Audit](./SIGNAL_PROTOCOL_AUDIT.md) - Detailed verification against Signal spec
+- [Domain Documentation](./docs/README.md) - Per-domain deep dives:
+  - [Services](./docs/services/README.md) - Service layer (SignalService, MessageService, etc.)
+  - [UI Callbacks](./docs/ui-callbacks/README.md) - Slint callback wiring
+  - [Inbox System](./docs/inbox/README.md) - Message polling and events
+  - [Crypto Layer](./docs/crypto/README.md) - Signal Protocol and encryption
 
 ---
 
@@ -257,6 +266,32 @@ MessageService::send_message()
 
 **DM mailbox operations**. Used by `chat.rs` for DM sending.
 
+### AttachmentService (`src/services/attachment_service.rs`)
+
+**File upload/download operations**. Handles chunked uploads, verification, and local storage.
+
+```rust
+// Upload a file to a channel
+let result = attachment_service.upload_file(&grpc_pool, &file_path, &channel_id).await?;
+// Returns: UploadResult { attachment_id, filename, file_size, mime_type }
+
+// Get service from context
+let attachment_service = ctx.attachment_service();
+```
+
+| Method | Purpose |
+|--------|---------|
+| `upload_file()` | Chunked upload with SHA256 auth tags |
+| `verify_upload()` | Fallback verification for h2 errors |
+
+**Upload flow**:
+1. Read file metadata (size, MIME type)
+2. Chunk file into 256KB pieces
+3. Generate SHA256 auth tag per chunk
+4. Stream chunks via gRPC
+5. Store attachment in local repository
+6. Return `UploadResult` with server-assigned ID
+
 ---
 
 ## Initialization Order
@@ -290,6 +325,7 @@ AppContext initializes in this exact order:
    └── MessageService
    └── MessageGateway
    └── MailboxManager
+   └── AttachmentService (on-demand via ctx.attachment_service())
 
 6. State
    └── UIState, AuthState, ChatState, etc.
@@ -1098,6 +1134,113 @@ Covers: X3DH/PQXDH, Double Ratchet, Sender Keys, Sealed Sender, UAK, Trust Root,
 
 ---
 
+## Separation of Concerns
+
+### Layer Responsibilities
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ UI Layer (bin_ui/features/*.rs)                                 │
+│                                                                 │
+│ ALLOWED:                                                        │
+│   - Wire Slint callbacks                                        │
+│   - Call services from AppContext                               │
+│   - Update UI state                                             │
+│   - Spawn async tasks for service calls                         │
+│   - Parse user input                                            │
+│                                                                 │
+│ FORBIDDEN:                                                      │
+│   - Direct crypto operations (encrypt/decrypt/sign)             │
+│   - Direct network operations (building chunks, streaming)      │
+│   - Direct database queries                                     │
+│   - Business logic (validation, transformation)                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Service Layer (services/*.rs)                                   │
+│                                                                 │
+│ ALLOWED:                                                        │
+│   - Orchestrate business logic                                  │
+│   - Call crypto layer for encryption/decryption                 │
+│   - Call network layer for gRPC operations                      │
+│   - Call storage layer for persistence                          │
+│   - Transform domain objects                                    │
+│                                                                 │
+│ EXAMPLES:                                                       │
+│   - SignalService: High-level Signal Protocol operations        │
+│   - MessageService: Channel message sending orchestration       │
+│   - AttachmentService: File upload with chunking/verification   │
+│   - AuthService: Login/register flow orchestration              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Crypto / Network / Storage Layers                               │
+│                                                                 │
+│ crypto/: Raw cryptographic operations                           │
+│ network/grpc/: gRPC client implementations                      │
+│ storage/: Database access and repositories                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### What Goes Where
+
+| Operation | Wrong Layer | Correct Layer |
+|-----------|-------------|---------------|
+| Encrypt message | UI callback | SignalService |
+| Upload file chunks | UI callback | AttachmentService |
+| Generate key fingerprint | UI callback | SignalService |
+| Send DM content | UI callback | MessageService.send_dm_content() |
+| Refresh prekeys | UI callback | SignalService.refresh_prekeys_if_needed() |
+| Build DataMessage proto | UI callback | message_gateway::build_*_content() |
+
+### Service Layer Pattern
+
+Each service encapsulates one domain concern:
+
+```rust
+// AttachmentService - encapsulates ALL file upload logic
+pub struct AttachmentService {
+    attachment_repo: Arc<AttachmentRepository>,
+}
+
+impl AttachmentService {
+    // Public API - simple, clear interface
+    pub async fn upload_file(
+        &self,
+        grpc_pool: &GrpcClientPool,
+        file_path: &Path,
+        channel_id: &ChannelId,
+    ) -> Result<UploadResult, AttachmentError>
+
+    // Internal - chunking, hashing, streaming, verification
+    async fn verify_upload(...) -> Result<FileMetadata, AttachmentError>
+}
+```
+
+UI code becomes simple:
+
+```rust
+// In composer.rs - clean, delegated logic
+let attachment_service = AttachmentService::new(attachment_repo);
+match attachment_service.upload_file(&grpc_pool, file_path, &channel_id).await {
+    Ok(result) => {
+        let pending = PendingAttachment::new(
+            result.attachment_id,
+            result.filename,
+            file_path.to_path_buf(),
+            result.file_size,
+            result.mime_type,
+        );
+        chat_state.add_pending_attachment(pending);
+    }
+    Err(e) => tracing::error!("Failed to upload: {}", e),
+}
+```
+
+---
+
 ## Common Mistakes
 
 ### 1. Creating Services Manually
@@ -1205,6 +1348,72 @@ window.on_send(move |text| {
 });
 ```
 
+### 9. Crypto in UI Layer (Separation of Concerns)
+
+```rust
+// ❌ WRONG - crypto logic in UI callback
+window.on_send_dm(move |peer_id, text| {
+    // Building protos, encrypting, key management in UI = BAD
+    let data_message = DataMessage { body: text.to_string(), ... };
+    let plaintext = data_message.encode_to_vec();
+    let encrypted = signal_service.encrypt_message(...).await?;
+    let mailbox_encrypted = encrypt_dm_bytes(&encrypted, &shared_secret)?;
+    mailbox_manager.send_to_mailbox(...).await?;
+});
+
+// ✅ CORRECT - delegate to service
+window.on_send_dm(move |peer_id, text| {
+    let message_service = ctx.message_service();
+    slint::spawn_local(async move {
+        match message_service.send_dm_content(&peer_id, text.as_str()).await {
+            Ok(_) => { /* update UI */ }
+            Err(e) => tracing::error!("Send failed: {}", e),
+        }
+    }).unwrap();
+});
+```
+
+### 10. Business Logic in UI Layer
+
+```rust
+// ❌ WRONG - file upload logic in UI callback (230+ lines!)
+window.on_attachment_clicked(move || {
+    // File reading, chunking, hashing, gRPC streaming...
+    let file_content = tokio::fs::read(file_path).await?;
+    let chunks: Vec<FileChunk> = file_content.chunks(CHUNK_SIZE)
+        .enumerate()
+        .map(|(seq, chunk_data)| {
+            let mut hasher = Sha256::new();
+            hasher.update(chunk_data);
+            // ... 200 more lines
+        })
+        .collect();
+});
+
+// ✅ CORRECT - delegate to AttachmentService
+window.on_attachment_clicked(move || {
+    let attachment_service = AttachmentService::new(attachment_repo.clone());
+    slint::spawn_local(async move {
+        match attachment_service.upload_file(&grpc_pool, &file_path, &channel_id).await {
+            Ok(result) => { /* add to pending */ }
+            Err(e) => tracing::error!("Upload failed: {}", e),
+        }
+    }).unwrap();
+});
+```
+
+### 11. Direct Key Store Access in UI
+
+```rust
+// ❌ WRONG - accessing key_store directly from UI
+let fingerprint = ctx.key_store.get_fingerprint()?;
+ctx.key_store.refresh_prekeys()?;
+
+// ✅ CORRECT - go through SignalService
+let fingerprint = ctx.signal_service.get_identity_fingerprint(&ctx.key_store)?;
+ctx.signal_service.refresh_prekeys_if_needed(&grpc_pool, &ctx.key_store).await?;
+```
+
 ---
 
 ## Quick Reference
@@ -1213,12 +1422,13 @@ window.on_send(move |text| {
 
 | I want to... | Look in... | Notes |
 |--------------|------------|-------|
-| Send a DM | `bin_ui/features/chat.rs` | Uses SignalService + MailboxManager |
+| Send a DM | `bin_ui/features/chat.rs` | Uses MessageService.send_dm_content() |
 | Receive a DM | `inbox/provider.rs::poll_dm_mailboxes()` | Decrypts via MessageGateway |
 | Send channel message | `services/message_service.rs` | Handles encryption decision |
 | Receive channel message | `inbox/provider.rs::process_message()` | Routes via MessageGateway |
 | Decrypt any message | `services/message_gateway.rs` | Central decryption router |
 | Encrypt for Signal | `services/signal_service.rs` | High-level API |
+| Upload attachment | `services/attachment_service.rs` | Chunking, streaming, verification |
 | Store a message | `storage/repositories/message_repo.rs` | Use insert_or_ignore() |
 | Handle incoming events | `bin_ui/features/auth.rs::handle_inbox_event()` | UI updates |
 | Rotate sender keys | `services/channel_service.rs` | On leave/kick |
@@ -1246,7 +1456,12 @@ window.on_send(move |text| {
 
 **MessageService**:
 - `send_message()` → Channel send (NOT DM!)
+- `send_dm_content()` → DM send (orchestrates Signal + mailbox)
 - `get_channel_encryption_settings()` → Check require_encryption
+
+**AttachmentService**:
+- `upload_file()` → Chunked upload with verification
+- `verify_upload()` → Fallback for h2 errors
 
 **ChannelService**:
 - `leave_channel()` → Clears local sender keys
@@ -1298,3 +1513,56 @@ The Chatter Linux client follows these core principles:
 5. **Always use insert_or_ignore for received messages** - handle duplicates
 6. **Trust root is hardcoded** - never fetch from server
 7. **Use async properly** - spawn_local, not block_on
+8. **Separation of concerns** - UI calls services, services call crypto/network
+
+---
+
+## What's Still Missing / Future Work
+
+### Partially Implemented
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Group mailbox fanout | Infrastructure exists | `src/mailbox/group/` exists but not wired to sending |
+| Emoji picker | Callback wired | UI component not implemented |
+| GIF picker | Callback wired | UI component not implemented |
+| Mention autocomplete | Callback wired | Search/suggestion not implemented |
+| Attachment download | Not started | Only upload implemented |
+
+### Architecture Improvements Needed
+
+1. **Group Mailboxes (NDSS '21)**
+   - `GroupMailboxManager`, `GroupFanout` exist in `src/mailbox/group/`
+   - Need to wire into `MessageService` for channel sending
+   - Goal: Fan-out to member mailboxes instead of channel ID
+
+2. **Attachment Download Service**
+   - `AttachmentService.upload_file()` is complete
+   - Need `download_file()` for receiving attachments
+   - Should handle chunked download, decryption, caching
+
+3. **Offline Queue**
+   - `OfflineState` exists but not used
+   - Need to queue failed sends for retry
+   - Should persist queue across restarts
+
+4. **Key Rotation Automation**
+   - Manual prekey refresh exists
+   - Need background service for automatic rotation
+   - Should trigger when prekey count drops below threshold
+
+### UI Layer Cleanup Candidates
+
+These files may still have business logic that could be extracted:
+
+| File | Potential Issue | Recommended Service |
+|------|-----------------|---------------------|
+| `chat/send.rs` | DM proto building | MessageService.send_dm_content() |
+| `modals/friends.rs` | Friend request logic | UserService |
+| `sidebar/channels.rs` | Channel list filtering | ChannelService |
+
+### Testing Gaps
+
+1. **Integration tests** for service layer orchestration
+2. **Mock services** for UI callback testing
+3. **Crypto verification** tests against Signal reference implementation

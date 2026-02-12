@@ -576,6 +576,7 @@ impl ChannelClient {
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
+
 }
 
 #[cfg(test)]

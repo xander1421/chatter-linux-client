@@ -59,10 +59,30 @@ impl SenderKeyManager {
         distribution_id: Uuid,
         sender_key_store: &mut dyn SenderKeyStore,
     ) -> Result<SenderKeyDistributionMessage, CryptoError> {
+        tracing::debug!(
+            sender = %sender,
+            distribution_id = %distribution_id,
+            "[SENDER_KEY] Creating distribution message"
+        );
         let mut rng = StdRng::from_os_rng();
-        create_sender_key_distribution_message(sender, distribution_id, sender_key_store, &mut rng)
+        let result = create_sender_key_distribution_message(sender, distribution_id, sender_key_store, &mut rng)
             .await
-            .map_err(|e| CryptoError::Protocol(e.to_string()))
+            .map_err(|e| {
+                tracing::error!(
+                    sender = %sender,
+                    distribution_id = %distribution_id,
+                    error = %e,
+                    "[SENDER_KEY] Failed to create distribution message"
+                );
+                CryptoError::Protocol(e.to_string())
+            })?;
+        tracing::info!(
+            sender = %sender,
+            distribution_id = %distribution_id,
+            skdm_len = result.serialized().len(),
+            "[SENDER_KEY] Created distribution message successfully"
+        );
+        Ok(result)
     }
 
     /// Process a received sender key distribution message from a group member.
@@ -80,9 +100,26 @@ impl SenderKeyManager {
         skdm: &SenderKeyDistributionMessage,
         sender_key_store: &mut dyn SenderKeyStore,
     ) -> Result<(), CryptoError> {
+        tracing::debug!(
+            sender = %sender,
+            skdm_len = skdm.serialized().len(),
+            "[SENDER_KEY] Processing distribution message from sender"
+        );
         process_sender_key_distribution_message(sender, skdm, sender_key_store)
             .await
-            .map_err(|e| CryptoError::Protocol(e.to_string()))
+            .map_err(|e| {
+                tracing::error!(
+                    sender = %sender,
+                    error = %e,
+                    "[SENDER_KEY] Failed to process distribution message"
+                );
+                CryptoError::Protocol(e.to_string())
+            })?;
+        tracing::info!(
+            sender = %sender,
+            "[SENDER_KEY] Stored sender key from distribution message"
+        );
+        Ok(())
     }
 
     /// Encrypt a message for a group using sender keys.
@@ -105,10 +142,31 @@ impl SenderKeyManager {
         plaintext: &[u8],
         sender_key_store: &mut dyn SenderKeyStore,
     ) -> Result<SenderKeyMessage, CryptoError> {
+        tracing::debug!(
+            sender = %sender,
+            distribution_id = %distribution_id,
+            plaintext_len = plaintext.len(),
+            "[SENDER_KEY] Encrypting message for group"
+        );
         let mut rng = StdRng::from_os_rng();
-        group_encrypt(sender_key_store, sender, distribution_id, plaintext, &mut rng)
+        let result = group_encrypt(sender_key_store, sender, distribution_id, plaintext, &mut rng)
             .await
-            .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))
+            .map_err(|e| {
+                tracing::error!(
+                    sender = %sender,
+                    distribution_id = %distribution_id,
+                    error = %e,
+                    "[SENDER_KEY] Group encryption failed"
+                );
+                CryptoError::EncryptionFailed(e.to_string())
+            })?;
+        tracing::debug!(
+            sender = %sender,
+            distribution_id = %distribution_id,
+            ciphertext_len = result.serialized().len(),
+            "[SENDER_KEY] Group encryption successful"
+        );
+        Ok(result)
     }
 
     /// Decrypt a group message from a sender.
@@ -129,9 +187,28 @@ impl SenderKeyManager {
         sender: &ProtocolAddress,
         sender_key_store: &mut dyn SenderKeyStore,
     ) -> Result<Vec<u8>, CryptoError> {
-        group_decrypt(ciphertext, sender_key_store, sender)
+        tracing::debug!(
+            sender = %sender,
+            ciphertext_len = ciphertext.len(),
+            "[SENDER_KEY] Decrypting group message from sender"
+        );
+        let result = group_decrypt(ciphertext, sender_key_store, sender)
             .await
-            .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))
+            .map_err(|e| {
+                tracing::error!(
+                    sender = %sender,
+                    ciphertext_len = ciphertext.len(),
+                    error = %e,
+                    "[SENDER_KEY] Group decryption failed - may need sender key"
+                );
+                CryptoError::DecryptionFailed(e.to_string())
+            })?;
+        tracing::debug!(
+            sender = %sender,
+            plaintext_len = result.len(),
+            "[SENDER_KEY] Group decryption successful"
+        );
+        Ok(result)
     }
 }
 

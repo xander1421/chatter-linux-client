@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::crypto::signal::{IdentityKeyManager, PreKeyManager, SenderKeyManager, SessionManager};
 use crate::error::{NetworkError, StorageError, SystemError};
 use crate::events::EventBus;
+use crate::media::gif::GifClient;
 use crate::mailbox::group::{GroupCoordinator, GroupFanout, GroupMailboxManager};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -35,6 +36,9 @@ const DEFAULT_SERVER_URL: &str = "http://localhost:50051";
 
 /// Environment variable for server URL.
 const SERVER_URL_ENV: &str = "CHATTER_SERVER_URL";
+
+/// Environment variable for Tenor API key (GIF search).
+const TENOR_API_KEY_ENV: &str = "TENOR_API_KEY";
 
 /// Application context error.
 #[derive(Debug, thiserror::Error)]
@@ -140,6 +144,8 @@ pub struct AppContext {
     pub group_coordinator: Arc<GroupCoordinator>,
     /// Group fanout for N-way parallel delivery (initialized after connect).
     pub group_fanout: std::sync::OnceLock<Arc<GroupFanout>>,
+    /// GIF client for Tenor API (optional, requires TENOR_API_KEY).
+    pub gif_client: Option<Arc<GifClient>>,
 
     // State stores
     /// UI preferences state.
@@ -257,7 +263,16 @@ impl AppContext {
         ));
         let group_fanout = std::sync::OnceLock::new();
 
-        // 12. Create state stores
+        // 12. Create GIF client (optional)
+        let gif_client = env::var(TENOR_API_KEY_ENV).ok().map(|api_key| {
+            tracing::info!("Tenor API key found, GIF search enabled");
+            Arc::new(GifClient::new(api_key))
+        });
+        if gif_client.is_none() {
+            tracing::debug!("No Tenor API key ({}) - GIF search disabled", TENOR_API_KEY_ENV);
+        }
+
+        // 13. Create state stores
         let ui_state = UIState::new();
         let auth_state = AuthState::new();
         let chat_state = ChatState::new();
@@ -297,6 +312,7 @@ impl AppContext {
             group_mailbox_manager,
             group_coordinator,
             group_fanout,
+            gif_client,
             ui_state,
             auth_state,
             chat_state,
@@ -377,6 +393,16 @@ impl AppContext {
         self.message_service.clone()
     }
 
+    /// Get the attachment service.
+    pub fn attachment_service(&self) -> crate::services::AttachmentService {
+        crate::services::AttachmentService::new(self.attachment_repo.clone())
+    }
+
+    /// Get the GIF client (optional, requires TENOR_API_KEY env var).
+    pub fn gif_client(&self) -> Option<Arc<GifClient>> {
+        self.gif_client.clone()
+    }
+
     /// Initialize the device inbox provider.
     ///
     /// Must be called after `grpc_pool.connect()` succeeds.
@@ -392,13 +418,15 @@ impl AppContext {
                 self.grpc_pool.auth_clone(),
             );
             let pipeline = Arc::new(crate::network::validation::MessageValidationPipeline::new());
-            Arc::new(DeviceInboxProvider::new(
-                crate::inbox::provider::InboxConfig::default(),
+            Arc::new(DeviceInboxProvider::with_event_bus(
+                crate::inbox::InboxConfig::default(),
                 Arc::new(tokio::sync::Mutex::new(message_client)),
                 Arc::new(tokio::sync::Mutex::new(mailbox_client)),
                 pipeline,
                 self.message_gateway.clone(),
                 self.database.clone(),
+                self.grpc_pool.clone(),
+                Some(self.event_bus.clone()),
             ))
         });
     }
@@ -437,6 +465,26 @@ impl AppContext {
     /// Get the group coordinator for mailbox setup and announcements.
     pub fn group_coordinator(&self) -> Arc<GroupCoordinator> {
         self.group_coordinator.clone()
+    }
+
+    /// Spawn the DM bootstrap handler.
+    ///
+    /// This handler listens for KeyExchangeReceived domain events and completes
+    /// the DM bootstrap protocol by creating our mailbox and sending a response.
+    ///
+    /// Should be called after login when the user is authenticated and the
+    /// gRPC pool is connected.
+    ///
+    /// # Returns
+    ///
+    /// A JoinHandle for the spawned task.
+    pub fn spawn_dm_bootstrap_handler(&self) -> tokio::task::JoinHandle<()> {
+        crate::inbox::streaming::spawn_dm_bootstrap_handler_from_bus(
+            self.database.clone(),
+            self.grpc_pool.clone(),
+            self.mailbox_manager.clone(),
+            &self.event_bus,
+        )
     }
 }
 

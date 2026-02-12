@@ -46,6 +46,15 @@ fn uuid_from_timestamp(ts: u64) -> Uuid {
     uuid_from_bytes(&ts.to_le_bytes())
 }
 
+/// Create a deterministic UUID from (author, timestamp) tuple.
+/// Signal uses this tuple to uniquely identify messages.
+fn uuid_from_author_and_timestamp(author: &UserId, ts: u64) -> Uuid {
+    let mut bytes = Vec::with_capacity(48); // 16 (UUID) + 8 (u64) + some padding
+    bytes.extend_from_slice(author.as_uuid().as_bytes());
+    bytes.extend_from_slice(&ts.to_le_bytes());
+    uuid_from_bytes(&bytes)
+}
+
 // ============================================================================
 // ChatHandler
 // ============================================================================
@@ -189,13 +198,19 @@ impl ChatHandler {
     }
 
     /// Handle delete request (delete for everyone).
+    ///
+    /// Signal identifies messages by (authorId, timestamp) tuple.
+    /// For "delete for everyone", you can only delete your own messages,
+    /// so the author of the message = sender of the delete (from sealed sender envelope).
     async fn handle_delete(
         &self,
         delete: &Delete,
         processed: &ProcessedMessage,
         ctx: &HandlerContext,
     ) -> HandlerResult {
-        // Extract author (who is deleting)
+        // Extract author from sealed sender envelope.
+        // This is the person who sent the delete AND the author of the message being deleted
+        // (Signal only allows deleting your own messages for "delete for everyone").
         let author_id = processed
             .sender_address
             .as_ref()
@@ -206,14 +221,25 @@ impl ChatHandler {
             })
             .ok_or_else(|| HandlerError::missing_context("sender_address"))?;
 
-        // Derive message ID from target timestamp
-        // Signal uses (author, timestamp) tuple to identify messages
-        let message_id = MessageId::from_uuid(uuid_from_timestamp(delete.target_sent_timestamp));
+        // Derive message ID from (author, timestamp) tuple - Signal's message identification
+        // We hash both values together to create a deterministic UUID
+        let message_id = MessageId::from_uuid(uuid_from_author_and_timestamp(
+            &author_id,
+            delete.target_sent_timestamp,
+        ));
 
-        // For delete, we need channel context - this is a limitation
-        // In practice, the delete should include channel_id or be scoped to conversation
-        // For now, we use a placeholder channel ID
-        let channel_id = ChannelId::from_uuid(Uuid::nil());
+        // For DM deletes, channel_id is None - the event handler will derive it from author_id.
+        // For group deletes, the channel context would come from the conversation.
+        // The sealed sender envelope tells us who sent the delete, which is sufficient
+        // for DMs (the channel is the DM conversation with that sender).
+        let channel_id = None;
+
+        tracing::debug!(
+            author = %author_id,
+            timestamp = delete.target_sent_timestamp,
+            message_id = %message_id,
+            "Processing delete request from sealed sender"
+        );
 
         // Emit delete event
         ctx.emit(DomainEvent::MessageDeleted {

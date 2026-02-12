@@ -7,6 +7,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { ChatHeader, ChatHeaderData } from "chat_header.slint";
 import { MessageList, MessageItemData, MessageAttachmentData } from "message_list.slint";
 import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
+import { PinnedBar } from "pinned_bar.slint";
 
 // Re-export types for parent components
 export { MessageItemData, MessageAttachmentData, PendingAttachmentData }
@@ -33,10 +34,21 @@ export component ChatLayout inherits Rectangle {
     in-out property <bool> composer-is-editing: false;
     in-out property <string> composer-edit-message-id: "";
 
+    // Pinned bar properties (Telegram-style always visible)
+    in property <bool> has-pinned-messages: false;
+    in property <string> pinned-message-preview: "";
+    in property <int> pinned-current-index: 1;
+    in property <int> pinned-total-count: 1;
+
     // Header callbacks
     callback search-clicked();
-    callback pinned-clicked();
     callback settings-clicked();
+
+    // Pinned bar callbacks
+    callback pinned-prev-clicked();
+    callback pinned-next-clicked();
+    callback pinned-go-to-message();
+    callback pinned-dismiss-clicked();
 
     // Message list callbacks
     callback message-clicked(string);
@@ -57,6 +69,7 @@ export component ChatLayout inherits Rectangle {
     callback mention-triggered(string);
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
+    callback process-text(string) -> string;  // Insert word breaks for text wrapping
 
     // Layout
     background: Colors.background;
@@ -78,11 +91,29 @@ export component ChatLayout inherits Rectangle {
             search-clicked => {
                 root.search-clicked();
             }
-            pinned-clicked => {
-                root.pinned-clicked();
-            }
             settings-clicked => {
                 root.settings-clicked();
+            }
+        }
+
+        // Pinned messages bar (Telegram-style, always visible when pinned messages exist)
+        if root.has-pinned-messages: PinnedBar {
+            message-preview: root.pinned-message-preview;
+            current-index: root.pinned-current-index;
+            total-count: root.pinned-total-count;
+            has-multiple: root.pinned-total-count > 1;
+
+            prev-clicked => {
+                root.pinned-prev-clicked();
+            }
+            next-clicked => {
+                root.pinned-next-clicked();
+            }
+            go-to-message => {
+                root.pinned-go-to-message();
+            }
+            dismiss-clicked => {
+                root.pinned-dismiss-clicked();
             }
         }
 
@@ -154,6 +185,9 @@ export component ChatLayout inherits Rectangle {
             }
             typing-changed(is-typing) => {
                 root.typing-changed(is-typing);
+            }
+            process-text(text) => {
+                return root.process-text(text);
             }
         }
     }
