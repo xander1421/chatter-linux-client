@@ -66,14 +66,25 @@ async fn start_call_impl(
     call_type: CallType,
 ) {
     // Get current channel ID and name from the window
+    // Check both selected-channel-id (for channels) and selected-dm-id (for DMs)
     let (channel_id_str, channel_name) = if let Some(w) = weak.upgrade() {
-        (w.get_selected_channel_id().to_string(), w.get_channel_name().to_string())
+        let channel_id = w.get_selected_channel_id().to_string();
+        let dm_id = w.get_selected_dm_id().to_string();
+
+        if !channel_id.is_empty() {
+            (channel_id, w.get_channel_name().to_string())
+        } else if !dm_id.is_empty() {
+            // For DMs, the dm_id IS the channel_id
+            (dm_id, w.get_channel_name().to_string())
+        } else {
+            (String::new(), String::new())
+        }
     } else {
         return;
     };
 
     if channel_id_str.is_empty() {
-        tracing::warn!("No channel selected for call");
+        tracing::warn!("No channel or DM selected for call");
         return;
     }
 
