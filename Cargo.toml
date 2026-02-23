@@ -72,7 +72,7 @@ rusqlite = { version = "0.32", features = ["bundled-sqlcipher", "unlock_notify"]
 # System Integration (D-Bus)
 # ============================================================================
 zbus = "5"                            # Modern D-Bus library
-keyring = "3"                         # Cross-platform secure credential storage
+keyring = { version = "3", features = ["sync-secret-service"] }  # Cross-platform secure credential storage (DBus Secret Service on Linux)
 notify-rust = "4"                     # Desktop notifications
 ksni = "0.2"                          # System tray (StatusNotifierItem)
 directories = "6"                     # XDG directories
@@ -109,7 +109,14 @@ rodio = "0.21.1"
 cpal = "0.15"                              # Audio input (recording)
 hound = "3.5"                              # WAV encoding
 image = "0.25.9"
+v4l = "0.14"                              # V4L2 webcam capture (Linux)
 once_cell = "1"                            # Lazy static initialization
+
+# ============================================================================
+# WebRTC / LiveKit
+# ============================================================================
+livekit = { version = "0.7", features = ["native-tls"] }
+livekit-api = "0.4"
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }  # Syntax highlighting (pure Rust)
 lazy_static = "1.5.0"
 async-stream = "0.3.6"
