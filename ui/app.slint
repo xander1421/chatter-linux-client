@@ -36,9 +36,13 @@ import { SettingsScreen } from "settings/settings_screen.slint";
 import { ImageViewer, EmojiData } from "components/mod.slint";
 import { CodePreviewPanel, CodeLine } from "components/mod.slint";
 import { PdfPreviewPanel } from "components/mod.slint";
+import { VideoPlayer } from "components/mod.slint";
+
+// Import call UI
+import { IncomingCallModal, ActiveCallView, IncomingCallData, ActiveCallData, CallParticipantData } from "calls/mod.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData }
+export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData }
 
 export component App inherits Rectangle {
     // ========== View routing ==========
@@ -90,12 +94,21 @@ export component App inherits Rectangle {
     in property <string> typing-indicator: "";
     in property <[MessageItemData]> messages: [];
     in property <bool> loading-messages: false;
+    in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
+    in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
+    in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
+    in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
     in-out property <string> composer-text: "";
     in property <string> composer-placeholder: "Type a message...";
     in property <bool> composer-disabled: false;
     in property <[PendingAttachmentData]> pending-attachments: [];
     in-out property <bool> composer-is-editing: false;
     in-out property <string> composer-edit-message-id: "";
+
+    // ========== Audio playback state ==========
+    in-out property <string> current-playing-attachment-id: "";
+    in-out property <float> audio-progress: 0.0;  // Playback progress 0.0-1.0
+    in-out property <string> audio-elapsed: "0:00";  // Elapsed time display
 
     // ========== Image viewer state ==========
     in-out property <bool> image-viewer-visible: false;
@@ -121,6 +134,20 @@ export component App inherits Rectangle {
     in property <string> pdf-preview-error: "";
     callback close-pdf-preview();
     callback open-pdf-external();
+
+    // ========== Video player state ==========
+    in-out property <bool> video-player-visible: false;
+    in property <image> video-player-frame;
+    in property <string> video-player-filename: "";
+    in property <float> video-player-progress: 0.0;
+    in property <string> video-player-elapsed: "0:00";
+    in property <string> video-player-duration: "0:00";
+    in property <bool> video-player-is-playing: false;
+    in-out property <float> video-player-volume: 1.0;
+    callback close-video-player();
+    callback video-player-toggle-play-pause();
+    callback video-player-seek(float);
+    callback video-player-set-volume(float);
 
     // ========== Reaction picker state ==========
     in-out property <bool> reaction-picker-visible: false;
@@ -279,6 +306,17 @@ export component App inherits Rectangle {
     in-out property <bool> settings-sealed-sender-unrestricted: false;
     in property <int> settings-prekey-count: 0;
 
+    // ========== Call properties ==========
+    in-out property <bool> incoming-call-visible: false;
+    in property <IncomingCallData> incoming-call-data;
+    in-out property <bool> active-call-visible: false;
+    in property <ActiveCallData> active-call-data;
+    in-out property <bool> call-is-muted: false;
+    in-out property <bool> call-is-video-enabled: true;
+    in-out property <bool> call-is-screen-sharing: false;
+    in property <image> call-local-video-frame;
+    in property <[image]> call-remote-video-frames;
+
     // ========== Auth callbacks ==========
     callback login(string, string);
     callback register(string, string, string);
@@ -317,6 +355,7 @@ export component App inherits Rectangle {
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback process-text(string) -> string;  // Insert word breaks for text wrapping
+    callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
 
     // ========== Modal callbacks ==========
     // Create channel (name, description, template, ai_provider, ai_model)
@@ -376,6 +415,14 @@ export component App inherits Rectangle {
     callback settings-copy-fingerprint();
     callback settings-sealed-sender-changed(bool);
     callback settings-refresh-keys();
+
+    // ========== Call callbacks ==========
+    callback accept-incoming-call(string);  // call_id
+    callback decline-incoming-call(string); // call_id
+    callback call-toggle-mute();
+    callback call-toggle-video();
+    callback call-toggle-screen-share();
+    callback call-end();
 
     background: Colors.background;
 
@@ -493,6 +540,12 @@ export component App inherits Rectangle {
                 typing-indicator: root.typing-indicator;
                 messages: root.messages;
                 loading-messages: root.loading-messages;
+                scroll-to-message-index: root.scroll-to-message-index;
+                message-scroll-position <=> root.message-scroll-position;
+                should-auto-scroll: root.should-auto-scroll;
+                current-playing-attachment-id: root.current-playing-attachment-id;
+                audio-progress: root.audio-progress;
+                audio-elapsed: root.audio-elapsed;
                 composer-text <=> root.composer-text;
                 composer-placeholder: root.composer-placeholder;
                 composer-disabled: root.composer-disabled;
@@ -533,6 +586,7 @@ export component App inherits Rectangle {
                 remove-attachment(id) => { root.remove-attachment(id); }
                 typing-changed(is-typing) => { root.typing-changed(is-typing); }
                 process-text(text) => { return root.process-text(text); }
+                scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
             }
 
             // Thread panel (appears to the right of chat when visible)
@@ -839,6 +893,44 @@ export component App inherits Rectangle {
         }
     }
 
+    // ========== Call overlays (rendered above modals) ==========
+    // Incoming call modal
+    IncomingCallModal {
+        show: root.incoming-call-visible;
+        call-data: root.incoming-call-data;
+
+        accept-call => {
+            root.accept-incoming-call(root.incoming-call-data.call-id);
+        }
+        decline-call => {
+            root.decline-incoming-call(root.incoming-call-data.call-id);
+        }
+    }
+
+    // Active call view (full screen when visible)
+    ActiveCallView {
+        show: root.active-call-visible;
+        call-data: root.active-call-data;
+        is-muted: root.call-is-muted;
+        is-video-enabled: root.call-is-video-enabled;
+        is-screen-sharing: root.call-is-screen-sharing;
+        local-video-frame: root.call-local-video-frame;
+        remote-video-frames: root.call-remote-video-frames;
+
+        toggle-mute => {
+            root.call-toggle-mute();
+        }
+        toggle-video => {
+            root.call-toggle-video();
+        }
+        toggle-screen-share => {
+            root.call-toggle-screen-share();
+        }
+        end-call => {
+            root.call-end();
+        }
+    }
+
     // Image viewer overlay (rendered above modals)
     ImageViewer {
         show: root.image-viewer-visible;
@@ -849,6 +941,33 @@ export component App inherits Rectangle {
         close => {
             root.image-viewer-visible = false;
             root.close-image-viewer();
+        }
+    }
+
+    // Video player overlay (rendered above modals)
+    VideoPlayer {
+        show: root.video-player-visible;
+        frame: root.video-player-frame;
+        filename: root.video-player-filename;
+        progress: root.video-player-progress;
+        elapsed: root.video-player-elapsed;
+        duration: root.video-player-duration;
+        is-playing: root.video-player-is-playing;
+        volume: root.video-player-volume;
+
+        close => {
+            root.video-player-visible = false;
+            root.close-video-player();
+        }
+        toggle-play-pause => {
+            root.video-player-toggle-play-pause();
+        }
+        seek(pos) => {
+            root.video-player-seek(pos);
+        }
+        set-volume(vol) => {
+            root.video-player-volume = vol;
+            root.video-player-set-volume(vol);
         }
     }
 

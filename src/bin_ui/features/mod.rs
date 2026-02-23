@@ -3,6 +3,7 @@
 //! Each module handles a specific feature area's callbacks.
 
 pub mod auth;
+pub mod calls;
 pub mod chat;
 pub mod chat_actions;
 pub mod composer;
@@ -26,4 +27,5 @@ pub fn wire_all(window: &MainWindow, ctx: &AppContext) {
     composer::wire(window, ctx);
     modals::wire(window, ctx);
     thread::wire(window, ctx);
+    calls::wire(window, ctx);
 }

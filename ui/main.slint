@@ -1,11 +1,11 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData } from "app.slint";
 import { CodeLine } from "components/mod.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, CodeLine, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData }
+export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, CodeLine, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -56,12 +56,21 @@ export component MainWindow inherits Window {
     in property <string> typing-indicator <=> app.typing-indicator;
     in property <[MessageItemData]> messages <=> app.messages;
     in property <bool> loading-messages <=> app.loading-messages;
+    in property <int> scroll-to-message-index <=> app.scroll-to-message-index;
+    in-out property <length> message-scroll-position <=> app.message-scroll-position;
+    in-out property <bool> is-at-bottom <=> app.is-at-bottom;  // True when scrolled to bottom
+    in property <bool> should-auto-scroll <=> app.should-auto-scroll;  // Enable auto-scroll
     in-out property <string> composer-text <=> app.composer-text;
     in property <string> composer-placeholder <=> app.composer-placeholder;
     in property <bool> composer-disabled <=> app.composer-disabled;
     in property <[PendingAttachmentData]> pending-attachments <=> app.pending-attachments;
     in-out property <bool> composer-is-editing <=> app.composer-is-editing;
     in-out property <string> composer-edit-message-id <=> app.composer-edit-message-id;
+
+    // ========== Audio playback state ==========
+    in-out property <string> current-playing-attachment-id <=> app.current-playing-attachment-id;
+    in-out property <float> audio-progress <=> app.audio-progress;
+    in-out property <string> audio-elapsed <=> app.audio-elapsed;
 
     // ========== Image viewer state ==========
     in-out property <bool> image-viewer-visible <=> app.image-viewer-visible;
@@ -244,6 +253,17 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-sealed-sender-unrestricted <=> app.settings-sealed-sender-unrestricted;
     in property <int> settings-prekey-count <=> app.settings-prekey-count;
 
+    // ========== Call properties ==========
+    in-out property <bool> incoming-call-visible <=> app.incoming-call-visible;
+    in property <IncomingCallData> incoming-call-data <=> app.incoming-call-data;
+    in-out property <bool> active-call-visible <=> app.active-call-visible;
+    in property <ActiveCallData> active-call-data <=> app.active-call-data;
+    in-out property <bool> call-is-muted <=> app.call-is-muted;
+    in-out property <bool> call-is-video-enabled <=> app.call-is-video-enabled;
+    in-out property <bool> call-is-screen-sharing <=> app.call-is-screen-sharing;
+    in property <image> call-local-video-frame <=> app.call-local-video-frame;
+    in property <[image]> call-remote-video-frames <=> app.call-remote-video-frames;
+
     // ========== Auth callbacks ==========
     callback login <=> app.login;
     callback register <=> app.register;
@@ -280,6 +300,7 @@ export component MainWindow inherits Window {
     callback remove-attachment <=> app.remove-attachment;
     callback typing-changed <=> app.typing-changed;
     callback process-text <=> app.process-text;
+    callback scroll-to-bottom-clicked <=> app.scroll-to-bottom-clicked;
 
     // ========== Modal callbacks ==========
     callback create-channel <=> app.create-channel;
@@ -325,6 +346,14 @@ export component MainWindow inherits Window {
     callback settings-copy-fingerprint <=> app.settings-copy-fingerprint;
     callback settings-sealed-sender-changed <=> app.settings-sealed-sender-changed;
     callback settings-refresh-keys <=> app.settings-refresh-keys;
+
+    // ========== Call callbacks ==========
+    callback accept-incoming-call <=> app.accept-incoming-call;
+    callback decline-incoming-call <=> app.decline-incoming-call;
+    callback call-toggle-mute <=> app.call-toggle-mute;
+    callback call-toggle-video <=> app.call-toggle-video;
+    callback call-toggle-screen-share <=> app.call-toggle-screen-share;
+    callback call-end <=> app.call-end;
 
     // App fills the entire window - explicit sizing ensures width flows to children
     app := App {
