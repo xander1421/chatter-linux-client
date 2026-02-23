@@ -1,0 +1,274 @@
+// Active call view with video grid and controls
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Avatar } from "../components/avatar.slint";
+import { CallControls } from "call_controls.slint";
+import { ActiveCallData, CallParticipantData } from "types.slint";
+
+component ParticipantTile inherits Rectangle {
+    in property <CallParticipantData> participant;
+    in property <image> video-frame;
+    in property <bool> is-local: false;
+    in property <bool> show-video: true;
+
+    background: Colors.surface;
+    border-radius: Spacing.radius-lg;
+    clip: true;
+
+    // Video frame or avatar placeholder
+    if show-video && participant.is-video-enabled: Image {
+        source: video-frame;
+        width: 100%;
+        height: 100%;
+        image-fit: cover;
+    }
+
+    if !show-video || !participant.is-video-enabled: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Colors.surface-hover;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Spacing.md;
+
+            Avatar {
+                width: 64px;
+                height: 64px;
+                size: 64px;
+                fallback-text: participant.display-name;
+            }
+
+            Text {
+                text: participant.display-name;
+                font-size: Typography.sm;
+                color: Colors.text-primary;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    // Overlay: mute indicator
+    if participant.is-muted: Rectangle {
+        x: Spacing.sm;
+        y: parent.height - 32px;
+        width: 24px;
+        height: 24px;
+        border-radius: 12px;
+        background: Colors.error.with-alpha(0.8);
+
+        Text {
+            text: "\u{1F507}";
+            font-size: Typography.xs;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            width: 100%;
+            height: 100%;
+        }
+    }
+
+    // Speaking indicator border
+    if participant.is-speaking: Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: Spacing.radius-lg;
+        border-width: 3px;
+        border-color: Colors.primary;
+        background: transparent;
+    }
+
+    // Name label
+    Rectangle {
+        x: Spacing.sm;
+        y: Spacing.sm;
+        width: name-text.preferred-width + Spacing.lg;
+        height: 24px;
+        border-radius: Spacing.radius-sm;
+        background: #000000aa;
+
+        name-text := Text {
+            x: Spacing.sm;
+            text: is-local ? "You" : participant.display-name;
+            font-size: Typography.xs;
+            color: Colors.text-primary;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component ActiveCallView inherits Rectangle {
+    in property <bool> show: false;
+    in property <ActiveCallData> call-data;
+    in property <bool> is-muted: false;
+    in property <bool> is-video-enabled: true;
+    in property <bool> is-screen-sharing: false;
+    in property <image> local-video-frame;
+    in property <[image]> remote-video-frames;
+
+    callback toggle-mute();
+    callback toggle-video();
+    callback toggle-screen-share();
+    callback end-call();
+
+    background: Colors.background;
+
+    if show: VerticalLayout {
+        // Header
+        Rectangle {
+            height: 56px;
+            background: Colors.surface;
+
+            HorizontalLayout {
+                padding: Spacing.lg;
+                alignment: space-between;
+
+                VerticalLayout {
+                    alignment: center;
+
+                    Text {
+                        text: call-data.title;
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        color: Colors.text-primary;
+                    }
+
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+
+                        if call-data.is-encrypted: Text {
+                            text: "\u{1F512}";
+                            font-size: Typography.xs;
+                        }
+
+                        Text {
+                            text: format-duration(call-data.duration-seconds);
+                            font-size: Typography.xs;
+                            color: Colors.text-secondary;
+                        }
+
+                        Text {
+                            text: "• " + call-data.participant-count + " participants";
+                            font-size: Typography.xs;
+                            color: Colors.text-secondary;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Video grid
+        Rectangle {
+            vertical-stretch: 1;
+            background: Colors.background;
+
+            // Grid layout depends on participant count
+            // For 1 participant: full screen
+            // For 2: side by side
+            // For 3-4: 2x2 grid
+            // For 5+: scrollable grid
+
+            if call-data.participant-count == 1: ParticipantTile {
+                width: parent.width - Spacing.xxl;
+                height: parent.height - Spacing.xxl;
+                x: Spacing.lg;
+                y: Spacing.lg;
+                participant: call-data.participants[0];
+                video-frame: local-video-frame;
+                is-local: true;
+            }
+
+            if call-data.participant-count == 2: HorizontalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.lg;
+
+                ParticipantTile {
+                    horizontal-stretch: 1;
+                    participant: call-data.participants[0];
+                    video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
+                }
+
+                ParticipantTile {
+                    horizontal-stretch: 1;
+                    participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
+                    video-frame: local-video-frame;
+                    is-local: true;
+                }
+            }
+
+            // 3-4 participants: 2x2 grid using nested layouts
+            if call-data.participant-count >= 3 && call-data.participant-count <= 4: VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.lg;
+
+                // Top row
+                HorizontalLayout {
+                    spacing: Spacing.lg;
+
+                    ParticipantTile {
+                        horizontal-stretch: 1;
+                        participant: call-data.participants[0];
+                        video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
+                    }
+                    ParticipantTile {
+                        horizontal-stretch: 1;
+                        participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
+                        video-frame: remote-video-frames.length > 1 ? remote-video-frames[1] : local-video-frame;
+                    }
+                }
+
+                // Bottom row
+                HorizontalLayout {
+                    spacing: Spacing.lg;
+
+                    ParticipantTile {
+                        horizontal-stretch: 1;
+                        participant: call-data.participants.length > 2 ? call-data.participants[2] : call-data.participants[0];
+                        video-frame: remote-video-frames.length > 2 ? remote-video-frames[2] : local-video-frame;
+                    }
+                    ParticipantTile {
+                        horizontal-stretch: 1;
+                        participant: call-data.participants.length > 3 ? call-data.participants[3] : call-data.participants[0];
+                        video-frame: local-video-frame;
+                        is-local: call-data.participant-count >= 4;
+                        // Hide 4th tile if only 3 participants
+                        opacity: call-data.participant-count >= 4 ? 1.0 : 0.0;
+                    }
+                }
+            }
+        }
+
+        // Controls bar
+        Rectangle {
+            height: 88px;
+            background: transparent;
+
+            CallControls {
+                x: (parent.width - self.width) / 2;
+                y: Spacing.sm;
+                width: 280px;
+                is-muted: is-muted;
+                is-video-enabled: is-video-enabled;
+                is-screen-sharing: is-screen-sharing;
+                is-video-call: call-data.is-video-call;
+
+                toggle-mute => { root.toggle-mute(); }
+                toggle-video => { root.toggle-video(); }
+                toggle-screen-share => { root.toggle-screen-share(); }
+                end-call => { root.end-call(); }
+            }
+        }
+    }
+
+    pure function format-duration(seconds: int) -> string {
+        // Format as mm:ss or h:mm:ss
+        if seconds < 3600 {
+            return Math.floor(seconds / 60) + ":" + (Math.mod(seconds, 60) < 10 ? "0" : "") + Math.mod(seconds, 60);
+        } else {
+            return Math.floor(seconds / 3600) + ":" +
+                   (Math.mod(Math.floor(seconds / 60), 60) < 10 ? "0" : "") + Math.mod(Math.floor(seconds / 60), 60) + ":" +
+                   (Math.mod(seconds, 60) < 10 ? "0" : "") + Math.mod(seconds, 60);
+        }
+    }
+}
