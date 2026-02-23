@@ -3,6 +3,7 @@
 //! Native Linux desktop client for Chatter secure messaging.
 
 pub mod app;
+pub mod calls;
 pub mod domain;
 pub mod crypto;
 pub mod storage;
