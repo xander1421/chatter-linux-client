@@ -1,0 +1,116 @@
+// Call control bar with mute, video, screen share, and end call buttons
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+component ControlButton inherits Rectangle {
+    in property <string> icon-text;
+    in property <bool> active: false;
+    in property <bool> danger: false;
+
+    callback clicked();
+
+    width: 48px;
+    height: 48px;
+    border-radius: 24px;
+    background: {
+        if danger {
+            touch.has-hover ? #dc2626 : Colors.error
+        } else if active {
+            touch.has-hover ? #dc2626 : Colors.error
+        } else {
+            touch.has-hover ? Colors.surface-hover : Colors.surface
+        }
+    };
+    border-width: (!active && !danger) ? 1px : 0;
+    border-color: Colors.text-muted.with-alpha(0.3);
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: icon-text;
+        font-size: Typography.xl;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        width: 100%;
+        height: 100%;
+    }
+}
+
+export component CallControls inherits Rectangle {
+    in property <bool> is-muted: false;
+    in property <bool> is-video-enabled: true;
+    in property <bool> is-screen-sharing: false;
+    in property <bool> is-video-call: true;
+
+    callback toggle-mute();
+    callback toggle-video();
+    callback toggle-screen-share();
+    callback end-call();
+
+    height: 72px;
+    background: Colors.surface;
+    border-radius: 36px;
+    border-width: 1px;
+    border-color: Colors.text-muted.with-alpha(0.2);
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: Spacing.lg;
+        padding-left: Spacing.xl;
+        padding-right: Spacing.xl;
+
+        // Mute button
+        ControlButton {
+            icon-text: is-muted ? "\u{1F507}" : "\u{1F3A4}";
+            active: is-muted;
+            clicked => { toggle-mute(); }
+        }
+
+        // Video toggle (only for video calls)
+        if is-video-call: ControlButton {
+            icon-text: is-video-enabled ? "\u{1F4F9}" : "\u{1F4F7}";
+            active: !is-video-enabled;
+            clicked => { toggle-video(); }
+        }
+
+        // Screen share toggle
+        ControlButton {
+            icon-text: "\u{1F5B5}";
+            active: is-screen-sharing;
+            clicked => { toggle-screen-share(); }
+        }
+
+        // Spacer
+        Rectangle {
+            width: Spacing.lg;
+            background: transparent;
+        }
+
+        // End call button (larger, always red)
+        Rectangle {
+            width: 56px;
+            height: 48px;
+            border-radius: 24px;
+            background: end-touch.has-hover ? #dc2626 : Colors.error;
+
+            end-touch := TouchArea {
+                clicked => { end-call(); }
+            }
+
+            // Rotated phone icon to indicate hang up
+            Text {
+                text: "\u{1F4DE}";
+                font-size: Typography.xl;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
+                rotation-angle: 135deg;
+            }
+        }
+    }
+}
