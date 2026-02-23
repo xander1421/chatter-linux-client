@@ -694,4 +694,4 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 | 71 | Complete UI Callback Wiring | 5 | Done | 2026-02-08 |
 | 72 | Channel Creation, Search & Join UI | 1 | Done | 2026-02-10 |
 | 73 | Signal Protocol Encryption Wiring | 1 | Done | 2026-02-10 |
-| 74 | LiveKit Video & Audio Calls | 1/5 | In Progress | - |
+| 74 | LiveKit Video & Audio Calls | 2/5 | In Progress | - |
