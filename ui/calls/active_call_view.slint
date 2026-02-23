@@ -112,6 +112,8 @@ export component ActiveCallView inherits Rectangle {
     callback toggle-screen-share();
     callback end-call();
 
+    // Only visible when show is true
+    visible: show;
     background: Colors.background;
 
     if show: VerticalLayout {
