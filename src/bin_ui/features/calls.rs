@@ -21,22 +21,30 @@ pub fn wire(window: &MainWindow, ctx: &AppContext) {
 
 fn wire_start_call(window: &MainWindow, ctx: &AppContext) {
     let weak = window.as_weak();
-    let ctx_grpc = ctx.grpc_pool.clone();
+    let ctx_call_service = ctx.call_service.clone();
     let ctx_settings = ctx.settings_repo.clone();
 
     // Start voice call
     window.on_start_voice_call({
         let weak = weak.clone();
-        let grpc = ctx_grpc.clone();
+        let call_service = ctx_call_service.clone();
         let settings = ctx_settings.clone();
 
         move || {
             let weak = weak.clone();
-            let grpc = grpc.clone();
             let settings = settings.clone();
 
+            // Get the call service from OnceLock
+            let call_service = match call_service.get() {
+                Some(svc) => svc.clone(),
+                None => {
+                    tracing::error!("CallService not initialized");
+                    return;
+                }
+            };
+
             slint::spawn_local(async move {
-                start_call_impl(weak, grpc, settings, CallType::Voice).await;
+                start_call_impl(weak, call_service, settings, CallType::Voice).await;
             }).unwrap();
         }
     });
@@ -44,16 +52,24 @@ fn wire_start_call(window: &MainWindow, ctx: &AppContext) {
     // Start video call
     window.on_start_video_call({
         let weak = weak.clone();
-        let grpc = ctx_grpc.clone();
+        let call_service = ctx_call_service.clone();
         let settings = ctx_settings.clone();
 
         move || {
             let weak = weak.clone();
-            let grpc = grpc.clone();
             let settings = settings.clone();
 
+            // Get the call service from OnceLock
+            let call_service = match call_service.get() {
+                Some(svc) => svc.clone(),
+                None => {
+                    tracing::error!("CallService not initialized");
+                    return;
+                }
+            };
+
             slint::spawn_local(async move {
-                start_call_impl(weak, grpc, settings, CallType::Video).await;
+                start_call_impl(weak, call_service, settings, CallType::Video).await;
             }).unwrap();
         }
     });
@@ -61,7 +77,7 @@ fn wire_start_call(window: &MainWindow, ctx: &AppContext) {
 
 async fn start_call_impl(
     weak: slint::Weak<MainWindow>,
-    grpc: Arc<chatter_linux::network::grpc::GrpcClientPool>,
+    call_service: Arc<CallService>,
     settings: Arc<chatter_linux::storage::SettingsRepository>,
     call_type: CallType,
 ) {
@@ -115,13 +131,6 @@ async fn start_call_impl(
             return;
         }
     };
-
-    // Create CallService
-    let call_client = chatter_linux::network::grpc::CallClient::new(
-        grpc.channel(),
-        grpc.auth_clone(),
-    );
-    let call_service = CallService::new(call_client);
 
     // For now, use a zeroed key - proper key derivation requires Signal session lookup
     // TODO: Derive encryption key from Signal session
