@@ -1,0 +1,157 @@
+// Incoming call notification modal
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Avatar } from "../components/avatar.slint";
+import { IncomingCallData } from "types.slint";
+
+export component IncomingCallModal inherits Rectangle {
+    in property <bool> show: false;
+    in property <IncomingCallData> call-data;
+
+    callback accept-call();
+    callback decline-call();
+
+    // Full screen overlay
+    width: 100%;
+    height: 100%;
+    background: #00000099;
+    opacity: show ? 1.0 : 0.0;
+    visible: show;
+
+    animate opacity { duration: 200ms; }
+
+    if show: Rectangle {
+        // Center card
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 320px;
+        height: 380px;
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000066;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Spacing.xl;
+            padding: Spacing.xxl;
+
+            // Caller avatar with pulse ring
+            Rectangle {
+                width: 96px;
+                height: 96px;
+                horizontal-stretch: 0;
+
+                // Pulse ring animation
+                Rectangle {
+                    width: 96px;
+                    height: 96px;
+                    border-radius: 48px;
+                    background: transparent;
+                    border-width: 3px;
+                    border-color: Colors.primary.with-alpha(pulse-opacity);
+
+                    property <float> pulse-opacity: 0.0;
+
+                    animate pulse-opacity {
+                        duration: 1500ms;
+                        iteration-count: -1;
+                        easing: ease-out;
+                    }
+
+                    init => {
+                        self.pulse-opacity = 0.8;
+                    }
+                }
+
+                Avatar {
+                    width: 80px;
+                    height: 80px;
+                    x: 8px;
+                    y: 8px;
+                    size: 80px;
+                    fallback-text: call-data.caller-name;
+                }
+            }
+
+            // Caller info
+            VerticalLayout {
+                alignment: center;
+                spacing: Spacing.sm;
+
+                Text {
+                    text: call-data.caller-name;
+                    font-size: Typography.xl;
+                    font-weight: Typography.semibold;
+                    color: Colors.text-primary;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: call-data.is-video-call ? "Incoming video call..." : "Incoming voice call...";
+                    font-size: Typography.sm;
+                    color: Colors.text-secondary;
+                    horizontal-alignment: center;
+                }
+
+                if call-data.channel-name != "": Text {
+                    text: "in " + call-data.channel-name;
+                    font-size: Typography.xs;
+                    color: Colors.text-muted;
+                    horizontal-alignment: center;
+                }
+            }
+
+            // Action buttons
+            HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.xxl;
+
+                // Decline button (red circle)
+                Rectangle {
+                    width: 64px;
+                    height: 64px;
+                    border-radius: 32px;
+                    background: decline-hover.has-hover ? #dc2626 : Colors.error;
+
+                    decline-hover := TouchArea {
+                        clicked => { decline-call(); }
+                    }
+
+                    Text {
+                        text: "\u{2715}";
+                        font-size: 28px;
+                        color: Colors.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+
+                // Accept button (green circle)
+                Rectangle {
+                    width: 64px;
+                    height: 64px;
+                    border-radius: 32px;
+                    background: accept-hover.has-hover ? #059669 : Colors.success;
+
+                    accept-hover := TouchArea {
+                        clicked => { accept-call(); }
+                    }
+
+                    Text {
+                        text: call-data.is-video-call ? "\u{1F4F9}" : "\u{1F4DE}";
+                        font-size: 28px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+            }
+        }
+    }
+}
