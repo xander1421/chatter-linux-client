@@ -19,6 +19,7 @@ pub mod user_client;
 // saved_messages_client removed - saved messages uses channel type=4 with regular Channel/Message APIs
 
 pub use auth_client::AuthClient;
+pub use call_client::CallClient;
 pub use channel_client::ChannelClient;
 pub use client_pool::GrpcClientPool;
 pub use file_client::FileClient;
