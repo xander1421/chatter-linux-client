@@ -97,6 +97,20 @@ export component MainWindow inherits Window {
     callback close-pdf-preview <=> app.close-pdf-preview;
     callback open-pdf-external <=> app.open-pdf-external;
 
+    // ========== Video player state ==========
+    in-out property <bool> video-player-visible <=> app.video-player-visible;
+    in property <image> video-player-frame <=> app.video-player-frame;
+    in property <string> video-player-filename <=> app.video-player-filename;
+    in property <float> video-player-progress <=> app.video-player-progress;
+    in property <string> video-player-elapsed <=> app.video-player-elapsed;
+    in property <string> video-player-duration <=> app.video-player-duration;
+    in property <bool> video-player-is-playing <=> app.video-player-is-playing;
+    in-out property <float> video-player-volume <=> app.video-player-volume;
+    callback close-video-player <=> app.close-video-player;
+    callback video-player-toggle-play-pause <=> app.video-player-toggle-play-pause;
+    callback video-player-seek <=> app.video-player-seek;
+    callback video-player-set-volume <=> app.video-player-set-volume;
+
     // ========== Reaction picker state ==========
     in-out property <bool> reaction-picker-visible <=> app.reaction-picker-visible;
     in-out property <string> reaction-picker-message-id <=> app.reaction-picker-message-id;
@@ -301,6 +315,8 @@ export component MainWindow inherits Window {
     callback typing-changed <=> app.typing-changed;
     callback process-text <=> app.process-text;
     callback scroll-to-bottom-clicked <=> app.scroll-to-bottom-clicked;
+    callback start-voice-call <=> app.start-voice-call;
+    callback start-video-call <=> app.start-video-call;
 
     // ========== Modal callbacks ==========
     callback create-channel <=> app.create-channel;

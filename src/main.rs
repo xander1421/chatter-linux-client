@@ -38,6 +38,7 @@ async fn main() {
             // Initialize components that require connection
             ctx.init_device_inbox_provider();
             ctx.init_group_fanout();
+            ctx.init_call_service();
             true
         }
         Err(e) => {
@@ -54,6 +55,9 @@ async fn main() {
     if auth_service.is_logged_in() {
         window.set_current_view("main".into());
 
+        // Spawn event handlers for DomainEvent processing (NDSS '21 mailboxes, etc.)
+        let _event_handlers = ctx.spawn_event_handlers();
+
         // Start inbox provider and load initial data (only if connected)
         let inbox_provider = ctx.get_device_inbox_provider();
         let weak_window = window.as_weak();
@@ -68,6 +72,12 @@ async fn main() {
         let auth_state = ctx.auth_state.clone();
 
         let user_repo_for_events = user_repo.clone();
+        let channel_repo_for_events = channel_repo.clone();
+        let attachment_repo_for_events = attachment_repo.clone();
+        let grpc_pool_for_events = grpc_pool.clone();
+        let message_service_for_events = ctx.message_service.clone();
+        let database_for_events = ctx.database.clone();
+        let mailbox_manager_for_events = ctx.mailbox_manager.clone();
         let weak_for_events = weak_window.clone();
 
         tokio::spawn(async move {
@@ -80,6 +90,12 @@ async fn main() {
                     let mut event_rx = provider.subscribe();
                     let weak_events = weak_for_events.clone();
                     let user_repo_events = user_repo_for_events.clone();
+                    let channel_repo_events = channel_repo_for_events.clone();
+                    let attachment_repo_events = attachment_repo_for_events.clone();
+                    let grpc_pool_events = grpc_pool_for_events.clone();
+                    let message_service_events = message_service_for_events.clone();
+                    let database_events = database_for_events.clone();
+                    let mailbox_manager_events = mailbox_manager_for_events.clone();
 
                     tokio::spawn(async move {
                         while let Ok(event) = event_rx.recv().await {
@@ -87,7 +103,14 @@ async fn main() {
                                 event,
                                 &weak_events,
                                 &user_repo_events,
-                            );
+                                &channel_repo_events,
+                                &attachment_repo_events,
+                                &grpc_pool_events,
+                                &message_service_events,
+                                &database_events,
+                                &mailbox_manager_events,
+                            )
+                            .await;
                         }
                     });
                 }

@@ -356,6 +356,8 @@ export component App inherits Rectangle {
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback process-text(string) -> string;  // Insert word breaks for text wrapping
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
+    callback start-voice-call();  // Start voice call in current channel
+    callback start-video-call();  // Start video call in current channel
 
     // ========== Modal callbacks ==========
     // Create channel (name, description, template, ai_provider, ai_model)
@@ -555,6 +557,8 @@ export component App inherits Rectangle {
 
                 search-clicked => { root.search-clicked(); }
                 settings-clicked => { root.chat-settings-clicked(); }
+                voice-call-clicked => { root.start-voice-call(); }
+                video-call-clicked => { root.start-video-call(); }
 
                 // Pinned bar (Telegram-style)
                 has-pinned-messages: root.has-pinned-messages;

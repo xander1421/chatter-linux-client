@@ -30,6 +30,8 @@ export component ChatHeader inherits Rectangle {
     // Callbacks
     callback search-clicked();
     callback settings-clicked();
+    callback voice-call-clicked();
+    callback video-call-clicked();
 
     // Computed properties
     property <string> channel-icon: {
@@ -67,13 +69,15 @@ export component ChatHeader inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            // Channel name
+            // Channel name (constrained width so typing indicator has space)
             Text {
                 text: root.channel-name;
                 color: Colors.text-primary;
                 font-size: Typography.base;
                 font-weight: Typography.semibold;
                 vertical-alignment: center;
+                max-width: 250px;
+                overflow: elide;
             }
 
             // Archived badge
@@ -146,6 +150,50 @@ export component ChatHeader inherits Rectangle {
         HorizontalLayout {
             spacing: Spacing.xs;
             alignment: end;
+
+            // Voice call button
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                background: voice-call-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    text: "\u{1F4DE}";  // Telephone receiver
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                voice-call-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.voice-call-clicked();
+                    }
+                }
+            }
+
+            // Video call button
+            Rectangle {
+                width: 32px;
+                height: 32px;
+                background: video-call-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+
+                Text {
+                    text: "\u{1F4F9}";  // Video camera
+                    font-size: Typography.base;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                video-call-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.video-call-clicked();
+                    }
+                }
+            }
 
             // Search button
             Rectangle {

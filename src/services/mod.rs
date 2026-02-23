@@ -81,7 +81,7 @@ pub use signal_service::SignalService;
 pub use mailbox_manager::{MailboxManager, MailboxError, ActiveMailbox};
 pub use message_gateway::{
     DmContent, MessageGateway, RouteResult,
-    build_text_content, build_typing_content, build_typing_content_with_channel,
+    build_text_content, build_data_message_content, build_typing_content, build_typing_content_with_channel,
     build_read_receipt_content, build_delivery_receipt_content,
     build_reaction_content, build_reaction_content_with_channel,
     build_pin_content, build_pin_content_with_channel,
@@ -90,4 +90,5 @@ pub use message_gateway::{
     build_delete_for_everyone_content, build_delete_for_everyone_content_with_channel,
 };
 pub use message_service::MessageService;
-pub use attachment_service::{AttachmentService, AttachmentError, UploadResult};
+pub use attachment_service::{AttachmentService, AttachmentError, UploadResult, CdnUploadResult};
+pub use call_service::CallService;

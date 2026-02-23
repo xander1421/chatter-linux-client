@@ -25,6 +25,13 @@ export component ChatLayout inherits Rectangle {
     // Message list properties
     in property <[MessageItemData]> messages: [];
     in property <bool> loading-messages: false;
+    in property <string> current-playing-attachment-id: "";
+    in property <float> audio-progress: 0.0;
+    in property <string> audio-elapsed: "0:00";
+    in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
+    in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
+    out property <bool> is-at-bottom: message-list.is-at-bottom;  // True when scrolled to bottom
+    in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
 
     // Composer properties
     in-out property <string> composer-text: "";
@@ -43,6 +50,8 @@ export component ChatLayout inherits Rectangle {
     // Header callbacks
     callback search-clicked();
     callback settings-clicked();
+    callback voice-call-clicked();
+    callback video-call-clicked();
 
     // Pinned bar callbacks
     callback pinned-prev-clicked();
@@ -58,6 +67,7 @@ export component ChatLayout inherits Rectangle {
     callback more-clicked(string);
     callback view-attachment(string);  // attachment ID - for viewing attachment in messages
     callback load-more();
+    callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
 
     // Composer callbacks
     callback send(string);
@@ -94,6 +104,12 @@ export component ChatLayout inherits Rectangle {
             settings-clicked => {
                 root.settings-clicked();
             }
+            voice-call-clicked => {
+                root.voice-call-clicked();
+            }
+            video-call-clicked => {
+                root.video-call-clicked();
+            }
         }
 
         // Pinned messages bar (Telegram-style, always visible when pinned messages exist)
@@ -119,11 +135,17 @@ export component ChatLayout inherits Rectangle {
 
         // Message list in middle (fills remaining space)
         // Width 100% flows to children for text wrapping
-        MessageList {
+        message-list := MessageList {
             width: 100%;
             vertical-stretch: 1;
             messages: root.messages;
             loading: root.loading-messages;
+            current-playing-attachment-id: root.current-playing-attachment-id;
+            audio-progress: root.audio-progress;
+            audio-elapsed: root.audio-elapsed;
+            scroll-to-index: root.scroll-to-message-index;
+            scroll-position <=> root.message-scroll-position;
+            should-auto-scroll: root.should-auto-scroll;
 
             message-clicked(id) => {
                 root.message-clicked(id);
@@ -145,6 +167,9 @@ export component ChatLayout inherits Rectangle {
             }
             attachment-clicked(id) => {
                 root.view-attachment(id);
+            }
+            scroll-to-bottom-clicked => {
+                root.scroll-to-bottom-clicked();
             }
         }
 

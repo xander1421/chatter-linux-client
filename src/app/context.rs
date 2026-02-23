@@ -6,8 +6,9 @@
 use std::env;
 use std::sync::Arc;
 
-use crate::crypto::signal::{IdentityKeyManager, PreKeyManager, SenderKeyManager, SessionManager};
+use crate::crypto::signal::{IdentityKeyManager, PreKeyManager, SenderKeyManager, SesameManager, SessionManager, SqliteSesameStore};
 use crate::error::{NetworkError, StorageError, SystemError};
+use crate::services::CallService;
 use crate::events::EventBus;
 use crate::media::gif::GifClient;
 use crate::mailbox::group::{GroupCoordinator, GroupFanout, GroupMailboxManager};
@@ -86,6 +87,8 @@ pub struct AppContext {
     pub directories: Directories,
     /// System keyring for secure credential storage.
     pub keyring: Keyring,
+    /// Cached database passphrase (avoids multiple keyring prompts).
+    pub db_passphrase: String,
 
     // Storage
     /// Encrypted SQLCipher database connection.
@@ -120,6 +123,8 @@ pub struct AppContext {
     pub session_manager: Arc<SessionManager>,
     /// Sender key management for groups (stateless).
     pub sender_key_manager: Arc<SenderKeyManager>,
+    /// Sesame session management with message queueing.
+    pub sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
 
     // Network
     /// gRPC connection pool.
@@ -146,6 +151,8 @@ pub struct AppContext {
     pub group_fanout: std::sync::OnceLock<Arc<GroupFanout>>,
     /// GIF client for Tenor API (optional, requires TENOR_API_KEY).
     pub gif_client: Option<Arc<GifClient>>,
+    /// Call service for voice/video calls (initialized after connect).
+    pub call_service: std::sync::OnceLock<Arc<CallService>>,
 
     // State stores
     /// UI preferences state.
@@ -190,13 +197,18 @@ impl AppContext {
     pub fn new() -> Result<Self, ContextError> {
         // 1. System initialization
         let directories = Directories::new()?;
-        let keyring = Keyring::new();
 
-        // 2. Database passphrase (get from keyring or generate)
+        // 2. Get database path first (needed for keyring uniqueness)
+        let db_path = directories.database_path();
+
+        // 3. Create keyring tied to this database path
+        // This ensures each XDG_DATA_HOME gets its own passphrase
+        let keyring = Keyring::new(db_path.clone());
+
+        // 4. Database passphrase (get from keyring or generate)
         let passphrase = Self::passphrase_or_generate(&keyring)?;
 
-        // 3. Open database with passphrase
-        let db_path = directories.database_path();
+        // 5. Open database with passphrase
         let database = Database::open(&db_path, &passphrase)?;
 
         // Run migrations
@@ -223,6 +235,14 @@ impl AppContext {
         let session_manager = Arc::new(SessionManager);
         let sender_key_manager = Arc::new(SenderKeyManager::new());
 
+        // 6b. Create Sesame manager for multi-session handling and message queueing
+        let sesame_store = SqliteSesameStore::new(database.clone());
+        // Initialize Sesame tables (safe to call multiple times)
+        if let Err(e) = sesame_store.init_tables() {
+            tracing::warn!("Failed to initialize Sesame tables: {}", e);
+        }
+        let sesame_manager = Arc::new(SesameManager::new(sesame_store));
+
         // 7. Create network pool
         let server_url = env::var(SERVER_URL_ENV).unwrap_or_else(|_| DEFAULT_SERVER_URL.to_string());
         let grpc_pool = Arc::new(GrpcClientPool::new(&server_url)?);
@@ -234,18 +254,6 @@ impl AppContext {
             settings_repo.clone(),
         ));
 
-        let message_service = Arc::new(MessageService::new(
-            settings_repo.clone(),
-            message_repo.clone(),
-            channel_repo.clone(),
-            signal_service.clone(),
-        ));
-
-        let message_gateway = Arc::new(MessageGateway::new(
-            (*signal_service).clone(), // SignalService is Clone
-            message_repo.clone(),
-        ));
-
         // 9. Device inbox provider will be initialized after connect()
         let device_inbox_provider = std::sync::OnceLock::new();
 
@@ -255,7 +263,7 @@ impl AppContext {
             settings_repo.clone(),
         ));
 
-        // 11. Create group mailbox infrastructure
+        // 11. Create group mailbox infrastructure (needed by MessageService)
         let group_mailbox_manager = Arc::new(GroupMailboxManager::new(database.clone()));
         let group_coordinator = Arc::new(GroupCoordinator::new(
             database.clone(),
@@ -263,7 +271,24 @@ impl AppContext {
         ));
         let group_fanout = std::sync::OnceLock::new();
 
-        // 12. Create GIF client (optional)
+        // 12. Create MessageService with group mailbox support and Sesame
+        let message_service = Arc::new(MessageService::new(
+            grpc_pool.clone(),
+            settings_repo.clone(),
+            message_repo.clone(),
+            channel_repo.clone(),
+            signal_service.clone(),
+            group_mailbox_manager.clone(),
+            sesame_manager.clone(),
+        ));
+
+        let message_gateway = Arc::new(MessageGateway::with_sesame(
+            (*signal_service).clone(), // SignalService is Clone
+            message_repo.clone(),
+            sesame_manager.clone(),
+        ));
+
+        // 13. Create GIF client (optional)
         let gif_client = env::var(TENOR_API_KEY_ENV).ok().map(|api_key| {
             tracing::info!("Tenor API key found, GIF search enabled");
             Arc::new(GifClient::new(api_key))
@@ -272,7 +297,10 @@ impl AppContext {
             tracing::debug!("No Tenor API key ({}) - GIF search disabled", TENOR_API_KEY_ENV);
         }
 
-        // 13. Create state stores
+        // 14. Call service will be initialized after connect()
+        let call_service = std::sync::OnceLock::new();
+
+        // 14. Create state stores
         let ui_state = UIState::new();
         let auth_state = AuthState::new();
         let chat_state = ChatState::new();
@@ -288,6 +316,7 @@ impl AppContext {
         Ok(Self {
             directories,
             keyring,
+            db_passphrase: passphrase,
             database,
             key_store,
             user_repo,
@@ -302,6 +331,7 @@ impl AppContext {
             prekey_manager,
             session_manager,
             sender_key_manager,
+            sesame_manager,
             grpc_pool,
             auth_interceptor,
             signal_service,
@@ -313,6 +343,7 @@ impl AppContext {
             group_coordinator,
             group_fanout,
             gif_client,
+            call_service,
             ui_state,
             auth_state,
             chat_state,
@@ -331,10 +362,23 @@ impl AppContext {
     ///
     /// If a passphrase exists in the keyring, returns it.
     /// Otherwise, generates a new 32-byte hex passphrase, stores it, and returns it.
+    ///
+    /// Uses retry logic with 5-second delays to give users time to unlock
+    /// their password manager (e.g., KeePassXC).
     fn passphrase_or_generate(keyring: &Keyring) -> Result<String, ContextError> {
-        // Try to get existing passphrase
-        if let Ok(passphrase) = keyring.get_passphrase() {
-            return Ok(passphrase);
+        // Retry config: 6 retries * 5 seconds = 30 seconds total wait time
+        const MAX_RETRIES: u32 = 6;
+        const RETRY_DELAY_SECS: u64 = 5;
+
+        // Try to get existing passphrase with retries
+        match keyring.get_passphrase_with_retry(MAX_RETRIES, RETRY_DELAY_SECS) {
+            Ok(passphrase) => {
+                tracing::info!("Retrieved existing passphrase from keyring");
+                return Ok(passphrase);
+            }
+            Err(e) => {
+                tracing::info!("No existing passphrase in keyring ({}), generating new one", e);
+            }
         }
 
         // Generate new passphrase (32 random bytes as hex = 64 chars)
@@ -342,8 +386,15 @@ impl AppContext {
         rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
         let passphrase = hex::encode(bytes);
 
-        // Store in keyring
-        keyring.set_passphrase(&passphrase)?;
+        // Store in keyring with retries
+        tracing::info!("Please unlock your password manager to store the database passphrase...");
+        keyring.set_passphrase_with_retry(&passphrase, MAX_RETRIES, RETRY_DELAY_SECS)?;
+
+        // Verify it was stored correctly
+        match keyring.get_passphrase() {
+            Ok(_) => tracing::info!("Verified: passphrase successfully stored and retrievable"),
+            Err(e) => tracing::error!("FAILED to verify passphrase storage: {}", e),
+        }
 
         Ok(passphrase)
     }
@@ -365,6 +416,7 @@ impl AppContext {
     /// The AuthService orchestrates login, registration, and logout flows.
     pub fn auth_service(&self) -> AuthService {
         AuthService::new(
+            self.grpc_pool.clone(),
             self.identity_manager.clone(),
             self.prekey_manager.clone(),
             self.user_repo.clone(),
@@ -401,6 +453,34 @@ impl AppContext {
     /// Get the GIF client (optional, requires TENOR_API_KEY env var).
     pub fn gif_client(&self) -> Option<Arc<GifClient>> {
         self.gif_client.clone()
+    }
+
+    /// Get the user service for profile and friend operations.
+    pub fn user_service(&self) -> crate::services::user_service::UserService {
+        crate::services::user_service::UserService::new(
+            self.grpc_pool.clone(),
+            self.settings_repo.clone(),
+            self.user_repo.clone(),
+        )
+    }
+
+    /// Get the session service for session management.
+    pub fn session_service(&self) -> crate::services::session_service::SessionService {
+        crate::services::session_service::SessionService::new(
+            self.grpc_pool.clone(),
+            self.settings_repo.clone(),
+        )
+    }
+
+    /// Get the channel service for channel operations.
+    pub fn channel_service(&self) -> crate::services::channel::ChannelService {
+        crate::services::channel::ChannelService::new(
+            self.grpc_pool.clone(),
+            self.settings_repo.clone(),
+            self.channel_repo.clone(),
+            self.signal_service.clone(),
+            self.group_coordinator.clone(),
+        )
     }
 
     /// Initialize the device inbox provider.
@@ -467,24 +547,88 @@ impl AppContext {
         self.group_coordinator.clone()
     }
 
+    /// Initialize the call service for voice/video calls.
+    ///
+    /// Must be called after `grpc_pool.connect()` succeeds.
+    /// Safe to call multiple times - only initializes once.
+    pub fn init_call_service(&self) {
+        self.call_service.get_or_init(|| {
+            let call_client = crate::network::grpc::CallClient::new(
+                self.grpc_pool.channel(),
+                self.grpc_pool.auth_clone(),
+            );
+            Arc::new(CallService::new(call_client))
+        });
+    }
+
+    /// Get the call service.
+    ///
+    /// Returns None if not yet initialized (call `init_call_service()` first).
+    pub fn get_call_service(&self) -> Option<Arc<CallService>> {
+        self.call_service.get().cloned()
+    }
+
     /// Spawn the DM bootstrap handler.
     ///
     /// This handler listens for KeyExchangeReceived domain events and completes
     /// the DM bootstrap protocol by creating our mailbox and sending a response.
     ///
+    /// Uses spawn_blocking with fresh DB/gRPC connections internally to handle
+    /// libsignal's non-Send async stores.
+    ///
     /// Should be called after login when the user is authenticated and the
     /// gRPC pool is connected.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called before authentication is set (requires Basic auth mode).
     ///
     /// # Returns
     ///
     /// A JoinHandle for the spawned task.
     pub fn spawn_dm_bootstrap_handler(&self) -> tokio::task::JoinHandle<()> {
+        let auth_info = self.grpc_pool.auth_info();
         crate::inbox::streaming::spawn_dm_bootstrap_handler_from_bus(
-            self.database.clone(),
-            self.grpc_pool.clone(),
-            self.mailbox_manager.clone(),
+            self.directories.database_path(),
+            self.db_passphrase.clone(),
+            self.grpc_pool.endpoint(),
+            auth_info.user_id,
+            auth_info.device_id,
+            auth_info.token,
             &self.event_bus,
         )
+    }
+
+    /// Spawn the domain event handlers.
+    ///
+    /// Processes DomainEvents from the event bus and updates state stores.
+    /// Includes handling for:
+    /// - Message events (received, edited, deleted)
+    /// - Typing indicators
+    /// - Reactions
+    /// - Pin/unpin
+    /// - Group mailbox announcements (NDSS '21)
+    ///
+    /// Should be called after login when the user is authenticated.
+    ///
+    /// # Returns
+    ///
+    /// A JoinHandle for the spawned task.
+    pub fn spawn_event_handlers(&self) -> tokio::task::JoinHandle<()> {
+        use crate::events::EventHandlers;
+
+        let handlers = EventHandlers::new(
+            self.message_state.clone(),
+            self.chat_state.clone(),
+            self.pinned_state.clone(),
+            self.user_state.clone(),
+            self.presence_state.clone(),
+            self.streaming_state.clone(),
+            self.offline_state.clone(),
+        )
+        .with_group_coordinator(self.group_coordinator.clone());
+
+        handlers.spawn(self.event_bus.clone())
     }
 }
 
