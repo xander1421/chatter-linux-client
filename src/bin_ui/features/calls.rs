@@ -66,7 +66,7 @@ async fn start_call_impl(
 ) {
     // Get current channel ID from the window
     let channel_id_str = if let Some(w) = weak.upgrade() {
-        w.get_channel_id().to_string()
+        w.get_selected_channel_id().to_string()
     } else {
         return;
     };
