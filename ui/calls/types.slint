@@ -1,0 +1,31 @@
+// Call UI type definitions
+
+export struct CallParticipantData {
+    user-id: string,
+    display-name: string,
+    avatar-url: string,
+    is-muted: bool,
+    is-video-enabled: bool,
+    is-screen-sharing: bool,
+    is-speaking: bool,
+}
+
+export struct ActiveCallData {
+    call-id: string,
+    channel-id: string,
+    title: string,
+    is-video-call: bool,
+    is-encrypted: bool,
+    participant-count: int,
+    duration-seconds: int,
+    participants: [CallParticipantData],
+}
+
+export struct IncomingCallData {
+    call-id: string,
+    caller-id: string,
+    caller-name: string,
+    caller-avatar: string,
+    channel-name: string,
+    is-video-call: bool,
+}
