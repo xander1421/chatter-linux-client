@@ -598,6 +598,21 @@ All callbacks wired. Final plan (71-05) included major refactoring:
   - Receive: `dispatch_channel_control_content` parses and emits proper events
   - Server never sees channel context for control messages
 
+### Phase 74: LiveKit Video & Audio Calls
+**Goal**: Integrate LiveKit Rust SDK for real-time video and audio calling
+**Depends on**: Phase 73
+**Research**: Likely (LiveKit SDK API, Slint video rendering)
+**Research topics**: livekit crate API, video frame rendering to Slint, audio device integration
+**Plans**: TBD
+
+**Key integration points:**
+- LiveKit Rust SDK (`livekit = "0.7"`) for WebRTC
+- Server-side: Go backend generates JWT access tokens
+- Client: Room connection, track publishing/subscribing
+- UI: Video frames → Slint Image component
+- Audio: Integration with existing `media/audio_player.rs`
+- Call state management and UI (incoming/outgoing/active call screens)
+
 ## Progress
 
 **Execution Order:** Phases execute in numeric order (1 → 2 → ... → 70)
@@ -678,3 +693,4 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 | 71 | Complete UI Callback Wiring | 5 | Done | 2026-02-08 |
 | 72 | Channel Creation, Search & Join UI | 1 | Done | 2026-02-10 |
 | 73 | Signal Protocol Encryption Wiring | 1 | Done | 2026-02-10 |
+| 74 | LiveKit Video & Audio Calls | 0 | Not Started | - |

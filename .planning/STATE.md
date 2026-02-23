@@ -299,6 +299,7 @@ None.
 ### Roadmap Evolution
 
 - Phase 71 added: Complete UI Callback Wiring (wire all remaining Slint callbacks to services)
+- Phase 74 added: LiveKit Video & Audio Calls (WebRTC via livekit Rust SDK)
 
 ## Session Continuity
 
