@@ -3,13 +3,14 @@
 //! Wires call-related Slint callbacks to CallService.
 
 use std::str::FromStr;
-use slint::ComponentHandle;
+use std::sync::Arc;
+use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::call::CallType;
 use chatter_linux::domain::ids::{CallId, ChannelId, UserId};
 use chatter_linux::services::CallService;
-use crate::MainWindow;
+use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 /// Wire all call-related callbacks.
 pub fn wire(window: &MainWindow, ctx: &AppContext) {
@@ -60,13 +61,13 @@ fn wire_start_call(window: &MainWindow, ctx: &AppContext) {
 
 async fn start_call_impl(
     weak: slint::Weak<MainWindow>,
-    grpc: std::sync::Arc<chatter_linux::network::grpc::GrpcClientPool>,
-    settings: std::sync::Arc<chatter_linux::storage::SettingsRepository>,
+    grpc: Arc<chatter_linux::network::grpc::GrpcClientPool>,
+    settings: Arc<chatter_linux::storage::SettingsRepository>,
     call_type: CallType,
 ) {
-    // Get current channel ID from the window
-    let channel_id_str = if let Some(w) = weak.upgrade() {
-        w.get_selected_channel_id().to_string()
+    // Get current channel ID and name from the window
+    let (channel_id_str, channel_name) = if let Some(w) = weak.upgrade() {
+        (w.get_selected_channel_id().to_string(), w.get_channel_name().to_string())
     } else {
         return;
     };
@@ -84,7 +85,7 @@ async fn start_call_impl(
         }
     };
 
-    // Get current user ID
+    // Get current user ID and display name
     let user_id_str = match settings.get_string(chatter_linux::storage::settings_keys::CURRENT_USER_ID) {
         Ok(Some(id)) => id,
         _ => {
@@ -92,6 +93,9 @@ async fn start_call_impl(
             return;
         }
     };
+
+    // Display name shown as "You" for local participant
+    let display_name = "You".to_string();
 
     let user_id = match UserId::from_str(&user_id_str) {
         Ok(id) => id,
@@ -112,13 +116,14 @@ async fn start_call_impl(
     // TODO: Derive encryption key from Signal session
     let encryption_key = [0u8; 32];
 
+    let is_video_call = matches!(call_type, CallType::Video);
     let call_type_str = match call_type {
-        CallType::Voice => "Voice",
-        CallType::Video => "Video",
-        CallType::Group => "Group",
+        CallType::Voice => "Voice Call",
+        CallType::Video => "Video Call",
+        CallType::Group => "Group Call",
     };
 
-    tracing::info!("Starting {} call in channel {}", call_type_str, channel_id);
+    tracing::info!("Starting {} in channel {}", call_type_str, channel_id);
 
     match call_service.initiate_call(
         channel_id,
@@ -130,6 +135,33 @@ async fn start_call_impl(
         Ok(call) => {
             tracing::info!("Started call: {:?}", call.id);
             if let Some(w) = weak.upgrade() {
+                // Create local participant
+                let local_participant = CallParticipantData {
+                    user_id: user_id_str.into(),
+                    display_name: display_name.into(),
+                    avatar_url: "".into(),
+                    is_muted: false,
+                    is_video_enabled: is_video_call,
+                    is_screen_sharing: false,
+                    is_speaking: false,
+                };
+
+                // Create call data for UI
+                let call_data = ActiveCallData {
+                    call_id: call.id.to_string().into(),
+                    channel_id: channel_id_str.into(),
+                    title: if channel_name.is_empty() { call_type_str.into() } else { channel_name.into() },
+                    is_video_call,
+                    is_encrypted: true,
+                    participant_count: 1,
+                    duration_seconds: 0,
+                    participants: ModelRc::new(VecModel::from(vec![local_participant])),
+                };
+
+                w.set_active_call_data(call_data);
+                w.set_call_is_muted(false);
+                w.set_call_is_video_enabled(is_video_call);
+                w.set_call_is_screen_sharing(false);
                 w.set_active_call_visible(true);
             }
         }
