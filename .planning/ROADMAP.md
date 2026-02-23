@@ -603,7 +603,8 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 **Depends on**: Phase 73
 **Research**: Likely (LiveKit SDK API, Slint video rendering)
 **Research topics**: livekit crate API, video frame rendering to Slint, audio device integration
-**Plans**: TBD
+**Status**: In Progress
+**Plans**: 1/5 complete
 
 **Key integration points:**
 - LiveKit Rust SDK (`livekit = "0.7"`) for WebRTC
@@ -693,4 +694,4 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 | 71 | Complete UI Callback Wiring | 5 | Done | 2026-02-08 |
 | 72 | Channel Creation, Search & Join UI | 1 | Done | 2026-02-10 |
 | 73 | Signal Protocol Encryption Wiring | 1 | Done | 2026-02-10 |
-| 74 | LiveKit Video & Audio Calls | 0 | Not Started | - |
+| 74 | LiveKit Video & Audio Calls | 1/5 | In Progress | - |
