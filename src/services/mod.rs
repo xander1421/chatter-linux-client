@@ -45,6 +45,10 @@ pub mod embed_service;
 pub mod gif_service;
 pub mod signal;
 pub mod channel_event_service;
+pub mod dm_bootstrap_service;
+
+// Re-exports for DM bootstrap service
+pub use dm_bootstrap_service::{DmBootstrapError, DmBootstrapService};
 
 // Re-exports for channel event service
 pub use channel_event_service::{ChannelEventError, ChannelEventService};
