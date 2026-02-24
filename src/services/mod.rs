@@ -13,6 +13,7 @@ pub mod channel;
 pub mod channel_template;
 pub mod user_service;
 pub mod status_service;
+pub mod attachment;
 pub mod attachment_service;
 pub mod call_service;
 pub mod call_verification;
