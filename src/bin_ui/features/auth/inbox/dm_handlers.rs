@@ -10,9 +10,8 @@ use chatter_linux::domain::attachment::{Attachment, AttachmentStatus, ContentLoc
 use chatter_linux::domain::ids::AttachmentId;
 use chatter_linux::network::grpc::client_pool::GrpcClientPool;
 use chatter_linux::proto::content_v1::AttachmentPointer;
-use chatter_linux::services::mailbox_manager::MailboxManager;
-use chatter_linux::services::message_service::MessageService;
-use chatter_linux::storage::{AttachmentRepository, ChannelRepository, Database, MessageRepository, UserRepository};
+use chatter_linux::services::DmBootstrapService;
+use chatter_linux::storage::{AttachmentRepository, MessageRepository, UserRepository};
 
 use crate::bin_ui::converters::{
     attachment_pointer_to_display_data, get_initials, AttachmentDisplayData,
@@ -22,134 +21,6 @@ use crate::{DMListItemData, MainWindow, MessageItemData};
 
 use super::typing::{clear_typing_for_peer, clear_typing_timer, set_typing_with_timer};
 use super::utils::{format_timestamp, update_reaction_summary};
-
-// =============================================================================
-// Session Recovery Handlers
-// =============================================================================
-
-/// Handle session convergence failure by resetting and re-establishing session.
-///
-/// When all Sesame sessions fail to decrypt a message, we need to:
-/// 1. Archive all existing sessions
-/// 2. Fetch fresh prekey bundle and establish new session
-/// 3. Future messages should work with the new session
-pub(crate) fn handle_convergence_failure(
-    peer_id: chatter_linux::domain::UserId,
-    message_service: Arc<MessageService>,
-    grpc_pool: Arc<GrpcClientPool>,
-) {
-    // Use spawn_blocking because libsignal stores aren't Send
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create runtime for convergence recovery");
-
-        rt.block_on(async {
-            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
-
-            // Reset session and establish fresh one (device_id = 1 for primary)
-            match message_service
-                .reset_and_establish_session(&mut auth_client, &peer_id, 1)
-                .await
-            {
-                Ok(()) => {
-                    tracing::info!(
-                        peer_id = %peer_id,
-                        "Session reset complete - ready for fresh messages"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "Failed to reset session after convergence failure"
-                    );
-                }
-            }
-        });
-    });
-}
-
-// =============================================================================
-// DM Bootstrap Handler
-// =============================================================================
-
-pub(crate) fn handle_dm_bootstrap_completed(
-    peer_id: chatter_linux::domain::UserId,
-    message_service: Arc<MessageService>,
-    database: Arc<Database>,
-    mailbox_manager: Arc<MailboxManager>,
-    grpc_pool: Arc<GrpcClientPool>,
-) {
-    tracing::info!(
-        peer_id = %peer_id,
-        "BOOTSTRAP[4/4] handle_dm_bootstrap_completed called - spawning task to send pending"
-    );
-
-    // Use spawn_blocking because libsignal stores aren't Send
-    tokio::task::spawn_blocking(move || {
-        tracing::debug!(
-            peer_id = %peer_id,
-            "BOOTSTRAP[4/4] Inside spawn_blocking, creating runtime"
-        );
-
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create runtime for bootstrap completion");
-
-        rt.block_on(async {
-            tracing::debug!(
-                peer_id = %peer_id,
-                "BOOTSTRAP[4/4] Creating auth client for pending message send"
-            );
-
-            // Create an auth client for key fetching (needed for Signal encryption)
-            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
-
-            tracing::info!(
-                peer_id = %peer_id,
-                "BOOTSTRAP[4/4] Calling send_pending_messages (initiator side)"
-            );
-
-            // Send all pending messages for this peer
-            match message_service
-                .send_pending_messages(&mut auth_client, &peer_id, database.clone(), &mailbox_manager)
-                .await
-            {
-                Ok(count) => {
-                    if count > 0 {
-                        tracing::info!(
-                            peer_id = %peer_id,
-                            count = count,
-                            "BOOTSTRAP[4/4] SUCCESS - Sent {} pending message(s) after bootstrap!",
-                            count
-                        );
-                    } else {
-                        tracing::info!(
-                            peer_id = %peer_id,
-                            "BOOTSTRAP[4/4] No pending messages to send (initiator side)"
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "BOOTSTRAP[4/4] FAILED - Could not send pending messages"
-                    );
-                }
-            }
-        });
-    });
-}
 
 // =============================================================================
 // DM Event Handlers
@@ -1230,7 +1101,7 @@ pub(crate) fn handle_dm_delete_for_everyone(
 pub(crate) async fn handle_friend_accepted(
     weak_window: &slint::Weak<MainWindow>,
     user_repo: &UserRepository,
-    channel_repo: &Arc<ChannelRepository>,
+    dm_bootstrap_service: &Arc<DmBootstrapService>,
     grpc_pool: &Arc<GrpcClientPool>,
     friend_user_id: String,
     channel_id: String,
@@ -1267,33 +1138,15 @@ pub(crate) async fn handle_friend_accepted(
                 }
             };
 
-            // Save to local repo
-            if let Err(e) = channel_repo.insert(&channel) {
+            // Save DM channel via service
+            if let Err(e) = dm_bootstrap_service.save_dm_channel(&channel) {
                 tracing::error!(error = %e, "Failed to save DM channel to local repo");
                 // Continue anyway to update UI
             }
 
-            // Sync memberships from the proto response
-            for proto_member in &proto_channel.members {
-                match chatter_linux::services::channel::converters::proto_to_domain_membership(&channel.id, proto_member) {
-                    Ok(membership) => {
-                        if let Err(e) = channel_repo.insert_or_ignore_membership(&membership) {
-                            tracing::warn!(
-                                channel_id = %channel.id,
-                                user_id = %membership.user_id,
-                                error = %e,
-                                "Failed to sync DM membership"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            channel_id = %channel.id,
-                            error = %e,
-                            "Failed to convert proto DM membership"
-                        );
-                    }
-                }
+            // Sync memberships via service
+            if let Err(e) = dm_bootstrap_service.sync_dm_memberships(&channel, &proto_channel.members) {
+                tracing::error!(error = %e, "Failed to sync DM memberships");
             }
 
             // Get friend's display name - try local repo first, then fetch from server

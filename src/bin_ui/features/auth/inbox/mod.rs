@@ -17,17 +17,15 @@ use std::sync::Arc;
 
 use slint::Model;
 
-use chatter_linux::crypto::IdentityKeyManager;
 use chatter_linux::events::EventBus;
 use chatter_linux::inbox::handlers::DomainEvent;
 use chatter_linux::inbox::InboxEvent;
 use chatter_linux::network::grpc::client_pool::GrpcClientPool;
-use chatter_linux::services::mailbox_manager::MailboxManager;
+use chatter_linux::services::DmBootstrapService;
 use chatter_linux::services::message_service::MessageService;
-use chatter_linux::services::CallWorkerHandle;
-use chatter_linux::storage::{AttachmentRepository, ChannelRepository, Database, KeyStore, MessageRepository, SettingsRepository, UserRepository};
+use chatter_linux::storage::{AttachmentRepository, Database, MessageRepository, UserRepository};
 
-use crate::bin_ui::features::calls::{cleanup_call_ui_state, on_dm_bootstrap_completed};
+use crate::bin_ui::features::calls::cleanup_call_ui_state;
 use crate::MainWindow;
 
 // Re-export public items
@@ -39,18 +37,12 @@ pub async fn handle_inbox_event(
     event: InboxEvent,
     weak_window: &slint::Weak<MainWindow>,
     user_repo: &UserRepository,
-    channel_repo: &Arc<ChannelRepository>,
+    dm_bootstrap_service: &Arc<DmBootstrapService>,
     attachment_repo: &Arc<AttachmentRepository>,
     grpc_pool: &Arc<GrpcClientPool>,
     message_service: &Arc<MessageService>,
     database: &Arc<Database>,
-    mailbox_manager: &Arc<MailboxManager>,
     event_bus: &EventBus,
-    // Call-related services for pending call bootstrap
-    call_service: &std::sync::OnceLock<CallWorkerHandle>,
-    settings_repo: &Arc<SettingsRepository>,
-    identity_manager: &Arc<IdentityKeyManager>,
-    key_store: &Arc<KeyStore>,
 ) {
     match event {
         InboxEvent::DmReceived {
@@ -71,11 +63,7 @@ pub async fn handle_inbox_event(
 
             // If all sessions failed (convergence failed), reset and prepare for fresh session
             if convergence_failed {
-                dm_handlers::handle_convergence_failure(
-                    peer_id,
-                    message_service.clone(),
-                    grpc_pool.clone(),
-                );
+                dm_bootstrap_service.handle_convergence_failure(peer_id);
             }
         }
         InboxEvent::DmRetryRequested { peer_id, original_timestamp } => {
@@ -85,11 +73,7 @@ pub async fn handle_inbox_event(
                 "DM retry requested - resetting session"
             );
 
-            dm_handlers::handle_convergence_failure(
-                peer_id,
-                message_service.clone(),
-                grpc_pool.clone(),
-            );
+            dm_bootstrap_service.handle_convergence_failure(peer_id);
         }
         InboxEvent::DmPollCompleted { total_messages } => {
             if total_messages > 0 {
@@ -301,7 +285,7 @@ pub async fn handle_inbox_event(
             dm_handlers::handle_friend_accepted(
                 weak_window,
                 user_repo,
-                channel_repo,
+                dm_bootstrap_service,
                 grpc_pool,
                 friend_user_id,
                 channel_id,
@@ -346,28 +330,7 @@ pub async fn handle_inbox_event(
                 }
             });
 
-            dm_handlers::handle_dm_bootstrap_completed(
-                peer_id,
-                message_service.clone(),
-                database.clone(),
-                mailbox_manager.clone(),
-                grpc_pool.clone(),
-            );
-
-            // Check if there's a pending call waiting for this bootstrap
-            // This schedules work on UI thread and returns immediately
-            on_dm_bootstrap_completed(
-                peer_id,
-                weak_window.clone(),
-                call_service,
-                message_service.clone(),
-                database.clone(),
-                mailbox_manager.clone(),
-                settings_repo.clone(),
-                identity_manager.clone(),
-                key_store.clone(),
-                channel_repo.clone(),
-            );
+            dm_bootstrap_service.handle_bootstrap_completed(peer_id);
         }
         InboxEvent::IncomingCall {
             peer_id,
