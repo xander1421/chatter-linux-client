@@ -40,7 +40,7 @@ pub async fn handle_inbox_event(
     dm_bootstrap_service: &Arc<DmBootstrapService>,
     attachment_repo: &Arc<AttachmentRepository>,
     grpc_pool: &Arc<GrpcClientPool>,
-    message_service: &Arc<MessageService>,
+    _message_service: &Arc<MessageService>,
     database: &Arc<Database>,
     event_bus: &EventBus,
 ) {

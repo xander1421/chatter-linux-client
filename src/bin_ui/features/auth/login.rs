@@ -29,8 +29,8 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
     let signal_service = ctx.signal_service.clone();
     let group_coordinator = ctx.group_coordinator.clone();
     let message_service = ctx.message_service.clone();
+    let dm_bootstrap_service = ctx.dm_bootstrap_service.clone();
     let database = ctx.database.clone();
-    let mailbox_manager = ctx.mailbox_manager.clone();
     let event_bus = ctx.event_bus.clone();
     let db_path = ctx.database.path().to_path_buf();
     // Use cached passphrase from context (avoids multiple keyring prompts)
@@ -54,8 +54,8 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
         let signal_service = signal_service.clone();
         let group_coordinator = group_coordinator.clone();
         let message_service = message_service.clone();
+        let dm_bootstrap_service = dm_bootstrap_service.clone();
         let database = database.clone();
-        let mailbox_manager = mailbox_manager.clone();
         let event_bus = event_bus.clone();
         let db_path = db_path.clone();
         let db_passphrase = db_passphrase.clone();
@@ -106,12 +106,11 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                             let mut event_rx = provider.subscribe();
                             let weak_for_events = weak.clone();
                             let user_repo_for_events = user_repo.clone();
-                            let channel_repo_for_events = channel_repo.clone();
+                            let dm_bootstrap_service_for_events = dm_bootstrap_service.clone();
                             let attachment_repo_for_events = attachment_repo.clone();
                             let grpc_pool_for_events = grpc_pool.clone();
                             let message_service_for_events = message_service.clone();
                             let database_for_events = database.clone();
-                            let mailbox_manager_for_events = mailbox_manager.clone();
                             let event_bus_for_events = event_bus.clone();
 
                             tokio::spawn(async move {
@@ -120,12 +119,11 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                                         event,
                                         &weak_for_events,
                                         &user_repo_for_events,
-                                        &channel_repo_for_events,
+                                        &dm_bootstrap_service_for_events,
                                         &attachment_repo_for_events,
                                         &grpc_pool_for_events,
                                         &message_service_for_events,
                                         &database_for_events,
-                                        &mailbox_manager_for_events,
                                         &event_bus_for_events,
                                     )
                                     .await;

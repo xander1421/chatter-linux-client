@@ -79,12 +79,11 @@ async fn main() {
         let auth_state = ctx.auth_state.clone();
 
         let user_repo_for_events = user_repo.clone();
-        let channel_repo_for_events = channel_repo.clone();
+        let dm_bootstrap_service_for_events = ctx.dm_bootstrap_service.clone();
         let attachment_repo_for_events = attachment_repo.clone();
         let grpc_pool_for_events = grpc_pool.clone();
         let message_service_for_events = ctx.message_service.clone();
         let database_for_events = ctx.database.clone();
-        let mailbox_manager_for_events = ctx.mailbox_manager.clone();
         let event_bus_for_events = ctx.event_bus.clone();
         let weak_for_events = weak_window.clone();
 
@@ -98,12 +97,11 @@ async fn main() {
                     let mut event_rx = provider.subscribe();
                     let weak_events = weak_for_events.clone();
                     let user_repo_events = user_repo_for_events.clone();
-                    let channel_repo_events = channel_repo_for_events.clone();
+                    let dm_bootstrap_service_events = dm_bootstrap_service_for_events.clone();
                     let attachment_repo_events = attachment_repo_for_events.clone();
                     let grpc_pool_events = grpc_pool_for_events.clone();
                     let message_service_events = message_service_for_events.clone();
                     let database_events = database_for_events.clone();
-                    let mailbox_manager_events = mailbox_manager_for_events.clone();
                     let event_bus_events = event_bus_for_events.clone();
 
                     tokio::spawn(async move {
@@ -112,12 +110,11 @@ async fn main() {
                                 event,
                                 &weak_events,
                                 &user_repo_events,
-                                &channel_repo_events,
+                                &dm_bootstrap_service_events,
                                 &attachment_repo_events,
                                 &grpc_pool_events,
                                 &message_service_events,
                                 &database_events,
-                                &mailbox_manager_events,
                                 &event_bus_events,
                             )
                             .await;

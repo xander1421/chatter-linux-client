@@ -16,6 +16,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::services::auth_service::AuthService;
+use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::signal_service::SignalService;
 use crate::services::message_service::MessageService;
 use crate::services::message_gateway::MessageGateway;
@@ -139,6 +140,8 @@ pub struct AppContext {
     pub message_service: Arc<MessageService>,
     /// Message gateway.
     pub message_gateway: Arc<MessageGateway>,
+    /// DM bootstrap service for session recovery and channel establishment.
+    pub dm_bootstrap_service: Arc<DmBootstrapService>,
     /// Device inbox provider (initialized after connect).
     pub device_inbox_provider: std::sync::OnceLock<Arc<DeviceInboxProvider>>,
     /// Mailbox manager for privacy-preserving DM messaging.
@@ -289,6 +292,15 @@ impl AppContext {
             sesame_manager.clone(),
         ));
 
+        // 12b. Create DM bootstrap service for session recovery and channel establishment
+        let dm_bootstrap_service = Arc::new(DmBootstrapService::new(
+            message_service.clone(),
+            channel_repo.clone(),
+            grpc_pool.clone(),
+            database.clone(),
+            mailbox_manager.clone(),
+        ));
+
         // 13. Create GIF client (optional)
         let gif_client = env::var(TENOR_API_KEY_ENV).ok().map(|api_key| {
             tracing::info!("Tenor API key found, GIF search enabled");
@@ -338,6 +350,7 @@ impl AppContext {
             signal_service,
             message_service,
             message_gateway,
+            dm_bootstrap_service,
             device_inbox_provider,
             mailbox_manager,
             group_mailbox_manager,
