@@ -60,7 +60,7 @@ component ParticipantTile inherits Rectangle {
         background: Colors.error.with-alpha(0.8);
 
         Text {
-            text: "\u{1F507}";
+            text: "\u{1F507}\u{FE0F}";
             font-size: Typography.xs;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -140,8 +140,50 @@ export component ActiveCallView inherits Rectangle {
                         spacing: Spacing.sm;
 
                         if call-data.is-encrypted: Text {
-                            text: "\u{1F512}";
+                            text: "\u{1F512}\u{FE0F}";
                             font-size: Typography.xs;
+                        }
+
+                        // Verification emojis - compare with other party
+                        if call-data.is-encrypted && call-data.verification-emoji-1 != "": Rectangle {
+                            width: verification-emojis.preferred-width + Spacing.md;
+                            height: 20px;
+                            border-radius: Spacing.radius-sm;
+                            background: Colors.primary.with-alpha(0.2);
+
+                            verification-emojis := HorizontalLayout {
+                                padding-left: Spacing.xs;
+                                padding-right: Spacing.xs;
+                                spacing: 2px;
+
+                                Text {
+                                    text: call-data.verification-emoji-1;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: call-data.verification-emoji-2;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: call-data.verification-emoji-3;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: call-data.verification-emoji-4;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    // TODO: Show verification info dialog
+                                }
+                            }
                         }
 
                         Text {

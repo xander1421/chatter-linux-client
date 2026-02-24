@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 74 of 74 (LiveKit Video & Audio Calls)
-Plan: 5 of 5 in current phase
-Status: Phase complete
-Last activity: 2026-02-23 — Completed 74-05-PLAN.md
+Phase: 75 of 75 (Secure In-Memory Attachment Handling)
+Plan: 0 of ? in current phase
+Status: In progress
+Last activity: 2026-02-23 — Started Phase 75
 
 Progress: ██████████████████████████████████████████████████████████████████████████ 100%
 
@@ -300,10 +300,12 @@ None.
 
 - Phase 71 added: Complete UI Callback Wiring (wire all remaining Slint callbacks to services)
 - Phase 74 added: LiveKit Video & Audio Calls (WebRTC via livekit Rust SDK)
+- Phase 75 added: Secure In-Memory Attachment Handling (encrypted DB storage, memory-only decryption)
+- Phase 76 added: Refactor Large Service Files (split files >550 lines into focused modules)
 
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 74-05-PLAN.md (ActiveCallView and Callback Wiring)
-Resume file: None
-Next action: Phase 74 complete, milestone complete
+Stopped at: Working on Phase 75 - Secure In-Memory Attachment Handling
+Resume file: .planning/refactor-ui-separation-of-concerns.md
+Next action: Complete channel attachment migration to encrypted CDN flow

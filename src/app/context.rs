@@ -551,6 +551,7 @@ impl AppContext {
     ///
     /// Must be called after `grpc_pool.connect()` succeeds.
     /// Safe to call multiple times - only initializes once.
+    #[allow(clippy::arc_with_non_send_sync)] // LiveKit types don't implement Send+Sync
     pub fn init_call_service(&self) {
         self.call_service.get_or_init(|| {
             let call_client = crate::network::grpc::CallClient::new(

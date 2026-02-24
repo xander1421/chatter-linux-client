@@ -497,6 +497,7 @@ impl GroupMailboxManager {
     /// Get all group mailboxes for batch polling.
     ///
     /// Returns (group_id, public_key, private_key, mailbox_id) for all active groups.
+    #[allow(clippy::type_complexity)]
     pub fn get_all_group_mailboxes(
         &self,
     ) -> Result<Vec<(ChannelId, [u8; 32], [u8; 64], String)>, MailboxError> {

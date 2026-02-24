@@ -354,7 +354,7 @@ impl AIService {
     ///
     /// * `client` - Mutable reference to integration client
     /// * `integration_id` - Optional integration ID to filter events.
-    ///                      If None, receives events for all integrations.
+    ///   If None, receives events for all integrations.
     pub async fn subscribe_events(
         &self,
         client: &mut IntegrationClient,

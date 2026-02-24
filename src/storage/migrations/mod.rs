@@ -15,6 +15,8 @@ pub mod v011_mailbox_tokens;
 pub mod v012_dm_conversations;
 pub mod v013_group_mailboxes;
 pub mod v015_ephemeral_messages;
+pub mod v016_message_sent_at;
+pub mod v017_encrypted_attachment_content;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -33,6 +35,8 @@ pub use v011_mailbox_tokens::V011MailboxTokens;
 pub use v012_dm_conversations::V012DmConversations;
 pub use v013_group_mailboxes::V013GroupMailboxes;
 pub use v015_ephemeral_messages::V015EphemeralMessages;
+pub use v016_message_sent_at::V016MessageSentAt;
+pub use v017_encrypted_attachment_content::V017EncryptedAttachmentContent;
 
 /// Trait for database migrations.
 ///
@@ -166,4 +170,6 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V012DmConversations)
         .register(V013GroupMailboxes)
         .register(V015EphemeralMessages)
+        .register(V016MessageSentAt)
+        .register(V017EncryptedAttachmentContent)
 }

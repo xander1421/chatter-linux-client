@@ -31,8 +31,8 @@ export component ReactionPicker inherits Rectangle {
     callback category-changed(int);
     callback search-changed(string);
 
-    // Quick reaction emoji
-    property <[string]> quick-reactions: ["\u{1F44D}", "\u{2764}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F621}"];
+    // Quick reaction emoji (with emoji variant selectors for colorful rendering)
+    property <[string]> quick-reactions: ["\u{1F44D}\u{FE0F}", "\u{2764}\u{FE0F}", "\u{1F602}\u{FE0F}", "\u{1F62E}\u{FE0F}", "\u{1F622}\u{FE0F}", "\u{1F621}\u{FE0F}"];
     // thumbs up, heart, joy, surprised, crying, angry
 
     // Only render when visible

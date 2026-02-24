@@ -19,8 +19,9 @@ use crate::error::MailboxError;
 use crate::mailbox::group::{GroupMailbox, GroupMailboxManager, MemberMailbox};
 use crate::mailbox::{MailboxToken, TokenManager};
 use crate::network::grpc::MailboxClient;
-use crate::proto::content_v1::GroupMailboxAddress;
+use crate::proto::content_v1::{GroupMailboxAddress, SenderKeyDistribution};
 use crate::storage::Database;
+use crate::util::time::TimestampNanos;
 
 /// Default group mailbox TTL: 7 days in seconds.
 pub const DEFAULT_GROUP_MAILBOX_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
@@ -31,6 +32,11 @@ pub struct GroupMailboxSetupResult {
     pub mailbox: GroupMailbox,
     /// Announcement to send to the group.
     pub announcement: GroupMailboxAddress,
+    /// Sender Key Distribution Message to distribute to members.
+    ///
+    /// This SKDM must be distributed pairwise via Double Ratchet to all
+    /// channel members so they can decrypt our Sender Key encrypted messages.
+    pub skdm: Option<SenderKeyDistribution>,
 }
 
 /// Group mailbox coordinator.
@@ -79,24 +85,32 @@ impl GroupCoordinator {
         channel_id: &ChannelId,
         mailbox_client: &mut MailboxClient,
     ) -> Result<GroupMailboxSetupResult, MailboxError> {
+        tracing::info!(channel_id = %channel_id, "Starting group mailbox setup");
+
         // Check if we already have a non-expired mailbox
         if let Some(state) = self.mailbox_manager.load_group_state(channel_id)? {
             if let Some(existing) = &state.our_mailbox {
                 if !existing.is_expired() {
                     // Already have valid mailbox, just return announcement
+                    // SKDM will be populated by caller if needed
+                    tracing::info!(channel_id = %channel_id, "Using existing non-expired mailbox");
                     let announcement = self.build_announcement(channel_id, existing);
                     return Ok(GroupMailboxSetupResult {
                         mailbox: existing.clone(),
                         announcement,
+                        skdm: None,
                     });
                 }
             }
         }
 
         // Get available token or request new ones
+        tracing::info!(channel_id = %channel_id, "Ensuring token...");
         let token = self.ensure_token(mailbox_client).await?;
+        tracing::info!(channel_id = %channel_id, "Token obtained");
 
         // Create ephemeral mailbox on server
+        tracing::info!(channel_id = %channel_id, "Creating ephemeral mailbox on server...");
         let response = mailbox_client
             .create_ephemeral_mailbox(
                 token.public_key.clone(),
@@ -106,6 +120,7 @@ impl GroupCoordinator {
             )
             .await
             .map_err(|e| MailboxError::Network(e.to_string()))?;
+        tracing::info!(channel_id = %channel_id, mailbox_id = %response.mailbox_id, "Ephemeral mailbox created");
 
         // Build our mailbox from token + response
         let mailbox = self.build_mailbox_from_token(channel_id, &token, &response)?;
@@ -120,6 +135,7 @@ impl GroupCoordinator {
         Ok(GroupMailboxSetupResult {
             mailbox,
             announcement,
+            skdm: None, // Populated by caller if available
         })
     }
 
@@ -175,6 +191,44 @@ impl GroupCoordinator {
         Ok(())
     }
 
+    /// Process a received mailbox public key (from SKDM ephemeral_reply_to).
+    ///
+    /// Called when we receive another member's mailbox key bundled with SKDM.
+    /// This is the preferred NDSS '21 flow - mailbox announced alongside sender key.
+    ///
+    /// # Arguments
+    ///
+    /// * `sender_id` - Who sent the SKDM with mailbox
+    /// * `channel_id` - Channel this mailbox is for
+    /// * `mailbox_public_key` - 32-byte Ed25519 public key
+    /// * `timestamp` - When the SKDM was sent (for expiry calculation)
+    pub fn process_mailbox_key(
+        &self,
+        sender_id: UserId,
+        channel_id: &ChannelId,
+        mailbox_public_key: [u8; 32],
+        _timestamp: u64,
+    ) -> Result<(), MailboxError> {
+        // Create MemberMailbox with default TTL
+        let member_mailbox = MemberMailbox::new(
+            sender_id,
+            mailbox_public_key,
+            Some(Utc::now() + Duration::seconds(DEFAULT_GROUP_MAILBOX_TTL_SECONDS as i64)),
+        );
+
+        // Store the member's mailbox
+        self.mailbox_manager
+            .save_member_mailbox(channel_id, &member_mailbox)?;
+
+        tracing::info!(
+            channel_id = %channel_id,
+            sender_id = %sender_id,
+            "Stored member mailbox from SKDM ephemeral_reply_to (NDSS '21)"
+        );
+
+        Ok(())
+    }
+
     /// Check if we have a mailbox set up for a channel.
     pub fn has_mailbox(&self, channel_id: &ChannelId) -> Result<bool, MailboxError> {
         let state = self.mailbox_manager.load_group_state(channel_id)?;
@@ -203,12 +257,16 @@ impl GroupCoordinator {
         &self,
         client: &mut MailboxClient,
     ) -> Result<MailboxToken, MailboxError> {
+        tracing::info!("Checking for available token locally");
         if let Some(token) = self.token_manager.get_available_token()? {
+            tracing::info!("Found existing local token");
             return Ok(token);
         }
 
         // Need to request tokens
+        tracing::info!("No local token, requesting from server...");
         let count = self.token_manager.request_tokens(client, 5).await?;
+        tracing::info!(count = count, "Requested tokens from server");
         if count == 0 {
             return Err(MailboxError::NoTokensAvailable);
         }
@@ -263,8 +321,16 @@ impl GroupCoordinator {
         GroupMailboxAddress {
             channel_id: channel_id.to_string(),
             mailbox_pk: mailbox.public_key.to_vec(),
-            timestamp: Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
         }
+    }
+
+    /// Clean up all group mailbox state when leaving a channel.
+    ///
+    /// Removes our mailbox and all member mailbox records for this channel.
+    pub fn cleanup_channel(&self, channel_id: &ChannelId) -> Result<(), MailboxError> {
+        tracing::info!(channel_id = %channel_id, "Cleaning up group mailbox state");
+        self.mailbox_manager.delete_group_state(channel_id)
     }
 }
 
@@ -299,12 +365,13 @@ mod tests {
         let announcement = GroupMailboxAddress {
             channel_id: channel_id.to_string(),
             mailbox_pk: mailbox.public_key.to_vec(),
-            timestamp: Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
         };
 
         let result = GroupMailboxSetupResult {
             mailbox: mailbox.clone(),
             announcement: announcement.clone(),
+            skdm: None,
         };
 
         assert_eq!(result.mailbox.id, "test-mailbox");

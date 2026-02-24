@@ -26,10 +26,10 @@ use crate::domain::ids::{ChannelId, UserId};
 use crate::proto::content_v1::{GroupEncrypted, SenderKeyDistribution};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
-use crate::error::{CryptoError, NetworkError, ServiceError};
+use crate::error::{CryptoError, ServiceError};
 
 use crate::storage::KeyStore;
-use crate::util::time::timestamp_nanos;
+use crate::util::time::TimestampNanos;
 
 /// Signal Service for end-to-end encryption.
 ///
@@ -100,7 +100,7 @@ impl SignalService {
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
         tracing::debug!(recipient_id, device_id, "Signal: checking if session exists");
-        if SessionManager::has_session(&SignalStore::new(self.key_store.clone()), &address).await.map_err(CryptoError::from)? {
+        if SessionManager::has_session(&SignalStore::new(self.key_store.clone()), &address).await? {
             tracing::debug!(recipient_id, device_id, "Signal: session already exists");
             return Ok(());
         }
@@ -112,7 +112,7 @@ impl SignalService {
             .await
             .map_err(|e| {
                 tracing::error!(recipient_id, device_id, error = %e, "Signal: failed to fetch prekey bundle");
-                NetworkError::from(e)
+                e
             })?;
         tracing::debug!(recipient_id, device_id, "Signal: prekey bundle received");
 
@@ -140,7 +140,7 @@ impl SignalService {
         .await
         .map_err(|e| {
             tracing::error!(recipient_id, device_id, error = ?e, "Signal: failed to establish session");
-            CryptoError::from(e)
+            e
         })?;
 
         tracing::debug!(recipient_id, device_id, "Signal: session established successfully");
@@ -150,7 +150,6 @@ impl SignalService {
     /// Encrypt a message for a specific recipient device using Sealed Sender.
     ///
     /// Returns the encrypted ciphertext bytes.
-
     pub async fn encrypt_message(
         &self,
         auth_client: &mut AuthClient,
@@ -296,7 +295,7 @@ impl SignalService {
         ciphertext: &[u8],
     ) -> Result<(ProtocolAddress, Vec<u8>), ServiceError> {
         // We need the server's trust root public key to validate the sender certificate.
-        let trust_root = &self.trust_root; 
+        let trust_root = self.trust_root; 
 
         let local_uuid = self.settings_repo
              .get_string(keys::CURRENT_USER_ID)
@@ -333,7 +332,7 @@ impl SignalService {
         )
         .await?;
 
-        let sender_address = ProtocolAddress::new(result.sender_uuid, result.device_id.into());
+        let sender_address = ProtocolAddress::new(result.sender_uuid, result.device_id);
         Ok((sender_address, result.message))
     }
 
@@ -699,7 +698,7 @@ impl SignalService {
             .await
             .map_err(|e| {
                 tracing::error!(device_id, error = %e, "Signal: failed to request sender certificate");
-                NetworkError::from(e)
+                e
             })?;
 
         let refresh_after = cert_response.refresh_after;
@@ -793,7 +792,7 @@ impl SignalService {
             kyber_public,
             kyber_signature,
             identity_key,
-        ).map_err(|e| ServiceError::Validation(format!("Invalid prekey bundle format: {}", e).into()))
+        ).map_err(|e| ServiceError::Validation(format!("Invalid prekey bundle format: {}", e)))
     }
 
     pub fn set_trust_root(&mut self, key: PublicKey) {
@@ -877,7 +876,7 @@ impl SignalService {
         Ok(SenderKeyDistribution {
             channel_id: channel_id.to_string(),
             distribution_message: skdm.serialized().to_vec(),
-            timestamp: timestamp_nanos(),
+            timestamp: TimestampNanos::now().as_u64(),
         })
     }
 
@@ -1022,7 +1021,7 @@ impl SignalService {
             Some(SenderKeyDistribution {
                 channel_id: channel_id.to_string(),
                 distribution_message: skdm.serialized().to_vec(),
-                timestamp: timestamp_nanos(),
+                timestamp: TimestampNanos::now().as_u64(),
             })
         } else {
             tracing::debug!(
@@ -1055,7 +1054,7 @@ impl SignalService {
         let group_encrypted = GroupEncrypted {
             channel_id: channel_id.to_string(),
             ciphertext: ciphertext.serialized().to_vec(),
-            timestamp: timestamp_nanos(),
+            timestamp: TimestampNanos::now().as_u64(),
         };
 
         Ok((group_encrypted, skdm_to_distribute))

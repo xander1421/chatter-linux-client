@@ -1,4 +1,6 @@
 //! Join channel modal callbacks.
+//!
+//! Uses ChannelService for all channel operations - no direct network calls.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -9,8 +11,6 @@ use tokio::time::{sleep, Duration};
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::channel::ChannelType;
 use chatter_linux::domain::ids::ChannelId;
-use chatter_linux::network::grpc::MailboxClient;
-use chatter_linux::services::channel::ChannelService;
 
 use crate::bin_ui::converters::channel_to_slint;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
@@ -22,20 +22,12 @@ pub fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
 
     // Search channels callback (with debounce)
     let weak_window = window.as_weak();
-    let grpc_pool = ctx.grpc_pool.clone();
-    let settings_repo = ctx.settings_repo.clone();
-    let channel_repo = ctx.channel_repo.clone();
-    let signal_service = ctx.signal_service.clone();
-    let group_coordinator = ctx.group_coordinator.clone();
+    let channel_service = Arc::new(ctx.channel_service());
     let search_counter_clone = search_counter.clone();
 
     window.on_search_channels(move |query: SharedString| {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool.clone();
-        let settings_repo = settings_repo.clone();
-        let channel_repo = channel_repo.clone();
-        let signal_service = signal_service.clone();
-        let group_coordinator = group_coordinator.clone();
+        let channel_service = channel_service.clone();
         let query = query.to_string();
         let counter = search_counter_clone.clone();
 
@@ -79,17 +71,9 @@ pub fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
                 return;
             }
 
-            // Perform search
-            let channel_service = ChannelService::new(settings_repo, channel_repo, signal_service, group_coordinator);
-            let mut channel_client =
-                chatter_linux::network::grpc::channel_client::ChannelClient::new(
-                    grpc_pool.channel(),
-                    grpc_pool.auth_clone(),
-                );
-
+            // Perform search using ChannelService
             match channel_service
                 .search_channels(
-                    &mut channel_client,
                     &query,
                     20,
                     0,
@@ -141,28 +125,22 @@ pub fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
 
     // Join channel callback
     let weak_window = window.as_weak();
-    let grpc_pool = ctx.grpc_pool.clone();
-    let settings_repo = ctx.settings_repo.clone();
+    let channel_service = Arc::new(ctx.channel_service());
     let channel_repo = ctx.channel_repo.clone();
     let message_repo = ctx.message_repo.clone();
     let user_repo = ctx.user_repo.clone();
     let attachment_repo = ctx.attachment_repo.clone();
     let chat_state = ctx.chat_state.clone();
-    let signal_service = ctx.signal_service.clone();
-    let group_coordinator = ctx.group_coordinator.clone();
     let message_service = ctx.message_service.clone();
 
     window.on_join_channel(move |channel_id_str: SharedString| {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool.clone();
-        let settings_repo = settings_repo.clone();
+        let channel_service = channel_service.clone();
         let channel_repo = channel_repo.clone();
         let message_repo = message_repo.clone();
         let user_repo = user_repo.clone();
         let attachment_repo = attachment_repo.clone();
         let chat_state = chat_state.clone();
-        let signal_service = signal_service.clone();
-        let group_coordinator = group_coordinator.clone();
         let message_service = message_service.clone();
         let channel_id_str = channel_id_str.to_string();
 
@@ -200,42 +178,17 @@ pub fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            // Join channel
-            let channel_service = ChannelService::new(settings_repo, channel_repo.clone(), signal_service, group_coordinator);
-            let mut channel_client =
-                chatter_linux::network::grpc::channel_client::ChannelClient::new(
-                    grpc_pool.channel(),
-                    grpc_pool.auth_clone(),
-                );
-            let mut mailbox_client = MailboxClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
-
+            // Join channel using ChannelService (handles mailbox setup internally)
             match channel_service
-                .join_channel(&mut channel_client, Some(&mut mailbox_client), &channel_id, None)
+                .join_channel(&channel_id, None, true)
                 .await
             {
                 Ok((channel, mailbox_setup)) => {
-                    // If group mailbox was setup, send the announcement
+                    // If group mailbox was setup, send the announcement and distribute SKDM
                     if let Some(setup_result) = mailbox_setup {
-                        let mut message_client = chatter_linux::network::grpc::MessageClient::new(
-                            grpc_pool.channel(),
-                            grpc_pool.auth_clone(),
-                        );
-                        let mut auth_client = chatter_linux::network::grpc::AuthClient::new(
-                            grpc_pool.channel(),
-                            grpc_pool.auth_clone(),
-                        );
-
+                        // Send mailbox announcement to other members
                         if let Err(e) = message_service
-                            .send_group_mailbox_announcement(
-                                &mut message_client,
-                                &mut auth_client,
-                                &mut channel_client,
-                                &channel.id,
-                                setup_result.announcement,
-                            )
+                            .announce_group_mailbox(&channel.id, setup_result.announcement)
                             .await
                         {
                             tracing::warn!(
@@ -248,6 +201,26 @@ pub fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
                                 channel_id = %channel.id,
                                 "Sent group mailbox announcement after join"
                             );
+                        }
+
+                        // Distribute SKDM to all channel members via Double Ratchet
+                        // This is critical - without SKDM, other members can't decrypt our messages
+                        if let Some(skdm) = setup_result.skdm {
+                            if let Err(e) = message_service
+                                .distribute_skdm(&channel.id, &skdm)
+                                .await
+                            {
+                                tracing::error!(
+                                    channel_id = %channel.id,
+                                    error = %e,
+                                    "Failed to distribute SKDM after join - other members won't receive our messages!"
+                                );
+                            } else {
+                                tracing::info!(
+                                    channel_id = %channel.id,
+                                    "Distributed SKDM to channel members after join"
+                                );
+                            }
                         }
                     }
                     let channel_id = channel.id;

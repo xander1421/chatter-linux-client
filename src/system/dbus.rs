@@ -31,7 +31,6 @@ impl DbusClient {
     /// Get a reference to the underlying D-Bus connection.
     ///
     /// Use this to make custom D-Bus calls or create proxies.
-    #[must_use]
     pub fn connection(&self) -> &Connection {
         &self.connection
     }

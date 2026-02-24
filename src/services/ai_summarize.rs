@@ -139,7 +139,7 @@ impl AISummarizeService {
     ///
     /// * `messages` - Messages to summarize
     /// * `instruction` - Optional custom instruction. Defaults to
-    ///                   "Summarize the following conversation concisely"
+    ///   "Summarize the following conversation concisely"
     ///
     /// # Returns
     ///

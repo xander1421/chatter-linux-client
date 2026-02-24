@@ -211,7 +211,7 @@ impl RetryExecutor {
                     }
 
                     // Get next backoff delay and sleep
-                    let delay = backoff.next();
+                    let delay = backoff.next_timeout();
                     tokio::time::sleep(delay).await;
 
                     attempt += 1;

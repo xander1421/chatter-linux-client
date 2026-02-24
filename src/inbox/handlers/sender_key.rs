@@ -112,6 +112,24 @@ impl InboxHandler for SenderKeyHandler {
                 ChannelId::from_uuid(uuid_from_string(&sender_key.channel_id))
             });
 
+        // Extract sender's mailbox public key from ephemeral_reply_to (NDSS '21)
+        // This is bundled with SKDM so we learn the sender's group mailbox address
+        let sender_mailbox_pk: Option<[u8; 32]> = content.ephemeral_reply_to
+            .as_ref()
+            .and_then(|pk| {
+                if pk.len() == 32 {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(pk);
+                    Some(arr)
+                } else {
+                    tracing::warn!(
+                        "Invalid ephemeral_reply_to length: {} (expected 32)",
+                        pk.len()
+                    );
+                    None
+                }
+            });
+
         // Emit SenderKeyReceived event
         ctx.emit(DomainEvent::SenderKeyReceived {
             sender_id,
@@ -119,6 +137,21 @@ impl InboxHandler for SenderKeyHandler {
             distribution_message: sender_key.distribution_message.clone(),
             timestamp: sender_key.timestamp,
         });
+
+        // If sender included their mailbox address, emit GroupMailboxReceived event
+        if let Some(mailbox_pk) = sender_mailbox_pk {
+            ctx.emit(DomainEvent::GroupMailboxReceived {
+                sender_id,
+                channel_id,
+                mailbox_public_key: mailbox_pk,
+                timestamp: content.timestamp,
+            });
+            tracing::debug!(
+                channel_id = %channel_id,
+                sender_id = %sender_id,
+                "Extracted sender's group mailbox from SKDM"
+            );
+        }
 
         Ok(HandlerOutcome::Processed)
     }

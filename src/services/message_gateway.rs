@@ -8,29 +8,52 @@ use std::sync::Arc;
 use prost::Message as ProstMessage;
 
 use crate::crypto::dm_crypto::decrypt_dm_bytes;
+use crate::crypto::signal::sesame::{ConvergenceResult, SesameManager, SqliteSesameStore};
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{Message, MessageContent};
 use crate::error::ServiceError;
 use crate::proto::content_v1::{
-    Content, DataMessage, Delete, DeleteForMeSync, EditMessage, GroupEncrypted,
+    AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage, GroupEncrypted,
     GroupMailboxAddress, PinMessage, Reaction, ReceiptMessage, TypingMessage, content,
     typing_message, receipt_message,
 };
 use crate::services::SignalService;
 use crate::storage::repositories::MessageRepository;
+use crate::util::time::TimestampNanos;
 
 // ============================================================================
 // Content Builders (for sending)
 // ============================================================================
 
 /// Create a Content proto for a text message.
-pub fn build_text_content(body: &str) -> Content {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+/// `sent_at` should be the SAME timestamp used for Message.sent_at (nanoseconds).
+pub fn build_text_content(body: &str, sent_at: u64) -> Content {
     Content {
-        timestamp: now,
+        timestamp: sent_at,
         content: Some(content::Content::DataMessage(DataMessage {
             body: body.to_string(),
-            timestamp: now,
+            timestamp: sent_at,
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+/// Create a Content proto for a message with text and/or attachments.
+/// `sent_at` should be the SAME timestamp used for Message.sent_at (nanoseconds).
+pub fn build_data_message_content(body: &str, attachments: Vec<AttachmentPointer>, sent_at: u64) -> Content {
+    tracing::debug!(
+        sent_at = sent_at,
+        body_len = body.len(),
+        attachment_count = attachments.len(),
+        "build_data_message_content: creating Content proto"
+    );
+    Content {
+        timestamp: sent_at,
+        content: Some(content::Content::DataMessage(DataMessage {
+            body: body.to_string(),
+            timestamp: sent_at,
+            attachments,
             ..Default::default()
         })),
         ..Default::default()
@@ -44,7 +67,7 @@ pub fn build_typing_content(started: bool) -> Content {
 
 /// Create a Content proto for typing indicator with optional channel context.
 pub fn build_typing_content_with_channel(started: bool, channel_id: Option<&str>) -> Content {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
         content: Some(content::Content::Typing(TypingMessage {
@@ -58,7 +81,7 @@ pub fn build_typing_content_with_channel(started: bool, channel_id: Option<&str>
 
 /// Create a Content proto for read receipt.
 pub fn build_read_receipt_content(message_timestamps: Vec<u64>) -> Content {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
         content: Some(content::Content::Receipt(ReceiptMessage {
@@ -72,7 +95,7 @@ pub fn build_read_receipt_content(message_timestamps: Vec<u64>) -> Content {
 
 /// Create a Content proto for delivery receipt.
 pub fn build_delivery_receipt_content(message_timestamps: Vec<u64>) -> Content {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
         content: Some(content::Content::Receipt(ReceiptMessage {
@@ -102,7 +125,7 @@ pub fn build_reaction_content_with_channel(
     target_sent_timestamp: u64,
     channel_id: Option<&str>,
 ) -> Content {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = TimestampNanos::now().as_u64();
     // Note: Reaction proto doesn't have channel_id field - we encode it in target_author_aci
     // as "channel:{channel_id}:{author_aci}" for channels, or just author_aci for DMs
     let encoded_author = if let Some(ch_id) = channel_id {
@@ -139,7 +162,7 @@ pub fn build_pin_content_with_channel(
     unpin: bool,
     channel_id: Option<&str>,
 ) -> Content {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
         content: Some(content::Content::Pin(PinMessage {
@@ -164,7 +187,7 @@ pub fn build_edit_content_with_channel(
     new_body: &str,
     channel_id: Option<&str>,
 ) -> Content {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
         content: Some(content::Content::Edit(EditMessage {
@@ -186,7 +209,7 @@ pub fn build_delete_for_me_content(
     target_author_aci: &str,
     target_sent_timestamp: u64,
 ) -> Content {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
         content: Some(content::Content::DeleteForMeSync(DeleteForMeSync {
@@ -210,7 +233,7 @@ pub fn build_delete_for_everyone_content_with_channel(
     target_sent_timestamp: u64,
     channel_id: Option<&str>,
 ) -> Content {
-    let now = chrono::Utc::now().timestamp_millis() as u64;
+    let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
         content: Some(content::Content::DataMessage(DataMessage {
@@ -225,13 +248,79 @@ pub fn build_delete_for_everyone_content_with_channel(
     }
 }
 
+/// Create a Content proto for call key exchange (incoming call notification).
+///
+/// This is sent via sealed sender to notify the peer of an incoming call
+/// and share the E2EE key material for the call.
+///
+/// Note: call_type and channel_id are included in the API for consistency but
+/// are not part of the proto - the receiver derives these from conversation context.
+pub fn build_call_key_content(
+    call_id: &str,
+    key_material: Vec<u8>,
+    _call_type: &str,
+    _channel_id: &str,
+) -> Content {
+    use crate::proto::content_v1::CallKeyExchange;
+    let now = TimestampNanos::now().as_u64();
+    Content {
+        timestamp: now,
+        content: Some(content::Content::CallKey(CallKeyExchange {
+            call_id: call_id.to_string(),
+            key_material,
+            timestamp: now,
+        })),
+        ..Default::default()
+    }
+}
+
+/// Create a Content proto for call hangup notification.
+///
+/// This is sent via sealed sender to notify the peer that the call has ended.
+pub fn build_call_hangup_content(call_id: &str, reason: CallHangupReason) -> Content {
+    use crate::proto::content_v1::{CallHangup, call_hangup};
+    let now = TimestampNanos::now().as_u64();
+    Content {
+        timestamp: now,
+        content: Some(content::Content::CallHangup(CallHangup {
+            call_id: call_id.to_string(),
+            reason: match reason {
+                CallHangupReason::Normal => call_hangup::Reason::Normal as i32,
+                CallHangupReason::Declined => call_hangup::Reason::Declined as i32,
+                CallHangupReason::Busy => call_hangup::Reason::Busy as i32,
+                CallHangupReason::Timeout => call_hangup::Reason::Timeout as i32,
+                CallHangupReason::NetworkError => call_hangup::Reason::NetworkError as i32,
+            },
+            timestamp: now,
+        })),
+        ..Default::default()
+    }
+}
+
+/// Reason for call hangup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallHangupReason {
+    /// User ended call normally
+    Normal,
+    /// Call was declined
+    Declined,
+    /// User is busy (on another call)
+    Busy,
+    /// Call not answered in time
+    Timeout,
+    /// Network connectivity issue
+    NetworkError,
+}
+
 /// Parsed DM content after decryption.
 #[derive(Debug, Clone)]
 pub enum DmContent {
-    /// Text message
+    /// Text message with optional attachments
     Text {
         body: String,
         timestamp: u64,
+        /// Attachment pointers for any files included
+        attachments: Vec<AttachmentPointer>,
     },
     /// Typing indicator
     Typing {
@@ -281,6 +370,33 @@ pub enum DmContent {
         /// Ephemeral public key (32 or 64 bytes).
         ephemeral_pk: Vec<u8>,
         /// Timestamp of the key exchange.
+        timestamp: u64,
+    },
+    /// Call key exchange (incoming call notification).
+    ///
+    /// When someone initiates a call, they send this to notify the peer
+    /// and share the call encryption key material.
+    CallKey {
+        /// Call ID.
+        call_id: String,
+        /// DTLS fingerprint or SRTP key material.
+        key_material: Vec<u8>,
+        /// Timestamp when call was initiated.
+        timestamp: u64,
+        /// Call type: "Voice Call", "Video Call", or "Group Call".
+        call_type: String,
+        /// Channel/conversation ID for context.
+        channel_id: String,
+    },
+    /// Call hangup notification.
+    ///
+    /// Sent when a call participant ends the call to notify others.
+    CallHangup {
+        /// Call ID.
+        call_id: String,
+        /// Hangup reason.
+        reason: CallHangupReason,
+        /// Timestamp when hangup was sent.
         timestamp: u64,
     },
 }
@@ -339,6 +455,7 @@ pub enum SealedSenderResult {
 pub struct MessageGateway {
     signal_service: SignalService,
     message_repo: Arc<MessageRepository>,
+    sesame_manager: Option<Arc<SesameManager<SqliteSesameStore>>>,
 }
 
 impl MessageGateway {
@@ -350,6 +467,20 @@ impl MessageGateway {
         Self {
             signal_service,
             message_repo,
+            sesame_manager: None,
+        }
+    }
+
+    /// Create a new MessageGateway with Sesame session management.
+    pub fn with_sesame(
+        signal_service: SignalService,
+        message_repo: Arc<MessageRepository>,
+        sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
+    ) -> Self {
+        Self {
+            signal_service,
+            message_repo,
+            sesame_manager: Some(sesame_manager),
         }
     }
 
@@ -373,15 +504,49 @@ impl MessageGateway {
             ServiceError::Validation(format!("Invalid sender ID in Signal address: {}", e))
         })?;
 
+        tracing::info!(
+            sender_id = %sender_id,
+            plaintext_len = plaintext.len(),
+            "GATEWAY: Decrypted sealed sender, parsing Content proto"
+        );
+
         // First try to parse as Content proto (preferred, contains KeyExchange)
         if let Ok(content_proto) = Content::decode(plaintext.as_slice()) {
+            // Log what content type we got
+            let content_type_name = match &content_proto.content {
+                Some(content::Content::DataMessage(_)) => "DataMessage",
+                Some(content::Content::Typing(_)) => "Typing",
+                Some(content::Content::Receipt(_)) => "Receipt",
+                Some(content::Content::Reaction(_)) => "Reaction",
+                Some(content::Content::Edit(_)) => "Edit",
+                Some(content::Content::Pin(_)) => "Pin",
+                Some(content::Content::KeyExchange(_)) => "KeyExchange",
+                Some(content::Content::Attachment(_)) => "Attachment",
+                Some(content::Content::SenderKey(_)) => "SenderKey",
+                Some(content::Content::GroupEncrypted(_)) => "GroupEncrypted",
+                Some(content::Content::SenderKeyRequest(_)) => "SenderKeyRequest",
+                Some(content::Content::GroupMailboxAddress(_)) => "GroupMailboxAddress",
+                Some(content::Content::CallKey(_)) => "CallKey",
+                Some(content::Content::CallHangup(_)) => "CallHangup",
+                Some(content::Content::DeleteForMeSync(_)) => "DeleteForMeSync",
+                None => "None",
+            };
+
+            tracing::info!(
+                sender_id = %sender_id,
+                content_type = content_type_name,
+                timestamp = content_proto.timestamp,
+                "GATEWAY: Parsed Content proto, content type = {}", content_type_name
+            );
+
             // Check for KeyExchange
             if let Some(content::Content::KeyExchange(key_exchange)) = content_proto.content {
-                tracing::debug!(
+                tracing::info!(
                     sender_id = %sender_id,
                     conversation_id = %key_exchange.conversation_id,
                     key_len = key_exchange.ephemeral_pk.len(),
-                    "Received KeyExchange in sealed sender message"
+                    "GATEWAY: Found KeyExchange! key_len={} (0=REQUEST, 64=MESSAGE)",
+                    key_exchange.ephemeral_pk.len()
                 );
                 return Ok(SealedSenderResult::KeyExchange {
                     sender_id,
@@ -398,9 +563,112 @@ impl MessageGateway {
 
             // Other content types in sealed sender (typing, receipt, etc.)
             // For now just log and return success
+            tracing::info!(
+                sender_id = %sender_id,
+                content_type = content_type_name,
+                "GATEWAY: Non-data/non-keyexchange content - returning MessageStored"
+            );
+            return Ok(SealedSenderResult::MessageStored);
+        } else {
+            tracing::warn!(
+                sender_id = %sender_id,
+                plaintext_len = plaintext.len(),
+                "GATEWAY: Failed to parse as Content proto, trying DataMessage fallback"
+            );
+        }
+
+        // Fallback: Parse as raw DataMessage proto
+        let data_message = DataMessage::decode(plaintext.as_slice()).map_err(|e| {
+            ServiceError::Validation(format!("Failed to parse DataMessage: {}", e))
+        })?;
+
+        self.store_data_message(data_message, Some(sender_id)).await
+    }
+
+    /// Decrypt an identified sender message (PreKey or Ciphertext).
+    ///
+    /// This is the fallback path when sealed sender is not used.
+    /// The server knows the sender and passes source_user_id/source_device_id.
+    ///
+    /// When SesameManager is available, uses session convergence to try
+    /// multiple sessions if the primary session fails to decrypt.
+    pub async fn decrypt_identified_message(
+        &self,
+        envelope: &[u8],
+        sender_id: &UserId,
+        sender_device_id: u32,
+    ) -> Result<SealedSenderResult, ServiceError> {
+        // Try to decrypt using session convergence if Sesame is available
+        let plaintext = if let Some(ref sesame_manager) = self.sesame_manager {
+            match self
+                .signal_service
+                .decrypt_with_convergence(envelope, &sender_id.to_string(), sender_device_id, sesame_manager.as_ref())
+                .await?
+            {
+                ConvergenceResult::ActiveSession { plaintext, session_id } => {
+                    tracing::debug!(
+                        sender_id = %sender_id,
+                        session_id_hex = %hex::encode(&session_id[..8.min(session_id.len())]),
+                        "Decrypted with active session"
+                    );
+                    plaintext
+                }
+                ConvergenceResult::PromotedSession { plaintext, session_id } => {
+                    tracing::info!(
+                        sender_id = %sender_id,
+                        session_id_hex = %hex::encode(&session_id[..8.min(session_id.len())]),
+                        "Decrypted with promoted session (Sesame convergence)"
+                    );
+                    plaintext
+                }
+                ConvergenceResult::AllFailed { errors } => {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        error_count = errors.len(),
+                        first_error = %errors.first().map(|s| s.as_str()).unwrap_or("none"),
+                        "All session convergence attempts failed"
+                    );
+                    return Err(ServiceError::Crypto(
+                        crate::error::CryptoError::Protocol(
+                            format!("Session convergence failed: {} sessions tried", errors.len())
+                        )
+                    ));
+                }
+            }
+        } else {
+            // No Sesame manager - use direct decryption
+            self.signal_service
+                .decrypt_message_identified(envelope, &sender_id.to_string(), sender_device_id)
+                .await?
+        };
+
+        // First try to parse as Content proto (preferred, contains KeyExchange)
+        if let Ok(content_proto) = Content::decode(plaintext.as_slice()) {
+            // Check for KeyExchange
+            if let Some(content::Content::KeyExchange(key_exchange)) = content_proto.content {
+                tracing::debug!(
+                    sender_id = %sender_id,
+                    conversation_id = %key_exchange.conversation_id,
+                    key_len = key_exchange.ephemeral_pk.len(),
+                    "Received KeyExchange in identified sender message"
+                );
+                return Ok(SealedSenderResult::KeyExchange {
+                    sender_id: *sender_id,
+                    conversation_id: key_exchange.conversation_id,
+                    ephemeral_public_key: key_exchange.ephemeral_pk,
+                    timestamp: key_exchange.timestamp,
+                });
+            }
+
+            // Handle DataMessage inside Content
+            if let Some(content::Content::DataMessage(data_message)) = content_proto.content {
+                return self.store_data_message(data_message, Some(*sender_id)).await;
+            }
+
+            // Other content types
             tracing::debug!(
                 sender_id = %sender_id,
-                "Received non-data content in sealed sender (typing/receipt/etc)"
+                "Received non-data content in identified sender message"
             );
             return Ok(SealedSenderResult::MessageStored);
         }
@@ -410,7 +678,7 @@ impl MessageGateway {
             ServiceError::Validation(format!("Failed to parse DataMessage: {}", e))
         })?;
 
-        self.store_data_message(data_message, Some(sender_id)).await
+        self.store_data_message(data_message, Some(*sender_id)).await
     }
 
     /// Store a DataMessage to the repository.
@@ -432,9 +700,10 @@ impl MessageGateway {
         // Generate message ID from timestamp (Signal's approach: timestamp + author = unique)
         let message_id = MessageId::new();
 
-        // Convert timestamp to datetime
+        // Convert timestamp to datetime (nanoseconds since epoch)
         let created_at = if data_message.timestamp > 0 {
-            chrono::DateTime::from_timestamp_millis(data_message.timestamp as i64)
+            TimestampNanos::from_nanos(data_message.timestamp)
+                .to_datetime()
                 .unwrap_or_else(chrono::Utc::now)
         } else {
             chrono::Utc::now()
@@ -453,7 +722,7 @@ impl MessageGateway {
             })
             .collect();
 
-        // Create domain message
+        // Create domain message with sender's timestamp for Signal-style dedup
         let message = Message {
             id: message_id,
             channel_id,
@@ -465,6 +734,7 @@ impl MessageGateway {
             is_pinned: false,
             is_edited: false,
             is_deleted: false,
+            sent_at: data_message.timestamp,
             created_at,
             updated_at: created_at,
             edited_at: None,
@@ -543,6 +813,7 @@ impl MessageGateway {
             return Ok((sender_id, DmContent::Text {
                 body: data_message.body,
                 timestamp: data_message.timestamp,
+                attachments: data_message.attachments,
             }));
         }
 
@@ -558,6 +829,7 @@ impl MessageGateway {
         Ok((sender_id, DmContent::Text {
             body: raw_text,
             timestamp: 0,
+            attachments: vec![],
         }))
     }
 
@@ -571,10 +843,18 @@ impl MessageGateway {
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
                 }
-                // Otherwise it's a text message
+                // Log timestamp for debugging
+                tracing::debug!(
+                    dm_timestamp = msg.timestamp,
+                    content_timestamp = content_proto.timestamp,
+                    body_len = msg.body.len(),
+                    "parse_content: DataMessage extracted"
+                );
+                // Otherwise it's a text message (possibly with attachments)
                 Ok(DmContent::Text {
                     body: msg.body,
                     timestamp: msg.timestamp,
+                    attachments: msg.attachments,
                 })
             }
             Some(content::Content::Typing(msg)) => {
@@ -626,6 +906,33 @@ impl MessageGateway {
                     conversation_id: kx.conversation_id,
                     ephemeral_pk: kx.ephemeral_pk,
                     timestamp: kx.timestamp,
+                })
+            }
+            Some(content::Content::CallKey(call_key)) => {
+                // Call key exchange received (incoming call notification)
+                Ok(DmContent::CallKey {
+                    call_id: call_key.call_id,
+                    key_material: call_key.key_material,
+                    timestamp: call_key.timestamp,
+                    call_type: String::new(), // Not in proto, will be set by caller context
+                    channel_id: String::new(), // Not in proto, derived from conversation
+                })
+            }
+            Some(content::Content::CallHangup(hangup)) => {
+                use crate::proto::content_v1::call_hangup;
+                // Call hangup notification received
+                let reason = match call_hangup::Reason::try_from(hangup.reason) {
+                    Ok(call_hangup::Reason::Normal) => CallHangupReason::Normal,
+                    Ok(call_hangup::Reason::Declined) => CallHangupReason::Declined,
+                    Ok(call_hangup::Reason::Busy) => CallHangupReason::Busy,
+                    Ok(call_hangup::Reason::Timeout) => CallHangupReason::Timeout,
+                    Ok(call_hangup::Reason::NetworkError) => CallHangupReason::NetworkError,
+                    _ => CallHangupReason::Normal,
+                };
+                Ok(DmContent::CallHangup {
+                    call_id: hangup.call_id,
+                    reason,
+                    timestamp: hangup.timestamp,
                 })
             }
             Some(content::Content::SenderKey(_)) |
@@ -1052,7 +1359,7 @@ impl MessageGateway {
         crate::proto::content_v1::SenderKeyRequest {
             channel_id: channel_id.to_string(),
             target_user_id: target_user_id.to_string(),
-            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
         }
     }
 }

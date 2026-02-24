@@ -55,6 +55,10 @@ impl Database {
         // Enable foreign key constraints
         conn.pragma_update(None, "foreign_keys", "ON")?;
 
+        // Enable WAL mode for better concurrency (allows concurrent reads while writing)
+        // This is essential for proactive DM session establishment which opens a second connection
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             path: path.to_path_buf(),

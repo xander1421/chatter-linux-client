@@ -27,7 +27,7 @@ pub struct ServerPublicKey {
     inner: PublicKey,
     /// Server's key identifier for rotation tracking.
     pub key_id: String,
-    /// When this key expires (Unix timestamp milliseconds).
+    /// When this key expires (Unix timestamp nanoseconds, per proto spec).
     pub valid_until: u64,
 }
 
@@ -38,7 +38,7 @@ impl ServerPublicKey {
     ///
     /// * `der_bytes` - RSA-2048 public key in DER format
     /// * `key_id` - Server's key identifier
-    /// * `valid_until` - Expiry timestamp (milliseconds)
+    /// * `valid_until` - Expiry timestamp (nanoseconds, per proto spec)
     ///
     /// # Errors
     ///
@@ -65,11 +65,12 @@ impl ServerPublicKey {
 
     /// Check if this key is still valid.
     pub fn is_valid(&self) -> bool {
-        let now_ms = std::time::SystemTime::now()
+        // valid_until is in nanoseconds (per proto spec)
+        let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
+            .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
-        now_ms < self.valid_until
+        now_nanos < self.valid_until
     }
 
     /// Get a reference to the inner public key.
@@ -346,20 +347,20 @@ mod tests {
 
     #[test]
     fn test_server_public_key_validity() {
-        // Test expired key
-        let now_ms = std::time::SystemTime::now()
+        // Test expired key (all timestamps in nanoseconds per proto spec)
+        let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
+            .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
 
         // We can't easily create a valid RSA key without the full setup,
         // but we can test the validity logic conceptually
-        let past = now_ms - 1000; // 1 second ago
-        let future = now_ms + 60000; // 1 minute from now
+        let past = now_nanos - 1_000_000_000; // 1 second ago
+        let future = now_nanos + 60_000_000_000; // 1 minute from now
 
-        // Validity check is: now_ms < valid_until
-        assert!(now_ms < future); // Should be valid
-        assert!(now_ms >= past); // Should be expired
+        // Validity check is: now_nanos < valid_until
+        assert!(now_nanos < future); // Should be valid
+        assert!(now_nanos >= past); // Should be expired
     }
 
     #[test]

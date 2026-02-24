@@ -9,7 +9,8 @@ import { DMListItem } from "dm_list_item.slint";
 
 // Data struct for DM items (mirrors Rust DMListItemData)
 export struct DMListItemData {
-    user-id: string,
+    channel-id: string,      // The DM channel ID
+    user-id: string,         // The other user's ID
     display-name: string,
     avatar-url: string,
     initials: string,
@@ -72,11 +73,11 @@ export component DMList inherits Rectangle {
                     last-message: item.last-message;
                     timestamp: item.timestamp;
                     unread-count: item.unread-count;
-                    selected: item.user-id == root.selected-conversation-id;
+                    selected: item.channel-id == root.selected-conversation-id;
                     collapsed: root.collapsed;
 
                     clicked => {
-                        root.conversation-selected(item.user-id);
+                        root.conversation-selected(item.channel-id);
                     }
                     show-tooltip(text, item-y) => {
                         // Adjust y position: header height + flickable offset + item position

@@ -5,7 +5,6 @@
 
 use std::str::FromStr;
 
-use chrono::{DateTime, TimeZone, Utc};
 use prost::Message as ProstMessage;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -138,18 +137,14 @@ impl ChatHandler {
             .filter_map(|id_str| IntegrationId::from_str(id_str).ok())
             .collect();
 
-        // Build the message
-        let now = Utc::now();
-        let created_at = timestamp_to_datetime(data_message.timestamp).unwrap_or(now);
-
-        let mut message = Message::new_text(channel_id, sender_id, String::new());
+        // Build the message with sender's timestamp for Signal-style dedup
+        // created_at is derived from sent_at in Message::new_text()
+        let mut message = Message::new_text(channel_id, sender_id, String::new(), data_message.timestamp);
         message.content = content;
         message.reply_to = reply_to;
         message.attachments = attachments;
         message.mentioned_integrations = mentioned_integrations;
         message.targets_ai_bot = data_message.targets_ai_bot;
-        message.created_at = created_at;
-        message.updated_at = created_at;
 
         // Set thread_id if this is a reply
         if let Some(quote) = &data_message.quote {
@@ -234,11 +229,12 @@ impl ChatHandler {
         // for DMs (the channel is the DM conversation with that sender).
         let channel_id = None;
 
-        tracing::debug!(
-            author = %author_id,
+        tracing::info!(
+            ?author_id,
             timestamp = delete.target_sent_timestamp,
-            message_id = %message_id,
-            "Processing delete request from sealed sender"
+            ?message_id,
+            ?channel_id,
+            "Inbox handler: processing delete-for-everyone request"
         );
 
         // Emit delete event
@@ -248,6 +244,7 @@ impl ChatHandler {
             channel_id,
         });
 
+        tracing::debug!(?message_id, "Delete event emitted");
         Ok(HandlerOutcome::Processed)
     }
 }
@@ -294,15 +291,7 @@ impl InboxHandler for ChatHandler {
 // Helpers
 // ============================================================================
 
-/// Convert millisecond timestamp to DateTime<Utc>.
-fn timestamp_to_datetime(timestamp_ms: u64) -> Option<DateTime<Utc>> {
-    if timestamp_ms == 0 {
-        return None;
-    }
-    let secs = (timestamp_ms / 1000) as i64;
-    let nsecs = ((timestamp_ms % 1000) * 1_000_000) as u32;
-    Utc.timestamp_opt(secs, nsecs).single()
-}
+// Note: Use crate::util::time::TimestampNanos for timestamp conversion
 
 #[cfg(test)]
 mod tests {
@@ -332,14 +321,16 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_to_datetime() {
-        let ts = 1704067200000u64; // 2024-01-01 00:00:00 UTC
-        let dt = timestamp_to_datetime(ts).unwrap();
+    fn test_timestamp_nanos_to_datetime() {
+        use crate::util::time::TimestampNanos;
+        // 2024-01-01 00:00:00 UTC in nanoseconds
+        let ts = TimestampNanos::from_nanos(1704067200_000_000_000u64);
+        let dt = ts.to_datetime().unwrap();
         assert_eq!(dt.year(), 2024);
         assert_eq!(dt.month(), 1);
         assert_eq!(dt.day(), 1);
 
-        assert!(timestamp_to_datetime(0).is_none());
+        assert!(TimestampNanos::from_nanos(0).to_datetime().is_none());
     }
 
     #[tokio::test]

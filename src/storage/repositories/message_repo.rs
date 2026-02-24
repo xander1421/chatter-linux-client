@@ -46,10 +46,10 @@ impl MessageRepository {
                 id, channel_id, sender_id, content_type, content_json,
                 thread_id, reply_to, attachments_json,
                 is_pinned, is_edited, is_deleted,
-                created_at, updated_at, edited_at,
+                sent_at, created_at, updated_at, edited_at,
                 reaction_counts_json, current_user_reactions_json,
                 mentioned_integrations_json, targets_ai_bot
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 message.id.to_string(),
                 message.channel_id.to_string(),
@@ -62,6 +62,7 @@ impl MessageRepository {
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
+                message.sent_at as i64,
                 message.created_at.to_rfc3339(),
                 message.updated_at.to_rfc3339(),
                 message.edited_at.map(|dt| dt.to_rfc3339()),
@@ -77,6 +78,9 @@ impl MessageRepository {
     /// Insert a new message, ignoring if it already exists (for deduplication).
     ///
     /// Returns `true` if the message was inserted, `false` if it was skipped (duplicate).
+    /// Deduplication is based on:
+    /// - Primary key (message id)
+    /// - Unique index on (sender_id, sent_at) for Signal-style dedup
     pub fn insert_or_ignore(&self, message: &Message) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let content_json = serde_json::to_string(&message.content)
@@ -95,10 +99,10 @@ impl MessageRepository {
                 id, channel_id, sender_id, content_type, content_json,
                 thread_id, reply_to, attachments_json,
                 is_pinned, is_edited, is_deleted,
-                created_at, updated_at, edited_at,
+                sent_at, created_at, updated_at, edited_at,
                 reaction_counts_json, current_user_reactions_json,
                 mentioned_integrations_json, targets_ai_bot
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 message.id.to_string(),
                 message.channel_id.to_string(),
@@ -111,6 +115,7 @@ impl MessageRepository {
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
+                message.sent_at as i64,
                 message.created_at.to_rfc3339(),
                 message.updated_at.to_rfc3339(),
                 message.edited_at.map(|dt| dt.to_rfc3339()),
@@ -130,7 +135,7 @@ impl MessageRepository {
             "SELECT id, channel_id, sender_id, content_json,
                     thread_id, reply_to, attachments_json,
                     is_pinned, is_edited, is_deleted,
-                    created_at, updated_at, edited_at,
+                    sent_at, created_at, updated_at, edited_at,
                     reaction_counts_json, current_user_reactions_json,
                     mentioned_integrations_json, targets_ai_bot
              FROM messages WHERE id = ?1",
@@ -219,34 +224,36 @@ impl MessageRepository {
         let conn = self.db.connection()?;
 
         let messages = if let Some(before_id) = before {
-            // Cursor-based pagination using (created_at, id) tuple
+            // Cursor-based pagination using (sent_at, id) tuple for proper ordering
+            // sent_at is nanosecond timestamp, ensuring correct order for rapid messages
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.channel_id, m.sender_id, m.content_json,
                         m.thread_id, m.reply_to, m.attachments_json,
                         m.is_pinned, m.is_edited, m.is_deleted,
-                        m.created_at, m.updated_at, m.edited_at,
+                        m.sent_at, m.created_at, m.updated_at, m.edited_at,
                         m.reaction_counts_json, m.current_user_reactions_json,
                         m.mentioned_integrations_json, m.targets_ai_bot
                  FROM messages m
                  WHERE m.channel_id = ?1
-                   AND (m.created_at, m.id) < (SELECT created_at, id FROM messages WHERE id = ?2)
-                 ORDER BY m.created_at DESC, m.id DESC
+                   AND (m.sent_at, m.id) < (SELECT sent_at, id FROM messages WHERE id = ?2)
+                 ORDER BY m.sent_at DESC, m.id DESC
                  LIMIT ?3",
             )?;
             let mut rows = stmt.query(params![channel_id.to_string(), before_id.to_string(), limit])?;
             collect_messages(&mut rows)?
         } else {
             // First page - no cursor
+            // Use sent_at (nanosecond timestamp) for ordering to handle rapid messages
             let mut stmt = conn.prepare(
                 "SELECT id, channel_id, sender_id, content_json,
                         thread_id, reply_to, attachments_json,
                         is_pinned, is_edited, is_deleted,
-                        created_at, updated_at, edited_at,
+                        sent_at, created_at, updated_at, edited_at,
                         reaction_counts_json, current_user_reactions_json,
                         mentioned_integrations_json, targets_ai_bot
                  FROM messages
                  WHERE channel_id = ?1
-                 ORDER BY created_at DESC, id DESC
+                 ORDER BY sent_at DESC, id DESC
                  LIMIT ?2",
             )?;
             let mut rows = stmt.query(params![channel_id.to_string(), limit])?;
@@ -270,13 +277,13 @@ impl MessageRepository {
                 "SELECT m.id, m.channel_id, m.sender_id, m.content_json,
                         m.thread_id, m.reply_to, m.attachments_json,
                         m.is_pinned, m.is_edited, m.is_deleted,
-                        m.created_at, m.updated_at, m.edited_at,
+                        m.sent_at, m.created_at, m.updated_at, m.edited_at,
                         m.reaction_counts_json, m.current_user_reactions_json,
                         m.mentioned_integrations_json, m.targets_ai_bot
                  FROM messages m
                  WHERE m.thread_id = ?1
-                   AND (m.created_at, m.id) < (SELECT created_at, id FROM messages WHERE id = ?2)
-                 ORDER BY m.created_at DESC, m.id DESC
+                   AND (m.sent_at, m.id) < (SELECT sent_at, id FROM messages WHERE id = ?2)
+                 ORDER BY m.sent_at DESC, m.id DESC
                  LIMIT ?3",
             )?;
             let mut rows = stmt.query(params![thread_id.to_string(), before_id.to_string(), limit])?;
@@ -286,12 +293,12 @@ impl MessageRepository {
                 "SELECT id, channel_id, sender_id, content_json,
                         thread_id, reply_to, attachments_json,
                         is_pinned, is_edited, is_deleted,
-                        created_at, updated_at, edited_at,
+                        sent_at, created_at, updated_at, edited_at,
                         reaction_counts_json, current_user_reactions_json,
                         mentioned_integrations_json, targets_ai_bot
                  FROM messages
                  WHERE thread_id = ?1
-                 ORDER BY created_at DESC, id DESC
+                 ORDER BY sent_at DESC, id DESC
                  LIMIT ?2",
             )?;
             let mut rows = stmt.query(params![thread_id.to_string(), limit])?;
@@ -308,12 +315,12 @@ impl MessageRepository {
             "SELECT id, channel_id, sender_id, content_json,
                     thread_id, reply_to, attachments_json,
                     is_pinned, is_edited, is_deleted,
-                    created_at, updated_at, edited_at,
+                    sent_at, created_at, updated_at, edited_at,
                     reaction_counts_json, current_user_reactions_json,
                     mentioned_integrations_json, targets_ai_bot
              FROM messages
              WHERE channel_id = ?1 AND is_pinned = 1
-             ORDER BY created_at DESC",
+             ORDER BY sent_at DESC",
         )?;
         let mut rows = stmt.query(params![channel_id.to_string()])?;
         collect_messages(&mut rows)
@@ -403,17 +410,23 @@ fn content_type_discriminant(content: &MessageContent) -> i32 {
 }
 
 /// Convert a row to a Message.
+/// Column order: id(0), channel_id(1), sender_id(2), content_json(3),
+///               thread_id(4), reply_to(5), attachments_json(6),
+///               is_pinned(7), is_edited(8), is_deleted(9),
+///               sent_at(10), created_at(11), updated_at(12), edited_at(13),
+///               reaction_counts_json(14), current_user_reactions_json(15),
+///               mentioned_integrations_json(16), targets_ai_bot(17)
 fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, StorageError>> {
     let content_json: String = row.get(3)?;
     let attachments_json: String = row.get(6)?;
-    let reaction_counts_json: String = row.get(13)?;
-    let current_user_reactions_json: String = row.get(14)?;
-    let mentioned_integrations_json: String = row.get(15)?;
+    let reaction_counts_json: String = row.get(14)?;
+    let current_user_reactions_json: String = row.get(15)?;
+    let mentioned_integrations_json: String = row.get(16)?;
 
     let thread_id: Option<String> = row.get(4)?;
     let reply_to: Option<String> = row.get(5)?;
     let sender_id: Option<String> = row.get(2)?;
-    let edited_at: Option<String> = row.get(12)?;
+    let edited_at: Option<String> = row.get(13)?;
 
     // Deserialize JSON fields
     let content: MessageContent = match serde_json::from_str(&content_json) {
@@ -467,13 +480,14 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
         is_pinned: row.get::<_, i32>(7)? != 0,
         is_edited: row.get::<_, i32>(8)? != 0,
         is_deleted: row.get::<_, i32>(9)? != 0,
-        created_at: parse_datetime(&row.get::<_, String>(10)?),
-        updated_at: parse_datetime(&row.get::<_, String>(11)?),
+        sent_at: row.get::<_, i64>(10)? as u64,
+        created_at: parse_datetime(&row.get::<_, String>(11)?),
+        updated_at: parse_datetime(&row.get::<_, String>(12)?),
         edited_at: edited_at.map(|s| parse_datetime(&s)),
         reaction_counts,
         current_user_reactions,
         mentioned_integrations,
-        targets_ai_bot: row.get::<_, i32>(16)? != 0,
+        targets_ai_bot: row.get::<_, i32>(17)? != 0,
     }))
 }
 

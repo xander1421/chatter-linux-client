@@ -19,6 +19,11 @@ export struct ActiveCallData {
     participant-count: int,
     duration-seconds: int,
     participants: [CallParticipantData],
+    // Verification emojis (SAS) - both parties should see the same emojis
+    verification-emoji-1: string,
+    verification-emoji-2: string,
+    verification-emoji-3: string,
+    verification-emoji-4: string,
 }
 
 export struct IncomingCallData {
@@ -28,4 +33,24 @@ export struct IncomingCallData {
     caller-avatar: string,
     channel-name: string,
     is-video-call: bool,
+    // Encryption key from caller (base64 encoded for UI transport)
+    encryption-key: string,
+    // Call start timestamp (nanoseconds since epoch, stored as string for precision)
+    call-start-timestamp-ns: string,
+}
+
+// Device/source selection types
+export struct AudioDeviceData {
+    id: string,
+    name: string,
+    is-default: bool,
+}
+
+export struct ScreenSourceData {
+    id: string,
+    name: string,
+    width: int,
+    height: int,
+    is-monitor: bool,  // true = monitor, false = window
+    is-primary: bool,
 }

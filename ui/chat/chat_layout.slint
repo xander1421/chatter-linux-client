@@ -26,6 +26,7 @@ export component ChatLayout inherits Rectangle {
     in property <[MessageItemData]> messages: [];
     in property <bool> loading-messages: false;
     in property <string> current-playing-attachment-id: "";
+    in property <bool> is-media-playing: false;
     in property <float> audio-progress: 0.0;
     in property <string> audio-elapsed: "0:00";
     in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
@@ -66,6 +67,7 @@ export component ChatLayout inherits Rectangle {
     callback thread-clicked(string);
     callback more-clicked(string);
     callback view-attachment(string);  // attachment ID - for viewing attachment in messages
+    callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
 
@@ -141,6 +143,7 @@ export component ChatLayout inherits Rectangle {
             messages: root.messages;
             loading: root.loading-messages;
             current-playing-attachment-id: root.current-playing-attachment-id;
+            is-media-playing: root.is-media-playing;
             audio-progress: root.audio-progress;
             audio-elapsed: root.audio-elapsed;
             scroll-to-index: root.scroll-to-message-index;
@@ -167,6 +170,9 @@ export component ChatLayout inherits Rectangle {
             }
             attachment-clicked(id) => {
                 root.view-attachment(id);
+            }
+            audio-seek(id, pos) => {
+                root.audio-seek(id, pos);
             }
             scroll-to-bottom-clicked => {
                 root.scroll-to-bottom-clicked();

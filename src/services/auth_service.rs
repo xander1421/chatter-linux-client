@@ -13,6 +13,7 @@ use crate::domain::ids::UserId;
 use crate::domain::user::{PresenceStatus, Profile, User};
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 use crate::storage::repositories::user_repo::UserRepository;
@@ -68,6 +69,7 @@ pub struct LoginResult {
 /// Orchestrates login, registration, and logout flows by coordinating
 /// crypto, network, and storage layers.
 pub struct AuthService {
+    grpc_pool: Arc<GrpcClientPool>,
     identity_manager: Arc<IdentityKeyManager>,
     prekey_manager: Arc<PreKeyManager>,
     user_repo: Arc<UserRepository>,
@@ -80,6 +82,7 @@ pub struct AuthService {
 impl AuthService {
     /// Create a new AuthService with all dependencies.
     pub fn new(
+        grpc_pool: Arc<GrpcClientPool>,
         identity_manager: Arc<IdentityKeyManager>,
         prekey_manager: Arc<PreKeyManager>,
         user_repo: Arc<UserRepository>,
@@ -88,6 +91,7 @@ impl AuthService {
         auth_interceptor: AuthInterceptor,
     ) -> Self {
         Self {
+            grpc_pool,
             identity_manager,
             prekey_manager,
             user_repo,
@@ -95,6 +99,11 @@ impl AuthService {
             key_store,
             auth_interceptor,
         }
+    }
+
+    /// Internal helper to create an auth client.
+    fn auth_client(&self) -> AuthClient {
+        AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
     }
 
     /// Check if a user is currently logged in.
@@ -216,7 +225,7 @@ impl AuthService {
 
         // Create/update profile
         let profile = Profile {
-            user_id: user_id,
+            user_id,
             display_name: display_name.clone(),
             avatar_url: if user_profile.avatar_url.is_empty() {
                 None
@@ -337,6 +346,9 @@ impl AuthService {
                     .as_millis() as u64,
             }),
             unidentified_access_key: None, // Server derives from profile_key
+            // Per NDSS '21: Do NOT enable unrestricted access by default.
+            // Initial contact uses anonymous credentials (blind-signed tokens) instead.
+            // This prevents spam while preserving sender anonymity.
             unrestricted_unidentified_access: Some(false),
         };
 
@@ -409,7 +421,7 @@ impl AuthService {
         });
 
         let profile = Profile {
-            user_id: user_id,
+            user_id,
             display_name: server_display_name.clone(),
             avatar_url,
             status_message: None,
@@ -454,5 +466,38 @@ impl AuthService {
         self.settings_repo.delete(keys::CURRENT_DEVICE_ID)?;
 
         Ok(())
+    }
+
+    // ==================== Simplified Wrappers ====================
+
+    /// Simplified wrapper for login that creates the client internally.
+    pub async fn do_login(
+        &self,
+        username: &str,
+        password: &str,
+        device_name: &str,
+    ) -> Result<LoginResult, AuthError> {
+        let mut auth_client = self.auth_client();
+        self.login(&mut auth_client, username, password, device_name)
+            .await
+    }
+
+    /// Simplified wrapper for register that creates the client internally.
+    pub async fn do_register(
+        &self,
+        username: &str,
+        password: &str,
+        display_name: &str,
+        device_name: &str,
+    ) -> Result<LoginResult, AuthError> {
+        let mut auth_client = self.auth_client();
+        self.register(&mut auth_client, username, password, display_name, device_name)
+            .await
+    }
+
+    /// Simplified wrapper for logout that creates the client internally.
+    pub async fn do_logout(&self) -> Result<(), AuthError> {
+        let mut auth_client = self.auth_client();
+        self.logout(&mut auth_client).await
     }
 }

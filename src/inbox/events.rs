@@ -5,6 +5,7 @@
 
 use crate::domain::ids::ChannelId;
 use crate::domain::UserId;
+use crate::proto::content_v1::AttachmentPointer;
 use crate::proto::mailbox_v1::EnvelopeType;
 
 /// Events emitted by the inbox system for monitoring and coordination.
@@ -58,6 +59,8 @@ pub enum InboxEvent {
         timestamp: u64,
         /// Message ID (for acknowledgment).
         message_id: String,
+        /// Attachment pointers (if any files were included).
+        attachments: Vec<AttachmentPointer>,
     },
     /// DM decryption failed.
     DmDecryptionFailed {
@@ -65,6 +68,18 @@ pub enum InboxEvent {
         peer_id: UserId,
         /// Error description.
         error: String,
+        /// Whether all sessions were tried (Sesame convergence failed).
+        convergence_failed: bool,
+    },
+    /// DM retry requested - all sessions failed, need sender to resend.
+    ///
+    /// This is emitted when Sesame convergence fails and we need the peer
+    /// to re-establish a session and resend the message.
+    DmRetryRequested {
+        /// Peer user ID (who should retry).
+        peer_id: UserId,
+        /// Original message timestamp (for deduplication).
+        original_timestamp: u64,
     },
     /// DM mailbox poll completed.
     DmPollCompleted {
@@ -264,6 +279,44 @@ pub enum InboxEvent {
         friend_user_id: String,
         /// DM channel ID created for this friendship.
         channel_id: String,
+    },
+    // =========================================================================
+    // DM Bootstrap Events
+    // =========================================================================
+    /// DM bootstrap completed - shared secret established with peer.
+    /// The UI should retry any pending messages for this peer.
+    DmBootstrapCompleted {
+        /// Peer user ID.
+        peer_id: UserId,
+    },
+    // =========================================================================
+    // Call Events
+    // =========================================================================
+    /// Incoming call notification received via sealed sender.
+    IncomingCall {
+        /// Peer user ID (caller).
+        peer_id: UserId,
+        /// Call ID.
+        call_id: String,
+        /// Call encryption key material.
+        key_material: Vec<u8>,
+        /// Call type: "Voice Call", "Video Call", etc.
+        call_type: String,
+        /// Channel/DM ID for context.
+        channel_id: String,
+        /// Timestamp when call was initiated.
+        timestamp: u64,
+    },
+    /// Call hangup notification received via sealed sender.
+    CallHangup {
+        /// Peer user ID (who ended the call).
+        peer_id: UserId,
+        /// Call ID.
+        call_id: String,
+        /// Hangup reason.
+        reason: String,
+        /// Timestamp when hangup was sent.
+        timestamp: u64,
     },
 }
 

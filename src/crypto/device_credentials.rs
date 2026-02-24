@@ -3,16 +3,12 @@
 //! Device credential generation and storage for Signal-style device authentication.
 //! Implements device auth token generation and UAK (Unidentified Access Key) derivation.
 
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use hkdf::Hkdf;
 use rand::RngCore;
-use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use crate::error::CryptoError;
-
-/// UAK HKDF info string per Signal specification.
-const UAK_HKDF_INFO: &[u8] = b"UnidentifiedDelivery";
 
 /// Device authentication token (32 bytes).
 ///
@@ -163,20 +159,35 @@ impl DeviceCredentials {
 
 /// Derive Unidentified Access Key from profile key.
 ///
-/// Uses HKDF-SHA256 with info="UnidentifiedDelivery" per Signal spec.
+/// Uses AES-256-GCM with zero nonce encrypting zero plaintext per libsignal's
+/// `ProfileKey.deriveAccessKey()` implementation.
+///
+/// Technical note: AES-GCM = CTR mode + auth tag. Taking first 16 bytes of
+/// ciphertext (before auth tag) is equivalent to AES-CTR, which is what
+/// libsignal actually uses internally.
 ///
 /// # Arguments
-/// * `profile_key` - 32-byte profile key
+/// * `profile_key` - 32-byte profile key (used as AES-256 key)
 ///
 /// # Returns
-/// 16-byte UAK
+/// 16-byte UAK (first 16 bytes of AES-GCM ciphertext)
 pub fn derive_uak(profile_key: &[u8; 32]) -> [u8; 16] {
-    // HKDF-SHA256: salt=None, ikm=profile_key, info="UnidentifiedDelivery"
-    let hkdf = Hkdf::<Sha256>::new(None, profile_key);
+    // Create AES-256-GCM cipher with profile key
+    let cipher = Aes256Gcm::new_from_slice(profile_key)
+        .expect("Profile key is always 32 bytes");
+
+    // Use 12-byte zero nonce (Signal's standard for UAK derivation)
+    let nonce = Nonce::from_slice(&[0u8; 12]);
+
+    // Encrypt 16 zero bytes to derive UAK
+    let plaintext = [0u8; 16];
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_ref())
+        .expect("AES-GCM encryption of zeros should never fail");
+
+    // First 16 bytes of ciphertext is the UAK (auth tag follows but we ignore it)
     let mut uak = [0u8; 16];
-    // Extract exactly 16 bytes for UAK
-    hkdf.expand(UAK_HKDF_INFO, &mut uak)
-        .expect("HKDF expansion for 16 bytes should never fail");
+    uak.copy_from_slice(&ciphertext[..16]);
     uak
 }
 

@@ -46,12 +46,15 @@
 //! // The handler loop runs until the bus is dropped
 //! ```
 
+use std::sync::Arc;
+
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tracing::{debug, trace, warn};
 
 use crate::events::bus::EventBus;
 use crate::inbox::handlers::DomainEvent;
+use crate::mailbox::group::GroupCoordinator;
 use crate::state::{
     ChatState, MessageState, OfflineState, PinnedState, PresenceState, StreamingState, UserState,
 };
@@ -87,6 +90,8 @@ pub struct EventHandlers {
     /// Connection and offline queue status.
     #[allow(dead_code)]
     offline_state: OfflineState,
+    /// Group mailbox coordinator for NDSS '21 per-group mailboxes.
+    group_coordinator: Option<Arc<GroupCoordinator>>,
 }
 
 impl EventHandlers {
@@ -119,7 +124,16 @@ impl EventHandlers {
             presence_state,
             streaming_state,
             offline_state,
+            group_coordinator: None,
         }
+    }
+
+    /// Set the group coordinator for handling NDSS '21 mailbox events.
+    ///
+    /// Called after construction when GroupCoordinator is available.
+    pub fn with_group_coordinator(mut self, coordinator: Arc<GroupCoordinator>) -> Self {
+        self.group_coordinator = Some(coordinator);
+        self
     }
 
     /// Spawn the event handler loop as a background task.
@@ -196,15 +210,21 @@ impl EventHandlers {
                 author_id,
                 channel_id,
             } => {
+                tracing::info!(
+                    ?message_id,
+                    ?author_id,
+                    ?channel_id,
+                    "Inbox event: MessageDeleted received"
+                );
                 // For DM deletes, channel_id may be None - derive from author_id
                 // (DM channel is the conversation with that author)
                 if let Some(ch_id) = channel_id {
-                    trace!(?ch_id, ?message_id, "Removing message from state");
+                    tracing::debug!(?ch_id, ?message_id, "Removing message from state");
                     self.message_state.remove_message(&ch_id, &message_id);
                 } else {
                     // DM delete - we need to find the message by ID across all channels
                     // or derive DM channel from author. For now, try to find and remove.
-                    trace!(
+                    tracing::debug!(
                         ?author_id,
                         ?message_id,
                         "DM delete: searching for message to remove"
@@ -212,6 +232,7 @@ impl EventHandlers {
                     // Try to find the channel containing this message
                     if let Some(ch_id) = self.message_state.find_channel_for_message(&message_id) {
                         self.message_state.remove_message(&ch_id, &message_id);
+                        tracing::info!(?ch_id, ?message_id, "Removed deleted message from state");
                     } else {
                         tracing::warn!(
                             ?author_id,
@@ -296,11 +317,17 @@ impl EventHandlers {
                 emoji,
                 ..
             } => {
-                trace!(?message_id, ?reactor_id, %emoji, "Adding reaction to streaming state");
+                tracing::info!(
+                    ?message_id,
+                    ?reactor_id,
+                    %emoji,
+                    "Inbox event: ReactionAdded received"
+                );
                 // Determine if current user reacted (would need local user ID context)
                 // For now, assume not current user unless services layer provides that info
                 self.streaming_state
-                    .update_reaction(&message_id, emoji, 1, None);
+                    .update_reaction(&message_id, emoji.clone(), 1, None);
+                tracing::debug!(?message_id, %emoji, "Updated reaction count in streaming state (+1)");
             }
 
             DomainEvent::ReactionRemoved {
@@ -309,9 +336,15 @@ impl EventHandlers {
                 emoji,
                 ..
             } => {
-                trace!(?message_id, ?reactor_id, %emoji, "Removing reaction from streaming state");
+                tracing::info!(
+                    ?message_id,
+                    ?reactor_id,
+                    %emoji,
+                    "Inbox event: ReactionRemoved received"
+                );
                 self.streaming_state
-                    .update_reaction(&message_id, emoji, -1, None);
+                    .update_reaction(&message_id, emoji.clone(), -1, None);
+                tracing::debug!(?message_id, %emoji, "Updated reaction count in streaming state (-1)");
             }
 
             // ================================================================
@@ -320,9 +353,14 @@ impl EventHandlers {
             DomainEvent::MessagePinned {
                 message_id,
                 channel_id,
-                ..
+                pinner_id,
             } => {
-                trace!(?channel_id, ?message_id, "Adding pinned message to state");
+                tracing::info!(
+                    ?message_id,
+                    ?channel_id,
+                    ?pinner_id,
+                    "Inbox event: MessagePinned received"
+                );
                 // Update message state to mark as pinned
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
@@ -330,14 +368,20 @@ impl EventHandlers {
                     });
                 // Add to pinned state
                 self.pinned_state.add_pinned_message(message_id);
+                tracing::debug!(?channel_id, ?message_id, "Marked message as pinned in state");
             }
 
             DomainEvent::MessageUnpinned {
                 message_id,
                 channel_id,
-                ..
+                unpinner_id,
             } => {
-                trace!(?channel_id, ?message_id, "Removing pinned message from state");
+                tracing::info!(
+                    ?message_id,
+                    ?channel_id,
+                    ?unpinner_id,
+                    "Inbox event: MessageUnpinned received"
+                );
                 // Update message state to mark as unpinned
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
@@ -345,6 +389,7 @@ impl EventHandlers {
                     });
                 // Remove from pinned state
                 self.pinned_state.remove_pinned_message(&message_id);
+                tracing::debug!(?channel_id, ?message_id, "Marked message as unpinned in state");
             }
 
             // ================================================================
@@ -381,6 +426,29 @@ impl EventHandlers {
                 trace!(?sender_id, ?channel_id, "Sender key received (handled by crypto layer)");
             }
 
+            DomainEvent::GroupMailboxReceived {
+                sender_id,
+                channel_id,
+                mailbox_public_key,
+                timestamp,
+            } => {
+                // Process NDSS '21 mailbox announcement bundled with SKDM
+                if let Some(ref coordinator) = self.group_coordinator {
+                    if let Err(e) = coordinator.process_mailbox_key(
+                        sender_id,
+                        &channel_id,
+                        mailbox_public_key,
+                        timestamp,
+                    ) {
+                        warn!(?sender_id, ?channel_id, error = %e, "Failed to process group mailbox from SKDM");
+                    } else {
+                        trace!(?sender_id, ?channel_id, "Processed group mailbox from SKDM (NDSS '21)");
+                    }
+                } else {
+                    trace!(?sender_id, ?channel_id, "GroupMailboxReceived event ignored (no coordinator)");
+                }
+            }
+
             // ================================================================
             // Sync Events
             // ================================================================
@@ -393,6 +461,15 @@ impl EventHandlers {
                 // Remove from local message cache (this syncs the deletion across devices)
                 self.message_state
                     .remove_message(&conversation_id, &target_message_id);
+            }
+
+            // ================================================================
+            // Call Events
+            // ================================================================
+            DomainEvent::CallHangupReceived { call_id, peer_id, .. } => {
+                // Call hangup is handled by the UI thread in calls.rs via event bus subscription.
+                // No state store updates needed here.
+                trace!(?call_id, ?peer_id, "CallHangupReceived: handled by UI thread");
             }
         }
     }
@@ -470,11 +547,12 @@ mod tests {
 
     fn create_handlers() -> EventHandlers {
         let (msg, chat, pinned, user, presence, streaming, offline) = create_test_stores();
+        // For tests, we don't have a GroupCoordinator, so it stays None
         EventHandlers::new(msg, chat, pinned, user, presence, streaming, offline)
     }
 
     fn create_test_message(channel_id: ChannelId) -> Message {
-        Message::new_text(channel_id, Some(UserId::new()), "Test message".to_string())
+        Message::new_text(channel_id, Some(UserId::new()), "Test message".to_string(), 0)
     }
 
     // ========================================================================

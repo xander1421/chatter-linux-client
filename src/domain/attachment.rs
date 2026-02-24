@@ -12,10 +12,24 @@ pub enum AttachmentStatus {
     #[default]
     Pending,
     Uploading,
+    Downloading,
     Processing,
     Ready,
     Failed,
     Expired,
+}
+
+/// Where the encrypted content is stored.
+///
+/// Tracks whether encrypted attachment data needs to be fetched from CDN
+/// or is already stored locally in the database.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ContentLocation {
+    /// Content needs to be fetched from CDN (encrypted_content is empty).
+    #[default]
+    NotDownloaded,
+    /// Content is stored encrypted in database (encrypted_content populated).
+    InDatabase,
 }
 
 /// File category for UI display.
@@ -55,6 +69,55 @@ impl FileCategory {
             Self::Other
         }
     }
+
+    /// Infer category from filename extension.
+    #[must_use]
+    pub fn from_filename(filename: &str) -> Self {
+        let ext = std::path::Path::new(filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        match ext.as_str() {
+            // Images
+            "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "bmp" | "ico" => Self::Image,
+            // Video
+            "mp4" | "webm" | "mkv" | "avi" | "mov" | "wmv" | "flv" => Self::Video,
+            // Audio
+            "mp3" | "wav" | "ogg" | "flac" | "aac" | "m4a" | "wma" => Self::Audio,
+            // Code/Text
+            "rs" | "py" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "c" | "cpp" | "h"
+            | "hpp" | "cs" | "rb" | "php" | "swift" | "kt" | "scala" | "html" | "css" | "scss"
+            | "sass" | "less" | "json" | "yaml" | "yml" | "toml" | "xml" | "md" | "markdown"
+            | "txt" | "log" | "conf" | "cfg" | "sh" | "bash" | "zsh" | "fish" | "sql"
+            | "graphql" | "proto" | "dockerfile" | "makefile" | "cmake" | "gitignore" | "env"
+            | "ini" | "vue" | "svelte" => Self::Code,
+            // Documents
+            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" => {
+                Self::Document
+            }
+            // Archives
+            "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar" => Self::Archive,
+            // Unknown
+            _ => Self::Other,
+        }
+    }
+
+    /// Infer category from both MIME type and filename, preferring more specific matches.
+    #[must_use]
+    pub fn from_mime_and_filename(mime: &str, filename: &str) -> Self {
+        let from_mime = Self::from_mime_type(mime);
+        let from_ext = Self::from_filename(filename);
+
+        // If MIME type gives us something specific, use it
+        if from_mime != Self::Other {
+            return from_mime;
+        }
+
+        // Otherwise fall back to extension
+        from_ext
+    }
 }
 
 /// Represents a file attachment.
@@ -63,13 +126,18 @@ pub struct Attachment {
     pub id: AttachmentId,
     pub metadata: FileMetadata,
     pub status: AttachmentStatus,
-    /// Local file path (after download)
+    /// Where encrypted content is stored (NotDownloaded or InDatabase).
+    #[serde(default)]
+    pub content_location: ContentLocation,
+    /// Local file path (DEPRECATED - kept for migration compatibility).
+    /// New attachments should use content_location + encrypted_content in DB.
+    #[serde(default)]
     pub local_path: Option<String>,
-    /// Remote URL (signed URL for download)
+    /// Remote URL / CDN key for downloading encrypted content.
     pub remote_url: Option<String>,
-    /// Encryption key for encrypted attachments
+    /// Encryption key for encrypted attachments (64 bytes: AES key + HMAC key).
     pub encryption_key: Option<Vec<u8>>,
-    /// Encryption IV/nonce
+    /// Encryption IV/digest for verification (32 bytes SHA-256).
     pub encryption_iv: Option<Vec<u8>>,
     pub created_at: DateTime<Utc>,
 }
@@ -82,12 +150,27 @@ impl Attachment {
             id,
             metadata,
             status: AttachmentStatus::Pending,
+            content_location: ContentLocation::NotDownloaded,
             local_path: None,
             remote_url: None,
             encryption_key: None,
             encryption_iv: None,
             created_at: Utc::now(),
         }
+    }
+
+    /// Check if encrypted content is stored in database.
+    #[must_use]
+    pub fn has_local_content(&self) -> bool {
+        matches!(self.content_location, ContentLocation::InDatabase)
+    }
+
+    /// Check if content needs to be downloaded from CDN.
+    #[must_use]
+    pub fn needs_download(&self) -> bool {
+        matches!(self.content_location, ContentLocation::NotDownloaded)
+            && self.remote_url.is_some()
+            && self.encryption_key.is_some()
     }
 
     /// Check if attachment is ready for use.
@@ -118,6 +201,17 @@ pub struct FileMetadata {
     pub height: Option<u32>,
     /// Audio/video duration in seconds
     pub duration_seconds: Option<f64>,
+    /// Audio waveform samples (32 values, 0-100) for visualization
+    #[serde(default)]
+    pub waveform_samples: Option<Vec<u8>>,
+    /// Thumbnail JPEG bytes (sender-provided for instant preview)
+    #[serde(default)]
+    pub thumbnail: Option<Vec<u8>>,
+    /// Thumbnail dimensions
+    #[serde(default)]
+    pub thumbnail_width: Option<u32>,
+    #[serde(default)]
+    pub thumbnail_height: Option<u32>,
 }
 
 impl FileMetadata {
@@ -133,6 +227,10 @@ impl FileMetadata {
             width: None,
             height: None,
             duration_seconds: None,
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
         }
     }
 
@@ -161,9 +259,13 @@ impl FileMetadata {
     }
 
     /// Check if file is code/text (syntax-highlightable).
+    /// Uses both MIME type and filename extension for detection.
     #[must_use]
     pub fn is_code(&self) -> bool {
-        matches!(self.category(), FileCategory::Code)
+        matches!(
+            FileCategory::from_mime_and_filename(&self.mime_type, &self.name),
+            FileCategory::Code
+        )
     }
 
     /// Check if file is a PDF document.
@@ -176,6 +278,26 @@ impl FileMetadata {
     #[must_use]
     pub fn is_document(&self) -> bool {
         matches!(self.category(), FileCategory::Document)
+    }
+
+    /// Check if a file is code/text based on MIME type and filename.
+    /// Static version for use when you don't have a full FileMetadata instance.
+    #[must_use]
+    pub fn is_code_file(filename: &str, mime_type: &str) -> bool {
+        matches!(
+            FileCategory::from_mime_and_filename(mime_type, filename),
+            FileCategory::Code
+        )
+    }
+
+    /// Check if a file is an image based on MIME type and filename.
+    /// Static version for use when you don't have a full FileMetadata instance.
+    #[must_use]
+    pub fn is_image_file(filename: &str, mime_type: &str) -> bool {
+        matches!(
+            FileCategory::from_mime_and_filename(mime_type, filename),
+            FileCategory::Image
+        )
     }
 
     /// Human-readable file size.

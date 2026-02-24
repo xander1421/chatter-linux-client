@@ -13,8 +13,10 @@ use crate::domain::channel::{
 use crate::domain::ids::{ChannelId, UserId};
 use crate::mailbox::group::{GroupCoordinator, GroupMailboxSetupResult};
 use crate::network::grpc::channel_client::ChannelClient;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::mailbox_client::MailboxClient;
 use crate::proto::chat_v1::{self, channel_event};
+use crate::proto::content_v1::SenderKeyDistribution;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
@@ -29,6 +31,7 @@ use super::error::ChannelError;
 /// Orchestrates channel creation, retrieval, updates, and deletion by
 /// coordinating network client and local storage.
 pub struct ChannelService {
+    grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
     channel_repo: Arc<ChannelRepository>,
     signal_service: Arc<crate::services::signal_service::SignalService>,
@@ -38,17 +41,29 @@ pub struct ChannelService {
 impl ChannelService {
     /// Create a new ChannelService with dependencies.
     pub fn new(
+        grpc_pool: Arc<GrpcClientPool>,
         settings_repo: Arc<SettingsRepository>,
         channel_repo: Arc<ChannelRepository>,
         signal_service: Arc<crate::services::signal_service::SignalService>,
         group_coordinator: Arc<GroupCoordinator>,
     ) -> Self {
         Self {
+            grpc_pool,
             settings_repo,
             channel_repo,
             signal_service,
             group_coordinator,
         }
+    }
+
+    /// Create a channel client for network operations.
+    fn channel_client(&self) -> ChannelClient {
+        ChannelClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+    }
+
+    /// Create a mailbox client for network operations.
+    fn mailbox_client(&self) -> MailboxClient {
+        MailboxClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
     }
 
     /// Get the currently logged-in user ID.
@@ -70,8 +85,6 @@ impl ChannelService {
     ///
     /// # Arguments
     ///
-    /// * `channel_client` - Mutable reference to channel client
-    /// * `mailbox_client` - Optional mailbox client for group mailbox setup
     /// * `name` - Channel name
     /// * `channel_type` - Type of channel (Public, Private, DirectMessage)
     /// * `config` - Optional channel configuration
@@ -79,10 +92,11 @@ impl ChannelService {
     /// * `image_url` - Optional channel image URL
     /// * `password` - Optional password for private channels
     /// * `initial_members` - Initial member user IDs
+    /// * `setup_mailbox` - Whether to setup group mailbox for encrypted channels
     ///
     /// # Group Mailbox Setup
     ///
-    /// If `mailbox_client` is provided and the channel requires encryption,
+    /// If `setup_mailbox` is true and the channel requires encryption,
     /// this method will automatically:
     /// 1. Create an ephemeral group mailbox for receiving messages
     /// 2. The caller should send the returned announcement via
@@ -90,8 +104,6 @@ impl ChannelService {
     #[allow(clippy::too_many_arguments)]
     pub async fn create_channel(
         &self,
-        channel_client: &mut ChannelClient,
-        mailbox_client: Option<&mut MailboxClient>,
         name: &str,
         channel_type: ChannelType,
         config: Option<ChannelConfig>,
@@ -99,6 +111,7 @@ impl ChannelService {
         image_url: Option<&str>,
         password: Option<&str>,
         initial_members: Vec<UserId>,
+        setup_mailbox: bool,
     ) -> Result<(Channel, Option<GroupMailboxSetupResult>), ChannelError> {
         let current_user = self.current_user_id()?;
 
@@ -112,6 +125,7 @@ impl ChannelService {
         let proto_type = domain_channel_type_to_proto(channel_type);
         let proto_config = config.as_ref().map(domain_config_to_proto);
 
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client
             .create_channel(
                 trimmed_name,
@@ -127,17 +141,37 @@ impl ChannelService {
         let mut channel_opt: Option<Channel> = None;
         while let Some(event_result) = stream.next().await {
             let event = event_result?;
+            tracing::debug!(
+                channel_id = %event.channel_id,
+                creation_status = event.creation_status,
+                has_event = event.event.is_some(),
+                "Received channel creation stream event"
+            );
             if let Some(channel_event::Event::ChannelCreated(proto_channel)) = event.event {
+                tracing::info!(
+                    channel_id = %proto_channel.id,
+                    channel_name = %proto_channel.name,
+                    "Received ChannelCreated event from server"
+                );
                 channel_opt = Some(proto_to_domain_channel(&proto_channel)?);
                 break;
             }
+        }
+
+        // Drop stream to release borrow of channel_client
+        drop(stream);
+
+        if channel_opt.is_none() {
+            tracing::error!("Stream ended without receiving ChannelCreated event");
         }
 
         let channel = channel_opt.ok_or_else(|| {
             ChannelError::InvalidInput("no channel created event received".to_string())
         })?;
 
+        tracing::info!(channel_id = %channel.id, "Inserting channel to local repo");
         self.channel_repo.insert(&channel)?;
+        tracing::info!(channel_id = %channel.id, "Channel inserted");
 
         let membership = Membership {
             channel_id: channel.id,
@@ -149,14 +183,38 @@ impl ChannelService {
             muted_until: None,
             notification_preference: NotificationPreference::All,
         };
+        tracing::info!(channel_id = %channel.id, "Inserting membership to local repo");
         self.channel_repo.insert_membership(&membership)?;
+        tracing::info!(channel_id = %channel.id, "Membership inserted");
 
         // Setup group mailbox for encrypted channels (NDSS '21 paper)
-        let mailbox_setup = if let Some(client) = mailbox_client {
-            self.setup_group_mailbox(&channel.id, client).await.ok().flatten()
+        tracing::info!(channel_id = %channel.id, setup_mailbox = setup_mailbox, "About to setup group mailbox");
+        let mailbox_setup = if setup_mailbox {
+            let mut mailbox_client = self.mailbox_client();
+            match self.setup_group_mailbox_internal(&channel.id, &mut mailbox_client).await {
+                Ok(Some(setup)) => Some(setup),
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::error!(
+                        channel_id = %channel.id,
+                        error = %e,
+                        "Group mailbox setup failed during channel creation - group encryption unavailable"
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
+
+        // Sync members (in case initial_members were added by server)
+        if let Err(e) = self.sync_channel_members_internal(&mut channel_client, &channel.id).await {
+            tracing::debug!(
+                channel_id = %channel.id,
+                error = %e,
+                "Failed to sync members after creation (may be normal for new channel)"
+            );
+        }
 
         Ok((channel, mailbox_setup))
     }
@@ -166,13 +224,79 @@ impl ChannelService {
     /// Get a channel by ID.
     ///
     /// Fetches from server and upserts to local storage.
-    pub async fn get_channel(
+    pub async fn get_channel(&self, channel_id: &ChannelId) -> Result<Channel, ChannelError> {
+        let _ = self.current_user_id()?;
+
+        let mut channel_client = self.channel_client();
+        let proto_channel = channel_client
+            .get_channel(&channel_id.to_string())
+            .await?;
+
+        let channel = proto_to_domain_channel(&proto_channel)?;
+
+        match self.channel_repo.get(channel_id)? {
+            Some(_) => self.channel_repo.update(&channel)?,
+            None => self.channel_repo.insert(&channel)?,
+        }
+
+        Ok(channel)
+    }
+
+    /// Get a channel by ID and sync its memberships.
+    ///
+    /// Fetches from server, upserts channel to local storage, and syncs all memberships.
+    /// Useful for DM channels where we need membership info immediately.
+    pub async fn get_channel_with_memberships(
         &self,
-        channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
     ) -> Result<Channel, ChannelError> {
         let _ = self.current_user_id()?;
 
+        let mut channel_client = self.channel_client();
+        let proto_channel = channel_client
+            .get_channel(&channel_id.to_string())
+            .await?;
+
+        let channel = proto_to_domain_channel(&proto_channel)?;
+
+        // Upsert channel
+        match self.channel_repo.get(channel_id)? {
+            Some(_) => self.channel_repo.update(&channel)?,
+            None => self.channel_repo.insert(&channel)?,
+        }
+
+        // Sync memberships
+        for proto_member in &proto_channel.members {
+            match proto_to_domain_membership(channel_id, proto_member) {
+                Ok(membership) => {
+                    if let Err(e) = self.channel_repo.insert_or_ignore_membership(&membership) {
+                        tracing::warn!(
+                            channel_id = %channel_id,
+                            user_id = %membership.user_id,
+                            error = %e,
+                            "Failed to sync membership"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        error = %e,
+                        "Failed to convert proto membership"
+                    );
+                }
+            }
+        }
+
+        Ok(channel)
+    }
+
+    /// Internal: Get a channel using an existing client.
+    async fn get_channel_internal(
+        &self,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+    ) -> Result<Channel, ChannelError> {
         let proto_channel = channel_client
             .get_channel(&channel_id.to_string())
             .await?;
@@ -191,7 +315,6 @@ impl ChannelService {
     #[allow(clippy::too_many_arguments)]
     pub async fn update_channel(
         &self,
-        channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
         name: Option<&str>,
         description: Option<&str>,
@@ -250,6 +373,7 @@ impl ChannelService {
         };
 
         let channel_id_str = channel_id.to_string();
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client
             .update_channel(&channel_id_str, proto_channel, update_mask)
             .await?;
@@ -273,14 +397,11 @@ impl ChannelService {
     }
 
     /// Delete a channel.
-    pub async fn delete_channel(
-        &self,
-        channel_client: &mut ChannelClient,
-        channel_id: &ChannelId,
-    ) -> Result<(), ChannelError> {
+    pub async fn delete_channel(&self, channel_id: &ChannelId) -> Result<(), ChannelError> {
         let _ = self.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client.delete_channel(&channel_id_str).await?;
 
         let mut deleted = false;
@@ -315,23 +436,29 @@ impl ChannelService {
 
     /// Join a channel.
     ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - The channel to join
+    /// * `password` - Optional password for private channels
+    /// * `setup_mailbox` - Whether to setup group mailbox for encrypted channels
+    ///
     /// # Group Mailbox Setup
     ///
-    /// If `mailbox_client` is provided and the channel requires encryption,
+    /// If `setup_mailbox` is true and the channel requires encryption,
     /// this method will automatically:
     /// 1. Create an ephemeral group mailbox for receiving messages
     /// 2. The caller should send the returned announcement via
     ///    `MessageService::send_group_mailbox_announcement()`
     pub async fn join_channel(
         &self,
-        channel_client: &mut ChannelClient,
-        mailbox_client: Option<&mut MailboxClient>,
         channel_id: &ChannelId,
         password: Option<&str>,
+        setup_mailbox: bool,
     ) -> Result<(Channel, Option<GroupMailboxSetupResult>), ChannelError> {
         let current_user = self.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client
             .join_channel(&channel_id_str, password, false)
             .await?;
@@ -367,7 +494,7 @@ impl ChannelService {
 
         let channel = match self.channel_repo.get(channel_id)? {
             Some(ch) => ch,
-            None => self.get_channel(channel_client, channel_id).await?,
+            None => self.get_channel_internal(&mut channel_client, channel_id).await?,
         };
 
         let membership = Membership {
@@ -382,15 +509,16 @@ impl ChannelService {
         };
         self.channel_repo.insert_membership(&membership)?;
 
-        // Create and prepare our sender key for this channel
-        // The SKDM will be distributed with our first message
-        match self.signal_service.create_sender_key(channel_id).await {
+        // Create and prepare our sender key for this channel.
+        // The SKDM must be distributed to all channel members via Double Ratchet.
+        let skdm_opt = match self.signal_service.create_sender_key(channel_id).await {
             Ok(skdm) => {
                 tracing::info!(
                     channel_id = %channel_id,
                     skdm_len = skdm.distribution_message.len(),
                     "Created sender key for joined channel"
                 );
+                Some(skdm)
             }
             Err(e) => {
                 // Non-fatal - key will be created on first message
@@ -399,28 +527,111 @@ impl ChannelService {
                     error = %e,
                     "Failed to create sender key on join (will create on first message)"
                 );
+                None
             }
-        }
+        };
 
         // Setup group mailbox for encrypted channels (NDSS '21 paper)
-        let mailbox_setup = if let Some(client) = mailbox_client {
-            self.setup_group_mailbox(channel_id, client).await.ok().flatten()
+        let mailbox_setup = if setup_mailbox {
+            let mut mailbox_client = self.mailbox_client();
+            match self.setup_group_mailbox_internal(channel_id, &mut mailbox_client).await {
+                Ok(Some(mut setup)) => {
+                    // Include the SKDM in the result so caller can distribute it
+                    setup.skdm = skdm_opt;
+                    Some(setup)
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::error!(
+                        channel_id = %channel_id,
+                        error = %e,
+                        "Group mailbox setup failed during channel join - group encryption unavailable"
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
 
+        // Sync other channel members for SKDM distribution
+        if let Err(e) = self.sync_channel_members_internal(&mut channel_client, channel_id).await {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to sync channel members after join (SKDM distribution may fail)"
+            );
+        }
+
         Ok((channel, mailbox_setup))
     }
 
-    /// Leave a channel.
-    pub async fn leave_channel(
+    /// Sync channel members from the server to local storage.
+    ///
+    /// Fetches all channel members and stores their memberships locally.
+    /// This is essential for SKDM distribution which needs to know all members.
+    pub async fn sync_channel_members(&self, channel_id: &ChannelId) -> Result<usize, ChannelError> {
+        let mut channel_client = self.channel_client();
+        self.sync_channel_members_internal(&mut channel_client, channel_id).await
+    }
+
+    /// Internal: Sync channel members using an existing client.
+    async fn sync_channel_members_internal(
         &self,
         channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<usize, ChannelError> {
+        let channel_id_str = channel_id.to_string();
+
+        // Fetch members from server (paginate if needed)
+        let response = channel_client
+            .get_channel_members(&channel_id_str, 100, 0)
+            .await?;
+
+        let total_from_server = response.members.len();
+        let mut synced_count = 0;
+        for proto_member in &response.members {
+            // Convert proto to domain membership
+            match proto_to_domain_membership(channel_id, proto_member) {
+                Ok(membership) => {
+                    // Insert or update membership
+                    if let Err(e) = self.channel_repo.insert_membership(&membership) {
+                        tracing::debug!(
+                            channel_id = %channel_id,
+                            user_id = %membership.user_id,
+                            error = %e,
+                            "Failed to save membership (may already exist)"
+                        );
+                    } else {
+                        synced_count += 1;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        error = %e,
+                        "Failed to convert proto membership"
+                    );
+                }
+            }
+        }
+
+        tracing::info!(
+            channel_id = %channel_id,
+            synced_count = synced_count,
+            total_from_server = total_from_server,
+            "Synced channel members for SKDM distribution"
+        );
+
+        Ok(synced_count)
+    }
+
+    /// Leave a channel.
+    pub async fn leave_channel(&self, channel_id: &ChannelId) -> Result<(), ChannelError> {
         let current_user = self.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client.leave_channel(&channel_id_str).await?;
 
         let mut left = false;
@@ -462,13 +673,21 @@ impl ChannelService {
             );
         }
 
+        // Clean up group mailbox state (NDSS '21 ephemeral mailboxes)
+        if let Err(e) = self.group_coordinator.cleanup_channel(channel_id) {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to clean up group mailbox when leaving channel"
+            );
+        }
+
         Ok(())
     }
 
     /// Invite a user to a channel.
     pub async fn invite_user(
         &self,
-        channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
         invitee_id: &UserId,
         message: Option<&str>,
@@ -477,6 +696,7 @@ impl ChannelService {
 
         let channel_id_str = channel_id.to_string();
         let invitee_id_str = invitee_id.to_string();
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client
             .invite_user(&channel_id_str, &invitee_id_str, message)
             .await?;
@@ -510,24 +730,29 @@ impl ChannelService {
     }
 
     /// Respond to a channel invitation.
-    /// Respond to a channel invitation.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - The channel invitation to respond to
+    /// * `accept` - Whether to accept or decline the invitation
+    /// * `setup_mailbox` - Whether to setup group mailbox if accepting
     ///
     /// # Group Mailbox Setup
     ///
-    /// If `mailbox_client` is provided, accepting an invitation will automatically:
+    /// If `setup_mailbox` is true, accepting an invitation will automatically:
     /// 1. Create an ephemeral group mailbox for receiving messages
     /// 2. The caller should send the returned announcement via
     ///    `MessageService::send_group_mailbox_announcement()`
     pub async fn respond_to_invite(
         &self,
-        channel_client: &mut ChannelClient,
-        mailbox_client: Option<&mut MailboxClient>,
         channel_id: &ChannelId,
         accept: bool,
+        setup_mailbox: bool,
     ) -> Result<Option<(Channel, Option<GroupMailboxSetupResult>)>, ChannelError> {
         let current_user = self.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client
             .respond_to_invite(&channel_id_str, accept)
             .await?;
@@ -570,7 +795,7 @@ impl ChannelService {
         drop(stream);
 
         if joined {
-            let channel = self.get_channel(channel_client, channel_id).await?;
+            let channel = self.get_channel_internal(&mut channel_client, channel_id).await?;
 
             let membership = Membership {
                 channel_id: *channel_id,
@@ -585,8 +810,20 @@ impl ChannelService {
             self.channel_repo.insert_membership(&membership)?;
 
             // Setup group mailbox for encrypted channels (NDSS '21 paper)
-            let mailbox_setup = if let Some(client) = mailbox_client {
-                self.setup_group_mailbox(channel_id, client).await.ok().flatten()
+            let mailbox_setup = if setup_mailbox {
+                let mut mailbox_client = self.mailbox_client();
+                match self.setup_group_mailbox_internal(channel_id, &mut mailbox_client).await {
+                    Ok(Some(setup)) => Some(setup),
+                    Ok(None) => None,
+                    Err(e) => {
+                        tracing::error!(
+                            channel_id = %channel_id,
+                            error = %e,
+                            "Group mailbox setup failed during invite accept - group encryption unavailable"
+                        );
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -600,7 +837,6 @@ impl ChannelService {
     /// Get channel members with pagination.
     pub async fn get_channel_members(
         &self,
-        channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
         limit: u32,
         offset: u32,
@@ -608,6 +844,7 @@ impl ChannelService {
         let _ = self.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
+        let mut channel_client = self.channel_client();
         let response = channel_client
             .get_channel_members(&channel_id_str, limit as i32, offset as i32)
             .await?;
@@ -633,7 +870,6 @@ impl ChannelService {
     /// Update a member's role.
     pub async fn update_member_role(
         &self,
-        channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
         user_id: &UserId,
         new_role: MemberRole,
@@ -644,6 +880,7 @@ impl ChannelService {
 
         let channel_id_str = channel_id.to_string();
         let user_id_str = user_id.to_string();
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client
             .update_member_role(&channel_id_str, &user_id_str, proto_role)
             .await?;
@@ -689,14 +926,11 @@ impl ChannelService {
     // ==================== Archive Operations ====================
 
     /// Archive a channel.
-    pub async fn archive_channel(
-        &self,
-        channel_client: &mut ChannelClient,
-        channel_id: &ChannelId,
-    ) -> Result<Channel, ChannelError> {
+    pub async fn archive_channel(&self, channel_id: &ChannelId) -> Result<Channel, ChannelError> {
         let _ = self.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
+        let mut channel_client = self.channel_client();
         let response = channel_client.archive_channel(&channel_id_str).await?;
 
         let proto_channel = response.archived_channel.ok_or_else(|| {
@@ -714,14 +948,11 @@ impl ChannelService {
     }
 
     /// Unarchive a channel.
-    pub async fn unarchive_channel(
-        &self,
-        channel_client: &mut ChannelClient,
-        channel_id: &ChannelId,
-    ) -> Result<Channel, ChannelError> {
+    pub async fn unarchive_channel(&self, channel_id: &ChannelId) -> Result<Channel, ChannelError> {
         let _ = self.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
+        let mut channel_client = self.channel_client();
         let response = channel_client.unarchive_channel(&channel_id_str).await?;
 
         let proto_channel = response.unarchived_channel.ok_or_else(|| {
@@ -741,12 +972,12 @@ impl ChannelService {
     /// List archived channel IDs.
     pub async fn list_archived_channels(
         &self,
-        channel_client: &mut ChannelClient,
         limit: u32,
         offset: u32,
     ) -> Result<Vec<ChannelId>, ChannelError> {
         let _ = self.current_user_id()?;
 
+        let mut channel_client = self.channel_client();
         let response = channel_client
             .list_archived_channels(limit as i32, offset as i32)
             .await?;
@@ -767,13 +998,13 @@ impl ChannelService {
     /// List channels with pagination.
     pub async fn list_channels(
         &self,
-        channel_client: &mut ChannelClient,
         limit: u32,
         offset: u32,
         archived: Option<bool>,
     ) -> Result<Vec<Channel>, ChannelError> {
         let _ = self.current_user_id()?;
 
+        let mut channel_client = self.channel_client();
         let response = channel_client
             .list_channels(limit as i32, offset as i32, archived)
             .await?;
@@ -787,6 +1018,29 @@ impl ChannelService {
                 None => self.channel_repo.insert(&channel)?,
             }
 
+            // Sync memberships from the proto response
+            for proto_member in &proto.members {
+                match proto_to_domain_membership(&channel.id, proto_member) {
+                    Ok(membership) => {
+                        if let Err(e) = self.channel_repo.insert_or_ignore_membership(&membership) {
+                            tracing::warn!(
+                                channel_id = %channel.id,
+                                user_id = %membership.user_id,
+                                error = %e,
+                                "Failed to sync membership"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            channel_id = %channel.id,
+                            error = %e,
+                            "Failed to convert proto membership"
+                        );
+                    }
+                }
+            }
+
             channels.push(channel);
         }
 
@@ -796,7 +1050,6 @@ impl ChannelService {
     /// Search for channels by query.
     pub async fn search_channels(
         &self,
-        channel_client: &mut ChannelClient,
         query: &str,
         limit: u32,
         offset: u32,
@@ -809,6 +1062,7 @@ impl ChannelService {
             .map(domain_channel_type_to_proto)
             .collect();
 
+        let mut channel_client = self.channel_client();
         let response = channel_client
             .search_channels(query, limit as i32, offset as i32, vec![], proto_type_filter)
             .await?;
@@ -841,17 +1095,21 @@ impl ChannelService {
     // ==================== Moderation Operations ====================
 
     /// Kick a user from a channel.
+    ///
+    /// Returns the rotated SKDM which MUST be distributed to remaining members
+    /// to maintain forward secrecy. The departed user won't be able to decrypt
+    /// future messages encrypted with the new sender key.
     pub async fn kick_user(
         &self,
-        channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
         user_id: &UserId,
         reason: Option<&str>,
-    ) -> Result<(), ChannelError> {
+    ) -> Result<Option<SenderKeyDistribution>, ChannelError> {
         let _ = self.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let user_id_str = user_id.to_string();
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client
             .kick_user(&channel_id_str, &user_id_str, reason)
             .await?;
@@ -885,13 +1143,15 @@ impl ChannelService {
 
         let _ = self.channel_repo.delete_membership(channel_id, user_id);
 
-        match self.signal_service.rotate_sender_key(channel_id).await {
-            Ok(_skdm) => {
+        // Rotate sender key - departed user won't have the new key
+        let skdm = match self.signal_service.rotate_sender_key(channel_id).await {
+            Ok(skdm) => {
                 tracing::info!(
                     channel_id = %channel_id,
                     kicked_user = %user_id,
-                    "Rotated sender key after kicking user"
+                    "Rotated sender key after kicking user - SKDM must be distributed"
                 );
+                Some(skdm)
             }
             Err(e) => {
                 tracing::warn!(
@@ -899,16 +1159,16 @@ impl ChannelService {
                     error = %e,
                     "Failed to rotate sender key after kick (will rotate on next message)"
                 );
+                None
             }
-        }
+        };
 
-        Ok(())
+        Ok(skdm)
     }
 
     /// Ban a user from a channel.
     pub async fn ban_user(
         &self,
-        channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
         user_id: &UserId,
         duration: Option<std::time::Duration>,
@@ -918,6 +1178,7 @@ impl ChannelService {
 
         let channel_id_str = channel_id.to_string();
         let user_id_str = user_id.to_string();
+        let mut channel_client = self.channel_client();
         channel_client
             .ban_user(&channel_id_str, &user_id_str, duration, reason)
             .await?;
@@ -930,7 +1191,6 @@ impl ChannelService {
     /// Unban a user from a channel.
     pub async fn unban_user(
         &self,
-        channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
         user_id: &UserId,
     ) -> Result<(), ChannelError> {
@@ -938,6 +1198,7 @@ impl ChannelService {
 
         let channel_id_str = channel_id.to_string();
         let user_id_str = user_id.to_string();
+        let mut channel_client = self.channel_client();
         let mut stream = channel_client
             .unban_user(&channel_id_str, &user_id_str)
             .await?;
@@ -969,7 +1230,6 @@ impl ChannelService {
     /// # Arguments
     ///
     /// * `channel_id` - The channel to setup mailbox for
-    /// * `mailbox_client` - For creating the ephemeral mailbox
     ///
     /// # Returns
     ///
@@ -977,6 +1237,15 @@ impl ChannelService {
     /// * `Ok(None)` - Skipped (DM or non-encrypted channel)
     /// * `Err(_)` - Setup failed
     pub async fn setup_group_mailbox(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<Option<GroupMailboxSetupResult>, ChannelError> {
+        let mut mailbox_client = self.mailbox_client();
+        self.setup_group_mailbox_internal(channel_id, &mut mailbox_client).await
+    }
+
+    /// Internal: Setup group mailbox using an existing client.
+    async fn setup_group_mailbox_internal(
         &self,
         channel_id: &ChannelId,
         mailbox_client: &mut MailboxClient,

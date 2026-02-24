@@ -232,8 +232,8 @@ pub struct MessageItemData {
     pub content: String,
     /// Formatted timestamp (e.g., "2:34 PM", "Yesterday").
     pub timestamp: String,
-    /// Raw timestamp in milliseconds since epoch for event matching.
-    pub timestamp_ms: i64,
+    /// Raw nanosecond timestamp as string for event matching (reactions, edits).
+    pub timestamp_ns: String,
     /// Whether this is the current user's message.
     pub is_own: bool,
     /// Whether the message has been edited.
@@ -308,10 +308,10 @@ impl MessageItemData {
         self
     }
 
-    /// Set raw timestamp in milliseconds.
+    /// Set raw nanosecond timestamp for event matching.
     #[must_use]
-    pub fn with_timestamp_ms(mut self, timestamp_ms: i64) -> Self {
-        self.timestamp_ms = timestamp_ms;
+    pub fn with_timestamp_ns(mut self, timestamp_ns: u64) -> Self {
+        self.timestamp_ns = timestamp_ns.to_string();
         self
     }
 
@@ -532,7 +532,7 @@ pub fn message_to_item_data(
         .with_sender_avatar(sender_avatar_url)
         .with_content(extract_content_text(&message.content))
         .with_timestamp(format_timestamp(message.created_at))
-        .with_timestamp_ms(message.created_at.timestamp_millis())
+        .with_timestamp_ns(message.sent_at)
         .with_own(is_own)
         .with_edited(message.is_edited)
         .with_deleted(message.is_deleted)
@@ -645,7 +645,7 @@ mod tests {
     fn test_message_to_item_data() {
         let channel_id = ChannelId::new();
         let sender_id = UserId::new();
-        let msg = Message::new_text(channel_id, Some(sender_id), "Test message".to_string());
+        let msg = Message::new_text(channel_id, Some(sender_id), "Test message".to_string(), 0);
 
         let item = message_to_item_data(
             &msg,

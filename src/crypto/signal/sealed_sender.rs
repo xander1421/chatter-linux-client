@@ -104,10 +104,17 @@ impl SealedSenderManager {
         S: SessionStore,
         I: IdentityKeyStore,
     {
+        tracing::debug!(
+            destination = %destination,
+            plaintext_len = plaintext.len(),
+            "SealedSender: starting encryption"
+        );
+
         let mut rng = StdRng::from_os_rng();
         let now = SystemTime::now();
 
-        sealed_sender_encrypt(
+        tracing::debug!(destination = %destination, "SealedSender: calling sealed_sender_encrypt");
+        let result = sealed_sender_encrypt(
             destination,
             sender_cert,
             plaintext,
@@ -117,7 +124,21 @@ impl SealedSenderManager {
             &mut rng,
         )
         .await
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))
+        .map_err(|e| {
+            tracing::error!(
+                destination = %destination,
+                error = %e,
+                "SealedSender: encryption failed"
+            );
+            CryptoError::EncryptionFailed(e.to_string())
+        })?;
+
+        tracing::debug!(
+            destination = %destination,
+            ciphertext_len = result.len(),
+            "SealedSender: encryption complete"
+        );
+        Ok(result)
     }
 
     /// Decrypt sealed sender message and validate the sender certificate.
@@ -163,12 +184,19 @@ impl SealedSenderManager {
         SP: SignedPreKeyStore,
         K: KyberPreKeyStore,
     {
-        sealed_sender_decrypt(
+        tracing::debug!(
+            ciphertext_len = ciphertext.len(),
+            local_uuid = %local_uuid,
+            local_device_id = ?local_device_id,
+            "SealedSender: starting decryption"
+        );
+
+        let result = sealed_sender_decrypt(
             ciphertext,
             trust_root,
             timestamp,
             local_e164,
-            local_uuid,
+            local_uuid.clone(),
             local_device_id,
             identity_store,
             session_store,
@@ -180,6 +208,11 @@ impl SealedSenderManager {
         .map_err(|e| {
             // Map specific libsignal errors to our error types
             let msg = e.to_string();
+            tracing::error!(
+                error = %msg,
+                local_uuid = %local_uuid,
+                "SealedSender: decryption failed"
+            );
             if msg.contains("SealedSenderSelfSend") {
                 CryptoError::SealedSenderSelfSend
             } else if msg.contains("trust root") || msg.contains("certificate") {
@@ -187,7 +220,15 @@ impl SealedSenderManager {
             } else {
                 CryptoError::InvalidSealedSenderMessage(msg)
             }
-        })
+        })?;
+
+        tracing::debug!(
+            sender = %result.sender_uuid,
+            sender_device = ?result.device_id,
+            message_len = result.message.len(),
+            "SealedSender: decryption complete"
+        );
+        Ok(result)
     }
 
     /// Create UnidentifiedSenderMessageContent from pre-encrypted message.
@@ -421,7 +462,7 @@ pub fn validate_trust_root(cert: &SenderCertificate) -> bool {
     }
 
     // Validate certificate chain against trust root
-    match cert.validate(&*TRUST_ROOT_PUBLIC_KEY, now) {
+    match cert.validate(&TRUST_ROOT_PUBLIC_KEY, now) {
         Ok(true) => true,
         Ok(false) => {
             tracing::warn!("Sender certificate failed trust root validation");

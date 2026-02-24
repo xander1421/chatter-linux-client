@@ -22,6 +22,13 @@ async fn main() {
 
     tracing::info!("Chatter Linux Client v0.1.0");
 
+    // Initialize GStreamer for media processing (video decoding, waveform extraction)
+    if let Err(e) = gstreamer::init() {
+        tracing::warn!("GStreamer initialization failed: {} (media features may not work)", e);
+    } else {
+        tracing::info!("GStreamer initialized: {}", gstreamer::version_string());
+    }
+
     // Initialize application context (all subsystems)
     let ctx = match AppContext::new() {
         Ok(ctx) => ctx,
@@ -78,6 +85,7 @@ async fn main() {
         let message_service_for_events = ctx.message_service.clone();
         let database_for_events = ctx.database.clone();
         let mailbox_manager_for_events = ctx.mailbox_manager.clone();
+        let event_bus_for_events = ctx.event_bus.clone();
         let weak_for_events = weak_window.clone();
 
         tokio::spawn(async move {
@@ -96,6 +104,7 @@ async fn main() {
                     let message_service_events = message_service_for_events.clone();
                     let database_events = database_for_events.clone();
                     let mailbox_manager_events = mailbox_manager_for_events.clone();
+                    let event_bus_events = event_bus_for_events.clone();
 
                     tokio::spawn(async move {
                         while let Ok(event) = event_rx.recv().await {
@@ -109,6 +118,7 @@ async fn main() {
                                 &message_service_events,
                                 &database_events,
                                 &mailbox_manager_events,
+                                &event_bus_events,
                             )
                             .await;
                         }

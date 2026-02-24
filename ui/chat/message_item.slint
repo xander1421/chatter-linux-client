@@ -36,6 +36,12 @@ export component MessageItem inherits Rectangle {
     in property <int> attachment-count: 0;
     in property <[MessageAttachmentData]> attachments: [];
 
+    // Audio playback state (ID of currently playing attachment)
+    in property <string> current-playing-attachment-id: "";
+    in property <bool> is-media-playing: false;  // True when audio is actively playing
+    in property <float> audio-progress: 0.0;  // 0.0-1.0
+    in property <string> audio-elapsed: "0:00";
+
     // Reactions
     in property <bool> has-reactions: false;
     in property <string> reaction-summary: "";
@@ -55,6 +61,7 @@ export component MessageItem inherits Rectangle {
     callback more-clicked(string);
     callback message-clicked(string);
     callback attachment-clicked(string);  // attachment ID
+    callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
 
     // Styling - no layout shift, just color change on hover
     min-height: main-layout.preferred-height;
@@ -123,7 +130,7 @@ export component MessageItem inherits Rectangle {
                     border-radius: Spacing.radius-sm;
 
                     Text {
-                        text: "\u{1F642}"; // Smile emoji
+                        text: "\u{1F642}\u{FE0F}"; // Smile emoji (with emoji variant selector)
                         font-size: Typography.sm;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -270,31 +277,24 @@ export component MessageItem inherits Rectangle {
                 }
             }
 
-            // Content area - wrapped in Rectangle for clipping
+            // Content area - explicit width calculation for text wrapping
             Rectangle {
                 width: 100%;
-                height: content-layout.preferred-height;
+                height: content-text.preferred-height;
                 clip: true;  // Prevent overflow beyond container
 
-                content-layout := HorizontalLayout {
-                    width: 100%;
+                // Left spacer width for avatar alignment
+                property <length> spacer-width: root.show-sender ? (Spacing.avatar-sm + Spacing.sm) : 0;
 
-                    // Left spacer for avatar alignment
-                    if root.show-sender: Rectangle {
-                        width: Spacing.avatar-sm + Spacing.sm;
-                    }
-
-                    // Content text - width: 100% is required for word-wrap
-                    // Note: word-wrap only breaks at spaces. Long strings without spaces
-                    // need zero-width spaces inserted in Rust code to create break points.
-                    content-text := Text {
-                        width: 100%;
-                        text: root.content;
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        wrap: word-wrap;
-                        overflow: clip;  // Clip any remaining overflow
-                    }
+                // Content text with explicit width for proper word-wrap
+                content-text := Text {
+                    x: spacer-width;
+                    // Explicit width = parent width minus spacer - required for word-wrap to work
+                    width: parent.width - spacer-width;
+                    text: root.content;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    wrap: word-wrap;
                 }
             }
 
@@ -311,10 +311,10 @@ export component MessageItem inherits Rectangle {
                     // Image attachments - show thumbnail or placeholder
                     if attachment.is-image: Rectangle {
                         // Calculate size based on actual image dimensions
-                        // Max width 300px, max height 200px, preserve aspect ratio
+                        // Max width 300px, max height 400px (taller for phone screenshots)
                         property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.5;
                         property <length> max-w: 300px;
-                        property <length> max-h: 200px;
+                        property <length> max-h: 400px;
                         // If image is wider than tall, constrain by width
                         // If image is taller than wide, constrain by height
                         property <length> calc-w: aspect-ratio >= 1 ? min(max-w, attachment.width * 1px) : min(max-h * aspect-ratio, attachment.width * 1px);
@@ -331,7 +331,7 @@ export component MessageItem inherits Rectangle {
                             width: 100%;
                             height: 100%;
                             source: attachment.thumbnail;
-                            image-fit: cover;
+                            image-fit: contain;  // Show entire image, don't crop
                         }
 
                         // Show placeholder if no thumbnail
@@ -345,7 +345,7 @@ export component MessageItem inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: "\u{1F5BC}";  // Frame with picture
+                                    text: "\u{1F5BC}\u{FE0F}";  // Frame with picture (with emoji variant selector)
                                     font-size: 40px;
                                     horizontal-alignment: center;
                                 }
@@ -371,6 +371,47 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
+                        // Progress overlay for image uploads/downloads
+                        if attachment.is-uploading || attachment.is-downloading: Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            background: #00000080;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: Spacing.sm;
+
+                                Text {
+                                    text: attachment.is-uploading ? "Uploading..." : "Downloading...";
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    horizontal-alignment: center;
+                                }
+
+                                // Progress bar
+                                Rectangle {
+                                    width: 80%;
+                                    height: 6px;
+                                    background: Colors.surface-hover;
+                                    border-radius: 3px;
+
+                                    Rectangle {
+                                        width: parent.width * attachment.progress;
+                                        height: 100%;
+                                        background: attachment.is-uploading ? Colors.success : Colors.primary;
+                                        border-radius: 3px;
+                                    }
+                                }
+
+                                Text {
+                                    text: round(attachment.progress * 100) + "%";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.xs;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+
                         img-touch := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
@@ -381,12 +422,14 @@ export component MessageItem inherits Rectangle {
 
                     // Audio attachments - show audio player
                     if attachment.category == "audio": Rectangle {
+                        property <bool> is-this-playing: attachment.id == root.current-playing-attachment-id;
+
                         width: 320px;  // Fixed max width for audio player
                         height: 72px;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
                         border-width: 1px;
-                        border-color: attachment.is-playing ? Colors.primary : Colors.surface-hover;
+                        border-color: is-this-playing ? Colors.primary : Colors.surface-hover;
 
                         HorizontalLayout {
                             padding: Spacing.sm;
@@ -402,8 +445,8 @@ export component MessageItem inherits Rectangle {
                                 Text {
                                     width: 100%;
                                     height: 100%;
-                                    // Show pause icon when playing, play icon otherwise
-                                    text: attachment.is-playing ? "\u{23F8}" : "\u{25B6}";  // Pause or Play
+                                    // Show pause icon only when this attachment is playing AND not paused
+                                    text: (is-this-playing && root.is-media-playing) ? "\u{23F8}" : "\u{25B6}";  // Pause or Play
                                     color: Colors.text-primary;
                                     font-size: 20px;
                                     horizontal-alignment: center;
@@ -432,34 +475,84 @@ export component MessageItem inherits Rectangle {
                                     overflow: elide;
                                 }
 
-                                // Waveform placeholder (progress bar style)
-                                Rectangle {
+                                // Dynamic waveform visualization with progress
+                                waveform-container := Rectangle {
                                     height: 24px;
                                     background: Colors.surface-hover;
                                     border-radius: Spacing.radius-sm;
                                     clip: true;
 
-                                    // Waveform bars visualization
+                                    // Waveform bars with progress highlighting
                                     HorizontalLayout {
                                         padding: 4px;
                                         spacing: 2px;
                                         alignment: center;
 
-                                        for i in [3, 5, 8, 12, 7, 15, 10, 6, 11, 14, 9, 5, 13, 8, 6, 10, 12, 7, 4, 9, 11, 6, 8, 5]: Rectangle {
+                                        // Dynamic bars from waveform data - wrapped to align bottom
+                                        for bar[idx] in attachment.waveform: VerticalLayout {
+                                            alignment: end;  // Align bars to bottom (grow upward)
                                             width: 3px;
-                                            height: i * 1px;
-                                            background: #a78bfa;
-                                            border-radius: 1px;
+
+                                            Rectangle {
+                                                property <float> bar-position: (idx + 1) / 32.0;
+                                                property <bool> is-played: is-this-playing && bar-position <= root.audio-progress;
+
+                                                width: 3px;
+                                                // Scale bar height: 0-100 maps to 4-16px
+                                                height: max(4px, bar * 0.12px + 4px);
+                                                // Bright purple if played, dim purple otherwise
+                                                background: is-played ? #a78bfa : #4c1d95;
+                                                border-radius: 1px;
+                                            }
+                                        }
+                                    }
+
+                                    // Clickable area for seeking
+                                    waveform-touch := TouchArea {
+                                        // Track click position for seek calculation
+                                        property <float> seek-pos: clamp((self.mouse-x - 4px) / (parent.width - 8px), 0.0, 1.0);
+
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.audio-seek(attachment.id, self.seek-pos);
                                         }
                                     }
                                 }
 
-                                // Duration
-                                Text {
-                                    text: attachment.size-display;
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
+                                // Duration / elapsed time
+                                HorizontalLayout {
+                                    spacing: Spacing.xs;
+
+                                    Text {
+                                        text: is-this-playing ? root.audio-elapsed : (attachment.duration-display != "" ? attachment.duration-display : attachment.size-display);
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+
+                                    // Show total duration when playing
+                                    if is-this-playing && attachment.duration-display != "": Text {
+                                        text: " / " + attachment.duration-display;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
                                 }
+                            }
+                        }
+
+                        // Progress bar at bottom when downloading (audio files need download first)
+                        if attachment.is-downloading: Rectangle {
+                            x: 0;
+                            y: parent.height - 4px;
+                            width: parent.width;
+                            height: 4px;
+                            background: Colors.surface-hover;
+                            border-radius: 2px;
+
+                            Rectangle {
+                                width: parent.width * attachment.progress;
+                                height: 100%;
+                                background: Colors.primary;
+                                border-radius: 2px;
                             }
                         }
                     }
@@ -484,7 +577,7 @@ export component MessageItem inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: "\u{1F3AC}";  // Clapper board
+                                    text: "\u{1F3AC}\u{FE0F}";  // Clapper board (with emoji variant selector)
                                     font-size: 48px;
                                     horizontal-alignment: center;
                                 }
@@ -581,14 +674,45 @@ export component MessageItem inherits Rectangle {
                                 }
                             }
 
-                            // Download icon
+                            // Download icon or progress indicator
                             Rectangle {
                                 width: 32px;
                                 height: 32px;
                                 background: file-touch.has-hover ? Colors.surface-hover : transparent;
                                 border-radius: Spacing.radius-sm;
 
-                                Text {
+                                // Show spinner when uploading/downloading
+                                if attachment.is-uploading || attachment.is-downloading: Rectangle {
+                                    width: 24px;
+                                    height: 24px;
+                                    x: 4px;
+                                    y: 4px;
+                                    border-radius: 12px;
+                                    border-width: 2px;
+                                    border-color: Colors.surface-hover;
+
+                                    // Progress arc (simplified as a partial border)
+                                    Rectangle {
+                                        width: 24px;
+                                        height: 24px;
+                                        border-radius: 12px;
+                                        border-width: 2px;
+                                        border-color: Colors.primary;
+                                        clip: true;
+
+                                        // Progress fill
+                                        Rectangle {
+                                            x: 0;
+                                            y: 0;
+                                            width: parent.width * attachment.progress;
+                                            height: parent.height;
+                                            background: Colors.primary.transparentize(0.7);
+                                        }
+                                    }
+                                }
+
+                                // Show download icon when not transferring
+                                if !attachment.is-uploading && !attachment.is-downloading: Text {
                                     width: 100%;
                                     height: 100%;
                                     text: "\u{2B07}";  // Down arrow
@@ -597,6 +721,23 @@ export component MessageItem inherits Rectangle {
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
+                            }
+                        }
+
+                        // Progress bar at bottom when transferring
+                        if attachment.is-uploading || attachment.is-downloading: Rectangle {
+                            x: 0;
+                            y: parent.height - 4px;
+                            width: parent.width;
+                            height: 4px;
+                            background: Colors.surface-hover;
+                            border-radius: 2px;
+
+                            Rectangle {
+                                width: parent.width * attachment.progress;
+                                height: 100%;
+                                background: attachment.is-uploading ? Colors.success : Colors.primary;
+                                border-radius: 2px;
                             }
                         }
 
@@ -650,7 +791,7 @@ export component MessageItem inherits Rectangle {
                         padding: 2px;
 
                         Text {
-                            text: "\u{1F5E8}"; // Speech balloon
+                            text: "\u{1F5E8}\u{FE0F}"; // Speech balloon (with emoji variant selector)
                             font-size: Typography.xs;
                         }
 

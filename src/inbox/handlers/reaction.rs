@@ -119,6 +119,17 @@ impl InboxHandler for ReactionHandler {
         let message_id = MessageId::from_uuid(uuid_from_timestamp(reaction.target_sent_timestamp));
 
         // Emit appropriate event based on remove flag
+        let action = if reaction.remove { "remove" } else { "add" };
+        tracing::info!(
+            ?message_id,
+            ?author_id,
+            ?reactor_id,
+            emoji = %reaction.emoji,
+            action = %action,
+            timestamp = reaction.timestamp,
+            "Inbox handler: processing reaction"
+        );
+
         let event = if reaction.remove {
             DomainEvent::ReactionRemoved {
                 message_id,
@@ -138,6 +149,7 @@ impl InboxHandler for ReactionHandler {
         };
 
         ctx.emit(event);
+        tracing::debug!(action = %action, "Reaction event emitted");
         Ok(HandlerOutcome::Processed)
     }
 

@@ -12,7 +12,7 @@ use tempfile::TempDir;
 
 use chatter_linux::crypto::dm_crypto::{decrypt_dm_message, encrypt_dm_message};
 use chatter_linux::domain::UserId;
-use chatter_linux::inbox::provider::{DeviceInboxProvider, InboxConfig, InboxEvent};
+use chatter_linux::inbox::{InboxConfig, InboxEvent};
 use chatter_linux::mailbox::dm::{
     ConversationKey, DmConversation, DmConversationManager, DmMailbox, PeerMailbox, TwoWayAnonymity,
 };
@@ -363,6 +363,7 @@ fn test_inbox_event_dm_received_format() {
         text: "Hello!".to_string(),
         timestamp: 1234567890,
         message_id: "msg-123".to_string(),
+        attachments: vec![],
     };
 
     // Verify event can be cloned and debugged
@@ -378,6 +379,7 @@ fn test_inbox_event_dm_decryption_failed_format() {
     let event = InboxEvent::DmDecryptionFailed {
         peer_id,
         error: "No shared secret".to_string(),
+        convergence_failed: false,
     };
 
     let debug_str = format!("{:?}", event);

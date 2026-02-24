@@ -5,9 +5,56 @@
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_linux::app::AppContext;
+use chatter_linux::domain::{Attachment, FileCategory, Message};
+use chatter_linux::storage::AttachmentRepository;
 
 use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
 use crate::MainWindow;
+
+/// Generate a preview text for a pinned message (with attachment support).
+fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> String {
+    // First try to get text content
+    if let Some(text) = message.as_text() {
+        if !text.is_empty() {
+            return if text.len() > 80 {
+                format!("{}...", &text[..77])
+            } else {
+                text.to_string()
+            };
+        }
+    }
+
+    // If no text, describe attachments
+    if !attachments.is_empty() {
+        if attachments.len() == 1 {
+            let att = &attachments[0];
+            let category = att.metadata.category();
+            let (emoji, type_name) = match category {
+                FileCategory::Image => ("📷", "Photo"),
+                FileCategory::Video => ("🎬", "Video"),
+                FileCategory::Audio => ("🎵", "Voice message"),
+                FileCategory::Document => ("📄", "Document"),
+                FileCategory::Code => ("📝", "Code"),
+                FileCategory::Archive => ("📦", "Archive"),
+                FileCategory::Other => ("📎", "File"),
+            };
+            return format!("{} {}", emoji, type_name);
+        } else {
+            return format!("📎 {} attachments", attachments.len());
+        }
+    }
+
+    // Fallback for unresolved attachment IDs
+    if !message.attachments.is_empty() {
+        if message.attachments.len() == 1 {
+            "📎 Attachment".to_string()
+        } else {
+            format!("📎 {} attachments", message.attachments.len())
+        }
+    } else {
+        "[Pinned message]".to_string()
+    }
+}
 
 /// Wire header callbacks.
 pub fn wire(window: &MainWindow, ctx: &AppContext) {
@@ -16,6 +63,14 @@ pub fn wire(window: &MainWindow, ctx: &AppContext) {
     wire_pinned_navigation(window, ctx);
     wire_chat_settings_clicked(window, ctx);
     wire_load_more(window, ctx);
+    wire_scroll_to_bottom(window);
+}
+
+fn wire_scroll_to_bottom(window: &MainWindow) {
+    window.on_scroll_to_bottom_clicked(|| {
+        tracing::debug!("Scroll-to-bottom button clicked");
+        // Scrolling is handled in Slint
+    });
 }
 
 fn wire_search_clicked(window: &MainWindow) {
@@ -210,20 +265,22 @@ fn wire_pinned_navigation(window: &MainWindow, ctx: &AppContext) {
     let pinned_state = ctx.pinned_state.clone();
     let weak_window = window.as_weak();
     let message_repo = ctx.message_repo.clone();
+    let attachment_repo = ctx.attachment_repo.clone();
 
     window.on_pinned_prev_clicked(move || {
         pinned_state.navigate_prev();
-        update_pinned_ui(&weak_window, &pinned_state, &message_repo);
+        update_pinned_ui(&weak_window, &pinned_state, &message_repo, &attachment_repo);
     });
 
     // Next pinned message
     let pinned_state = ctx.pinned_state.clone();
     let weak_window = window.as_weak();
     let message_repo = ctx.message_repo.clone();
+    let attachment_repo = ctx.attachment_repo.clone();
 
     window.on_pinned_next_clicked(move || {
         pinned_state.navigate_next();
-        update_pinned_ui(&weak_window, &pinned_state, &message_repo);
+        update_pinned_ui(&weak_window, &pinned_state, &message_repo, &attachment_repo);
     });
 
     // Dismiss pinned bar
@@ -243,14 +300,51 @@ fn wire_pinned_navigation(window: &MainWindow, ctx: &AppContext) {
 
     // Go to pinned message (scroll to it in chat)
     let pinned_state = ctx.pinned_state.clone();
+    let weak_window = window.as_weak();
 
     window.on_pinned_go_to_message(move || {
         if let Some(message_id) = pinned_state.current_message_id() {
-            // TODO: Implement scroll-to-message functionality
-            // This would require:
-            // 1. Finding the message index in the current message list
-            // 2. Scrolling the Flickable to that position
-            tracing::info!("Go to pinned message: {}", message_id);
+            let message_id_str = message_id.to_string();
+            let weak = weak_window.clone();
+
+            // Find the message index in the current message list and scroll to it
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let messages = w.get_messages();
+                    let message_count = messages.row_count();
+
+                    // Find the index of the pinned message
+                    for i in 0..message_count {
+                        if let Some(msg) = messages.row_data(i) {
+                            if msg.message_id.as_str() == message_id_str.as_str() {
+                                // Calculate scroll position: negative offset from top
+                                // Estimated message height: 80px, plus some padding
+                                let estimated_height = 80.0f32;
+                                let padding = 16.0f32; // Spacing.md
+                                let scroll_pos = -((i as f32 * estimated_height) + padding);
+
+                                // Set scroll position directly
+                                w.set_message_scroll_position(scroll_pos);
+                                // Mark as not at bottom since we're scrolling to a specific message
+                                w.set_is_at_bottom(false);
+
+                                tracing::info!(
+                                    message_id = %message_id_str,
+                                    index = i,
+                                    scroll_position = scroll_pos,
+                                    "Scrolling to pinned message"
+                                );
+                                return;
+                            }
+                        }
+                    }
+
+                    tracing::warn!(
+                        message_id = %message_id_str,
+                        "Pinned message not found in current message list"
+                    );
+                }
+            });
         }
     });
 }
@@ -259,25 +353,24 @@ fn update_pinned_ui(
     weak_window: &slint::Weak<MainWindow>,
     pinned_state: &chatter_linux::state::PinnedState,
     message_repo: &std::sync::Arc<chatter_linux::storage::MessageRepository>,
+    attachment_repo: &std::sync::Arc<AttachmentRepository>,
 ) {
     let state = pinned_state.get();
     let current_index = state.current_index as i32;
     let total_count = state.pinned_message_ids.len() as i32;
 
-    // Get preview text for current pinned message
+    // Get preview text for current pinned message (with attachment support)
     let preview = if let Some(msg_id) = pinned_state.current_message_id() {
-        message_repo
-            .get(&msg_id)
-            .ok()
-            .flatten()
-            .and_then(|msg| msg.as_text().map(|t| {
-                if t.len() > 80 {
-                    format!("{}...", &t[..77])
-                } else {
-                    t.to_string()
-                }
-            }))
-            .unwrap_or_else(|| "[Pinned message]".to_string())
+        if let Ok(Some(msg)) = message_repo.get(&msg_id) {
+            let attachments: Vec<Attachment> = msg
+                .attachments
+                .iter()
+                .filter_map(|att_id| attachment_repo.get(att_id).ok().flatten())
+                .collect();
+            generate_pinned_preview(&msg, &attachments)
+        } else {
+            "[Pinned message]".to_string()
+        }
     } else {
         String::new()
     };

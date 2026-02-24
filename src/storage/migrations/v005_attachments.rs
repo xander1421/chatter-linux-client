@@ -30,6 +30,8 @@ impl Migration for V005Attachments {
             -- Encryption data (BLOB for binary)
             encryption_key BLOB,
             encryption_iv BLOB,
+            -- Thumbnail bytes (BLOB for efficient binary storage)
+            thumbnail_bytes BLOB,
             -- Timestamps
             created_at TEXT NOT NULL
         );

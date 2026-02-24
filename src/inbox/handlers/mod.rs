@@ -27,6 +27,9 @@ pub mod sender_key;
 pub mod sync;
 pub mod typing;
 
+// NOTE: proactive_dm module removed - DM bootstrap is done on-demand during first message send.
+// This avoids race conditions where both sides try to initiate simultaneously.
+
 use std::fmt;
 
 use tokio::sync::broadcast;
@@ -369,6 +372,21 @@ pub enum DomainEvent {
         /// When the distribution was sent (ms since epoch).
         timestamp: u64,
     },
+    /// Group mailbox address received (NDSS '21 per-group ephemeral mailbox).
+    ///
+    /// Bundled with SKDM via `ephemeral_reply_to` field, or sent as standalone
+    /// announcement when a member joins. Enables routing group messages to
+    /// member-specific mailboxes for traffic analysis resistance.
+    GroupMailboxReceived {
+        /// User who sent the mailbox announcement.
+        sender_id: UserId,
+        /// Channel this mailbox is for.
+        channel_id: ChannelId,
+        /// Sender's 32-byte Ed25519 public key for their group mailbox.
+        mailbox_public_key: [u8; 32],
+        /// When the announcement was sent (ms since epoch).
+        timestamp: u64,
+    },
     /// Multi-device sync: message deleted locally on another device.
     ///
     /// Different from MessageDeleted (delete for everyone) - this only
@@ -382,6 +400,18 @@ pub enum DomainEvent {
         target_message_id: MessageId,
         /// When the sync was issued (ms since epoch).
         timestamp: u64,
+    },
+    /// Call hangup received from peer (remote call ended).
+    ///
+    /// This event signals that the peer has ended the call and we should
+    /// disconnect from LiveKit and clean up call state.
+    CallHangupReceived {
+        /// The call ID that was hung up.
+        call_id: String,
+        /// User who initiated the hangup.
+        peer_id: UserId,
+        /// Hangup reason (e.g., "normal", "busy", "declined").
+        reason: String,
     },
 }
 
@@ -404,7 +434,9 @@ impl DomainEvent {
             DomainEvent::MessageUnpinned { channel_id, .. } => Some(*channel_id),
             DomainEvent::KeyExchangeReceived { conversation_id, .. } => Some(*conversation_id),
             DomainEvent::SenderKeyReceived { channel_id, .. } => Some(*channel_id),
+            DomainEvent::GroupMailboxReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::DeleteForMeSync { conversation_id, .. } => Some(*conversation_id),
+            DomainEvent::CallHangupReceived { .. } => None, // Calls don't have a channel context here
         }
     }
 
@@ -612,7 +644,7 @@ mod tests {
         assert!(typing.is_transient());
 
         let msg = DomainEvent::MessageReceived {
-            message: Message::new_text(channel_id, Some(user_id), "test".to_string()),
+            message: Message::new_text(channel_id, Some(user_id), "test".to_string(), 0),
         };
         assert!(!msg.is_transient());
     }
@@ -623,7 +655,7 @@ mod tests {
         let user_id = UserId::new();
 
         let msg = DomainEvent::MessageReceived {
-            message: Message::new_text(channel_id, Some(user_id), "test".to_string()),
+            message: Message::new_text(channel_id, Some(user_id), "test".to_string(), 0),
         };
         assert_eq!(msg.channel_id(), Some(channel_id));
 

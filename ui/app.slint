@@ -39,10 +39,10 @@ import { PdfPreviewPanel } from "components/mod.slint";
 import { VideoPlayer } from "components/mod.slint";
 
 // Import call UI
-import { IncomingCallModal, ActiveCallView, IncomingCallData, ActiveCallData, CallParticipantData } from "calls/mod.slint";
+import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData }
+export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData }
 
 export component App inherits Rectangle {
     // ========== View routing ==========
@@ -107,6 +107,7 @@ export component App inherits Rectangle {
 
     // ========== Audio playback state ==========
     in-out property <string> current-playing-attachment-id: "";
+    in-out property <bool> is-media-playing: false;  // True when audio is actively playing (not paused)
     in-out property <float> audio-progress: 0.0;  // Playback progress 0.0-1.0
     in-out property <string> audio-elapsed: "0:00";  // Elapsed time display
 
@@ -317,6 +318,16 @@ export component App inherits Rectangle {
     in property <image> call-local-video-frame;
     in property <[image]> call-remote-video-frames;
 
+    // Device picker properties
+    in-out property <bool> device-picker-visible: false;
+    in-out property <string> device-picker-type: "audio"; // "audio", "audio_output", or "screen"
+    in property <[AudioDeviceData]> audio-devices: [];
+    in-out property <string> selected-audio-device-id: "";
+    in property <[AudioDeviceData]> audio-output-devices: [];
+    in-out property <string> selected-audio-output-id: "";
+    in property <[ScreenSourceData]> screen-sources: [];
+    in-out property <string> selected-screen-source-id: "";
+
     // ========== Auth callbacks ==========
     callback login(string, string);
     callback register(string, string, string);
@@ -344,6 +355,7 @@ export component App inherits Rectangle {
     callback thread-clicked(string);
     callback more-clicked(string);
     callback view-attachment(string);  // attachment ID - for viewing/opening attachments
+    callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
     callback send(string);
     callback send-edit(string, string);  // (message_id, new_text)
@@ -425,6 +437,12 @@ export component App inherits Rectangle {
     callback call-toggle-video();
     callback call-toggle-screen-share();
     callback call-end();
+    callback show-audio-device-picker();
+    callback show-audio-output-picker();
+    callback show-screen-source-picker();
+    callback audio-device-selected(string);   // device_id
+    callback audio-output-selected(string);   // device_id
+    callback screen-source-selected(string);  // source_id
 
     background: Colors.background;
 
@@ -546,6 +564,7 @@ export component App inherits Rectangle {
                 message-scroll-position <=> root.message-scroll-position;
                 should-auto-scroll: root.should-auto-scroll;
                 current-playing-attachment-id: root.current-playing-attachment-id;
+                is-media-playing: root.is-media-playing;
                 audio-progress: root.audio-progress;
                 audio-elapsed: root.audio-elapsed;
                 composer-text <=> root.composer-text;
@@ -579,6 +598,7 @@ export component App inherits Rectangle {
                 thread-clicked(id) => { root.thread-clicked(id); }
                 more-clicked(id) => { root.more-clicked(id); }
                 view-attachment(id) => { root.view-attachment(id); }
+                audio-seek(id, pos) => { root.audio-seek(id, pos); }
                 load-more => { root.load-more(); }
                 send(text) => { root.send(text); }
                 send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
@@ -928,10 +948,50 @@ export component App inherits Rectangle {
             root.call-toggle-video();
         }
         toggle-screen-share => {
-            root.call-toggle-screen-share();
+            // Show screen source picker instead of directly toggling
+            if root.call-is-screen-sharing {
+                // If already sharing, stop it
+                root.call-toggle-screen-share();
+            } else {
+                // Show picker to select source
+                root.show-screen-source-picker();
+            }
         }
         end-call => {
             root.call-end();
+        }
+    }
+
+    // Device picker modal (for audio devices and screen sources)
+    DevicePicker {
+        show: root.device-picker-visible;
+        title: root.device-picker-type == "audio" ? "Select Microphone" :
+               root.device-picker-type == "audio_output" ? "Select Speaker" : "Select Screen to Share";
+        picker-type: root.device-picker-type;
+        audio-devices: root.audio-devices;
+        selected-audio-id: root.selected-audio-device-id;
+        audio-output-devices: root.audio-output-devices;
+        selected-audio-output-id: root.selected-audio-output-id;
+        screen-sources: root.screen-sources;
+        selected-screen-id: root.selected-screen-source-id;
+
+        audio-selected(id) => {
+            root.selected-audio-device-id = id;
+            root.device-picker-visible = false;
+            root.audio-device-selected(id);
+        }
+        audio-output-selected(id) => {
+            root.selected-audio-output-id = id;
+            root.device-picker-visible = false;
+            root.audio-output-selected(id);
+        }
+        screen-selected(id) => {
+            root.selected-screen-source-id = id;
+            root.device-picker-visible = false;
+            root.screen-source-selected(id);
+        }
+        closed => {
+            root.device-picker-visible = false;
         }
     }
 

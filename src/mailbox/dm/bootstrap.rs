@@ -11,7 +11,8 @@
 //! 6. Bob creates his own mailbox, sends address to Alice's mailbox
 //! 7. Both now have each other's mailbox addresses - two-way anonymity established
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{Duration, Utc};
 use prost::Message;
@@ -23,9 +24,36 @@ use crate::mailbox::{MailboxToken, TokenManager};
 use crate::network::grpc::MailboxClient;
 use crate::proto::content_v1::{content, Content, KeyExchange};
 use crate::storage::Database;
+use crate::util::time::TimestampNanos;
 
 /// Default mailbox TTL: 7 days in seconds.
 pub const DEFAULT_MAILBOX_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+
+/// Global lock to prevent concurrent bootstrap operations for the same peer.
+/// This avoids race conditions where multiple threads could create duplicate mailboxes.
+static BOOTSTRAP_IN_PROGRESS: OnceLock<Mutex<HashSet<UserId>>> = OnceLock::new();
+
+fn get_bootstrap_lock() -> &'static Mutex<HashSet<UserId>> {
+    BOOTSTRAP_IN_PROGRESS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Try to acquire bootstrap lock for a peer. Returns true if acquired, false if already in progress.
+/// Caller must call `release_bootstrap_lock` when done.
+pub fn try_acquire_bootstrap_lock(peer_id: &UserId) -> bool {
+    let mut lock = get_bootstrap_lock().lock().unwrap();
+    if lock.contains(peer_id) {
+        false
+    } else {
+        lock.insert(*peer_id);
+        true
+    }
+}
+
+/// Release bootstrap lock for a peer.
+pub fn release_bootstrap_lock(peer_id: &UserId) {
+    let mut lock = get_bootstrap_lock().lock().unwrap();
+    lock.remove(peer_id);
+}
 
 /// DM bootstrap handler for initiating anonymous DM conversations.
 ///
@@ -90,13 +118,13 @@ impl BootstrapResponse {
         let key_exchange = KeyExchange {
             ephemeral_pk: combined_pk,
             conversation_id: self.peer_id.to_string(),
-            timestamp: Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
         };
 
         let content = Content {
             content: Some(content::Content::KeyExchange(key_exchange)),
             ephemeral_reply_to: None,
-            timestamp: Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
             padding: vec![],
         };
 
@@ -149,16 +177,64 @@ impl DmBootstrap {
         peer_id: UserId,
         mailbox_client: &mut MailboxClient,
     ) -> Result<BootstrapResult, MailboxError> {
+        // Acquire bootstrap lock for this peer to prevent concurrent operations
+        {
+            let mut lock = get_bootstrap_lock().lock().unwrap();
+            if lock.contains(&peer_id) {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    "DM bootstrap: already in progress for this peer, skipping"
+                );
+                return Err(MailboxError::ConversationExists);
+            }
+            lock.insert(peer_id);
+        }
+
+        // Use a guard to ensure cleanup on all exit paths
+        let result = self.initiate_dm_inner(peer_id, mailbox_client).await;
+
+        // Release lock
+        {
+            let mut lock = get_bootstrap_lock().lock().unwrap();
+            lock.remove(&peer_id);
+        }
+
+        result
+    }
+
+    /// Inner implementation of initiate_dm (extracted for lock management).
+    async fn initiate_dm_inner(
+        &self,
+        peer_id: UserId,
+        mailbox_client: &mut MailboxClient,
+    ) -> Result<BootstrapResult, MailboxError> {
+        tracing::info!(peer_id = %peer_id, "DM bootstrap: step 1 - checking existing conversation");
+
         // 1. Check existing conversation state
         let existing = self.conversation_manager.load_conversation(&peer_id)?;
         if let Some(conv) = &existing {
+            tracing::debug!(
+                peer_id = %peer_id,
+                needs_bootstrap = conv.needs_bootstrap(),
+                has_our_mailbox = conv.our_mailbox.is_some(),
+                has_peer_mailbox = conv.peer_mailbox.is_some(),
+                has_shared_secret = conv.conversation_key.as_ref().map(|k| k.shared_secret.is_some()).unwrap_or(false),
+                "DM bootstrap: existing conversation found"
+            );
             if !conv.needs_bootstrap() {
                 return Err(MailboxError::ConversationExists);
             }
+        } else {
+            tracing::debug!(peer_id = %peer_id, "DM bootstrap: no existing conversation");
         }
+
+        tracing::info!(peer_id = %peer_id, "DM bootstrap: step 2 - ensuring token available");
 
         // 2. Get available token or request new ones
         let token = self.ensure_token(mailbox_client).await?;
+        tracing::debug!(peer_id = %peer_id, token_id = %token.id, "DM bootstrap: got token");
+
+        tracing::info!(peer_id = %peer_id, "DM bootstrap: step 3 - creating ephemeral mailbox");
 
         // 3. Create ephemeral mailbox on server
         let response = mailbox_client
@@ -169,13 +245,19 @@ impl DmBootstrap {
                 vec![],  // Empty randomizer for compatibility
             )
             .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(peer_id = %peer_id, error = %e, "DM bootstrap: failed to create mailbox");
+                MailboxError::Network(e.to_string())
+            })?;
+        tracing::debug!(peer_id = %peer_id, mailbox_id = %response.mailbox_id, "DM bootstrap: mailbox created");
 
         // 4. Build our mailbox from token + response
         let our_mailbox = self.build_mailbox_from_token(&token, &response)?;
+        tracing::debug!(peer_id = %peer_id, "DM bootstrap: step 4 - mailbox built from token");
 
         // 5. Generate conversation keys
         let conversation_key = ConversationKey::new();
+        tracing::debug!(peer_id = %peer_id, "DM bootstrap: step 5 - conversation keys generated");
 
         // 6. Save state
         self.conversation_manager
@@ -183,10 +265,14 @@ impl DmBootstrap {
         self.conversation_manager
             .save_conversation_key(&peer_id, &conversation_key)?;
         self.token_manager.mark_token_used(&token.id)?;
+        tracing::debug!(peer_id = %peer_id, "DM bootstrap: step 6 - state saved");
 
         // 7. Build bootstrap message (KeyExchange proto)
         let bootstrap_message =
             self.build_bootstrap_message(&our_mailbox, &conversation_key, &peer_id)?;
+        tracing::debug!(peer_id = %peer_id, message_len = bootstrap_message.len(), "DM bootstrap: step 7 - bootstrap message built");
+
+        tracing::info!(peer_id = %peer_id, "DM bootstrap: initiate_dm completed successfully");
 
         Ok(BootstrapResult {
             our_mailbox,
@@ -201,13 +287,18 @@ impl DmBootstrap {
         &self,
         client: &mut MailboxClient,
     ) -> Result<MailboxToken, MailboxError> {
+        tracing::info!("DM bootstrap: checking for available token");
         if let Some(token) = self.token_manager.get_available_token()? {
+            tracing::info!(token_id = %token.id, "DM bootstrap: found existing available token");
             return Ok(token);
         }
 
+        tracing::info!("DM bootstrap: no available token, requesting new tokens from server");
         // Need to request tokens
         let count = self.token_manager.request_tokens(client, 5).await?;
+        tracing::info!(count, "DM bootstrap: requested tokens from server");
         if count == 0 {
+            tracing::error!("DM bootstrap: no tokens received from server");
             return Err(MailboxError::NoTokensAvailable);
         }
 
@@ -295,6 +386,40 @@ impl DmBootstrap {
             return Ok(None);
         }
 
+        // Acquire bootstrap lock for this peer to prevent concurrent operations
+        {
+            let mut lock = get_bootstrap_lock().lock().unwrap();
+            if lock.contains(&sender_id) {
+                tracing::debug!(
+                    peer_id = %sender_id,
+                    "DM bootstrap: already in progress for this peer, skipping incoming"
+                );
+                return Ok(None);
+            }
+            lock.insert(sender_id);
+        }
+
+        // Use inner function for cleanup
+        let result = self
+            .handle_incoming_bootstrap_inner(sender_id, ephemeral_pk, mailbox_client)
+            .await;
+
+        // Release lock
+        {
+            let mut lock = get_bootstrap_lock().lock().unwrap();
+            lock.remove(&sender_id);
+        }
+
+        result
+    }
+
+    /// Inner implementation of handle_incoming_bootstrap (extracted for lock management).
+    async fn handle_incoming_bootstrap_inner(
+        &self,
+        sender_id: UserId,
+        ephemeral_pk: &[u8],
+        mailbox_client: &mut MailboxClient,
+    ) -> Result<Option<BootstrapResponse>, MailboxError> {
         // Extract peer's mailbox address and conversation key
         let mut peer_mailbox_pk = [0u8; 32];
         let mut peer_conversation_pk = [0u8; 32];
@@ -381,13 +506,13 @@ impl DmBootstrap {
         let bootstrap_exchange = KeyExchange {
             ephemeral_pk: combined_pk, // 64 bytes: mailbox || conversation key
             conversation_id: peer_id.to_string(),
-            timestamp: Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
         };
 
         let content = Content {
             content: Some(content::Content::KeyExchange(bootstrap_exchange)),
             ephemeral_reply_to: None,
-            timestamp: Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
             padding: vec![],
         };
 
@@ -455,13 +580,13 @@ mod tests {
         let key_exchange = KeyExchange {
             ephemeral_pk: combined_pk,
             conversation_id: peer_id.to_string(),
-            timestamp: Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
         };
 
         let content = Content {
             content: Some(content::Content::KeyExchange(key_exchange)),
             ephemeral_reply_to: None,
-            timestamp: Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
             padding: vec![],
         };
 

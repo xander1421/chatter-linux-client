@@ -1,6 +1,8 @@
 //! Thread panel callbacks.
 //!
 //! Handles thread panel actions (close, send reply, load more replies).
+//!
+//! Uses MessageService for all message operations - no direct network calls.
 
 use std::sync::Arc;
 
@@ -8,9 +10,6 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::ids::{ChannelId, MessageId};
-use chatter_linux::network::grpc::auth_client::AuthClient;
-use chatter_linux::network::grpc::channel_client::ChannelClient;
-use chatter_linux::network::grpc::message_client::MessageClient;
 use chatter_linux::state::ChatState;
 use chatter_linux::storage::{AttachmentRepository, ChannelRepository, MessageRepository, UserRepository};
 
@@ -52,7 +51,6 @@ fn wire_send_thread_reply(window: &MainWindow, ctx: &AppContext) {
     let weak_window = window.as_weak();
     let chat_state = ctx.chat_state.clone();
     let message_service = ctx.message_service.clone();
-    let grpc_pool = ctx.grpc_pool.clone();
     let group_fanout = ctx.get_group_fanout();
 
     window.on_send_thread_reply(move |text: SharedString| {
@@ -64,7 +62,6 @@ fn wire_send_thread_reply(window: &MainWindow, ctx: &AppContext) {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
         let message_service = message_service.clone();
-        let grpc_pool = grpc_pool.clone();
         let group_fanout = group_fanout.clone();
 
         // Use spawn_blocking with nested runtime for non-Send Signal futures
@@ -90,19 +87,9 @@ fn wire_send_thread_reply(window: &MainWindow, ctx: &AppContext) {
                     thread.channel_id
                 );
 
-                // Create gRPC clients
-                let mut message_client =
-                    MessageClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
-                let mut auth_client = AuthClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
-                let mut channel_client =
-                    ChannelClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
-
-                // Send the message as a reply to the thread root
+                // Send the message as a reply to the thread root using MessageService
                 match message_service
-                    .send_message(
-                        &mut message_client,
-                        &mut auth_client,
-                        &mut channel_client,
+                    .send(
                         group_fanout.as_deref(),
                         &thread.channel_id,
                         &text,

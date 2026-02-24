@@ -195,6 +195,36 @@ impl From<UserId> for ChannelId {
 }
 
 // ============================================================================
+// AttachmentId helpers
+// ============================================================================
+
+impl AttachmentId {
+    /// Create a deterministic attachment ID from a CDN key.
+    ///
+    /// Used for DM attachments where the server assigns a cdn_key rather than
+    /// a UUID. This generates a consistent UUID from the cdn_key so we can
+    /// look up the attachment in the repository.
+    #[must_use]
+    pub fn from_cdn_key(cdn_key: &str) -> Self {
+        use sha2::{Digest, Sha256};
+
+        let mut hasher = Sha256::new();
+        hasher.update(b"cdn_key:");
+        hasher.update(cdn_key.as_bytes());
+        let hash = hasher.finalize();
+
+        // Convert first 16 bytes to UUID (version 5 namespace format)
+        let mut uuid_bytes = [0u8; 16];
+        uuid_bytes.copy_from_slice(&hash[..16]);
+        // Set version 5 (SHA-1 namespace) and variant 1 (RFC 4122)
+        uuid_bytes[6] = (uuid_bytes[6] & 0x0f) | 0x50;
+        uuid_bytes[8] = (uuid_bytes[8] & 0x3f) | 0x80;
+
+        Self(Uuid::from_bytes(uuid_bytes))
+    }
+}
+
+// ============================================================================
 // DeviceId implementation (u32-based)
 // ============================================================================
 

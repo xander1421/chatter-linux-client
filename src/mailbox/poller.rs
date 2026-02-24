@@ -23,8 +23,9 @@ use crate::mailbox::group::{GroupMailboxManager, GroupPollResult};
 use crate::mailbox::timing::{TimingConfig, TimingObfuscation};
 use crate::network::grpc::MailboxClient;
 
-/// Default polling interval (30 seconds).
-pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 30;
+/// Default polling interval for DM mailboxes (5 seconds for real-time chat).
+/// NDSS '21 measured Signal delivery at ~1.5s; 5s balances latency vs server load.
+pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 5;
 
 /// Default dummy poll probability (20% of polls are to unused mailboxes).
 pub const DEFAULT_DUMMY_POLL_PROBABILITY: f64 = 0.2;

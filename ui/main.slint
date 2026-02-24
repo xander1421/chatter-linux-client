@@ -1,11 +1,11 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "app.slint";
 import { CodeLine } from "components/mod.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, CodeLine, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData }
+export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, CodeLine, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -69,6 +69,7 @@ export component MainWindow inherits Window {
 
     // ========== Audio playback state ==========
     in-out property <string> current-playing-attachment-id <=> app.current-playing-attachment-id;
+    in-out property <bool> is-media-playing <=> app.is-media-playing;
     in-out property <float> audio-progress <=> app.audio-progress;
     in-out property <string> audio-elapsed <=> app.audio-elapsed;
 
@@ -278,6 +279,16 @@ export component MainWindow inherits Window {
     in property <image> call-local-video-frame <=> app.call-local-video-frame;
     in property <[image]> call-remote-video-frames <=> app.call-remote-video-frames;
 
+    // Device picker properties
+    in-out property <bool> device-picker-visible <=> app.device-picker-visible;
+    in-out property <string> device-picker-type <=> app.device-picker-type;
+    in property <[AudioDeviceData]> audio-devices <=> app.audio-devices;
+    in-out property <string> selected-audio-device-id <=> app.selected-audio-device-id;
+    in property <[AudioDeviceData]> audio-output-devices <=> app.audio-output-devices;
+    in-out property <string> selected-audio-output-id <=> app.selected-audio-output-id;
+    in property <[ScreenSourceData]> screen-sources <=> app.screen-sources;
+    in-out property <string> selected-screen-source-id <=> app.selected-screen-source-id;
+
     // ========== Auth callbacks ==========
     callback login <=> app.login;
     callback register <=> app.register;
@@ -303,6 +314,7 @@ export component MainWindow inherits Window {
     callback thread-clicked <=> app.thread-clicked;
     callback more-clicked <=> app.more-clicked;
     callback view-attachment <=> app.view-attachment;
+    callback audio-seek <=> app.audio-seek;
     callback load-more <=> app.load-more;
     callback send <=> app.send;
     callback send-edit <=> app.send-edit;
@@ -370,6 +382,12 @@ export component MainWindow inherits Window {
     callback call-toggle-video <=> app.call-toggle-video;
     callback call-toggle-screen-share <=> app.call-toggle-screen-share;
     callback call-end <=> app.call-end;
+    callback show-audio-device-picker <=> app.show-audio-device-picker;
+    callback show-audio-output-picker <=> app.show-audio-output-picker;
+    callback show-screen-source-picker <=> app.show-screen-source-picker;
+    callback audio-device-selected <=> app.audio-device-selected;
+    callback audio-output-selected <=> app.audio-output-selected;
+    callback screen-source-selected <=> app.screen-source-selected;
 
     // App fills the entire window - explicit sizing ensures width flows to children
     app := App {

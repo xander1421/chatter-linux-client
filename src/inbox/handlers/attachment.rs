@@ -70,6 +70,21 @@ impl AttachmentHandler {
         &self,
         pointer: &AttachmentPointer,
     ) -> Result<Attachment, HandlerError> {
+        // Debug: log what we received
+        tracing::info!(
+            "AttachmentPointer received: cdn_key={}, file_name={}, content_type={}, \
+             thumbnail_bytes={}, thumbnail_size={}x{}, width={}, height={}, waveform_len={}",
+            pointer.cdn_key,
+            pointer.file_name,
+            pointer.content_type,
+            pointer.thumbnail.len(),
+            pointer.thumbnail_width,
+            pointer.thumbnail_height,
+            pointer.width,
+            pointer.height,
+            pointer.waveform.len()
+        );
+
         // Validate required fields
         if pointer.cdn_key.is_empty() {
             return Err(HandlerError::validation_failed("missing cdn_key"));
@@ -78,7 +93,7 @@ impl AttachmentHandler {
         // Generate deterministic attachment ID from cdn_key
         let attachment_id = AttachmentId::from_uuid(uuid_from_string(&pointer.cdn_key));
 
-        // Build file metadata
+        // Build file metadata with sender-provided preview data
         let metadata = FileMetadata {
             name: pointer.file_name.clone(),
             mime_type: pointer.content_type.clone(),
@@ -100,14 +115,44 @@ impl AttachmentHandler {
             } else {
                 None
             },
+            // Use sender-provided waveform (32 samples, 0-255)
+            waveform_samples: if !pointer.waveform.is_empty() {
+                Some(pointer.waveform.clone())
+            } else {
+                None
+            },
+            // Use sender-provided thumbnail for instant preview
+            thumbnail: if !pointer.thumbnail.is_empty() {
+                Some(pointer.thumbnail.clone())
+            } else {
+                None
+            },
+            thumbnail_width: if pointer.thumbnail_width > 0 {
+                Some(pointer.thumbnail_width)
+            } else {
+                None
+            },
+            thumbnail_height: if pointer.thumbnail_height > 0 {
+                Some(pointer.thumbnail_height)
+            } else {
+                None
+            },
         };
 
         // Build attachment with pending status (needs download)
+        // Content will be stored in database when downloaded via download_to_database()
         let mut attachment = Attachment::new(attachment_id, metadata);
         attachment.status = AttachmentStatus::Pending;
+        // content_location remains NotDownloaded (set by Attachment::new)
         attachment.remote_url = Some(pointer.cdn_key.clone());
         attachment.encryption_key = if !pointer.encryption_key.is_empty() {
             Some(pointer.encryption_key.clone())
+        } else {
+            None
+        };
+        // Store digest for verification during decryption
+        attachment.encryption_iv = if !pointer.digest.is_empty() {
+            Some(pointer.digest.clone())
         } else {
             None
         };

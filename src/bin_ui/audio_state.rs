@@ -3,6 +3,7 @@
 //! Tracks which audio attachment is currently playing so the UI can reflect this.
 
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use chatter_linux::media::AudioPlayer;
 
@@ -19,6 +20,8 @@ pub struct AudioState {
     pub current_id: Option<String>,
     /// Whether audio is currently playing (vs paused).
     pub is_playing: bool,
+    /// Total duration of the current audio.
+    pub total_duration: Duration,
 }
 
 impl AudioState {
@@ -56,11 +59,12 @@ pub fn is_attachment_playing(attachment_id: &str) -> bool {
     }
 }
 
-/// Update the audio state when playback starts.
-pub fn set_playing(attachment_id: &str) {
+/// Update the audio state when playback starts with known duration.
+pub fn set_playing_with_duration(attachment_id: &str, duration: Duration) {
     if let Ok(mut state) = get_audio_state().lock() {
         state.current_id = Some(attachment_id.to_string());
         state.is_playing = true;
+        state.total_duration = duration;
     }
 }
 
@@ -83,5 +87,83 @@ pub fn clear_state() {
     if let Ok(mut state) = get_audio_state().lock() {
         state.current_id = None;
         state.is_playing = false;
+        state.total_duration = Duration::ZERO;
     }
+}
+
+/// Get the ID of the currently playing attachment, if any.
+pub fn get_current_playing_id() -> Option<String> {
+    if let Ok(state) = get_audio_state().lock() {
+        state.current_id.clone()
+    } else {
+        None
+    }
+}
+
+/// Get the current playback progress as a float from 0.0 to 1.0.
+///
+/// Returns 0.0 if nothing is playing or duration is unknown.
+pub fn get_progress() -> f32 {
+    let player_arc = get_audio_player();
+    let state_arc = get_audio_state();
+
+    if let (Ok(player_guard), Ok(state_guard)) = (player_arc.lock(), state_arc.lock()) {
+        if !state_guard.is_playing && state_guard.current_id.is_none() {
+            return 0.0;
+        }
+
+        if let Some(ref player) = *player_guard {
+            if let Some(duration) = player.duration() {
+                if duration.as_secs_f32() > 0.0 {
+                    let position = player.position();
+                    return (position.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0);
+                }
+            }
+        }
+    }
+
+    0.0
+}
+
+/// Get the current playback position.
+///
+/// Returns Duration::ZERO if nothing is playing.
+pub fn get_position() -> Duration {
+    let player_arc = get_audio_player();
+
+    if let Ok(player_guard) = player_arc.lock() {
+        if let Some(ref player) = *player_guard {
+            return player.position();
+        }
+    }
+
+    Duration::ZERO
+}
+
+/// Get the total duration of the currently playing audio.
+pub fn get_current_duration() -> Option<Duration> {
+    if let Ok(state) = get_audio_state().lock() {
+        if state.current_id.is_some() && state.total_duration > Duration::ZERO {
+            return Some(state.total_duration);
+        }
+    }
+    None
+}
+
+/// Update position tracking after a seek.
+///
+/// This is a no-op since AudioPlayer.seek() internally handles position reset.
+/// The function exists for semantic clarity at call sites.
+pub fn set_seek_position(_position: Duration) {
+    // AudioPlayer.seek() resets pause_offset and play_start internally,
+    // so we don't need to track position separately here.
+    // This function exists for clarity at call sites.
+}
+
+/// Format duration as "M:SS" string.
+pub fn format_duration(duration: Duration) -> String {
+    let total_secs = duration.as_secs();
+    let minutes = total_secs / 60;
+    let seconds = total_secs % 60;
+    format!("{}:{:02}", minutes, seconds)
 }

@@ -1,0 +1,460 @@
+//! Channel event stream handling for UI updates.
+//!
+//! Subscribes to channel events (member joins, leaves, etc.) and updates
+//! the UI with system messages.
+
+use std::sync::Arc;
+
+use chrono::Utc;
+use slint::{Model, Weak};
+use tokio_stream::StreamExt;
+use tracing::{debug, error, info, warn};
+
+use chatter_linux::domain::channel::{MemberRole, Membership, NotificationPreference};
+use chatter_linux::domain::ids::{ChannelId, MessageId, UserId};
+use chatter_linux::domain::message::{Message, MessageContent, SystemMessage};
+use chatter_linux::network::grpc::channel_client::ChannelClient;
+use chatter_linux::network::grpc::client_pool::GrpcClientPool;
+use chatter_linux::proto::chat_v1::channel_event;
+use chatter_linux::services::signal_service::SignalService;
+use chatter_linux::storage::{ChannelRepository, MessageRepository, UserRepository};
+
+use crate::MainWindow;
+
+/// Spawn a task that streams channel events and updates the UI.
+///
+/// This connects to the server's channel event stream and handles:
+/// - MemberAdded: Creates a system message "X joined the channel"
+/// - MemberRemoved: Creates a system message "X left the channel" + marks for sender key rotation
+/// - ChannelUpdated: Could update channel info in sidebar
+///
+/// Note: SKDM distribution to new members happens when we send our first message
+/// to them (via MessageService's encrypt_for_group which includes SKDM if needed).
+///
+/// Returns a handle to the spawned task.
+pub fn spawn_channel_events_handler(
+    weak_window: Weak<MainWindow>,
+    grpc_pool: Arc<GrpcClientPool>,
+    channel_repo: Arc<ChannelRepository>,
+    message_repo: Arc<MessageRepository>,
+    user_repo: Arc<UserRepository>,
+    signal_service: Arc<SignalService>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Small delay to ensure connection is stable
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        loop {
+            match run_channel_events_stream(
+                &weak_window,
+                &grpc_pool,
+                &channel_repo,
+                &message_repo,
+                &user_repo,
+                &signal_service,
+            )
+            .await
+            {
+                Ok(()) => {
+                    info!("Channel events stream ended normally");
+                    break;
+                }
+                Err(e) => {
+                    warn!("Channel events stream error: {}. Reconnecting in 5s...", e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+    })
+}
+
+/// Run the channel events stream until it ends or errors.
+async fn run_channel_events_stream(
+    weak_window: &Weak<MainWindow>,
+    grpc_pool: &Arc<GrpcClientPool>,
+    channel_repo: &Arc<ChannelRepository>,
+    message_repo: &Arc<MessageRepository>,
+    user_repo: &Arc<UserRepository>,
+    signal_service: &Arc<SignalService>,
+) -> Result<(), String> {
+    let mut channel_client = ChannelClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+
+    // Stream events for all channels (pass None for channel_id)
+    let mut stream = channel_client
+        .stream_channel_events(None)
+        .await
+        .map_err(|e| format!("Failed to start channel events stream: {}", e))?;
+
+    info!("Channel events stream started");
+
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(event) => {
+                if let Some(event_data) = event.event {
+                    handle_channel_event(
+                        event_data,
+                        &event.channel_id,
+                        event.timestamp,
+                        weak_window,
+                        channel_repo,
+                        message_repo,
+                        user_repo,
+                        signal_service,
+                    )
+                    .await;
+                }
+            }
+            Err(e) => {
+                error!("Channel event stream error: {}", e);
+                return Err(format!("Stream error: {}", e));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Handle a single channel event.
+#[allow(clippy::too_many_arguments)]
+async fn handle_channel_event(
+    event: channel_event::Event,
+    channel_id_str: &str,
+    timestamp: u64,
+    weak_window: &Weak<MainWindow>,
+    channel_repo: &Arc<ChannelRepository>,
+    message_repo: &Arc<MessageRepository>,
+    user_repo: &Arc<UserRepository>,
+    signal_service: &Arc<SignalService>,
+) {
+    match event {
+        channel_event::Event::MemberAdded(member) => {
+            let user_id_str = member.user_id.clone();
+            debug!(
+                channel_id = %channel_id_str,
+                user_id = %user_id_str,
+                "Received MemberAdded event"
+            );
+
+            // Create system message for the join
+            if let (Ok(channel_id), Ok(user_id)) = (
+                channel_id_str.parse::<ChannelId>(),
+                user_id_str.parse::<UserId>(),
+            ) {
+                // Get user display name for the message
+                let display_name = match user_repo.get(&user_id) {
+                    Ok(Some(user)) => user.username,
+                    _ => user_id_str.clone(),
+                };
+
+                // Create system message
+                let message = Message {
+                    id: MessageId::new(),
+                    channel_id: channel_id.clone(),
+                    sender_id: None, // System messages have no sender
+                    content: MessageContent::System(SystemMessage::UserJoined(user_id.clone())),
+                    thread_id: None,
+                    reply_to: None,
+                    attachments: Vec::new(),
+                    is_pinned: false,
+                    is_edited: false,
+                    is_deleted: false,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                    edited_at: None,
+                    reaction_counts: Vec::new(),
+                    current_user_reactions: Vec::new(),
+                    mentioned_integrations: Vec::new(),
+                    targets_ai_bot: false,
+                    sent_at: 0, // System messages don't use sender timestamp
+                };
+
+                // Save to local database
+                if let Err(e) = message_repo.insert(&message) {
+                    warn!("Failed to save system message: {}", e);
+                }
+
+                // Update UI
+                update_ui_with_system_message(
+                    weak_window,
+                    &channel_id,
+                    &format!("{} joined the channel", display_name),
+                    timestamp,
+                );
+
+                // Sync this member to local storage
+                sync_member_to_local(channel_repo, &channel_id, &member);
+
+                // Note: SKDM distribution to new members happens automatically when we send
+                // our first message - encrypt_for_group() includes SKDM if the recipient
+                // doesn't have our sender key yet.
+            }
+        }
+        channel_event::Event::MemberRemovedId(user_id_str) => {
+            debug!(
+                channel_id = %channel_id_str,
+                user_id = %user_id_str,
+                "Received MemberRemoved event"
+            );
+
+            if let (Ok(channel_id), Ok(user_id)) = (
+                channel_id_str.parse::<ChannelId>(),
+                user_id_str.parse::<UserId>(),
+            ) {
+                // Get user display name
+                let display_name = match user_repo.get(&user_id) {
+                    Ok(Some(user)) => user.username,
+                    _ => user_id_str.clone(),
+                };
+
+                // Create system message
+                let message = Message {
+                    id: MessageId::new(),
+                    channel_id: channel_id.clone(),
+                    sender_id: None,
+                    content: MessageContent::System(SystemMessage::UserLeft(user_id)),
+                    thread_id: None,
+                    reply_to: None,
+                    attachments: Vec::new(),
+                    is_pinned: false,
+                    is_edited: false,
+                    is_deleted: false,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                    edited_at: None,
+                    reaction_counts: Vec::new(),
+                    current_user_reactions: Vec::new(),
+                    mentioned_integrations: Vec::new(),
+                    targets_ai_bot: false,
+                    sent_at: 0, // System messages don't use sender timestamp
+                };
+
+                if let Err(e) = message_repo.insert(&message) {
+                    warn!("Failed to save system message: {}", e);
+                }
+
+                // Mark channel for sender key rotation (forward secrecy)
+                // The departed member won't be able to decrypt our future messages
+                if let Err(e) = signal_service.mark_channel_for_rotation(&channel_id) {
+                    warn!(
+                        channel_id = %channel_id,
+                        error = %e,
+                        "Failed to mark channel for sender key rotation"
+                    );
+                } else {
+                    info!(
+                        channel_id = %channel_id,
+                        departed_user = %user_id,
+                        "Marked channel for sender key rotation after member left"
+                    );
+                }
+
+                update_ui_with_system_message(
+                    weak_window,
+                    &channel_id,
+                    &format!("{} left the channel", display_name),
+                    timestamp,
+                );
+            }
+        }
+        channel_event::Event::ChannelUpdated(proto_channel) => {
+            debug!(
+                channel_id = %channel_id_str,
+                channel_name = %proto_channel.name,
+                "Received ChannelUpdated event"
+            );
+
+            // Update channel in local repo
+            if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
+                // Convert proto to domain
+                if let Ok(channel) = chatter_linux::services::channel::converters::proto_to_domain_channel(&proto_channel) {
+                    if let Err(e) = channel_repo.update(&channel) {
+                        warn!("Failed to update channel in local repo: {}", e);
+                    }
+
+                    // Update sidebar UI
+                    let weak = weak_window.clone();
+                    let channel_name = channel.name.clone();
+                    let channel_id_str = channel_id.to_string();
+
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(window) = weak.upgrade() {
+                            // Update channel list in sidebar
+                            let channels = window.get_channels();
+                            for i in 0..channels.row_count() {
+                                if let Some(ch) = channels.row_data(i) {
+                                    if ch.channel_id.as_str() == channel_id_str {
+                                        use slint::VecModel;
+                                        let mut updated_ch = ch.clone();
+                                        updated_ch.name = channel_name.clone().into();
+                                        if let Some(model) = channels.as_any().downcast_ref::<VecModel<crate::ChannelListItemData>>() {
+                                            model.set_row_data(i, updated_ch);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Update header if this is the selected channel
+                            if window.get_selected_channel_id().as_str() == channel_id_str {
+                                window.set_channel_name(channel_name.into());
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        channel_event::Event::ChannelDeleted(deleted_channel_id) => {
+            info!(
+                channel_id = %deleted_channel_id,
+                "Received ChannelDeleted event"
+            );
+
+            // Parse channel ID
+            if let Ok(channel_id) = deleted_channel_id.parse::<ChannelId>() {
+                // Delete from local repo
+                if let Err(e) = channel_repo.delete(&channel_id) {
+                    warn!("Failed to delete channel from local repo: {}", e);
+                }
+
+                // Remove from sidebar UI
+                let weak = weak_window.clone();
+                let deleted_id = deleted_channel_id.clone();
+
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        // Remove from channel list
+                        let channels = window.get_channels();
+                        let channel_list: Vec<crate::ChannelListItemData> = (0..channels.row_count())
+                            .filter_map(|i| channels.row_data(i))
+                            .filter(|ch| ch.channel_id.as_str() != deleted_id)
+                            .collect();
+
+                        use slint::{ModelRc, VecModel};
+                        window.set_channels(ModelRc::new(VecModel::from(channel_list.clone())));
+
+                        // Also check DM list
+                        let dms = window.get_dm_conversations();
+                        let dm_list: Vec<crate::DMListItemData> = (0..dms.row_count())
+                            .filter_map(|i| dms.row_data(i))
+                            .filter(|dm| dm.channel_id.as_str() != deleted_id)
+                            .collect();
+                        window.set_dm_conversations(ModelRc::new(VecModel::from(dm_list)));
+
+                        // If this was the selected channel, clear selection
+                        if window.get_selected_channel_id().as_str() == deleted_id
+                            || window.get_selected_dm_id().as_str() == deleted_id
+                        {
+                            window.set_selected_channel_id("".into());
+                            window.set_selected_dm_id("".into());
+                            window.set_channel_name("".into());
+                            window.set_messages(ModelRc::new(VecModel::from(Vec::<crate::MessageItemData>::new())));
+
+                            // Select first available channel if any
+                            if !channel_list.is_empty() {
+                                window.set_selected_channel_id(channel_list[0].channel_id.clone());
+                                window.set_channel_name(channel_list[0].name.clone());
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        _ => {
+            // Other events (invitations, moderation, etc.)
+            debug!("Received other channel event type");
+        }
+    }
+}
+
+/// Update the UI with a system message for the current channel.
+fn update_ui_with_system_message(
+    weak_window: &Weak<MainWindow>,
+    channel_id: &ChannelId,
+    message_text: &str,
+    timestamp: u64,
+) {
+    let channel_id = channel_id.clone();
+    let message_text = message_text.to_string();
+    let weak = weak_window.clone();
+
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(window) = weak.upgrade() {
+            // Only add to UI if this is the currently active channel
+            let current_channel = window.get_selected_channel_id();
+            if current_channel.as_str() == channel_id.to_string() {
+                use crate::MessageItemData;
+                use slint::{ModelRc, SharedString, VecModel};
+
+                // Create system message item
+                let system_message = MessageItemData {
+                    message_id: uuid::Uuid::new_v4().to_string().into(),
+                    sender_id: SharedString::default(), // No sender for system messages
+                    sender_name: SharedString::default(),
+                    sender_initials: SharedString::default(),
+                    sender_avatar_url: SharedString::default(),
+                    content: message_text.into(),
+                    timestamp: super::inbox_events::format_timestamp(timestamp).into(),
+                    timestamp_ns: timestamp.to_string().into(),
+                    is_own: false,
+                    is_edited: false,
+                    is_deleted: false,
+                    is_system: true,
+                    is_ai: false,
+                    has_attachments: false,
+                    attachment_count: 0,
+                    attachments: ModelRc::new(VecModel::from(Vec::new())),
+                    has_reactions: false,
+                    reaction_summary: SharedString::default(),
+                    reply_count: 0,
+                    reply_count_text: SharedString::default(),
+                    is_thread_reply: false,
+                    show_sender: false,
+                    delivery_status: SharedString::default(),
+                    is_pinned: false,
+                };
+
+                // Append to messages list
+                let current_model = window.get_messages();
+                let mut messages: Vec<_> = (0..current_model.row_count())
+                    .filter_map(|i| current_model.row_data(i))
+                    .collect();
+                messages.push(system_message);
+                window.set_messages(ModelRc::new(VecModel::from(messages)));
+            }
+        }
+    });
+}
+
+/// Sync a member to local channel storage.
+fn sync_member_to_local(
+    channel_repo: &Arc<ChannelRepository>,
+    channel_id: &ChannelId,
+    member: &chatter_linux::proto::chat_v1::channel::ChannelMember,
+) {
+    let role = match member.role {
+        1 => MemberRole::Member,
+        2 => MemberRole::Moderator,
+        3 => MemberRole::Admin,
+        4 => MemberRole::Owner,
+        _ => MemberRole::Member,
+    };
+
+    if let Ok(user_id) = member.user_id.parse::<UserId>() {
+        let membership = Membership {
+            channel_id: channel_id.clone(),
+            user_id,
+            role,
+            joined_at: chrono::DateTime::from_timestamp_millis(member.joined_at as i64)
+                .unwrap_or_else(Utc::now),
+            last_read_message_id: None,
+            is_muted: member.muted,
+            muted_until: None,
+            notification_preference: NotificationPreference::All,
+        };
+
+        if let Err(e) = channel_repo.insert_membership(&membership) {
+            debug!("Member already exists or insert failed: {}", e);
+        }
+    }
+}
+

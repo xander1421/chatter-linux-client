@@ -218,7 +218,7 @@ export component ThreadPanel inherits Rectangle {
                     spacing: Spacing.sm;
 
                     Text {
-                        text: "\u{1F4AC}"; // Speech bubble emoji
+                        text: "\u{1F4AC}\u{FE0F}"; // Speech bubble emoji (with emoji variant selector)
                         font-size: 32px;
                         horizontal-alignment: center;
                     }
@@ -241,13 +241,17 @@ export component ThreadPanel inherits Rectangle {
 
             // Replies list
             if !root.loading && root.replies.length > 0: Flickable {
+                width: 100%;
+                height: 100%;
                 viewport-height: replies-layout.preferred-height;
 
                 replies-layout := VerticalLayout {
+                    width: 100%;
                     padding: Spacing.sm;
                     spacing: 2px;
 
                     for item in root.replies: MessageItem {
+                        width: 100%;
                         message-id: item.message-id;
                         sender-id: item.sender-id;
                         sender-name: item.sender-name;

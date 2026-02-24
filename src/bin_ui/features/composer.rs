@@ -9,22 +9,16 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::ids::AttachmentId;
 use chatter_linux::media::gif::GifClient;
-use chatter_linux::network::grpc::client_pool::GrpcClientPool;
-use chatter_linux::network::grpc::{ChannelClient, UserClient};
+use chatter_linux::services::channel::ChannelService;
+use chatter_linux::services::UserService;
 use chatter_linux::state::ChatState;
-use chatter_linux::storage::AttachmentRepository;
 
 use crate::bin_ui::converters::pending_attachment_to_slint;
 use crate::{EmojiData, GifData, MainWindow, MentionSuggestion, PendingAttachmentData};
 
 /// Wire composer callbacks.
 pub fn wire(window: &MainWindow, ctx: &AppContext) {
-    wire_attachment_clicked(
-        window,
-        ctx.grpc_pool.clone(),
-        ctx.chat_state.clone(),
-        ctx.attachment_repo.clone(),
-    );
+    wire_attachment_clicked(window, ctx.chat_state.clone());
     wire_remove_attachment(window, ctx.chat_state.clone());
     wire_emoji_clicked(window);
     wire_emoji_selected(window);
@@ -33,7 +27,12 @@ pub fn wire(window: &MainWindow, ctx: &AppContext) {
     wire_gif_clicked(window, ctx.gif_client.clone());
     wire_gif_selected(window);
     wire_gif_search(window, ctx.gif_client.clone());
-    wire_mention_triggered(window, ctx.grpc_pool.clone(), ctx.chat_state.clone());
+    wire_mention_triggered(
+        window,
+        Arc::new(ctx.channel_service()),
+        Arc::new(ctx.user_service()),
+        ctx.chat_state.clone(),
+    );
     wire_mention_selected(window);
     wire_process_text(window);
 }
@@ -97,25 +96,17 @@ fn wire_process_text(window: &MainWindow) {
     });
 }
 
-fn wire_attachment_clicked(
-    window: &MainWindow,
-    grpc_pool: Arc<GrpcClientPool>,
-    chat_state: ChatState,
-    attachment_repo: Arc<AttachmentRepository>,
-) {
+fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState) {
     let weak_window = window.as_weak();
 
     window.on_attachment_clicked(move || {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool.clone();
         let chat_state = chat_state.clone();
-        let attachment_repo = attachment_repo.clone();
         tracing::debug!("Attachment clicked");
 
         // Use tokio::spawn for the main async work to keep the runtime alive
         tokio::spawn(async move {
             use chatter_linux::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
-            use chatter_linux::services::AttachmentService;
             use chatter_linux::state::chat_state::PendingAttachment;
 
             let config = FilePickerConfig::new()
@@ -136,43 +127,55 @@ fn wire_attachment_clicked(
 
             tracing::info!("Selected {} file(s) for attachment", selected_files.len());
 
-            // Get active channel ID for upload permission
-            let channel_id = match chat_state.get().active_channel_id {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Cannot upload: no active channel selected");
-                    return;
-                }
-            };
-
-            // Create attachment service
-            let attachment_service = AttachmentService::new(attachment_repo);
-
-            // Upload each file
-            let mut uploaded_count = 0;
-            for file_path in &selected_files {
-                tracing::debug!("Uploading file: {:?}", file_path);
-
-                match attachment_service.upload_file(&grpc_pool, file_path, &channel_id).await {
-                    Ok(result) => {
-                        uploaded_count += 1;
-                        tracing::info!("Successfully uploaded: {:?}", file_path);
-
-                        // Add to pending attachments for composer UI
-                        let pending = PendingAttachment::new(
-                            result.attachment_id,
-                            result.filename,
-                            file_path.to_path_buf(),
-                            result.file_size,
-                            result.mime_type,
-                        );
-                        chat_state.add_pending_attachment(pending);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to upload {:?}: {}", file_path, e);
-                    }
-                }
+            // Verify we have an active channel
+            if chat_state.get().active_channel_id.is_none() {
+                tracing::warn!("Cannot upload: no active channel selected");
+                return;
             }
+
+            // Queue files for upload (upload happens at send time with encryption)
+            // This matches the DM flow - files are uploaded when message is sent
+            for file_path in &selected_files {
+                // Get file metadata for display
+                let metadata = match tokio::fs::metadata(file_path).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        tracing::error!("Failed to read file metadata {:?}: {}", file_path, e);
+                        continue;
+                    }
+                };
+
+                let filename = file_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+
+                let mime_type = mime_guess::from_path(file_path)
+                    .first_or_octet_stream()
+                    .to_string();
+
+                // Generate temporary ID for UI tracking (real ID assigned at upload time)
+                let temp_id = AttachmentId::new();
+
+                tracing::debug!(
+                    "Queued attachment: {} ({} bytes, {})",
+                    filename, metadata.len(), mime_type
+                );
+
+                // Add to pending attachments for composer UI
+                // File will be encrypted and uploaded when message is sent
+                let pending = PendingAttachment::new(
+                    temp_id,
+                    filename,
+                    file_path.to_path_buf(),
+                    metadata.len(),
+                    mime_type,
+                );
+                chat_state.add_pending_attachment(pending);
+            }
+
+            let uploaded_count = selected_files.len();
 
             // Update UI with attachment model
             let attachments = chat_state.get_pending_attachments();
@@ -670,14 +673,20 @@ async fn search_gifs_raw(query: &str, gif_client: Option<&GifClient>) -> Vec<Raw
     }
 }
 
-fn wire_mention_triggered(window: &MainWindow, grpc_pool: Arc<GrpcClientPool>, chat_state: ChatState) {
+fn wire_mention_triggered(
+    window: &MainWindow,
+    channel_service: Arc<ChannelService>,
+    user_service: Arc<UserService>,
+    chat_state: ChatState,
+) {
     let weak_window = window.as_weak();
 
     window.on_mention_triggered(move |query: SharedString| {
         let query_str = query.to_string();
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
-        let grpc_pool = grpc_pool.clone();
+        let channel_service = channel_service.clone();
+        let user_service = user_service.clone();
 
         if query_str.is_empty() {
             let _ = slint::invoke_from_event_loop(move || {
@@ -693,7 +702,12 @@ fn wire_mention_triggered(window: &MainWindow, grpc_pool: Arc<GrpcClientPool>, c
         // Spawn async task to fetch channel members
         tokio::spawn(async move {
             // Fetch raw suggestion data (Send-safe)
-            let raw_suggestions = fetch_mention_suggestions_raw(&query_str, &grpc_pool, &chat_state).await;
+            let raw_suggestions = fetch_mention_suggestions_raw(
+                &query_str,
+                &channel_service,
+                &user_service,
+                &chat_state,
+            ).await;
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
@@ -757,7 +771,8 @@ type RawMentionSuggestion = (String, String, String, bool); // (id, name, mentio
 /// Returns raw data that can be safely sent across threads.
 async fn fetch_mention_suggestions_raw(
     query: &str,
-    grpc_pool: &GrpcClientPool,
+    channel_service: &ChannelService,
+    user_service: &UserService,
     chat_state: &ChatState,
 ) -> Vec<RawMentionSuggestion> {
     let query_lower = query.to_lowercase();
@@ -790,39 +805,33 @@ async fn fetch_mention_suggestions_raw(
         }
     };
 
-    // Fetch channel members
-    let mut channel_client = ChannelClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
-
-    match channel_client
-        .get_channel_members(&channel_id.to_string(), 50, 0)
-        .await
-    {
-        Ok(response) => {
+    // Fetch channel members using ChannelService
+    match channel_service.get_channel_members(&channel_id, 50, 0).await {
+        Ok(members) => {
             // For each member, fetch their profile to get display name
-            let mut user_client = UserClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
-
-            for member in response.members.iter().take(20) {
-                // Fetch user profile
-                match user_client.get_user_profile(&member.user_id).await {
+            for member in &members[..std::cmp::min(20, members.len())] {
+                // Fetch user profile using UserService
+                match user_service.get_user_profile(&member.user_id).await {
                     Ok(profile) => {
                         let display_name = if profile.display_name.is_empty() {
                             // Use user_id as fallback if no display name
-                            member.user_id.clone()
+                            member.user_id.to_string()
                         } else {
                             profile.display_name.clone()
                         };
 
                         let name_lower = display_name.to_lowercase();
+                        let user_id_str = member.user_id.to_string();
 
                         // Check if query matches display name or user_id
                         if name_lower.contains(&query_lower)
-                            || member.user_id.to_lowercase().contains(&query_lower)
+                            || user_id_str.to_lowercase().contains(&query_lower)
                         {
                             suggestions.push((
-                                member.user_id.clone(),
+                                user_id_str,
                                 format!("@{}", display_name),
                                 "user".to_string(),
-                                !profile.avatar_url.is_empty(),
+                                profile.avatar_url.is_some(),
                             ));
                         }
                     }

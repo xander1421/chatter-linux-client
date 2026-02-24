@@ -83,6 +83,53 @@ impl AuthInterceptor {
     pub fn current_mode(&self) -> AuthMode {
         self.auth.read().clone()
     }
+
+    /// Get the current user ID from Basic auth (format: {uuid}.{device_id}).
+    /// Returns None if not in Basic auth mode or if parsing fails.
+    pub fn get_user_id(&self) -> Option<String> {
+        let auth = self.auth.read();
+        match &*auth {
+            AuthMode::Basic { username, .. } => {
+                // Username format: {uuid}.{device_id}
+                username.split('.').next().map(|s| s.to_string())
+            }
+            _ => None,
+        }
+    }
+
+    /// Get full auth info (user_id, device_id, token) from Basic auth.
+    ///
+    /// Returns None if not in Basic auth mode or if parsing fails.
+    pub fn get_auth_info(&self) -> Option<AuthInfo> {
+        let auth = self.auth.read();
+        match &*auth {
+            AuthMode::Basic { username, password } => {
+                // Username format: {uuid}.{device_id}
+                let parts: Vec<&str> = username.splitn(2, '.').collect();
+                if parts.len() != 2 {
+                    return None;
+                }
+                let device_id: u32 = parts[1].parse().ok()?;
+                Some(AuthInfo {
+                    user_id: parts[0].to_string(),
+                    device_id,
+                    token: password.clone(),
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Authentication credentials extracted from AuthInterceptor.
+#[derive(Debug, Clone)]
+pub struct AuthInfo {
+    /// User UUID
+    pub user_id: String,
+    /// Device ID
+    pub device_id: u32,
+    /// Auth token
+    pub token: String,
 }
 
 impl Default for AuthInterceptor {

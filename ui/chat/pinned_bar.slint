@@ -27,60 +27,14 @@ export component PinnedBar inherits Rectangle {
     height: 40px;
     background: Colors.surface;
 
-    // Clickable area for entire bar (go to message)
-    bar-touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.go-to-message();
-        }
-    }
-
     // Main content
     HorizontalLayout {
-        padding-left: Spacing.md;
+        padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: Spacing.sm;
         alignment: start;
 
-        // Left accent bar (Telegram-style)
-        Rectangle {
-            width: 3px;
-            height: 24px;
-            background: Colors.primary;
-            border-radius: 1.5px;
-        }
-
-        // Pin icon and info
-        HorizontalLayout {
-            spacing: Spacing.sm;
-            alignment: start;
-            horizontal-stretch: 1;
-
-            // Content area
-            VerticalLayout {
-                alignment: center;
-                spacing: 1px;
-
-                // Position text (small, muted)
-                Text {
-                    text: position-text;
-                    color: Colors.primary;
-                    font-size: Typography.xs;
-                    font-weight: Typography.medium;
-                }
-
-                // Message preview
-                Text {
-                    text: root.message-preview;
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    overflow: TextOverflow.elide;
-                    wrap: TextWrap.no-wrap;
-                }
-            }
-        }
-
-        // Navigation buttons (only if multiple pinned)
+        // Navigation buttons on LEFT (only if multiple pinned)
         if root.has-multiple: HorizontalLayout {
             spacing: 2px;
             alignment: center;
@@ -132,7 +86,50 @@ export component PinnedBar inherits Rectangle {
             }
         }
 
-        // Close/dismiss button
+        // Left accent bar (Telegram-style)
+        Rectangle {
+            width: 3px;
+            height: 24px;
+            background: Colors.primary;
+            border-radius: 1.5px;
+        }
+
+        // Clickable content area (go to message)
+        Rectangle {
+            horizontal-stretch: 1;
+
+            bar-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.go-to-message();
+                }
+            }
+
+            // Content area
+            VerticalLayout {
+                alignment: center;
+                spacing: 1px;
+
+                // Position text (small, muted)
+                Text {
+                    text: position-text;
+                    color: Colors.primary;
+                    font-size: Typography.xs;
+                    font-weight: Typography.medium;
+                }
+
+                // Message preview
+                Text {
+                    text: root.message-preview;
+                    color: Colors.text-primary;
+                    font-size: Typography.sm;
+                    overflow: TextOverflow.elide;
+                    wrap: TextWrap.no-wrap;
+                }
+            }
+        }
+
+        // Close/dismiss button on RIGHT
         Rectangle {
             width: 28px;
             height: 28px;

@@ -401,6 +401,74 @@ impl MessageClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
+    /// Send a sealed sender message using an anonymous credential (NDSS '21 initial contact).
+    ///
+    /// This implements the NDSS '21 "Improving Signal's Sealed Sender" protocol for
+    /// initial contact when the sender doesn't have the recipient's UAK yet.
+    ///
+    /// The anonymous credential is a blind-signed token that proves the sender is a
+    /// legitimate user without revealing their identity.
+    ///
+    /// # Arguments
+    ///
+    /// * `destination_user_id` - Recipient user ID
+    /// * `destination_device_id` - Recipient device ID (0 for all devices)
+    /// * `sealed_message` - The sealed sender envelope
+    /// * `public_key` - Ed25519 public key from the token (32 bytes)
+    /// * `signature` - Blind signature over the public key
+    /// * `randomizer` - Optional message randomizer for signature verification
+    pub async fn send_sealed_message_with_credential(
+        &mut self,
+        destination_user_id: &str,
+        destination_device_id: u32,
+        sealed_message: SealedSenderMessage,
+        public_key: &[u8],
+        signature: &[u8],
+        randomizer: Option<&[u8]>,
+    ) -> Result<SendSealedMessageResponse, NetworkError> {
+        use base64::Engine;
+        use tonic::Request;
+
+        let proto_request = SendSealedMessageRequest {
+            destination_user_id: destination_user_id.to_string(),
+            destination_device_id,
+            sealed_message: Some(sealed_message),
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        // Create request with anonymous credential header
+        let mut request = Request::new(proto_request);
+
+        // Build anonymous credential JSON
+        let credential = serde_json::json!({
+            "public_key": base64::engine::general_purpose::STANDARD.encode(public_key),
+            "signature": base64::engine::general_purpose::STANDARD.encode(signature),
+            "randomizer": randomizer.map(|r| base64::engine::general_purpose::STANDARD.encode(r)).unwrap_or_default(),
+        });
+
+        request.metadata_mut().insert(
+            "x-anonymous-credential",
+            credential
+                .to_string()
+                .parse()
+                .map_err(|_| NetworkError::InvalidRequest("invalid credential encoding".into()))?,
+        );
+
+        // Add destination user header (still needed to know where to deliver)
+        request.metadata_mut().insert(
+            "x-destination-user-id",
+            destination_user_id
+                .parse()
+                .map_err(|_| NetworkError::InvalidRequest("invalid user ID".into()))?,
+        );
+
+        self.inner
+            .send_sealed_message(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
     /// Internal helper for group sealed sender with combined UAK.
     #[allow(clippy::too_many_arguments)]
     async fn send_sealed_message_with_uak_and_group(

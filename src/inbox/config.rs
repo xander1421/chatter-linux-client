@@ -23,8 +23,10 @@ pub struct InboxConfig {
 impl Default for InboxConfig {
     fn default() -> Self {
         Self {
-            poll_interval: Duration::from_secs(5),
-            poll_interval_idle: Duration::from_secs(30),
+            // Active polling: 2s for fast bootstrap handshake (NDSS '21 measured ~1.5s delivery)
+            poll_interval: Duration::from_secs(2),
+            // Idle polling: 5s - still responsive for incoming DMs/bootstrap requests
+            poll_interval_idle: Duration::from_secs(5),
             max_batch_size: 100,
             retry_attempts: 3,
             ack_batch_size: 50,
@@ -102,8 +104,8 @@ mod tests {
     #[test]
     fn test_inbox_config_defaults() {
         let config = InboxConfig::default();
-        assert_eq!(config.poll_interval, Duration::from_secs(5));
-        assert_eq!(config.poll_interval_idle, Duration::from_secs(30));
+        assert_eq!(config.poll_interval, Duration::from_secs(2));
+        assert_eq!(config.poll_interval_idle, Duration::from_secs(5));
         assert_eq!(config.max_batch_size, 100);
         assert_eq!(config.retry_attempts, 3);
         assert_eq!(config.ack_batch_size, 50);

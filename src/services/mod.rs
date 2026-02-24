@@ -48,6 +48,9 @@ pub use read_receipt_service::{ReadReceiptError, ReadReceiptService};
 // Re-exports for reaction service
 pub use reaction_service::{ReactionError, ReactionService};
 
+// Re-exports for call verification
+pub use call_verification::{CallVerification, CallVerificationData, VERIFICATION_EMOJI_COUNT};
+
 // Re-export ReadState from aggregator for convenience
 pub use crate::network::streaming::read_receipt_stream::ReadState;
 
@@ -88,7 +91,8 @@ pub use message_gateway::{
     build_edit_content, build_edit_content_with_channel,
     build_delete_for_me_content,
     build_delete_for_everyone_content, build_delete_for_everyone_content_with_channel,
+    build_call_key_content, build_call_hangup_content, CallHangupReason,
 };
-pub use message_service::MessageService;
+pub use message_service::{MessageService, SendDmContentParams, SendDmMsgParams};
 pub use attachment_service::{AttachmentService, AttachmentError, UploadResult, CdnUploadResult};
 pub use call_service::CallService;

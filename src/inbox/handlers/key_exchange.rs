@@ -76,16 +76,23 @@ impl InboxHandler for KeyExchangeHandler {
             _ => return Ok(HandlerOutcome::Ignored),
         };
 
-        // Validate ephemeral_pk is either 32 bytes (regular key exchange) or 64 bytes (DM bootstrap)
+        // Validate ephemeral_pk is valid length:
+        // - 0 bytes: Bootstrap REQUEST (higher UUID prompting lower UUID to initiate)
         // - 32 bytes: Ed25519 public key for regular key exchange
-        // - 64 bytes: Combined key for DM bootstrap (32-byte mailbox pk + 32-byte conversation pk)
+        // - 64 bytes: Combined key for DM bootstrap MESSAGE (32-byte mailbox pk + 32-byte conversation pk)
         let key_len = key_exchange.ephemeral_pk.len();
-        if key_len != 32 && key_len != 64 {
+        if key_len != 0 && key_len != 32 && key_len != 64 {
             return Err(HandlerError::validation_failed(format!(
-                "ephemeral_pk must be 32 or 64 bytes, got {}",
+                "ephemeral_pk must be 0, 32, or 64 bytes, got {}",
                 key_len
             )));
         }
+
+        tracing::info!(
+            key_len = key_len,
+            conversation_id = %key_exchange.conversation_id,
+            "KEY_EXCHANGE_HANDLER: Processing KeyExchange (0=REQUEST, 32=regular, 64=MESSAGE)"
+        );
 
         // Validate conversation_id is non-empty
         if key_exchange.conversation_id.is_empty() {
@@ -277,7 +284,7 @@ mod tests {
         let result = handler.handle(&processed, &ctx).await;
         assert!(result.is_err());
         if let Err(HandlerError::ValidationFailed { reason }) = result {
-            assert!(reason.contains("32 or 64 bytes"));
+            assert!(reason.contains("0, 32, or 64 bytes"));
             assert!(reason.contains("16"));
         } else {
             panic!("Expected ValidationFailed error");

@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
 /// Session information for a device.
@@ -46,13 +47,19 @@ pub enum SessionError {
 ///
 /// Provides session listing and revocation functionality.
 pub struct SessionService {
+    grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
 }
 
 impl SessionService {
     /// Create a new SessionService with dependencies.
-    pub fn new(settings_repo: Arc<SettingsRepository>) -> Self {
-        Self { settings_repo }
+    pub fn new(grpc_pool: Arc<GrpcClientPool>, settings_repo: Arc<SettingsRepository>) -> Self {
+        Self { grpc_pool, settings_repo }
+    }
+
+    /// Create an auth client for network operations.
+    fn auth_client(&self) -> AuthClient {
+        AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
     }
 
     /// Check if a user is currently logged in.
@@ -73,14 +80,12 @@ impl SessionService {
     ///
     /// Returns a list of sessions with device info, timestamps, and whether
     /// each session is the current one (as provided by the server).
-    pub async fn list_sessions(
-        &self,
-        auth_client: &mut AuthClient,
-    ) -> Result<Vec<Session>, SessionError> {
+    pub async fn list_sessions(&self) -> Result<Vec<Session>, SessionError> {
         if !self.is_logged_in() {
             return Err(SessionError::NotLoggedIn);
         }
 
+        let mut auth_client = self.auth_client();
         let response = auth_client.list_sessions().await?;
 
         let sessions = response
@@ -105,15 +110,12 @@ impl SessionService {
     ///
     /// This will invalidate the session and force the device to re-authenticate.
     /// Cannot revoke the current session - use logout instead.
-    pub async fn revoke_session(
-        &self,
-        auth_client: &mut AuthClient,
-        device_id: u32,
-    ) -> Result<(), SessionError> {
+    pub async fn revoke_session(&self, device_id: u32) -> Result<(), SessionError> {
         if !self.is_logged_in() {
             return Err(SessionError::NotLoggedIn);
         }
 
+        let mut auth_client = self.auth_client();
         auth_client.revoke_session(device_id).await?;
         Ok(())
     }
@@ -122,14 +124,12 @@ impl SessionService {
     ///
     /// This will invalidate all other sessions, forcing those devices to re-authenticate.
     /// The server automatically excludes the current session.
-    pub async fn revoke_all_other_sessions(
-        &self,
-        auth_client: &mut AuthClient,
-    ) -> Result<(), SessionError> {
+    pub async fn revoke_all_other_sessions(&self) -> Result<(), SessionError> {
         if !self.is_logged_in() {
             return Err(SessionError::NotLoggedIn);
         }
 
+        let mut auth_client = self.auth_client();
         auth_client.revoke_all_sessions().await?;
         Ok(())
     }

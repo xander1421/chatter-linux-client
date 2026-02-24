@@ -1,6 +1,7 @@
 // Virtualized message list component
 //
 // Displays a scrollable list of messages with loading and empty states.
+// Features: animated scrolling, scroll-to-bottom button, auto-scroll on new messages.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -17,6 +18,19 @@ export component MessageList inherits Rectangle {
     in property <[MessageItemData]> messages: [];
     in property <bool> loading: false;
     in-out property <length> scroll-position: 0;
+    in property <int> scroll-to-index: -1;  // Set to message index to scroll to it
+    in property <string> current-playing-attachment-id: "";
+    in property <bool> is-media-playing: false;
+    in property <float> audio-progress: 0.0;
+    in property <string> audio-elapsed: "0:00";
+
+    // Scroll state - exposed for parent to detect and control auto-scroll
+    out property <bool> is-at-bottom: true;
+    in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll behavior
+
+    // Internal animated scroll target
+    property <length> scroll-target: 0px;
+    property <bool> animating: false;
 
     // Callbacks
     callback message-clicked(string);
@@ -26,6 +40,8 @@ export component MessageList inherits Rectangle {
     callback more-clicked(string);
     callback load-more();
     callback attachment-clicked(string);  // attachment ID
+    callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
+    callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button clicked
 
     // Layout - explicit width ensures text wrapping in message items
     // Width flows: root → Flickable → messages-layout → MessageItem → Text
@@ -90,7 +106,7 @@ export component MessageList inherits Rectangle {
             spacing: Spacing.md;
 
             Text {
-                text: "\u{1F4AC}"; // Speech bubbles emoji
+                text: "\u{1F4AC}\u{FE0F}"; // Speech bubbles emoji (with emoji variant selector)
                 font-size: 48px;
                 horizontal-alignment: center;
             }
@@ -111,17 +127,38 @@ export component MessageList inherits Rectangle {
         }
     }
 
-    // Message list
-    if !root.loading && root.messages.length > 0: Flickable {
-        // 100% width for proper sizing
+    // Message list with animated scrolling
+    if !root.loading && root.messages.length > 0: Rectangle {
         width: 100%;
         height: 100%;
-        viewport-height: messages-layout.preferred-height;
-        viewport-y <=> root.scroll-position;
 
-        messages-layout := VerticalLayout {
-            // 100% width - children will inherit through width: 100%
+        flickable := Flickable {
+            // Explicit width constraints for proper text wrapping
             width: 100%;
+            height: 100%;
+            // Constrain horizontal viewport to prevent content from expanding beyond visible width
+            viewport-width: self.width;
+            viewport-height: messages-layout.preferred-height;
+            viewport-y <=> root.scroll-position;
+
+            // Animate scroll position for smooth scrolling
+            animate viewport-y {
+                duration: 300ms;
+                easing: ease-out;
+            }
+
+            // Update is-at-bottom when scroll position changes
+            changed viewport-y => {
+                // Calculate if we're at bottom (within 50px threshold)
+                // viewport-y is negative, so at bottom means:
+                // viewport-y >= -(viewport-height - self.height)
+                // Rearranged: viewport-height + viewport-y <= self.height + threshold
+                root.is-at-bottom = (self.viewport-height + self.viewport-y) <= (self.height + 50px);
+            }
+
+            messages-layout := VerticalLayout {
+            // Explicit width from parent for proper text wrapping
+            width: parent.width;
             padding: Spacing.md;
             spacing: 2px;
 
@@ -136,8 +173,8 @@ export component MessageList inherits Rectangle {
             }
 
             for item in root.messages: MessageItem {
-                // 100% width for text wrapping to work
-                width: 100%;
+                // Explicit width for text wrapping (100% of parent minus padding)
+                width: parent.width - Spacing.md * 2;
                 message-id: item.message-id;
                 sender-id: item.sender-id;
                 sender-name: item.sender-name;
@@ -153,6 +190,10 @@ export component MessageList inherits Rectangle {
                 has-attachments: item.has-attachments;
                 attachment-count: item.attachment-count;
                 attachments: item.attachments;
+                current-playing-attachment-id: root.current-playing-attachment-id;
+                is-media-playing: root.is-media-playing;
+                audio-progress: root.audio-progress;
+                audio-elapsed: root.audio-elapsed;
                 has-reactions: item.has-reactions;
                 reaction-summary: item.reaction-summary;
                 reply-count: item.reply-count;
@@ -183,7 +224,58 @@ export component MessageList inherits Rectangle {
                 attachment-clicked(id) => {
                     root.attachment-clicked(id);
                 }
+
+                audio-seek(id, pos) => {
+                    root.audio-seek(id, pos);
+                }
             }
+        }
+        }
+
+        // Scroll-to-bottom floating button
+        // Appears when user has scrolled up from the bottom
+        if !root.is-at-bottom: Rectangle {
+            x: root.width - 60px;
+            y: root.height - 60px;
+            width: 44px;
+            height: 44px;
+            border-radius: 22px;
+            background: Colors.primary;
+            drop-shadow-blur: 8px;
+            drop-shadow-offset-y: 2px;
+            drop-shadow-color: #00000040;
+
+            // Fade in animation
+            opacity: 1.0;
+            animate opacity {
+                duration: 200ms;
+                easing: ease-out;
+            }
+
+            // Down arrow icon
+            Text {
+                text: "↓";
+                color: Colors.text-primary;
+                font-size: 20px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            scroll-btn := TouchArea {
+                clicked => {
+                    // Scroll to bottom: viewport-y = -(viewport-height - visible-height)
+                    root.scroll-position = -(flickable.viewport-height - flickable.height);
+                    root.is-at-bottom = true;
+                    root.scroll-to-bottom-clicked();
+                }
+            }
+
+            // Hover effect
+            states [
+                hover when scroll-btn.has-hover: {
+                    background: Colors.primary-hover;
+                }
+            ]
         }
     }
 }

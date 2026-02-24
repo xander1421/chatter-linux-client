@@ -26,6 +26,9 @@ pub struct Message {
     pub is_pinned: bool,
     pub is_edited: bool,
     pub is_deleted: bool,
+    /// Sender's timestamp (used for Signal-style deduplication with sender_id).
+    /// This is when the sender created the message, not when we received it.
+    pub sent_at: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub edited_at: Option<DateTime<Utc>>,
@@ -39,10 +42,27 @@ pub struct Message {
 }
 
 impl Message {
-    /// Create a new text message with the given channel, sender, and text.
+    /// Create a new text message with the given channel, sender, text, and sender's timestamp.
+    ///
+    /// The `sent_at` parameter is the sender's timestamp (nanoseconds since epoch),
+    /// used for Signal-style deduplication with `(sender_id, sent_at)`.
+    /// `created_at` is derived from `sent_at` - they represent the same moment.
     #[must_use]
-    pub fn new_text(channel_id: ChannelId, sender_id: Option<UserId>, text: String) -> Self {
-        let now = Utc::now();
+    pub fn new_text(
+        channel_id: ChannelId,
+        sender_id: Option<UserId>,
+        text: String,
+        sent_at: u64,
+    ) -> Self {
+        // Derive created_at from sent_at (they're the same moment)
+        let created_at = crate::util::time::TimestampNanos::from_nanos(sent_at)
+            .to_datetime()
+            .unwrap_or_else(Utc::now);
+        tracing::debug!(
+            sent_at_nanos = sent_at,
+            created_at = %created_at,
+            "Message::new_text - timestamp conversion"
+        );
         Self {
             id: MessageId::new(),
             channel_id,
@@ -54,8 +74,9 @@ impl Message {
             is_pinned: false,
             is_edited: false,
             is_deleted: false,
-            created_at: now,
-            updated_at: now,
+            sent_at,
+            created_at,
+            updated_at: created_at,
             edited_at: None,
             reaction_counts: Vec::new(),
             current_user_reactions: Vec::new(),
@@ -470,7 +491,7 @@ mod tests {
     fn test_message_new_text() {
         let channel_id = ChannelId::new();
         let sender_id = Some(UserId::new());
-        let msg = Message::new_text(channel_id, sender_id, "Hello, world!".to_string());
+        let msg = Message::new_text(channel_id, sender_id, "Hello, world!".to_string(), 0);
 
         assert_eq!(msg.channel_id, channel_id);
         assert_eq!(msg.sender_id, sender_id);
@@ -485,16 +506,16 @@ mod tests {
         let channel_id = ChannelId::new();
 
         // Text content
-        let text_msg = Message::new_text(channel_id, None, "Test".to_string());
+        let text_msg = Message::new_text(channel_id, None, "Test".to_string(), 0);
         assert_eq!(text_msg.as_text(), Some("Test"));
 
         // Mixed content
-        let mut mixed_msg = Message::new_text(channel_id, None, "".to_string());
+        let mut mixed_msg = Message::new_text(channel_id, None, "".to_string(), 0);
         mixed_msg.content = MessageContent::Mixed(MixedContent::text_only("Mixed text".to_string()));
         assert_eq!(mixed_msg.as_text(), Some("Mixed text"));
 
         // Encrypted content (no text extraction)
-        let mut enc_msg = Message::new_text(channel_id, None, "".to_string());
+        let mut enc_msg = Message::new_text(channel_id, None, "".to_string(), 0);
         enc_msg.content = MessageContent::Encrypted(EncryptedContent::new(
             vec![1, 2, 3],
             EncryptedMessageType::Signal,
@@ -558,7 +579,7 @@ mod tests {
     #[test]
     fn test_reaction_count() {
         let channel_id = ChannelId::new();
-        let mut msg = Message::new_text(channel_id, None, "Test".to_string());
+        let mut msg = Message::new_text(channel_id, None, "Test".to_string(), 0);
         msg.reaction_counts.push(ReactionCount::new("👍".to_string(), 5));
         msg.reaction_counts.push(ReactionCount::new("❤️".to_string(), 3));
 

@@ -20,6 +20,12 @@ export struct MessageAttachmentData {
     is-playing: bool,       // Whether this audio/video is currently playing
     icon: string,           // Emoji icon for file type (set by Rust)
     icon-color: color,      // Color for icon background (set by Rust)
+    waveform: [int],        // Audio waveform samples (32 values, 0-100)
+    duration-display: string, // Formatted duration (e.g., "1:23")
+    // Transfer progress
+    is-uploading: bool,     // Whether upload is in progress
+    is-downloading: bool,   // Whether download is in progress
+    progress: float,        // Transfer progress 0.0 to 1.0
 }
 
 // Data struct for message items (mirrors Rust MessageItemData)
@@ -31,7 +37,7 @@ export struct MessageItemData {
     sender-avatar-url: string,
     content: string,
     timestamp: string,
-    timestamp-ms: int,  // Raw timestamp in milliseconds for event matching
+    timestamp-ns: string,  // Nanosecond timestamp as string for event matching (reactions, edits, pins)
     is-own: bool,
     is-edited: bool,
     is-deleted: bool,
@@ -47,4 +53,5 @@ export struct MessageItemData {
     is-thread-reply: bool,
     show-sender: bool,
     delivery-status: string,  // "sent", "delivered", "read", or "" for non-own messages
+    is-pinned: bool,          // Whether message is pinned
 }

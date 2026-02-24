@@ -311,7 +311,7 @@ mod tests {
 
         let channel_id = ChannelId::new();
         let user_id = UserId::new();
-        let message = Message::new_text(channel_id, Some(user_id), "Hello!".to_string());
+        let message = Message::new_text(channel_id, Some(user_id), "Hello!".to_string(), 0);
         let msg_id = message.id;
 
         bus.emit_domain(DomainEvent::MessageReceived {

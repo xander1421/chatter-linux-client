@@ -178,6 +178,23 @@ impl GrpcClientPool {
     pub fn server_url(&self) -> &str {
         self.endpoint.uri().host().unwrap_or("unknown")
     }
+
+    /// Get the full endpoint URL string.
+    ///
+    /// Returns the complete URL including scheme and port.
+    pub fn endpoint(&self) -> String {
+        self.endpoint.uri().to_string()
+    }
+
+    /// Get auth info (user_id, device_id, token) from the auth interceptor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if not in Basic auth mode or credentials are malformed.
+    pub fn auth_info(&self) -> super::interceptors::AuthInfo {
+        self.auth.get_auth_info()
+            .expect("GrpcClientPool: auth_info requires Basic auth mode")
+    }
 }
 
 #[cfg(test)]

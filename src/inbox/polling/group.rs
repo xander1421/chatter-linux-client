@@ -8,7 +8,7 @@ use std::sync::Arc;
 use prost::Message as ProstMessage;
 use tokio::sync::broadcast;
 
-use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::Message;
 use crate::domain::UserId;
 use crate::inbox::events::InboxEvent;
@@ -154,18 +154,19 @@ async fn process_group_message(
                         .parse::<MessageId>()
                         .unwrap_or_else(|_| MessageId::new());
 
+                    // Use sender's timestamp for Signal-style dedup (sender_id + sent_at)
+                    // created_at is derived from sent_at in Message::new_text()
                     let mut message =
-                        Message::new_text(group_id, Some(*sender_id), data_message.body.clone());
+                        Message::new_text(group_id, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
                     message.id = msg_id;
 
-                    if data_message.timestamp > 0 {
-                        if let Some(dt) =
-                            chrono::DateTime::from_timestamp_millis(data_message.timestamp as i64)
-                        {
-                            message.created_at = dt;
-                            message.updated_at = dt;
-                        }
-                    }
+                    // Add attachment IDs to message (attachments are stored separately in attachment_repo)
+                    message.attachments = data_message
+                        .attachments
+                        .iter()
+                        .filter(|p| !p.cdn_key.is_empty())
+                        .map(|p| AttachmentId::from_cdn_key(&p.cdn_key))
+                        .collect();
 
                     match message_repo.insert_or_ignore(&message) {
                         Ok(true) => {

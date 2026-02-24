@@ -31,6 +31,10 @@ pub mod keys {
     // Crypto keys
     /// Profile key for encrypting saved messages (32 bytes, base64 encoded)
     pub const PROFILE_KEY: &str = "crypto.profile_key";
+    /// Cached sender certificate (serialized bytes, base64 encoded)
+    pub const SENDER_CERTIFICATE: &str = "crypto.sender_certificate";
+    /// When to refresh sender certificate (Unix timestamp ms)
+    pub const SENDER_CERTIFICATE_REFRESH_AFTER: &str = "crypto.sender_certificate_refresh_after";
 
     // UI settings
     pub const WINDOW_WIDTH: &str = "ui.window_width";

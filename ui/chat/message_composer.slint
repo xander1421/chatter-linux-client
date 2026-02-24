@@ -194,13 +194,13 @@ export component MessageComposer inherits Rectangle {
                                                       attachment.category == "archive" ? #fb923c :
                                                       Colors.text-muted;
 
-                        property <string> category-emoji: attachment.category == "image" ? "\u{1F5BC}" :
-                                                          attachment.category == "video" ? "\u{1F3AC}" :
-                                                          attachment.category == "audio" ? "\u{1F3B5}" :
-                                                          attachment.category == "document" ? "\u{1F4C4}" :
-                                                          attachment.category == "code" ? "\u{1F4DD}" :
-                                                          attachment.category == "archive" ? "\u{1F4E6}" :
-                                                          "\u{1F4CE}";
+                        property <string> category-emoji: attachment.category == "image" ? "\u{1F5BC}\u{FE0F}" :
+                                                          attachment.category == "video" ? "\u{1F3AC}\u{FE0F}" :
+                                                          attachment.category == "audio" ? "\u{1F3B5}\u{FE0F}" :
+                                                          attachment.category == "document" ? "\u{1F4C4}\u{FE0F}" :
+                                                          attachment.category == "code" ? "\u{1F4DD}\u{FE0F}" :
+                                                          attachment.category == "archive" ? "\u{1F4E6}\u{FE0F}" :
+                                                          "\u{1F4CE}\u{FE0F}";
 
                         HorizontalLayout {
                             padding: Spacing.sm;
@@ -330,7 +330,7 @@ export component MessageComposer inherits Rectangle {
                 opacity: root.disabled ? 0.5 : 1.0;
 
                 Text {
-                    text: "\u{1F4CE}";  // Paperclip
+                    text: "\u{1F4CE}\u{FE0F}";  // Paperclip (with emoji variant selector)
                     font-size: Typography.lg;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -345,9 +345,10 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Text input area - stretches to fill remaining space
+            // Text input area - explicit width for proper text wrapping
             Rectangle {
-                horizontal-stretch: 1;
+                // Use pre-calculated input-width for explicit sizing (required for word-wrap)
+                width: root.input-width;
                 height: root.content-height;
                 background: Colors.background;
                 border-radius: Spacing.radius-md;
@@ -367,7 +368,7 @@ export component MessageComposer inherits Rectangle {
                     wrap: word-wrap;
                 }
 
-                // Text input - width from parent for word-wrap
+                // Text input - explicit width for word-wrap to work on long words
                 text-input := TextInput {
                     x: Spacing.md;
                     y: Spacing.sm;
@@ -396,12 +397,8 @@ export component MessageComposer inherits Rectangle {
                         return reject;
                     }
 
-                    // Handle text changes for @ mention detection, typing indicator, and word breaks
+                    // Handle text changes for @ mention detection and typing indicator
                     edited => {
-                        // Process text to insert word breaks for wrapping
-                        // The callback checks if processing is needed to avoid infinite loops
-                        root.text = root.process-text(self.text);
-
                         // Check for @ mention trigger
                         if (self.text != "") {
                             root.check-mention-trigger(self.text);
@@ -421,7 +418,7 @@ export component MessageComposer inherits Rectangle {
                 opacity: root.disabled ? 0.5 : 1.0;
 
                 Text {
-                    text: "\u{1F600}";  // Grinning face
+                    text: "\u{1F600}\u{FE0F}";  // Grinning face (with emoji variant selector)
                     font-size: Typography.lg;
                     horizontal-alignment: center;
                     vertical-alignment: center;

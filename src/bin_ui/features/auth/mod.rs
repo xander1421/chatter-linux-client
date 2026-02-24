@@ -2,13 +2,14 @@
 //!
 //! Handles login, register, logout, and inbox event processing.
 
+mod channel_events;
 mod inbox_events;
 mod initial_data;
 mod login;
 mod logout;
 mod register;
 
-pub use inbox_events::handle_inbox_event;
+pub use inbox_events::{handle_inbox_event, update_reaction_summary};
 pub use initial_data::load_initial_data;
 
 use chatter_linux::app::AppContext;

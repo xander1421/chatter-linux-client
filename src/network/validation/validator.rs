@@ -57,10 +57,10 @@ pub struct ValidationLimits {
 impl Default for ValidationLimits {
     fn default() -> Self {
         Self {
-            max_content_size: 64 * 1024,           // 64KB
-            max_timestamp_drift_secs: 5 * 60,      // 5 minutes
-            min_timestamp: 1577836800000,          // 2020-01-01 00:00:00 UTC in millis
-            max_id_length: 64,                     // ULIDs/UUIDs are ~26-36 chars
+            max_content_size: 64 * 1024,                      // 64KB
+            max_timestamp_drift_secs: 5 * 60,                 // 5 minutes
+            min_timestamp: 1_577_836_800_000_000_000,         // 2020-01-01 00:00:00 UTC in nanos
+            max_id_length: 64,                                // ULIDs/UUIDs are ~26-36 chars
         }
     }
 }
@@ -160,12 +160,12 @@ impl ContentValidator {
         }
 
         // Check maximum (not too far in the future)
-        let now_millis = std::time::SystemTime::now()
+        let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
+            .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
 
-        let max_future = now_millis + (self.limits.max_timestamp_drift_secs * 1000);
+        let max_future = now_nanos + (self.limits.max_timestamp_drift_secs * 1_000_000_000);
         if timestamp > max_future {
             return Err(ValidationError::InvalidTimestamp(timestamp));
         }
@@ -230,6 +230,7 @@ impl Default for ContentValidator {
 
 /// Result of pipeline processing.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Message is the common case, boxing would add unnecessary indirection
 pub enum PipelineResult {
     /// Message passed validation and is ready for processing.
     Ready(Message),
@@ -381,7 +382,7 @@ mod tests {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_millis() as u64,
+                .as_nanos() as u64,
             content: None,
             ..Default::default()
         }
@@ -458,7 +459,7 @@ mod tests {
     fn test_timestamp_too_old() {
         let validator = ContentValidator::with_defaults();
         let mut message = make_valid_message();
-        message.timestamp = 1000000000000; // Year 2001, before 2020
+        message.timestamp = 1_000_000_000_000_000_000; // Year 2001 in nanos, before 2020
 
         let result = validator.validate(&message);
         assert!(matches!(result, Err(ValidationError::InvalidTimestamp(_))));
@@ -469,11 +470,11 @@ mod tests {
         let validator = ContentValidator::with_defaults();
         let mut message = make_valid_message();
         // 1 hour in the future (beyond 5 minute drift limit)
-        let now_millis = std::time::SystemTime::now()
+        let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64;
-        message.timestamp = now_millis + (60 * 60 * 1000);
+            .as_nanos() as u64;
+        message.timestamp = now_nanos + (60 * 60 * 1_000_000_000);
 
         let result = validator.validate(&message);
         assert!(matches!(result, Err(ValidationError::InvalidTimestamp(_))));
@@ -484,11 +485,11 @@ mod tests {
         let validator = ContentValidator::with_defaults();
         let mut message = make_valid_message();
         // 2 minutes in the future (within 5 minute drift limit)
-        let now_millis = std::time::SystemTime::now()
+        let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64;
-        message.timestamp = now_millis + (2 * 60 * 1000);
+            .as_nanos() as u64;
+        message.timestamp = now_nanos + (2 * 60 * 1_000_000_000);
 
         assert!(validator.validate(&message).is_ok());
     }
@@ -498,7 +499,7 @@ mod tests {
         let limits = ValidationLimits {
             max_content_size: 1024, // 1KB
             max_timestamp_drift_secs: 60, // 1 minute
-            min_timestamp: 1609459200000, // 2021-01-01
+            min_timestamp: 1_609_459_200_000_000_000, // 2021-01-01 in nanos
             max_id_length: 32,
         };
         let validator = ContentValidator::new(limits);
@@ -565,7 +566,7 @@ mod tests {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64;
+            .as_nanos() as u64;
 
         // First message should be ready
         let msg1 = make_test_message("msg-1", "channel-1", now);
@@ -582,7 +583,7 @@ mod tests {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64;
+            .as_nanos() as u64;
 
         // Message with empty ID should fail validation
         let mut msg = make_test_message("", "channel-1", now);
@@ -601,7 +602,7 @@ mod tests {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64;
+            .as_nanos() as u64;
 
         // Valid message should be ready
         let msg = make_test_message("msg-1", "channel-1", now);
@@ -620,7 +621,7 @@ mod tests {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64;
+            .as_nanos() as u64;
 
         // First message at now + 1000
         let msg1 = make_test_message("msg-1", "channel-1", now + 1000);
@@ -640,7 +641,7 @@ mod tests {
         let limits = ValidationLimits {
             max_content_size: 1024,
             max_timestamp_drift_secs: 60,
-            min_timestamp: 1609459200000,
+            min_timestamp: 1_609_459_200_000_000_000, // 2021-01-01 in nanos
             max_id_length: 32,
         };
         let pipeline = MessageValidationPipeline::with_config(100, limits, 10);
@@ -655,7 +656,7 @@ mod tests {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64;
+            .as_nanos() as u64;
 
         // Initial stats
         let stats = pipeline.stats();
@@ -677,7 +678,7 @@ mod tests {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64;
+            .as_nanos() as u64;
 
         // First message
         let msg1 = make_test_message("msg-1", "channel-1", now);

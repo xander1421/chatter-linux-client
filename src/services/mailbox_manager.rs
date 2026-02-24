@@ -253,13 +253,13 @@ impl MailboxManager {
         {
             let mailboxes = self.active_mailboxes.read().await;
             if let Some(mailbox) = mailboxes.get(conversation_id) {
-                // Check if it's still valid
-                let now = std::time::SystemTime::now()
+                // Check if it's still valid (expires_at is in nanoseconds per proto)
+                let now_nanos = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_millis() as u64;
+                    .as_nanos() as u64;
 
-                if mailbox.expires_at > now {
+                if mailbox.expires_at > now_nanos {
                     return Ok(mailbox.clone());
                 }
             }

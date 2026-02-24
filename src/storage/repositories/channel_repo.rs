@@ -158,6 +158,43 @@ impl ChannelRepository {
         Ok(channels)
     }
 
+    /// Get DM channel by peer user ID.
+    ///
+    /// Looks up the DM channel where both the current user and the peer are members.
+    /// This returns the server-assigned channel ID, NOT a derived one.
+    pub fn get_dm_channel_by_peer(
+        &self,
+        current_user_id: &UserId,
+        peer_id: &UserId,
+    ) -> Result<Option<Channel>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT c.id, c.channel_type, c.name, c.description, c.image_url, c.owner_id,
+                    c.persistence, c.max_members, c.default_ttl_seconds,
+                    c.allow_reactions, c.allow_threads, c.allow_attachments, c.require_encryption,
+                    c.created_at, c.updated_at, c.archived, c.unread_count, c.last_message_at
+             FROM channels c
+             INNER JOIN memberships m1 ON c.id = m1.channel_id AND m1.user_id = ?1
+             INNER JOIN memberships m2 ON c.id = m2.channel_id AND m2.user_id = ?2
+             WHERE c.channel_type = ?3",
+        )?;
+
+        let result = stmt.query_row(
+            params![
+                current_user_id.to_string(),
+                peer_id.to_string(),
+                channel_type_to_i32(ChannelType::DirectMessage)
+            ],
+            row_to_channel,
+        );
+
+        match result {
+            Ok(channel) => Ok(Some(channel)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
     /// List all channels of a specific type.
     pub fn list_by_type(&self, channel_type: ChannelType) -> Result<Vec<Channel>, StorageError> {
         let conn = self.db.connection()?;
@@ -266,6 +303,30 @@ impl ChannelRepository {
             ],
         )?;
         Ok(())
+    }
+
+    /// Insert a membership if it doesn't already exist.
+    ///
+    /// Returns Ok(true) if inserted, Ok(false) if already existed.
+    pub fn insert_or_ignore_membership(&self, membership: &Membership) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "INSERT OR IGNORE INTO memberships (
+                channel_id, user_id, role, joined_at, last_read_message_id,
+                is_muted, muted_until, notification_preference
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                membership.channel_id.to_string(),
+                membership.user_id.to_string(),
+                role_to_i32(membership.role),
+                membership.joined_at.to_rfc3339(),
+                membership.last_read_message_id.map(|id| id.to_string()),
+                membership.is_muted as i32,
+                membership.muted_until.map(|dt| dt.to_rfc3339()),
+                notification_pref_to_i32(membership.notification_preference),
+            ],
+        )?;
+        Ok(rows > 0)
     }
 
     /// Get a membership.

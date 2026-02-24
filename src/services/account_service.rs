@@ -8,6 +8,7 @@ use tokio_stream::StreamExt;
 
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::auth_client::AuthClient;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::account_deletion_event::Status as DeletionStatus;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
@@ -41,17 +42,28 @@ pub enum AccountError {
 /// Orchestrates password change and account deletion flows by coordinating
 /// network, and storage layers.
 pub struct AccountService {
+    grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
     auth_interceptor: AuthInterceptor,
 }
 
 impl AccountService {
     /// Create a new AccountService with all dependencies.
-    pub fn new(settings_repo: Arc<SettingsRepository>, auth_interceptor: AuthInterceptor) -> Self {
+    pub fn new(
+        grpc_pool: Arc<GrpcClientPool>,
+        settings_repo: Arc<SettingsRepository>,
+        auth_interceptor: AuthInterceptor,
+    ) -> Self {
         Self {
+            grpc_pool,
             settings_repo,
             auth_interceptor,
         }
+    }
+
+    /// Internal helper to create an auth client.
+    fn auth_client(&self) -> AuthClient {
+        AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
     }
 
     /// Check if a user is currently logged in.
@@ -173,5 +185,24 @@ impl AccountService {
         Err(AccountError::DeletionFailed(
             "deletion stream ended without result".to_string(),
         ))
+    }
+
+    // ==================== Simplified Wrappers ====================
+
+    /// Simplified wrapper for change_password that creates the client internally.
+    pub async fn change_pwd(
+        &self,
+        current_password: &str,
+        new_password: &str,
+    ) -> Result<(), AccountError> {
+        let mut auth_client = self.auth_client();
+        self.change_password(&mut auth_client, current_password, new_password)
+            .await
+    }
+
+    /// Simplified wrapper for delete_account that creates the client internally.
+    pub async fn delete_acct(&self, password: &str) -> Result<(), AccountError> {
+        let mut auth_client = self.auth_client();
+        self.delete_account(&mut auth_client, password).await
     }
 }

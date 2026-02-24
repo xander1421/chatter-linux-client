@@ -132,6 +132,16 @@ impl InboxHandler for PinHandler {
         let message_id = MessageId::from_uuid(uuid_from_timestamp(pin.target_sent_timestamp));
 
         // Emit appropriate event based on unpin flag
+        let action = if pin.unpin { "unpin" } else { "pin" };
+        tracing::info!(
+            ?message_id,
+            ?channel_id,
+            ?pinner_id,
+            action = %action,
+            timestamp = pin.timestamp,
+            "Inbox handler: processing pin/unpin"
+        );
+
         if pin.unpin {
             ctx.emit(DomainEvent::MessageUnpinned {
                 message_id,
@@ -146,6 +156,7 @@ impl InboxHandler for PinHandler {
             });
         }
 
+        tracing::debug!(action = %action, "Pin event emitted");
         Ok(HandlerOutcome::Processed)
     }
 

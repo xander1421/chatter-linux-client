@@ -3,7 +3,6 @@
 use slint::ComponentHandle;
 
 use chatter_linux::app::AppContext;
-use chatter_linux::network::grpc::auth_client::AuthClient;
 use chatter_linux::services::auth_service::AuthService;
 
 use crate::MainWindow;
@@ -41,8 +40,9 @@ pub fn wire_logout(window: &MainWindow, ctx: &AppContext) {
                 }
             }
 
-            // Create auth service and client
+            // Create auth service with grpc_pool for internal client creation
             let auth_service = AuthService::new(
+                grpc_pool.clone(),
                 identity_manager,
                 prekey_manager,
                 user_repo,
@@ -51,13 +51,8 @@ pub fn wire_logout(window: &MainWindow, ctx: &AppContext) {
                 auth_interceptor,
             );
 
-            let mut auth_client = AuthClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
-
             // Attempt logout (ignore errors - we logout locally regardless)
-            let _ = auth_service.logout(&mut auth_client).await;
+            let _ = auth_service.do_logout().await;
 
             // Update auth state
             auth_state.set_logged_out();

@@ -36,17 +36,10 @@ pub fn wire_settings_callbacks(window: &MainWindow, ctx: &AppContext) {
             });
 
             use chatter_linux::services::account_service::AccountService;
-            let account_service = AccountService::new(settings_repo.clone(), auth_interceptor);
+            let account_service =
+                AccountService::new(grpc_pool.clone(), settings_repo.clone(), auth_interceptor);
 
-            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
-
-            match account_service
-                .change_password(&mut auth_client, &current, &new)
-                .await
-            {
+            match account_service.change_pwd(&current, &new).await {
                 Ok(()) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {

@@ -90,7 +90,7 @@ impl FibonacciBackoff {
     /// Returns the current timeout plus random jitter, then advances
     /// to the next timeout in the sequence. If already at the last
     /// timeout, stays at that value.
-    pub fn next(&mut self) -> Duration {
+    pub fn next_timeout(&mut self) -> Duration {
         let base_timeout = self.timeouts[self.index];
 
         // Advance index but cap at last element
@@ -178,7 +178,7 @@ impl ConnectionRecovery {
             }
         }
         self.attempt_count += 1;
-        Some(self.backoff.next())
+        Some(self.backoff.next_timeout())
     }
 
     /// Reset the recovery state after successful connection.
@@ -235,18 +235,18 @@ mod tests {
         // Test without jitter to verify exact sequence
         let mut backoff = FibonacciBackoff::with_jitter(FibonacciBackoff::STANDARD, Duration::ZERO);
 
-        assert_eq!(backoff.next(), Duration::from_secs(1));
-        assert_eq!(backoff.next(), Duration::from_secs(2));
-        assert_eq!(backoff.next(), Duration::from_secs(3));
-        assert_eq!(backoff.next(), Duration::from_secs(5));
-        assert_eq!(backoff.next(), Duration::from_secs(8));
-        assert_eq!(backoff.next(), Duration::from_secs(13));
-        assert_eq!(backoff.next(), Duration::from_secs(21));
-        assert_eq!(backoff.next(), Duration::from_secs(34));
-        assert_eq!(backoff.next(), Duration::from_secs(55));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(1));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(2));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(3));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(5));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(8));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(13));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(21));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(34));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(55));
         // Should stay at max
-        assert_eq!(backoff.next(), Duration::from_secs(55));
-        assert_eq!(backoff.next(), Duration::from_secs(55));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(55));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(55));
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod tests {
         // Run multiple times to test jitter
         for _ in 0..10 {
             backoff.reset();
-            let timeout = backoff.next();
+            let timeout = backoff.next_timeout();
             let base = Duration::from_secs(1);
             assert!(timeout >= base);
             assert!(timeout < base + jitter);
@@ -269,15 +269,15 @@ mod tests {
         let mut backoff = FibonacciBackoff::with_jitter(FibonacciBackoff::STANDARD, Duration::ZERO);
 
         // Advance a few times
-        backoff.next();
-        backoff.next();
-        backoff.next();
+        backoff.next_timeout();
+        backoff.next_timeout();
+        backoff.next_timeout();
         assert_eq!(backoff.current_index(), 3);
 
         // Reset
         backoff.reset();
         assert_eq!(backoff.current_index(), 0);
-        assert_eq!(backoff.next(), Duration::from_secs(1));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(1));
     }
 
     #[test]
@@ -287,17 +287,17 @@ mod tests {
 
         // Advance through standard
         for _ in 0..9 {
-            backoff.next();
+            backoff.next_timeout();
         }
 
         // Now in extended territory
-        assert_eq!(backoff.next(), Duration::from_secs(89));
-        assert_eq!(backoff.next(), Duration::from_secs(144));
-        assert_eq!(backoff.next(), Duration::from_secs(233));
-        assert_eq!(backoff.next(), Duration::from_secs(377));
-        assert_eq!(backoff.next(), Duration::from_secs(610));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(89));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(144));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(233));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(377));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(610));
         // Should stay at max
-        assert_eq!(backoff.next(), Duration::from_secs(610));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(610));
     }
 
     #[test]
@@ -305,18 +305,18 @@ mod tests {
         let mut backoff = FibonacciBackoff::with_jitter(FibonacciBackoff::STANDARD, Duration::ZERO);
 
         // Start with standard
-        assert_eq!(backoff.next(), Duration::from_secs(1));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(1));
 
         // Switch to extended
         backoff.reset_with(FibonacciBackoff::EXTENDED);
         assert_eq!(backoff.current_index(), 0);
-        assert_eq!(backoff.next(), Duration::from_secs(1));
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(1));
 
         // Verify we're now on extended sequence
         for _ in 0..8 {
-            backoff.next();
+            backoff.next_timeout();
         }
-        assert_eq!(backoff.next(), Duration::from_secs(89)); // Extended-only value
+        assert_eq!(backoff.next_timeout(), Duration::from_secs(89)); // Extended-only value
     }
 
     #[test]
@@ -327,7 +327,7 @@ mod tests {
 
         // Advance to end
         for _ in 0..9 {
-            backoff.next();
+            backoff.next_timeout();
         }
 
         assert!(backoff.is_at_max());

@@ -2,7 +2,7 @@
 //!
 //! Data access for attachment entities.
 
-use crate::domain::attachment::{Attachment, AttachmentStatus, FileMetadata, Thumbnail};
+use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata, Thumbnail};
 use crate::domain::ids::AttachmentId;
 use crate::error::StorageError;
 use crate::storage::Database;
@@ -31,11 +31,14 @@ impl AttachmentRepository {
         let metadata_json = serde_json::to_string(&attachment.metadata)
             .map_err(|e| StorageError::InvalidData(format!("Failed to serialize metadata: {}", e)))?;
 
+        // Extract thumbnail bytes for BLOB storage (don't store in JSON)
+        let thumbnail_bytes = attachment.metadata.thumbnail.as_deref();
+
         conn.execute(
             "INSERT INTO attachments (
                 id, metadata_json, status, local_path, remote_url,
-                encryption_key, encryption_iv, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 attachment.id.to_string(),
                 metadata_json,
@@ -44,6 +47,47 @@ impl AttachmentRepository {
                 attachment.remote_url,
                 attachment.encryption_key,
                 attachment.encryption_iv,
+                thumbnail_bytes,
+                content_location_to_int(attachment.content_location),
+                attachment.created_at.to_rfc3339(),
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Insert an attachment with encrypted content stored in database.
+    ///
+    /// This stores the encrypted ciphertext directly in the database for
+    /// secure in-memory-only decryption during playback.
+    pub fn insert_with_content(
+        &self,
+        attachment: &Attachment,
+        encrypted_content: &[u8],
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let metadata_json = serde_json::to_string(&attachment.metadata)
+            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize metadata: {}", e)))?;
+
+        let thumbnail_bytes = attachment.metadata.thumbnail.as_deref();
+
+        conn.execute(
+            "INSERT INTO attachments (
+                id, metadata_json, status, local_path, remote_url,
+                encryption_key, encryption_iv, thumbnail_bytes,
+                encrypted_content, content_location, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                attachment.id.to_string(),
+                metadata_json,
+                status_to_int(attachment.status),
+                attachment.local_path,
+                attachment.remote_url,
+                attachment.encryption_key,
+                attachment.encryption_iv,
+                thumbnail_bytes,
+                encrypted_content,
+                content_location_to_int(ContentLocation::InDatabase),
                 attachment.created_at.to_rfc3339(),
             ],
         )?;
@@ -56,7 +100,7 @@ impl AttachmentRepository {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, metadata_json, status, local_path, remote_url,
-                    encryption_key, encryption_iv, created_at
+                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
              FROM attachments WHERE id = ?1",
         )?;
 
@@ -69,17 +113,76 @@ impl AttachmentRepository {
         }
     }
 
+    /// Get encrypted content for an attachment.
+    ///
+    /// Returns the encrypted ciphertext blob for decryption in memory.
+    /// Returns None if content is not stored in database (needs CDN download).
+    pub fn get_encrypted_content(&self, id: &AttachmentId) -> Result<Option<Vec<u8>>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT encrypted_content FROM attachments WHERE id = ?1 AND content_location = 1",
+        )?;
+
+        let result = stmt.query_row(params![id.to_string()], |row| {
+            let content: Option<Vec<u8>> = row.get(0)?;
+            Ok(content)
+        });
+
+        match result {
+            Ok(content) => Ok(content),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Store encrypted content for an existing attachment.
+    ///
+    /// Updates the attachment with downloaded encrypted ciphertext and
+    /// marks content_location as InDatabase.
+    pub fn store_encrypted_content(
+        &self,
+        id: &AttachmentId,
+        encrypted_content: &[u8],
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+
+        let rows = conn.execute(
+            "UPDATE attachments SET
+                encrypted_content = ?1,
+                content_location = ?2
+             WHERE id = ?3",
+            params![
+                encrypted_content,
+                content_location_to_int(ContentLocation::InDatabase),
+                id.to_string(),
+            ],
+        )?;
+
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!(
+                "Attachment {} not found",
+                id
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Update an existing attachment.
     pub fn update(&self, attachment: &Attachment) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let metadata_json = serde_json::to_string(&attachment.metadata)
             .map_err(|e| StorageError::InvalidData(format!("Failed to serialize metadata: {}", e)))?;
 
+        // Extract thumbnail bytes for BLOB storage
+        let thumbnail_bytes = attachment.metadata.thumbnail.as_deref();
+
         let rows = conn.execute(
             "UPDATE attachments SET
                 metadata_json = ?1, status = ?2, local_path = ?3, remote_url = ?4,
-                encryption_key = ?5, encryption_iv = ?6
-             WHERE id = ?7",
+                encryption_key = ?5, encryption_iv = ?6, thumbnail_bytes = ?7,
+                content_location = ?8
+             WHERE id = ?9",
             params![
                 metadata_json,
                 status_to_int(attachment.status),
@@ -87,6 +190,8 @@ impl AttachmentRepository {
                 attachment.remote_url,
                 attachment.encryption_key,
                 attachment.encryption_iv,
+                thumbnail_bytes,
+                content_location_to_int(attachment.content_location),
                 attachment.id.to_string(),
             ],
         )?;
@@ -128,7 +233,7 @@ impl AttachmentRepository {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, metadata_json, status, local_path, remote_url,
-                    encryption_key, encryption_iv, created_at
+                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
              FROM attachments WHERE status = ?1
              ORDER BY created_at DESC",
         )?;
@@ -142,7 +247,7 @@ impl AttachmentRepository {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, metadata_json, status, local_path, remote_url,
-                    encryption_key, encryption_iv, created_at
+                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
              FROM attachments WHERE status IN (?1, ?2)
              ORDER BY created_at ASC",
         )?;
@@ -150,6 +255,25 @@ impl AttachmentRepository {
         let pending = status_to_int(AttachmentStatus::Pending);
         let uploading = status_to_int(AttachmentStatus::Uploading);
         let mut rows = stmt.query(params![pending, uploading])?;
+        collect_attachments(&mut rows)
+    }
+
+    /// List attachments that need content downloaded from CDN.
+    pub fn list_pending_downloads(&self) -> Result<Vec<Attachment>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, metadata_json, status, local_path, remote_url,
+                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
+             FROM attachments
+             WHERE content_location = 0
+               AND remote_url IS NOT NULL
+               AND encryption_key IS NOT NULL
+               AND status != ?1
+             ORDER BY created_at ASC",
+        )?;
+
+        let failed = status_to_int(AttachmentStatus::Failed);
+        let mut rows = stmt.query(params![failed])?;
         collect_attachments(&mut rows)
     }
 
@@ -219,6 +343,7 @@ fn status_to_int(status: AttachmentStatus) -> i32 {
     match status {
         AttachmentStatus::Pending => 0,
         AttachmentStatus::Uploading => 1,
+        AttachmentStatus::Downloading => 6,
         AttachmentStatus::Processing => 2,
         AttachmentStatus::Ready => 3,
         AttachmentStatus::Failed => 4,
@@ -235,7 +360,24 @@ fn int_to_status(value: i32) -> AttachmentStatus {
         3 => AttachmentStatus::Ready,
         4 => AttachmentStatus::Failed,
         5 => AttachmentStatus::Expired,
+        6 => AttachmentStatus::Downloading,
         _ => AttachmentStatus::Pending, // Default fallback
+    }
+}
+
+/// Convert ContentLocation to integer for database storage.
+fn content_location_to_int(location: ContentLocation) -> i32 {
+    match location {
+        ContentLocation::NotDownloaded => 0,
+        ContentLocation::InDatabase => 1,
+    }
+}
+
+/// Convert integer to ContentLocation.
+fn int_to_content_location(value: i32) -> ContentLocation {
+    match value {
+        1 => ContentLocation::InDatabase,
+        _ => ContentLocation::NotDownloaded,
     }
 }
 
@@ -255,22 +397,28 @@ fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Attachm
     let remote_url: Option<String> = row.get(4)?;
     let encryption_key: Option<Vec<u8>> = row.get(5)?;
     let encryption_iv: Option<Vec<u8>> = row.get(6)?;
-    let created_at_str: String = row.get(7)?;
+    let thumbnail_bytes: Option<Vec<u8>> = row.get(7)?;
+    let content_location_int: i32 = row.get(8).unwrap_or(0); // Default to NotDownloaded for old rows
+    let created_at_str: String = row.get(9)?;
 
     let id: AttachmentId = match id_str.parse() {
         Ok(id) => id,
         Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid attachment ID: {}", e)))),
     };
 
-    let metadata: FileMetadata = match serde_json::from_str(&metadata_json) {
+    let mut metadata: FileMetadata = match serde_json::from_str(&metadata_json) {
         Ok(m) => m,
         Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid metadata JSON: {}", e)))),
     };
+
+    // Load thumbnail bytes from BLOB column (more efficient than JSON)
+    metadata.thumbnail = thumbnail_bytes;
 
     Ok(Ok(Attachment {
         id,
         metadata,
         status: int_to_status(status_int),
+        content_location: int_to_content_location(content_location_int),
         local_path,
         remote_url,
         encryption_key,

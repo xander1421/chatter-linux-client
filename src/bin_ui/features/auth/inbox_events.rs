@@ -2,13 +2,173 @@
 //!
 //! Processes incoming DM and channel events to update the UI in real-time.
 
-use slint::{Model, ModelRc, VecModel};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
 
+use base64::Engine;
+use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
+
+use chatter_linux::domain::attachment::{Attachment, AttachmentStatus, FileMetadata};
+use chatter_linux::domain::ids::AttachmentId;
 use chatter_linux::inbox::InboxEvent;
-use chatter_linux::storage::UserRepository;
+use chatter_linux::network::grpc::client_pool::GrpcClientPool;
+use chatter_linux::proto::content_v1::AttachmentPointer;
+use chatter_linux::events::EventBus;
+use chatter_linux::inbox::handlers::DomainEvent;
+use chatter_linux::services::message_service::MessageService;
+use chatter_linux::services::mailbox_manager::MailboxManager;
+use chatter_linux::storage::{AttachmentRepository, ChannelRepository, Database, MessageRepository, UserRepository};
+use crate::bin_ui::converters::{
+    attachment_pointer_to_display_data, get_initials, message_to_display_data,
+    message_to_display_data_with_attachments, AttachmentDisplayData, MessageDisplayData,
+};
+use crate::bin_ui::features::calls::cleanup_call_ui_state;
+use crate::bin_ui::features::chat::get_dm_channel_from_peer;
+use chatter_linux::domain::ids::MessageId;
+use crate::{DMListItemData, IncomingCallData, MainWindow, MessageItemData};
 
-use crate::bin_ui::converters::get_initials;
-use crate::{DMListItemData, MainWindow, MessageItemData};
+// ============================================================================
+// Typing Timer Management (Signal-style per-peer timers)
+// ============================================================================
+
+/// Typing timer state per peer.
+/// Signal uses 15-second auto-clear timers that reset on each STARTED message.
+struct TypingTimerEntry {
+    timer: Timer,
+}
+
+thread_local! {
+    /// Thread-local map of DM typing timers per peer ID.
+    /// Key: peer_id string, Value: timer entry
+    /// Must be thread_local because slint::Timer is not Send.
+    static DM_TYPING_TIMERS: RefCell<HashMap<String, TypingTimerEntry>> = RefCell::new(HashMap::new());
+}
+
+/// Typing indicator timeout in milliseconds (Signal uses 15 seconds).
+const TYPING_TIMEOUT_MS: u64 = 15_000;
+
+/// Set typing indicator with auto-clear timer (Signal-style).
+///
+/// When STARTED is received:
+/// 1. Show typing indicator ("is typing ..." since header shows peer name)
+/// 2. Start/restart 15-second timer to auto-clear (reuses existing timer to avoid calloop warnings)
+fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
+    // Show typing indicator (peer name already shown in header for DMs)
+    let indicator_text = "is typing ...";
+    tracing::debug!(
+        peer_id = %peer_id,
+        "TYPING_UI: Setting typing indicator"
+    );
+    window.set_typing_indicator(indicator_text.into());
+
+    // Check if we have an existing timer for this peer - if so, restart it
+    // This avoids stop+create which causes calloop orphaned event warnings
+    let needs_new_timer = DM_TYPING_TIMERS.with(|timers| {
+        let map = timers.borrow();
+        !map.contains_key(peer_id)
+    });
+
+    if needs_new_timer {
+        // Create new timer only if one doesn't exist
+        let timer = Timer::default();
+        let weak_window = window.as_weak();
+        let peer_id_owned = peer_id.to_string();
+        let peer_id_for_cleanup = peer_id.to_string();
+
+        tracing::debug!(
+            peer_id = %peer_id,
+            timeout_ms = TYPING_TIMEOUT_MS,
+            "TYPING_TIMER: Creating new 15s timer"
+        );
+
+        timer.start(
+            TimerMode::SingleShot,
+            std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
+            move || {
+                tracing::debug!(
+                    peer_id = %peer_id_owned,
+                    "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
+                );
+                // Clear typing indicator
+                if let Some(w) = weak_window.upgrade() {
+                    w.set_typing_indicator("".into());
+                }
+                // Remove from map
+                DM_TYPING_TIMERS.with(|timers| {
+                    timers.borrow_mut().remove(&peer_id_owned);
+                });
+            },
+        );
+
+        // Store timer
+        DM_TYPING_TIMERS.with(|timers| {
+            timers.borrow_mut().insert(peer_id_for_cleanup, TypingTimerEntry { timer });
+        });
+    } else {
+        // Restart existing timer (just call start again - Slint handles this)
+        DM_TYPING_TIMERS.with(|timers| {
+            let map = timers.borrow();
+            if let Some(entry) = map.get(peer_id) {
+                let weak_window = window.as_weak();
+                let peer_id_owned = peer_id.to_string();
+
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    timeout_ms = TYPING_TIMEOUT_MS,
+                    "TYPING_TIMER: Restarting existing timer"
+                );
+
+                entry.timer.start(
+                    TimerMode::SingleShot,
+                    std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
+                    move || {
+                        tracing::debug!(
+                            peer_id = %peer_id_owned,
+                            "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
+                        );
+                        if let Some(w) = weak_window.upgrade() {
+                            w.set_typing_indicator("".into());
+                        }
+                        DM_TYPING_TIMERS.with(|timers| {
+                            timers.borrow_mut().remove(&peer_id_owned);
+                        });
+                    },
+                );
+            }
+        });
+    }
+}
+
+/// Clear typing indicator and remove timer for a peer.
+///
+/// Note: We don't call timer.stop() because that can cause calloop orphaned event warnings.
+/// Instead, we just remove from map - the timer will fire harmlessly since the callback
+/// checks if the entry still exists in the map.
+fn clear_typing_timer(peer_id: &str) {
+    DM_TYPING_TIMERS.with(|timers| {
+        let mut map = timers.borrow_mut();
+        if map.remove(peer_id).is_some() {
+            tracing::debug!(
+                peer_id = %peer_id,
+                remaining_timers = map.len(),
+                "TYPING_TIMER: Removed timer entry for peer"
+            );
+        }
+    });
+}
+
+/// Clear typing indicator for a peer (called when message received or STOPPED).
+fn clear_typing_for_peer(window: &MainWindow, peer_id: &str) {
+    let current = window.get_typing_indicator().to_string();
+    tracing::info!(
+        peer_id = %peer_id,
+        current_value = %current,
+        "TYPING_UI: Clearing typing indicator"
+    );
+    clear_typing_timer(peer_id);
+    window.set_typing_indicator("".into());
+}
 
 /// Update a reaction summary string when a reaction is added or removed.
 ///
@@ -82,16 +242,16 @@ pub fn update_reaction_summary(current: &str, emoji: &str, remove: bool) -> Stri
         .join("  ")
 }
 
-/// Format a millisecond timestamp for display.
-pub fn format_timestamp(timestamp_ms: u64) -> String {
+/// Format a nanosecond timestamp for display.
+pub fn format_timestamp(timestamp_nanos: u64) -> String {
     use chrono::{Local, TimeZone};
 
-    if timestamp_ms == 0 {
+    if timestamp_nanos == 0 {
         return "".to_string();
     }
 
-    let secs = (timestamp_ms / 1000) as i64;
-    let nsecs = ((timestamp_ms % 1000) * 1_000_000) as u32;
+    let secs = (timestamp_nanos / 1_000_000_000) as i64;
+    let nsecs = (timestamp_nanos % 1_000_000_000) as u32;
 
     match Local.timestamp_opt(secs, nsecs).single() {
         Some(dt) => {
@@ -107,10 +267,18 @@ pub fn format_timestamp(timestamp_ms: u64) -> String {
 }
 
 /// Handle inbox events and update UI accordingly.
-pub fn handle_inbox_event(
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_inbox_event(
     event: InboxEvent,
     weak_window: &slint::Weak<MainWindow>,
     user_repo: &UserRepository,
+    channel_repo: &Arc<ChannelRepository>,
+    attachment_repo: &Arc<AttachmentRepository>,
+    grpc_pool: &Arc<GrpcClientPool>,
+    message_service: &Arc<MessageService>,
+    database: &Arc<Database>,
+    mailbox_manager: &Arc<MailboxManager>,
+    event_bus: &EventBus,
 ) {
     match event {
         InboxEvent::DmReceived {
@@ -118,11 +286,38 @@ pub fn handle_inbox_event(
             text,
             timestamp,
             message_id,
+            attachments,
         } => {
-            handle_dm_received(weak_window, user_repo, peer_id, text, timestamp, message_id);
+            let message_repo = Arc::new(MessageRepository::new(database.clone()));
+            handle_dm_received(weak_window, user_repo, attachment_repo, grpc_pool, &message_repo, peer_id, text, timestamp, message_id, attachments);
         }
-        InboxEvent::DmDecryptionFailed { peer_id, error } => {
-            tracing::error!("DM decryption failed from {}: {}", peer_id, error);
+        InboxEvent::DmDecryptionFailed { peer_id, error, convergence_failed } => {
+            tracing::error!(
+                "DM decryption failed from {}: {} (convergence_failed={})",
+                peer_id, error, convergence_failed
+            );
+
+            // If all sessions failed (convergence failed), reset and prepare for fresh session
+            if convergence_failed {
+                handle_convergence_failure(
+                    peer_id,
+                    message_service.clone(),
+                    grpc_pool.clone(),
+                );
+            }
+        }
+        InboxEvent::DmRetryRequested { peer_id, original_timestamp } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                original_timestamp,
+                "DM retry requested - resetting session"
+            );
+
+            handle_convergence_failure(
+                peer_id,
+                message_service.clone(),
+                grpc_pool.clone(),
+            );
         }
         InboxEvent::DmPollCompleted { total_messages } => {
             if total_messages > 0 {
@@ -131,19 +326,17 @@ pub fn handle_inbox_event(
         }
         InboxEvent::ChannelMessageReceived {
             channel_id,
-            sender_id,
-            message_id,
             text,
-            timestamp,
+            ..
         } => {
+            let message_repo = Arc::new(MessageRepository::new(database.clone()));
             handle_channel_message_received(
                 weak_window,
                 user_repo,
+                attachment_repo,
+                &message_repo,
                 channel_id,
-                sender_id,
-                message_id,
                 text,
-                timestamp,
             );
         }
         InboxEvent::MessageReceived { message_id, .. } => {
@@ -174,7 +367,7 @@ pub fn handle_inbox_event(
             handle_dm_unread_count(weak_window, channel_id, peer_id, unread_count);
         }
         InboxEvent::DmTyping { peer_id, action } => {
-            handle_dm_typing(weak_window, user_repo, peer_id, action);
+            handle_dm_typing(weak_window, peer_id, action);
         }
         InboxEvent::DmReceipt {
             peer_id,
@@ -329,112 +522,795 @@ pub fn handle_inbox_event(
             tracing::info!(
                 friend_user_id = %friend_user_id,
                 channel_id = %channel_id,
-                "Friend accepted event received - DM channel available"
+                "Friend accepted event received - adding DM to sidebar"
             );
-            // The DM will be added to sidebar via the user events stream handler
-            // which triggers this event. The actual sidebar update happens in
-            // friends.rs add_dm_to_sidebar when channel_id is received.
-            // This event is for logging/future use (e.g., showing a toast notification).
+
+            // Fetch the channel from server and add to sidebar
+            handle_friend_accepted(
+                weak_window,
+                user_repo,
+                channel_repo,
+                grpc_pool,
+                friend_user_id,
+                channel_id,
+            )
+            .await;
+        }
+        InboxEvent::DmBootstrapCompleted { peer_id } => {
+            // Bootstrap completed - send any pending messages that were queued
+            tracing::info!(
+                peer_id = %peer_id,
+                "BOOTSTRAP[4/4] DmBootstrapCompleted event received - will flush pending messages"
+            );
+
+            // Reset composer placeholder and update message status
+            let peer_id_str = peer_id.to_string();
+            let weak = weak_window.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    // Reset placeholder to normal
+                    w.set_composer_placeholder("Type a message...".into());
+
+                    // Update any "sending" messages to "sent" for this peer
+                    let selected_dm = w.get_selected_dm_id().to_string();
+                    let peer_channel_id = get_dm_channel_from_peer(&w, &peer_id_str);
+                    let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
+                        || selected_dm == peer_id_str;
+
+                    if is_active {
+                        let messages = w.get_messages();
+                        for i in 0..messages.row_count() {
+                            if let Some(msg) = messages.row_data(i) {
+                                if msg.is_own && msg.delivery_status.as_str() == "sending" {
+                                    let mut updated_msg = msg.clone();
+                                    updated_msg.delivery_status = "sent".into();
+                                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                                        model.set_row_data(i, updated_msg);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            handle_dm_bootstrap_completed(
+                peer_id,
+                message_service.clone(),
+                database.clone(),
+                mailbox_manager.clone(),
+                grpc_pool.clone(),
+            );
+        }
+        InboxEvent::IncomingCall {
+            peer_id,
+            call_id,
+            key_material,
+            call_type,
+            channel_id,
+            timestamp,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                call_id = %call_id,
+                call_type = %call_type,
+                channel_id = %channel_id,
+                key_len = key_material.len(),
+                timestamp = timestamp,
+                "Incoming call notification - showing modal"
+            );
+
+            // Get caller display name from user repo
+            let caller_name = user_repo
+                .get_profile(&peer_id)
+                .ok()
+                .flatten()
+                .map(|p| p.display_name.clone())
+                .filter(|name| !name.is_empty())
+                .or_else(|| {
+                    user_repo
+                        .get(&peer_id)
+                        .ok()
+                        .flatten()
+                        .map(|u| u.username.clone())
+                })
+                .unwrap_or_else(|| peer_id.to_string());
+
+            let is_video = call_type.contains("Video");
+            let peer_id_str = peer_id.to_string();
+            let weak = weak_window.clone();
+
+            // Encode encryption key as base64 for UI transport
+            let encryption_key_b64 = base64::engine::general_purpose::STANDARD.encode(&key_material);
+
+            // Pass call start timestamp as string (nanoseconds) for synchronized duration
+            let call_start_timestamp_ns = timestamp.to_string();
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    // Create incoming call data struct with encryption key
+                    let call_data = IncomingCallData {
+                        call_id: call_id.into(),
+                        caller_id: peer_id_str.into(),
+                        caller_name: caller_name.into(),
+                        caller_avatar: "".into(),
+                        channel_name: channel_id.into(), // Use channel_id as channel_name for now
+                        is_video_call: is_video,
+                        encryption_key: encryption_key_b64.into(),
+                        call_start_timestamp_ns: call_start_timestamp_ns.into(),
+                    };
+
+                    // Set incoming call data
+                    w.set_incoming_call_data(call_data);
+
+                    // Show the incoming call modal
+                    w.set_incoming_call_visible(true);
+
+                    tracing::info!("Incoming call modal displayed");
+                }
+            });
+        }
+        InboxEvent::CallHangup {
+            peer_id,
+            call_id,
+            reason,
+            timestamp: _,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                call_id = %call_id,
+                reason = %reason,
+                "Call hangup received - emitting domain event for cleanup"
+            );
+
+            // Emit domain event for calls.rs to handle (runs on UI thread with CallService access)
+            event_bus.emit_domain(DomainEvent::CallHangupReceived {
+                call_id: call_id.clone(),
+                peer_id,
+                reason: reason.clone(),
+            });
+
+            let weak = weak_window.clone();
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    // Close the active call view if this call is active
+                    let current_call_id = w.get_active_call_data().call_id.to_string();
+                    if current_call_id == call_id || current_call_id.is_empty() {
+                        // Stop call timer and clean up UI state
+                        cleanup_call_ui_state();
+
+                        w.set_active_call_visible(false);
+                        w.set_incoming_call_visible(false);
+                        tracing::info!("Call ended by peer - UI cleaned up");
+                    }
+                }
+            });
         }
     }
+}
+
+// =============================================================================
+// Session Recovery Handlers
+// =============================================================================
+
+/// Handle session convergence failure by resetting and re-establishing session.
+///
+/// When all Sesame sessions fail to decrypt a message, we need to:
+/// 1. Archive all existing sessions
+/// 2. Fetch fresh prekey bundle and establish new session
+/// 3. Future messages should work with the new session
+fn handle_convergence_failure(
+    peer_id: chatter_linux::domain::UserId,
+    message_service: Arc<MessageService>,
+    grpc_pool: Arc<GrpcClientPool>,
+) {
+    // Use spawn_blocking because libsignal stores aren't Send
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create runtime for convergence recovery");
+
+        rt.block_on(async {
+            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Reset session and establish fresh one (device_id = 1 for primary)
+            match message_service
+                .reset_and_establish_session(&mut auth_client, &peer_id, 1)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        "Session reset complete - ready for fresh messages"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "Failed to reset session after convergence failure"
+                    );
+                }
+            }
+        });
+    });
+}
+
+// =============================================================================
+// DM Bootstrap Handler
+// =============================================================================
+
+fn handle_dm_bootstrap_completed(
+    peer_id: chatter_linux::domain::UserId,
+    message_service: Arc<MessageService>,
+    database: Arc<Database>,
+    mailbox_manager: Arc<MailboxManager>,
+    grpc_pool: Arc<GrpcClientPool>,
+) {
+    tracing::info!(
+        peer_id = %peer_id,
+        "BOOTSTRAP[4/4] handle_dm_bootstrap_completed called - spawning task to send pending"
+    );
+
+    // Use spawn_blocking because libsignal stores aren't Send
+    tokio::task::spawn_blocking(move || {
+        tracing::debug!(
+            peer_id = %peer_id,
+            "BOOTSTRAP[4/4] Inside spawn_blocking, creating runtime"
+        );
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create runtime for bootstrap completion");
+
+        rt.block_on(async {
+            tracing::debug!(
+                peer_id = %peer_id,
+                "BOOTSTRAP[4/4] Creating auth client for pending message send"
+            );
+
+            // Create an auth client for key fetching (needed for Signal encryption)
+            let mut auth_client = chatter_linux::network::grpc::auth_client::AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            tracing::info!(
+                peer_id = %peer_id,
+                "BOOTSTRAP[4/4] Calling send_pending_messages (initiator side)"
+            );
+
+            // Send all pending messages for this peer
+            match message_service
+                .send_pending_messages(&mut auth_client, &peer_id, database.clone(), &mailbox_manager)
+                .await
+            {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            count = count,
+                            "BOOTSTRAP[4/4] SUCCESS - Sent {} pending message(s) after bootstrap!",
+                            count
+                        );
+                    } else {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            "BOOTSTRAP[4/4] No pending messages to send (initiator side)"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "BOOTSTRAP[4/4] FAILED - Could not send pending messages"
+                    );
+                }
+            }
+        });
+    });
 }
 
 // =============================================================================
 // DM Event Handlers
 // =============================================================================
 
+/// Auto-download image attachments in background and update UI.
+///
+/// This enables images to display inline without requiring user to click "View".
+/// Downloads encrypted content to database (no filesystem), then decrypts to memory for display.
+async fn auto_download_image_attachments(
+    pointers: Vec<AttachmentPointer>,
+    grpc_pool: Arc<GrpcClientPool>,
+    attachment_repo: Arc<AttachmentRepository>,
+    weak_window: slint::Weak<MainWindow>,
+    peer_id: String,
+) {
+    use chatter_linux::domain::attachment::ContentLocation;
+    use chatter_linux::media::ImageProcessor;
+    use chatter_linux::services::AttachmentService;
+
+    let attachment_service = AttachmentService::new(attachment_repo.clone());
+
+    for pointer in pointers {
+        let cdn_key = pointer.cdn_key.clone();
+        let att_id = AttachmentId::from_cdn_key(&cdn_key);
+
+        tracing::info!(
+            cdn_key = %cdn_key,
+            filename = %pointer.file_name,
+            "Auto-downloading image attachment to database"
+        );
+
+        // SECURE: Download encrypted content to database (not filesystem)
+        match attachment_service
+            .download_to_database(&grpc_pool, &att_id)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(
+                    cdn_key = %cdn_key,
+                    "Image attachment downloaded to database"
+                );
+
+                // Update attachment status
+                if let Ok(Some(mut att)) = attachment_repo.get(&att_id) {
+                    att.status = AttachmentStatus::Ready;
+                    att.content_location = ContentLocation::InDatabase;
+                    if let Err(e) = attachment_repo.update(&att) {
+                        tracing::error!(
+                            cdn_key = %cdn_key,
+                            error = %e,
+                            "Failed to update attachment status"
+                        );
+                    }
+                }
+
+                // SECURE: Decrypt to memory for UI display
+                match attachment_service.decrypt_to_memory(&att_id) {
+                    Ok(secure_buffer) => {
+                        // Get dimensions first (slint::Image is not Send)
+                        match ImageProcessor::get_dimensions_from_memory(secure_buffer.as_slice()) {
+                            Ok((width, height)) => {
+                                // Copy bytes for the event loop (secure_buffer zeroizes on drop)
+                                let image_bytes = secure_buffer.as_slice().to_vec();
+                                let cdn_key_for_ui = cdn_key.clone();
+                                let peer_id_clone = peer_id.clone();
+                                let weak = weak_window.clone();
+
+                                // Create image inside event loop (slint::Image is not Send)
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(window) = weak.upgrade() {
+                                        match ImageProcessor::memory_to_slint_image(&image_bytes) {
+                                            Ok(image) => {
+                                                update_attachment_thumbnail_from_image(
+                                                    &window,
+                                                    &cdn_key_for_ui,
+                                                    image,
+                                                    width as i32,
+                                                    height as i32,
+                                                    &peer_id_clone,
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    cdn_key = %cdn_key_for_ui,
+                                                    error = ?e,
+                                                    "Failed to create slint image from memory"
+                                                );
+                                            }
+                                        }
+                                    }
+                                });
+                                // secure_buffer dropped here -> memory zeroized
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    cdn_key = %cdn_key,
+                                    error = ?e,
+                                    "Failed to get image dimensions"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            cdn_key = %cdn_key,
+                            error = %e,
+                            "Failed to decrypt attachment to memory"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    cdn_key = %cdn_key,
+                    error = %e,
+                    "Failed to download image attachment to database"
+                );
+            }
+        }
+    }
+}
+
+/// Update a message's attachment thumbnail from a pre-loaded image (memory-safe).
+fn update_attachment_thumbnail_from_image(
+    window: &MainWindow,
+    cdn_key: &str,
+    image: slint::Image,
+    width: i32,
+    height: i32,
+    peer_id: &str,
+) {
+    use crate::bin_ui::features::chat::get_dm_channel_from_peer;
+
+    let selected_dm = window.get_selected_dm_id().to_string();
+    let peer_channel_id = get_dm_channel_from_peer(window, peer_id);
+    let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
+        || selected_dm == peer_id;
+
+    if !is_active {
+        tracing::debug!(
+            cdn_key = %cdn_key,
+            "Skipping thumbnail update - not active conversation"
+        );
+        return;
+    }
+
+    // Find and update the message with this attachment
+    let messages = window.get_messages();
+    for msg_idx in 0..messages.row_count() {
+        if let Some(msg) = messages.row_data(msg_idx) {
+            // Check if this message has the attachment we downloaded
+            let attachments = msg.attachments.clone();
+            let mut found = false;
+
+            for att_idx in 0..attachments.row_count() {
+                if let Some(att) = attachments.row_data(att_idx) {
+                    // Match by cdn_key (stored in id field)
+                    let att_id = AttachmentId::from_cdn_key(cdn_key);
+                    if att.id.as_str() == att_id.to_string() || att.id.as_str() == cdn_key {
+                        found = true;
+
+                        // Update the attachment with thumbnail
+                        let mut updated_att = att.clone();
+                        updated_att.has_thumbnail = true;
+                        updated_att.thumbnail = image.clone();
+                        updated_att.width = width;
+                        updated_att.height = height;
+
+                        if let Some(model) = attachments
+                            .as_any()
+                            .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
+                        {
+                            model.set_row_data(att_idx, updated_att);
+                            tracing::debug!(
+                                cdn_key = %cdn_key,
+                                msg_idx,
+                                att_idx,
+                                "Updated attachment thumbnail in UI"
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if found {
+                break;
+            }
+        }
+    }
+}
+
 fn handle_dm_received(
     weak_window: &slint::Weak<MainWindow>,
     user_repo: &UserRepository,
+    attachment_repo: &Arc<AttachmentRepository>,
+    grpc_pool: &Arc<GrpcClientPool>,
+    message_repo: &Arc<MessageRepository>,
     peer_id: chatter_linux::domain::UserId,
     text: String,
     timestamp: u64,
     message_id: String,
+    attachments: Vec<AttachmentPointer>,
 ) {
-    tracing::info!("DM received from {}: {} chars", peer_id, text.len());
+    tracing::info!("DM received from {}: {} chars, {} attachments", peer_id, text.len(), attachments.len());
 
-    let sender_name = user_repo
-        .get(&peer_id)
+    // Collect image attachments for auto-download (thumbnails)
+    // Note: Audio waveforms are now included in AttachmentPointer from sender
+    let mut image_pointers: Vec<AttachmentPointer> = Vec::new();
+
+    // Store attachment metadata in database for later download
+    for pointer in &attachments {
+        if pointer.cdn_key.is_empty() {
+            continue;
+        }
+
+        // Generate deterministic UUID from cdn_key for storage
+        let att_id = AttachmentId::from_cdn_key(&pointer.cdn_key);
+
+        let metadata = FileMetadata {
+            name: pointer.file_name.clone(),
+            mime_type: pointer.content_type.clone(),
+            size: pointer.plaintext_size,
+            sha256: vec![], // Will be computed after download
+            chunk_size: 0,
+            width: if pointer.width > 0 { Some(pointer.width) } else { None },
+            height: if pointer.height > 0 { Some(pointer.height) } else { None },
+            duration_seconds: if pointer.duration_ms > 0 { Some(pointer.duration_ms as f64 / 1000.0) } else { None },
+            waveform_samples: if !pointer.waveform.is_empty() { Some(pointer.waveform.clone()) } else { None },
+            thumbnail: if !pointer.thumbnail.is_empty() { Some(pointer.thumbnail.clone()) } else { None },
+            thumbnail_width: if pointer.thumbnail_width > 0 { Some(pointer.thumbnail_width) } else { None },
+            thumbnail_height: if pointer.thumbnail_height > 0 { Some(pointer.thumbnail_height) } else { None },
+        };
+
+        let attachment = Attachment {
+            id: att_id,
+            metadata,
+            status: AttachmentStatus::Pending, // Pending download
+            content_location: chatter_linux::domain::attachment::ContentLocation::NotDownloaded,
+            local_path: None,
+            remote_url: Some(pointer.cdn_key.clone()), // Store cdn_key here
+            encryption_key: if pointer.encryption_key.is_empty() {
+                None
+            } else {
+                Some(pointer.encryption_key.clone())
+            },
+            encryption_iv: if pointer.digest.is_empty() {
+                None
+            } else {
+                Some(pointer.digest.clone()) // Store digest in iv field
+            },
+            created_at: chrono::Utc::now(),
+        };
+
+        if let Err(e) = attachment_repo.insert(&attachment) {
+            tracing::error!(
+                cdn_key = %pointer.cdn_key,
+                error = %e,
+                "Failed to store DM attachment metadata"
+            );
+        } else {
+            tracing::debug!(
+                id = %att_id,
+                cdn_key = %pointer.cdn_key,
+                filename = %pointer.file_name,
+                "Stored DM attachment metadata for later download"
+            );
+
+            // Queue image attachments for auto-download ONLY if sender didn't provide thumbnail
+            // Sender-provided thumbnails are instant (no download/decrypt needed)
+            if pointer.content_type.starts_with("image/")
+                && !pointer.encryption_key.is_empty()
+                && pointer.thumbnail.is_empty()
+            {
+                image_pointers.push(pointer.clone());
+            }
+        }
+    }
+
+    // Auto-download image attachments in background
+    if !image_pointers.is_empty() {
+        let grpc_pool = grpc_pool.clone();
+        let attachment_repo = attachment_repo.clone();
+        let weak_for_download = weak_window.clone();
+        let peer_id_for_download = peer_id.to_string();
+
+        tokio::spawn(async move {
+            auto_download_image_attachments(
+                image_pointers,
+                grpc_pool,
+                attachment_repo,
+                weak_for_download,
+                peer_id_for_download,
+            ).await;
+        });
+    }
+
+    // Note: Audio waveform is now included in AttachmentPointer (sender-side generated)
+    // No need to auto-download audio just for waveform display
+
+    // Try to get display name from profile, fall back to user
+    let sender_name_from_repo = user_repo
+        .get_profile(&peer_id)
         .ok()
         .flatten()
-        .map(|u| u.username.clone())
-        .unwrap_or_else(|| peer_id.to_string());
+        .map(|p| p.display_name.clone())
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            user_repo
+                .get(&peer_id)
+                .ok()
+                .flatten()
+                .map(|u| u.username.clone())
+                .filter(|name| !name.is_empty())
+        });
+
+    let peer_id_str = peer_id.to_string();
+
+    // Build lookup map from attachment pointers for fallback display
+    // Key: AttachmentId derived from cdn_key, Value: display data from pointer
+    let pointer_display_map: std::collections::HashMap<AttachmentId, AttachmentDisplayData> = attachments
+        .iter()
+        .filter(|p| !p.cdn_key.is_empty())
+        .map(|p| (AttachmentId::from_cdn_key(&p.cdn_key), attachment_pointer_to_display_data(p)))
+        .collect();
+
+    // Fetch messages from DB (already sorted by sent_at)
+    // Look up the message by ID to get its channel_id, then fetch all messages for that channel
+    let display_messages: Option<Vec<MessageDisplayData>> = message_id
+        .parse::<MessageId>()
+        .ok()
+        .and_then(|msg_id| message_repo.get(&msg_id).ok().flatten())
+        .and_then(|msg| {
+            let channel_id = msg.channel_id;
+            // Fetch messages for this channel (DB returns sorted by sent_at DESC)
+            message_repo.list_for_channel(&channel_id, None, 100).ok()
+        })
+        .map(|messages| {
+            // Convert to display format
+            let mut display: Vec<MessageDisplayData> = messages
+                .iter()
+                .map(|msg| {
+                    let sender_name = if let Some(sender_id) = &msg.sender_id {
+                        user_repo
+                            .get_profile(sender_id)
+                            .ok()
+                            .flatten()
+                            .map(|p| p.display_name)
+                            .or_else(|| user_repo.get(sender_id).ok().flatten().map(|u| u.username))
+                            .unwrap_or_else(|| sender_id.to_string())
+                    } else {
+                        "Unknown".to_string()
+                    };
+
+                    // Resolve attachments: try DB first, fall back to pointer data
+                    let resolved_attachments: Vec<Attachment> = msg
+                        .attachments
+                        .iter()
+                        .filter_map(|att_id| attachment_repo.get(att_id).ok().flatten())
+                        .collect();
+
+                    // Get display data, using pointer fallback for missing attachments
+                    let attachment_display: Vec<AttachmentDisplayData> = msg
+                        .attachments
+                        .iter()
+                        .map(|att_id| {
+                            // First try to find in resolved DB attachments
+                            if let Some(att) = resolved_attachments.iter().find(|a| &a.id == att_id) {
+                                crate::bin_ui::converters::attachment_to_display_data(att)
+                            } else if let Some(pointer_data) = pointer_display_map.get(att_id) {
+                                // Fall back to pointer data for immediate display
+                                pointer_data.clone()
+                            } else {
+                                // Shouldn't happen, but create placeholder
+                                AttachmentDisplayData {
+                                    id: att_id.to_string(),
+                                    filename: "Unknown".to_string(),
+                                    size_display: "".to_string(),
+                                    mime_type: "application/octet-stream".to_string(),
+                                    category: "file".to_string(),
+                                    thumbnail_url: String::new(),
+                                    download_url: String::new(),
+                                    local_path: None,
+                                    is_image: false,
+                                    is_video: false,
+                                    width: 0,
+                                    height: 0,
+                                    is_playing: false,
+                                    icon: "📎".to_string(),
+                                    icon_color: slint::Color::from_argb_u8(255, 107, 114, 128),
+                                    waveform: vec![10; 32],
+                                    duration_display: String::new(),
+                                    is_uploading: false,
+                                    is_downloading: false,
+                                    progress: 0.0,
+                                    thumbnail_bytes: Vec::new(),
+                                }
+                            }
+                        })
+                        .collect();
+
+                    message_to_display_data_with_attachments(msg, &sender_name, attachment_display)
+                })
+                .collect();
+            // Reverse to show oldest first (DB returns newest first)
+            display.reverse();
+            display
+        });
+
+    // Build preview and timestamp for sidebar
+    let timestamp_str = format_timestamp(timestamp);
+    let preview = if text.is_empty() && !attachments.is_empty() {
+        format!("📎 {} attachment{}", attachments.len(), if attachments.len() == 1 { "" } else { "s" })
+    } else if text.len() > 50 {
+        format!("{}...", &text[..47])
+    } else {
+        text.clone()
+    };
 
     let weak = weak_window.clone();
-    let peer_id_str = peer_id.to_string();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(window) = weak.upgrade() else {
             return;
         };
 
+        // Get sender name from DM conversations if not in repo
+        let sender_name = sender_name_from_repo.unwrap_or_else(|| {
+            let conversations = window.get_dm_conversations();
+            for i in 0..conversations.row_count() {
+                if let Some(item) = conversations.row_data(i) {
+                    if item.user_id.as_str() == peer_id_str {
+                        let name = item.display_name.to_string();
+                        if !name.is_empty() {
+                            return name;
+                        }
+                    }
+                }
+            }
+            peer_id_str.clone()
+        });
+
         let selected_dm = window.get_selected_dm_id().to_string();
 
-        if selected_dm == peer_id_str {
-            // Add message to current view
-            let current_model = window.get_messages();
-            let mut messages: Vec<_> = (0..current_model.row_count())
-                .filter_map(|i| current_model.row_data(i))
-                .collect();
+        // Check if this is the active conversation
+        let peer_channel_id = get_dm_channel_from_peer(&window, &peer_id_str);
+        let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
+            || selected_dm == peer_id_str;
 
-            let initials = get_initials(&sender_name);
-            let timestamp_str = format_timestamp(timestamp);
+        // Clear typing timer (Signal-style)
+        clear_typing_for_peer(&window, &peer_id_str);
 
-            let preview = if text.len() > 50 {
-                format!("{}...", &text[..47])
-            } else {
-                text.clone()
-            };
+        if is_active {
+            if let Some(display_messages) = display_messages {
+                // Check if user is at bottom before updating
+                let was_at_bottom = window.get_is_at_bottom();
 
-            let msg_item = MessageItemData {
-                message_id: message_id.into(),
-                sender_id: peer_id_str.clone().into(),
-                sender_name: sender_name.into(),
-                sender_initials: initials.into(),
-                sender_avatar_url: "".into(),
-                content: text.into(),
-                timestamp: timestamp_str.clone().into(),
-                timestamp_ms: timestamp as i32,
-                is_own: false,
-                is_edited: false,
-                is_deleted: false,
-                is_system: false,
-                is_ai: false,
-                has_attachments: false,
-                attachment_count: 0,
-                attachments: ModelRc::new(VecModel::from(Vec::new())),
-                has_reactions: false,
-                reaction_summary: "".into(),
-                reply_count: 0,
-                reply_count_text: "".into(),
-                is_thread_reply: false,
-                show_sender: true,
-                delivery_status: "".into(),
-            };
+                // Convert to Slint types and set (messages already sorted by DB)
+                let slint_messages: Vec<MessageItemData> = display_messages
+                    .iter()
+                    .map(|m| m.to_slint())
+                    .collect();
+                window.set_messages(ModelRc::new(VecModel::from(slint_messages)));
 
-            messages.push(msg_item);
-            window.set_messages(ModelRc::new(VecModel::from(messages)));
-
-            // Update sidebar
-            update_dm_sidebar(&window, &peer_id_str, &preview, &timestamp_str);
-        } else {
-            // Update sidebar only
-            let timestamp_str = format_timestamp(timestamp);
-            let preview = if text.len() > 50 {
-                format!("{}...", &text[..47])
-            } else {
-                text
-            };
-            update_dm_sidebar(&window, &peer_id_str, &preview, &timestamp_str);
+                // Auto-scroll to bottom if user was at bottom before new message
+                if was_at_bottom {
+                    // Setting scroll position to large negative scrolls to bottom
+                    // The actual value will be clamped by the Flickable
+                    window.set_message_scroll_position(-99999.0);
+                    window.set_is_at_bottom(true);
+                }
+            }
         }
+
+        // Always update sidebar
+        update_dm_sidebar(&window, &peer_id_str, &sender_name, &preview, &timestamp_str);
     });
 }
 
-fn update_dm_sidebar(window: &MainWindow, peer_id_str: &str, preview: &str, timestamp_str: &str) {
+fn update_dm_sidebar(
+    window: &MainWindow,
+    peer_id_str: &str,
+    sender_name: &str,
+    preview: &str,
+    timestamp_str: &str,
+) {
     let dms = window.get_dm_conversations();
+
+    // Check if this peer already exists in the sidebar
     for i in 0..dms.row_count() {
         if let Some(dm) = dms.row_data(i) {
             if dm.user_id.as_str() == peer_id_str {
+                // Update existing entry
                 let mut updated_dm = dm.clone();
                 updated_dm.last_message = preview.into();
                 updated_dm.timestamp = timestamp_str.into();
@@ -442,10 +1318,42 @@ fn update_dm_sidebar(window: &MainWindow, peer_id_str: &str, preview: &str, time
                 if let Some(model) = dms.as_any().downcast_ref::<VecModel<DMListItemData>>() {
                     model.set_row_data(i, updated_dm);
                 }
-                break;
+                return;
             }
         }
     }
+
+    // Peer not found - add new DM entry to sidebar
+    tracing::info!(
+        peer_id = %peer_id_str,
+        sender_name = %sender_name,
+        "Adding new DM conversation to sidebar for incoming message"
+    );
+
+    let initials = crate::bin_ui::converters::get_initials(sender_name);
+
+    let new_dm = crate::DMListItemData {
+        channel_id: "".into(), // Will be populated when channel is synced
+        user_id: peer_id_str.into(),
+        display_name: sender_name.into(),
+        avatar_url: "".into(),
+        initials: initials.into(),
+        presence_status: "offline".into(),
+        last_message: preview.into(),
+        timestamp: timestamp_str.into(),
+        unread_count: 1, // New message is unread
+    };
+
+    // Add to conversations list
+    let mut dm_vec: Vec<crate::DMListItemData> = Vec::new();
+    for i in 0..dms.row_count() {
+        if let Some(dm) = dms.row_data(i) {
+            dm_vec.push(dm);
+        }
+    }
+    dm_vec.push(new_dm);
+
+    window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(dm_vec)));
 }
 
 fn handle_dm_unread_count(
@@ -483,38 +1391,100 @@ fn handle_dm_unread_count(
 
 fn handle_dm_typing(
     weak_window: &slint::Weak<MainWindow>,
-    user_repo: &UserRepository,
     peer_id: chatter_linux::domain::UserId,
     action: i32,
 ) {
-    tracing::debug!(peer_id = %peer_id, action, "Received typing indicator");
-
-    let peer_name = user_repo
-        .get(&peer_id)
-        .ok()
-        .flatten()
-        .map(|u| u.username.clone())
-        .unwrap_or_else(|| "Someone".to_string());
+    tracing::info!(
+        peer_id = %peer_id,
+        action,
+        action_name = if action == 1 { "STARTED" } else { "STOPPED" },
+        "TYPING_INDICATOR: DM typing event received"
+    );
 
     let peer_id_str = peer_id.to_string();
     let weak = weak_window.clone();
 
-    let _ = slint::invoke_from_event_loop(move || {
+    tracing::info!(
+        peer_id = %peer_id_str,
+        action,
+        "TYPING_INDICATOR: Scheduling invoke_from_event_loop"
+    );
+
+    let result = slint::invoke_from_event_loop(move || {
+        tracing::info!(
+            peer_id = %peer_id_str,
+            action,
+            "TYPING_INDICATOR: invoke_from_event_loop callback RUNNING"
+        );
+
         let Some(window) = weak.upgrade() else {
+            tracing::warn!("TYPING_INDICATOR: Window upgrade failed!");
             return;
         };
 
         let selected_dm = window.get_selected_dm_id().to_string();
-        if selected_dm != peer_id_str {
+        let peer_channel_id = get_dm_channel_from_peer(&window, &peer_id_str);
+
+        // Check condition 1: peer's channel_id matches selected_dm_id
+        let cond1_match = peer_channel_id.as_deref() == Some(selected_dm.as_str());
+        // Check condition 2: peer's user_id matches selected_dm_id directly
+        let cond2_match = selected_dm == peer_id_str;
+
+        tracing::info!(
+            peer_id = %peer_id_str,
+            selected_dm = %selected_dm,
+            peer_channel_id = ?peer_channel_id,
+            cond1_channel_match = cond1_match,
+            cond2_userid_match = cond2_match,
+            "TYPING_INDICATOR: Channel lookup and comparison"
+        );
+
+        // Check if this is the active conversation
+        // Note: selected_dm_id can be either channel_id (from sidebar) or user_id (from friends list)
+        // So we check both: peer's channel matches selected, OR peer_id matches selected directly
+        let is_active_conversation = cond1_match || cond2_match;
+
+        tracing::info!(
+            peer_id = %peer_id_str,
+            is_active_conversation,
+            "TYPING_INDICATOR: Active conversation check"
+        );
+
+        if !is_active_conversation {
+            tracing::warn!(
+                peer_id = %peer_id_str,
+                selected_dm = %selected_dm,
+                peer_channel_id = ?peer_channel_id,
+                "TYPING_INDICATOR: NOT active conversation - skipping UI update"
+            );
+            // Not the active conversation, but still manage timer for when user switches
+            if action != 1 {
+                clear_typing_timer(&peer_id_str);
+            }
             return;
         }
 
         if action == 1 {
-            window.set_typing_indicator(format!("{} is typing...", peer_name).into());
+            // STARTED: Show indicator and start 15s auto-clear timer (Signal-style)
+            // For DMs, just show "typing..." since the header already shows who we're chatting with
+            tracing::info!(
+                peer_id = %peer_id_str,
+                "TYPING_INDICATOR: Calling set_typing_with_timer"
+            );
+            set_typing_with_timer(&window, &peer_id_str);
         } else {
-            window.set_typing_indicator("".into());
+            // STOPPED: Clear indicator and cancel timer
+            tracing::info!(
+                peer_id = %peer_id_str,
+                "TYPING_INDICATOR: Clearing typing indicator (STOPPED)"
+            );
+            clear_typing_for_peer(&window, &peer_id_str);
         }
     });
+
+    if result.is_err() {
+        tracing::error!("TYPING_INDICATOR: invoke_from_event_loop FAILED to schedule!");
+    }
 }
 
 fn handle_dm_receipt(
@@ -545,7 +1515,10 @@ fn handle_dm_receipt(
         };
 
         let selected_dm = window.get_selected_dm_id().to_string();
-        if selected_dm != peer_id_str {
+        let peer_channel_id = get_dm_channel_from_peer(&window, &peer_id_str);
+        let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
+            || selected_dm == peer_id_str;
+        if !is_active {
             return;
         }
 
@@ -557,8 +1530,10 @@ fn handle_dm_receipt(
                     continue;
                 }
 
-                let msg_ts = msg.timestamp_ms as u64;
-                if timestamps.contains(&msg_ts) {
+                // Compare nanosecond timestamps as strings
+                let msg_ts_ns = msg.timestamp_ns.to_string();
+                let matching = timestamps.iter().any(|&ts| ts.to_string() == msg_ts_ns);
+                if matching {
                     let mut updated_msg = msg.clone();
                     updated_msg.delivery_status = status.into();
 
@@ -596,16 +1571,19 @@ fn handle_dm_reaction(
         };
 
         let selected_dm = window.get_selected_dm_id().to_string();
-        if selected_dm != peer_id_str {
+        let peer_channel_id = get_dm_channel_from_peer(&window, &peer_id_str);
+        let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
+            || selected_dm == peer_id_str;
+        if !is_active {
             return;
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        let target_ts_ns = target_sent_timestamp.to_string();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     let mut updated_msg = msg.clone();
                     let new_summary =
                         update_reaction_summary(&msg.reaction_summary.to_string(), &emoji, remove);
@@ -645,17 +1623,20 @@ fn handle_dm_pin(
         };
 
         let selected_dm = window.get_selected_dm_id().to_string();
-        if selected_dm != peer_id_str {
+        let peer_channel_id = get_dm_channel_from_peer(&window, &peer_id_str);
+        let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
+            || selected_dm == peer_id_str;
+        if !is_active {
             return;
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        let target_ts_ns = target_sent_timestamp.to_string();
         let mut preview = String::new();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     preview = msg.content.to_string();
                     if preview.len() > 100 {
                         preview = format!("{}...", &preview[..97]);
@@ -707,16 +1688,20 @@ fn handle_dm_edit(
         };
 
         let selected_dm = window.get_selected_dm_id().to_string();
-        if selected_dm != peer_id_str {
+        let peer_channel_id = get_dm_channel_from_peer(&window, &peer_id_str);
+        let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
+            || selected_dm == peer_id_str;
+        if !is_active {
             return;
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        // Convert nanoseconds to milliseconds for matching
+        let target_ts_ns = target_sent_timestamp.to_string();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     let mut updated_msg = msg.clone();
                     updated_msg.content = new_body.clone().into();
                     updated_msg.is_edited = true;
@@ -756,11 +1741,12 @@ fn handle_dm_delete_for_me(
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        // Convert nanoseconds to milliseconds for matching
+        let target_ts_ns = target_sent_timestamp.to_string();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     let mut updated_msg = msg.clone();
                     updated_msg.is_deleted = true;
                     updated_msg.content = "Message deleted".into();
@@ -796,16 +1782,20 @@ fn handle_dm_delete_for_everyone(
         };
 
         let selected_dm = window.get_selected_dm_id().to_string();
-        if selected_dm != peer_id_str {
+        let peer_channel_id = get_dm_channel_from_peer(&window, &peer_id_str);
+        let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
+            || selected_dm == peer_id_str;
+        if !is_active {
             return;
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        // Convert nanoseconds to milliseconds for matching
+        let target_ts_ns = target_sent_timestamp.to_string();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     let mut updated_msg = msg.clone();
                     updated_msg.is_deleted = true;
                     updated_msg.content = "This message was deleted".into();
@@ -828,29 +1818,51 @@ fn handle_dm_delete_for_everyone(
 fn handle_channel_message_received(
     weak_window: &slint::Weak<MainWindow>,
     user_repo: &UserRepository,
+    attachment_repo: &Arc<AttachmentRepository>,
+    message_repo: &Arc<MessageRepository>,
     channel_id: chatter_linux::domain::ids::ChannelId,
-    sender_id: chatter_linux::domain::UserId,
-    message_id: String,
     text: String,
-    timestamp: u64,
 ) {
     tracing::info!(
         channel_id = %channel_id,
-        sender_id = %sender_id,
         "Channel message received: {} chars",
         text.len()
     );
 
-    let sender_name = user_repo
-        .get(&sender_id)
+    // Fetch messages from DB (already sorted by sent_at DESC)
+    let display_messages: Option<Vec<MessageDisplayData>> = message_repo
+        .list_for_channel(&channel_id, None, 100)
         .ok()
-        .flatten()
-        .map(|u| u.username.clone())
-        .unwrap_or_else(|| sender_id.to_string());
+        .map(|messages| {
+            let mut display: Vec<MessageDisplayData> = messages
+                .iter()
+                .map(|msg| {
+                    let sender_name = if let Some(sender_id) = &msg.sender_id {
+                        user_repo
+                            .get(sender_id)
+                            .ok()
+                            .flatten()
+                            .map(|u| u.username)
+                            .unwrap_or_else(|| sender_id.to_string())
+                    } else {
+                        "Unknown".to_string()
+                    };
+                    // Resolve attachments from DB
+                    let resolved_attachments: Vec<Attachment> = msg
+                        .attachments
+                        .iter()
+                        .filter_map(|att_id| attachment_repo.get(att_id).ok().flatten())
+                        .collect();
+                    message_to_display_data(msg, &sender_name, &resolved_attachments)
+                })
+                .collect();
+            // Reverse to show oldest first (DB returns newest first)
+            display.reverse();
+            display
+        });
 
     let weak = weak_window.clone();
     let channel_id_str = channel_id.to_string();
-    let sender_id_str = sender_id.to_string();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(window) = weak.upgrade() else {
@@ -860,44 +1872,24 @@ fn handle_channel_message_received(
         let selected_channel = window.get_selected_channel_id().to_string();
 
         if selected_channel == channel_id_str {
-            let current_model = window.get_messages();
-            let mut messages: Vec<_> = (0..current_model.row_count())
-                .filter_map(|i| current_model.row_data(i))
-                .collect();
+            if let Some(display_messages) = display_messages {
+                // Check if user is at bottom before updating
+                let was_at_bottom = window.get_is_at_bottom();
 
-            let initials = get_initials(&sender_name);
-            let timestamp_str = format_timestamp(timestamp);
+                let slint_messages: Vec<MessageItemData> = display_messages
+                    .iter()
+                    .map(|m| m.to_slint())
+                    .collect();
+                let count = slint_messages.len();
+                window.set_messages(ModelRc::new(VecModel::from(slint_messages)));
+                tracing::debug!("Updated channel view with {} messages from DB", count);
 
-            let msg_item = MessageItemData {
-                message_id: message_id.into(),
-                sender_id: sender_id_str.into(),
-                sender_name: sender_name.into(),
-                sender_initials: initials.into(),
-                sender_avatar_url: "".into(),
-                content: text.into(),
-                timestamp: timestamp_str.into(),
-                timestamp_ms: timestamp as i32,
-                is_own: false,
-                is_edited: false,
-                is_deleted: false,
-                is_system: false,
-                is_ai: false,
-                has_attachments: false,
-                attachment_count: 0,
-                attachments: ModelRc::new(VecModel::from(Vec::new())),
-                has_reactions: false,
-                reaction_summary: "".into(),
-                reply_count: 0,
-                reply_count_text: "".into(),
-                is_thread_reply: false,
-                show_sender: true,
-                delivery_status: "".into(),
-            };
-
-            messages.push(msg_item);
-            window.set_messages(ModelRc::new(VecModel::from(messages)));
-
-            tracing::debug!("Added channel message to current view");
+                // Auto-scroll to bottom if user was at bottom before new message
+                if was_at_bottom {
+                    window.set_message_scroll_position(-99999.0);
+                    window.set_is_at_bottom(true);
+                }
+            }
         }
     });
 }
@@ -973,11 +1965,11 @@ fn handle_channel_reaction(
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        let target_ts_ns = target_sent_timestamp.to_string();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     let mut updated_msg = msg.clone();
                     let new_summary =
                         update_reaction_summary(&msg.reaction_summary.to_string(), &emoji, remove);
@@ -1022,12 +2014,12 @@ fn handle_channel_pin(
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        let target_ts_ns = target_sent_timestamp.to_string();
         let mut preview = String::new();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     preview = msg.content.to_string();
                     if preview.len() > 100 {
                         preview = format!("{}...", &preview[..97]);
@@ -1084,11 +2076,11 @@ fn handle_channel_edit(
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        let target_ts_ns = target_sent_timestamp.to_string();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     let mut updated_msg = msg.clone();
                     updated_msg.content = new_body.clone().into();
                     updated_msg.is_edited = true;
@@ -1129,11 +2121,11 @@ fn handle_channel_delete_for_everyone(
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        let target_ts_ns = target_sent_timestamp.to_string();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     let mut updated_msg = msg.clone();
                     updated_msg.is_deleted = true;
                     updated_msg.content = "This message was deleted".into();
@@ -1173,11 +2165,11 @@ fn handle_channel_delete_for_me(
         }
 
         let messages = window.get_messages();
-        let target_ts = target_sent_timestamp as i32;
+        let target_ts_ns = target_sent_timestamp.to_string();
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ms == target_ts {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
                     let mut updated_msg = msg.clone();
                     updated_msg.is_deleted = true;
                     updated_msg.content = "Message deleted".into();
@@ -1191,4 +2183,243 @@ fn handle_channel_delete_for_me(
             }
         }
     });
+}
+
+// =============================================================================
+// Friend Event Handlers
+// =============================================================================
+
+/// Handle FriendAccepted event by adding the DM channel to the sidebar.
+/// This is called on the SENDER's side when their friend request is accepted.
+///
+/// DM bootstrap happens on-demand when the user sends their first message,
+/// avoiding race conditions where both sides try to initiate simultaneously.
+async fn handle_friend_accepted(
+    weak_window: &slint::Weak<MainWindow>,
+    user_repo: &UserRepository,
+    channel_repo: &Arc<ChannelRepository>,
+    grpc_pool: &Arc<GrpcClientPool>,
+    friend_user_id: String,
+    channel_id: String,
+) {
+    use chatter_linux::network::grpc::channel_client::ChannelClient;
+    use chatter_linux::network::grpc::UserClient;
+
+    // Validate the channel ID format
+    if let Err(e) = channel_id.parse::<chatter_linux::domain::ids::ChannelId>() {
+        tracing::error!(error = %e, channel_id = %channel_id, "Invalid channel_id in FriendAccepted event");
+        return;
+    }
+
+    // Parse the friend user ID
+    let friend_uuid = match friend_user_id.parse::<chatter_linux::domain::UserId>() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(error = %e, friend_user_id = %friend_user_id, "Invalid friend_user_id in FriendAccepted event");
+            return;
+        }
+    };
+
+    // Fetch channel from server
+    let mut channel_client = ChannelClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+
+    match channel_client.get_channel(&channel_id).await {
+        Ok(proto_channel) => {
+            // Convert proto to domain
+            let channel = match chatter_linux::services::channel::converters::proto_to_domain_channel(&proto_channel) {
+                Ok(ch) => ch,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to convert proto channel");
+                    return;
+                }
+            };
+
+            // Save to local repo
+            if let Err(e) = channel_repo.insert(&channel) {
+                tracing::error!(error = %e, "Failed to save DM channel to local repo");
+                // Continue anyway to update UI
+            }
+
+            // Sync memberships from the proto response
+            for proto_member in &proto_channel.members {
+                match chatter_linux::services::channel::converters::proto_to_domain_membership(&channel.id, proto_member) {
+                    Ok(membership) => {
+                        if let Err(e) = channel_repo.insert_or_ignore_membership(&membership) {
+                            tracing::warn!(
+                                channel_id = %channel.id,
+                                user_id = %membership.user_id,
+                                error = %e,
+                                "Failed to sync DM membership"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            channel_id = %channel.id,
+                            error = %e,
+                            "Failed to convert proto DM membership"
+                        );
+                    }
+                }
+            }
+
+            // Get friend's display name - try local repo first, then fetch from server
+            let friend_name = match user_repo.get_profile(&friend_uuid).ok().flatten() {
+                Some(profile) => {
+                    if profile.display_name.is_empty() {
+                        friend_user_id.clone()
+                    } else {
+                        profile.display_name.clone()
+                    }
+                }
+                None => {
+                    // User not in local repo, fetch from server and save
+                    let mut user_client = UserClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+                    match user_client.get_user_profile(&friend_user_id).await {
+                        Ok(server_profile) => {
+                            let display_name = if !server_profile.display_name.is_empty() {
+                                server_profile.display_name.clone()
+                            } else {
+                                friend_user_id.clone()
+                            };
+
+                            // First create user record (required for profile foreign key)
+                            // Username not in profile proto, use display_name or user_id
+                            let username = if !server_profile.display_name.is_empty() {
+                                server_profile.display_name.clone()
+                            } else {
+                                friend_user_id.clone()
+                            };
+                            let user = chatter_linux::domain::user::User::new(
+                                friend_uuid,
+                                username,
+                                vec![], // Public key not available from profile endpoint
+                            );
+                            if let Err(e) = user_repo.insert(&user) {
+                                // Ignore duplicate key errors (user may already exist)
+                                if !e.to_string().contains("UNIQUE constraint") {
+                                    tracing::warn!(error = %e, "Failed to save friend user to local repo");
+                                }
+                            }
+
+                            // Now save profile to local repo for future lookups
+                            let local_profile = chatter_linux::domain::user::Profile {
+                                user_id: friend_uuid,
+                                display_name: display_name.clone(),
+                                avatar_url: Some(server_profile.avatar_url),
+                                status_message: None,
+                                presence: chatter_linux::domain::user::PresenceStatus::Offline,
+                            };
+                            if let Err(e) = user_repo.upsert_profile(&local_profile) {
+                                tracing::warn!(error = %e, "Failed to save friend profile to local repo");
+                            } else {
+                                tracing::debug!(
+                                    user_id = %friend_user_id,
+                                    display_name = %display_name,
+                                    "Saved friend profile to local repo"
+                                );
+                            }
+
+                            display_name
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to fetch friend profile, using ID");
+                            friend_user_id.clone()
+                        }
+                    }
+                }
+            };
+
+            let initials = get_initials(&friend_name);
+
+            // Add DM to sidebar UI
+            let weak = weak_window.clone();
+            let channel_id_clone = channel_id.clone();
+            let friend_user_id_clone = friend_user_id.clone();
+            let dm_item = DMListItemData {
+                channel_id: channel_id.clone().into(),
+                user_id: friend_user_id.clone().into(),
+                display_name: friend_name.into(),
+                initials: initials.into(),
+                avatar_url: "".into(),
+                presence_status: "offline".into(),
+                last_message: "".into(),
+                timestamp: "".into(),
+                unread_count: 0,
+            };
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    let current_dms = window.get_dm_conversations();
+                    let mut dms: Vec<DMListItemData> = (0..current_dms.row_count())
+                        .filter_map(|i| current_dms.row_data(i))
+                        .collect();
+
+                    // Check if DM already exists
+                    let exists = dms.iter().any(|dm| dm.channel_id.as_str() == channel_id_clone);
+                    if !exists {
+                        dms.push(dm_item);
+                        window.set_dm_conversations(ModelRc::new(VecModel::from(dms)));
+                        tracing::info!(
+                            channel_id = %channel_id_clone,
+                            friend_user_id = %friend_user_id_clone,
+                            "Added DM to sidebar for accepted friend"
+                        );
+                    }
+                }
+            });
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                channel_id = %channel_id,
+                "Failed to fetch DM channel from server"
+            );
+
+            // Even if we can't fetch the channel, try to add a basic DM entry
+            let friend_name = user_repo
+                .get(&friend_uuid)
+                .ok()
+                .flatten()
+                .map(|u| u.username.clone())
+                .unwrap_or_else(|| friend_user_id.clone());
+
+            let initials = get_initials(&friend_name);
+
+            let weak = weak_window.clone();
+            let channel_id_clone = channel_id.clone();
+            let friend_user_id_clone = friend_user_id.clone();
+            let dm_item = DMListItemData {
+                channel_id: channel_id.clone().into(),
+                user_id: friend_user_id.clone().into(),
+                display_name: friend_name.into(),
+                initials: initials.into(),
+                avatar_url: "".into(),
+                presence_status: "offline".into(),
+                last_message: "".into(),
+                timestamp: "".into(),
+                unread_count: 0,
+            };
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(window) = weak.upgrade() {
+                    let current_dms = window.get_dm_conversations();
+                    let mut dms: Vec<DMListItemData> = (0..current_dms.row_count())
+                        .filter_map(|i| current_dms.row_data(i))
+                        .collect();
+
+                    let exists = dms.iter().any(|dm| dm.channel_id.as_str() == channel_id_clone);
+                    if !exists {
+                        dms.push(dm_item);
+                        window.set_dm_conversations(ModelRc::new(VecModel::from(dms)));
+                        tracing::info!(
+                            channel_id = %channel_id_clone,
+                            friend_user_id = %friend_user_id_clone,
+                            "Added basic DM entry to sidebar (channel fetch failed)"
+                        );
+                    }
+                }
+            });
+        }
+    }
 }

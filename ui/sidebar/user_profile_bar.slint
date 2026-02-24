@@ -105,7 +105,7 @@ export component UserProfileBar inherits Rectangle {
                 background: friends-touch.has-hover ? Colors.surface-hover : transparent;
 
                 Text {
-                    text: "\u{1F465}"; // Two people icon (Unicode)
+                    text: "\u{1F465}\u{FE0F}"; // Two people icon (with emoji variant selector)
                     color: Colors.text-secondary;
                     font-size: 18px;
                     horizontal-alignment: center;
@@ -154,9 +154,9 @@ export component UserProfileBar inherits Rectangle {
                 background: settings-touch.has-hover ? Colors.surface-hover : transparent;
 
                 Text {
-                    text: "\u{2699}"; // Gear icon (Unicode)
+                    text: "\u{2699}\u{FE0F}"; // Gear icon (emoji)
                     color: Colors.text-secondary;
-                    font-size: 20px;
+                    font-size: 18px;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                     width: 100%;

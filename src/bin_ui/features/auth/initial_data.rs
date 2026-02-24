@@ -1,4 +1,6 @@
 //! Initial data loading after login.
+//!
+//! Uses ChannelService and UserService for all network operations.
 
 use std::sync::Arc;
 
@@ -6,11 +8,9 @@ use slint::{ModelRc, VecModel};
 
 use chatter_linux::domain::channel::ChannelType;
 use chatter_linux::mailbox::group::GroupCoordinator;
-use chatter_linux::network::grpc::channel_client::ChannelClient;
 use chatter_linux::network::grpc::client_pool::GrpcClientPool;
-use chatter_linux::network::grpc::user_client::UserClient;
-use chatter_linux::proto::chat_v1::friend_requests_filter;
 use chatter_linux::services::channel::ChannelService;
+use chatter_linux::services::user_service::{FriendRequestFilter, UserService};
 use chatter_linux::state::AuthState;
 use chatter_linux::storage::{AttachmentRepository, ChannelRepository, MessageRepository, SettingsRepository, UserRepository};
 
@@ -33,15 +33,17 @@ pub async fn load_initial_data(
 ) {
     tracing::info!("Loading initial data...");
 
-    // Create channel service and client
-    let channel_service = ChannelService::new(settings_repo.clone(), channel_repo.clone(), signal_service, group_coordinator);
-    let mut channel_client = ChannelClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+    // Create channel service (owns grpc_pool, no external client needed)
+    let channel_service = ChannelService::new(
+        grpc_pool.clone(),
+        settings_repo.clone(),
+        channel_repo.clone(),
+        signal_service,
+        group_coordinator,
+    );
 
     // Sync channels from server first (fetches and upserts to local storage)
-    match channel_service
-        .list_channels(&mut channel_client, 100, 0, None)
-        .await
-    {
+    match channel_service.list_channels(100, 0, None).await {
         Ok(synced_channels) => {
             for ch in &synced_channels {
                 tracing::debug!(
@@ -60,7 +62,7 @@ pub async fn load_initial_data(
     let channels = match channel_service.get_channels_for_user() {
         Ok(ch) => ch,
         Err(e) => {
-            tracing::warn!("Failed to load channels from local storage: {}", e);
+            tracing::error!("Failed to load channels from local storage: {} - showing empty channel list", e);
             Vec::new()
         }
     };
@@ -72,9 +74,51 @@ pub async fn load_initial_data(
     for channel in &channels {
         match channel.channel_type {
             ChannelType::DirectMessage => {
+                // For DMs, we need to find the OTHER user (not ourselves)
+                // owner_id is the creator, not necessarily the peer
+                let current_user_id = auth_state.get().current_user_id;
+
+                let other_user_id = if let Some(current_id) = current_user_id {
+                    // Get channel members and find the one that's not us
+                    match channel_repo.list_members(&channel.id) {
+                        Ok(members) => {
+                            members.iter()
+                                .find(|m| m.user_id != current_id)
+                                .map(|m| m.user_id.to_string())
+                                .unwrap_or_else(|| channel.owner_id.to_string())
+                        }
+                        Err(_) => channel.owner_id.to_string(),
+                    }
+                } else {
+                    // Fallback to owner_id if we don't know our own ID
+                    channel.owner_id.to_string()
+                };
+
                 let other_user_name = channel.name.clone();
-                let other_user_id = channel.owner_id.to_string();
-                dm_list.push(dm_to_slint(channel, &other_user_name, &other_user_id));
+
+                // Get the most recent message for this DM to populate preview
+                let (last_message, timestamp) = match message_repo.list_for_channel(&channel.id, None, 1) {
+                    Ok(messages) if !messages.is_empty() => {
+                        let msg = &messages[0];
+                        let preview = msg.as_text()
+                            .map(|text| {
+                                if text.len() > 50 {
+                                    format!("{}...", &text[..47])
+                                } else {
+                                    text.to_string()
+                                }
+                            })
+                            .unwrap_or_default();
+                        let ts = msg.created_at.format("%H:%M").to_string();
+                        (preview, ts)
+                    }
+                    _ => (String::new(), String::new()),
+                };
+
+                let mut dm_item = dm_to_slint(channel, &other_user_name, &other_user_id);
+                dm_item.last_message = last_message.into();
+                dm_item.timestamp = timestamp.into();
+                dm_list.push(dm_item);
             }
             ChannelType::Public | ChannelType::Private => {
                 channel_list.push(channel_to_slint(channel));
@@ -107,16 +151,20 @@ pub async fn load_initial_data(
     let user_repo_for_load = user_repo.clone();
     let attachment_repo_for_load = attachment_repo.clone();
 
-    // Fetch friend requests from server
-    let mut user_client = UserClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+    // Fetch friend requests from server using UserService
+    let user_service = UserService::new(
+        grpc_pool.clone(),
+        settings_repo.clone(),
+        user_repo.clone(),
+    );
 
-    let received_requests = match user_client
-        .list_friend_requests(friend_requests_filter::Filter::Received, 50, 0)
+    let received_requests = match user_service
+        .list_friend_requests(FriendRequestFilter::Received, 50, 0)
         .await
     {
-        Ok(response) => {
-            tracing::info!("Fetched {} received friend requests", response.requests.len());
-            response.requests
+        Ok(friendships) => {
+            tracing::info!("Fetched {} received friend requests", friendships.len());
+            friendships
         }
         Err(e) => {
             tracing::warn!("Failed to fetch received friend requests: {}", e);
@@ -124,13 +172,13 @@ pub async fn load_initial_data(
         }
     };
 
-    let sent_requests = match user_client
-        .list_friend_requests(friend_requests_filter::Filter::Sent, 50, 0)
+    let sent_requests = match user_service
+        .list_friend_requests(FriendRequestFilter::Sent, 50, 0)
         .await
     {
-        Ok(response) => {
-            tracing::info!("Fetched {} sent friend requests", response.requests.len());
-            response.requests
+        Ok(friendships) => {
+            tracing::info!("Fetched {} sent friend requests", friendships.len());
+            friendships
         }
         Err(e) => {
             tracing::warn!("Failed to fetch sent friend requests: {}", e);
@@ -138,28 +186,62 @@ pub async fn load_initial_data(
         }
     };
 
-    // Convert to UI types
-    let received_ui: Vec<FriendRequestData> = received_requests
-        .into_iter()
-        .map(|r| FriendRequestData {
-            user_id: r.user_id.into(),
-            display_name: r.display_name.into(),
-            username: r.username.into(),
-            avatar_url: r.avatar_url.into(),
-            sent_at: "".into(), // Server doesn't provide timestamp currently
-        })
-        .collect();
+    // Convert to UI types, fetching profiles for display names
+    let mut received_ui: Vec<FriendRequestData> = Vec::with_capacity(received_requests.len());
+    for f in received_requests {
+        let friend_id = f.friend_id;
+        let friend_id_str = friend_id.to_string();
 
-    let sent_ui: Vec<FriendRequestData> = sent_requests
-        .into_iter()
-        .map(|r| FriendRequestData {
-            user_id: r.user_id.into(),
-            display_name: r.display_name.into(),
-            username: r.username.into(),
-            avatar_url: r.avatar_url.into(),
+        // Try to fetch profile from server
+        let (display_name, username, avatar_url) = match user_service.get_user_profile(&friend_id).await {
+            Ok(profile) => {
+                let name = if profile.display_name.is_empty() {
+                    friend_id_str.clone()
+                } else {
+                    profile.display_name
+                };
+                let avatar = profile.avatar_url.unwrap_or_default();
+                (name.clone(), name, avatar)
+            }
+            Err(_) => (friend_id_str.clone(), friend_id_str.clone(), String::new()),
+        };
+
+        received_ui.push(FriendRequestData {
+            user_id: friend_id_str.into(),
+            display_name: display_name.into(),
+            username: username.into(),
+            avatar_url: avatar_url.into(),
             sent_at: "".into(),
-        })
-        .collect();
+        });
+    }
+
+    let mut sent_ui: Vec<FriendRequestData> = Vec::with_capacity(sent_requests.len());
+    for f in sent_requests {
+        let friend_id = f.friend_id;
+        let friend_id_str = friend_id.to_string();
+
+        // Try to fetch profile from server
+        let (display_name, username, avatar_url) = match user_service.get_user_profile(&friend_id).await {
+            Ok(profile) => {
+                let name = if profile.display_name.is_empty() {
+                    friend_id_str.clone()
+                } else {
+                    profile.display_name
+                };
+                let avatar = profile.avatar_url.unwrap_or_default();
+                (name.clone(), name, avatar)
+            }
+            Err(_) => (friend_id_str.clone(), friend_id_str.clone(), String::new()),
+        };
+
+        sent_ui.push(FriendRequestData {
+            user_id: friend_id_str.into(),
+            display_name: display_name.into(),
+            username: username.into(),
+            avatar_url: avatar_url.into(),
+            sent_at: "".into(),
+        });
+    }
 
     // Update UI with channels, DMs, and friend requests
     let window_weak_ui = window_weak.clone();

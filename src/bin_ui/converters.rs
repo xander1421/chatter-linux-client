@@ -4,9 +4,11 @@
 
 use slint::{Image, ModelRc, SharedString, VecModel};
 
-use chatter_linux::domain::attachment::Attachment;
+use chatter_linux::domain::attachment::{Attachment, AttachmentStatus};
 use chatter_linux::domain::channel::{Channel, ChannelType};
+use chatter_linux::domain::ids::AttachmentId;
 use chatter_linux::domain::message::Message;
+use chatter_linux::proto::content_v1::AttachmentPointer;
 use chatter_linux::state::PendingAttachment;
 
 use crate::bin_ui::audio_state;
@@ -58,6 +60,7 @@ pub fn channel_to_slint(channel: &Channel) -> ChannelListItemData {
 /// Convert a domain Channel (DM) to Slint DMListItemData.
 pub fn dm_to_slint(channel: &Channel, other_user_name: &str, other_user_id: &str) -> DMListItemData {
     DMListItemData {
+        channel_id: channel.id.to_string().into(),
         user_id: other_user_id.to_string().into(),
         display_name: other_user_name.to_string().into(),
         avatar_url: SharedString::default(),
@@ -87,13 +90,55 @@ pub struct AttachmentDisplayData {
     pub is_playing: bool,
     pub icon: String,
     pub icon_color: slint::Color,
+    /// Audio waveform samples (32 values, 0-100) for visualization.
+    pub waveform: Vec<i32>,
+    /// Formatted duration string (e.g., "1:23").
+    pub duration_display: String,
+    /// Transfer progress fields
+    pub is_uploading: bool,
+    pub is_downloading: bool,
+    pub progress: f32,
+    /// Thumbnail JPEG bytes from sender (for instant preview without download).
+    pub thumbnail_bytes: Vec<u8>,
 }
 
 impl AttachmentDisplayData {
     /// Convert to Slint MessageAttachmentData (must be called on UI thread).
     pub fn to_slint(&self) -> MessageAttachmentData {
-        // Try to load thumbnail from local path if available
-        let (has_thumbnail, thumbnail, img_width, img_height) = if let Some(ref path) = self.local_path {
+        // Priority 1: Try to load thumbnail from sender-provided bytes (instant preview)
+        // Priority 2: Load from local path after download
+        let (has_thumbnail, thumbnail, img_width, img_height) = if !self.thumbnail_bytes.is_empty() {
+            // Load thumbnail from sender-provided bytes
+            match image::load_from_memory(&self.thumbnail_bytes) {
+                Ok(img) => {
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                        rgba.as_raw(),
+                        w,
+                        h,
+                    );
+                    let slint_img = Image::from_rgba8(buffer);
+                    tracing::debug!(
+                        "Loaded thumbnail from bytes for {}: {}x{}, {} bytes",
+                        self.filename,
+                        w,
+                        h,
+                        self.thumbnail_bytes.len()
+                    );
+                    (true, slint_img, w as i32, h as i32)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to decode thumbnail bytes for {}: {:?}",
+                        self.filename,
+                        e
+                    );
+                    (false, Image::default(), self.width, self.height)
+                }
+            }
+        } else if let Some(ref path) = self.local_path {
+            // Load from local file after download
             if self.is_image {
                 let path_obj = std::path::Path::new(path);
                 if !path_obj.exists() {
@@ -124,9 +169,11 @@ impl AttachmentDisplayData {
                 (false, Image::default(), self.width, self.height)
             }
         } else {
-            tracing::debug!("No local_path for attachment: {}", self.filename);
             (false, Image::default(), self.width, self.height)
         };
+
+        // Convert waveform to Slint model
+        let waveform_model: ModelRc<i32> = ModelRc::new(VecModel::from(self.waveform.clone()));
 
         MessageAttachmentData {
             id: self.id.clone().into(),
@@ -145,6 +192,11 @@ impl AttachmentDisplayData {
             is_playing: self.is_playing,
             icon: self.icon.clone().into(),
             icon_color: self.icon_color,
+            waveform: waveform_model,
+            duration_display: self.duration_display.clone().into(),
+            is_uploading: self.is_uploading,
+            is_downloading: self.is_downloading,
+            progress: self.progress,
         }
     }
 }
@@ -160,6 +212,43 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
 
     // Get icon and color for category
     let (icon, icon_color) = category_to_icon_and_color(category);
+
+    // Get waveform samples (convert u8 to i32 for Slint)
+    let waveform: Vec<i32> = meta
+        .waveform_samples
+        .as_ref()
+        .map(|samples| {
+            let converted: Vec<i32> = samples.iter().map(|&s| s as i32).collect();
+            if meta.is_audio() {
+                let max = converted.iter().max().copied().unwrap_or(0);
+                tracing::debug!(
+                    "attachment_to_display_data: waveform has {} samples, max={}, first_5={:?}",
+                    converted.len(), max, &converted[..5.min(converted.len())]
+                );
+            }
+            converted
+        })
+        .unwrap_or_else(|| {
+            if meta.is_audio() {
+                tracing::warn!("attachment_to_display_data: no waveform_samples for audio, using flat default");
+            }
+            vec![10; 32]
+        }); // Default flat waveform
+
+    // Format duration for audio
+    let duration_display = meta
+        .duration_seconds
+        .map(|secs| {
+            let total_secs = secs as u64;
+            let minutes = total_secs / 60;
+            let seconds = total_secs % 60;
+            format!("{}:{:02}", minutes, seconds)
+        })
+        .unwrap_or_default();
+
+    // Determine transfer status from attachment status
+    let is_uploading = attachment.status == AttachmentStatus::Uploading;
+    let is_downloading = attachment.status == AttachmentStatus::Downloading;
 
     AttachmentDisplayData {
         id: id_str,
@@ -177,6 +266,86 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
         is_playing,
         icon: icon.to_string(),
         icon_color,
+        waveform,
+        duration_display,
+        is_uploading,
+        is_downloading,
+        progress: 0.0, // Will be updated by progress callback
+        // Use stored thumbnail from sender (for instant preview)
+        thumbnail_bytes: meta.thumbnail.clone().unwrap_or_default(),
+    }
+}
+
+/// Convert an AttachmentPointer (from proto) to thread-safe AttachmentDisplayData.
+///
+/// Used for displaying attachments immediately upon receive, before download completes.
+/// Shows filename, size, type info while download happens in background.
+pub fn attachment_pointer_to_display_data(pointer: &AttachmentPointer) -> AttachmentDisplayData {
+    let category = mime_to_category(&pointer.content_type);
+    let is_image = pointer.content_type.starts_with("image/");
+    let is_video = pointer.content_type.starts_with("video/");
+    let _is_audio = pointer.content_type.starts_with("audio/");
+
+    // Get icon and color for category
+    let (icon, icon_color) = category_to_icon_and_color(category);
+
+    // Use waveform from pointer if available (sender-side generated)
+    let waveform: Vec<i32> = if !pointer.waveform.is_empty() {
+        let converted: Vec<i32> = pointer.waveform.iter().map(|&s| s as i32).collect();
+        let max = converted.iter().max().copied().unwrap_or(0);
+        tracing::debug!(
+            "attachment_pointer_to_display_data: waveform has {} samples, max={}, first_5={:?}",
+            converted.len(), max, &converted[..5.min(converted.len())]
+        );
+        converted
+    } else {
+        tracing::debug!("attachment_pointer_to_display_data: no waveform in pointer, using flat default");
+        vec![10; 32] // Default flat waveform
+    };
+
+    // Format duration from pointer (milliseconds)
+    let duration_display = if pointer.duration_ms > 0 {
+        let total_secs = pointer.duration_ms / 1000;
+        let minutes = total_secs / 60;
+        let seconds = total_secs % 60;
+        format!("{}:{:02}", minutes, seconds)
+    } else {
+        String::new()
+    };
+
+    // Check if we have sender-provided thumbnail (instant preview)
+    let has_thumbnail = !pointer.thumbnail.is_empty();
+
+    // No download needed if we have thumbnail OR it's audio with waveform
+    // Video still needs download since we can't play without full file
+    let needs_download = is_video || (is_image && !has_thumbnail);
+
+    // Use deterministic UUID from cdn_key for consistent ID matching
+    // This ensures the ID matches what's stored in the attachment repository
+    let attachment_id = AttachmentId::from_cdn_key(&pointer.cdn_key).to_string();
+
+    AttachmentDisplayData {
+        id: attachment_id,
+        filename: pointer.file_name.clone(),
+        size_display: format_file_size(pointer.plaintext_size),
+        mime_type: pointer.content_type.clone(),
+        category: category.to_string(),
+        thumbnail_url: String::new(),
+        download_url: pointer.cdn_key.clone(), // CDN key for download
+        local_path: None, // Not downloaded yet
+        is_image,
+        is_video,
+        width: pointer.width as i32,
+        height: pointer.height as i32,
+        is_playing: false,
+        icon: icon.to_string(),
+        icon_color,
+        waveform,
+        duration_display,
+        is_uploading: false,
+        is_downloading: needs_download,
+        progress: 0.0,
+        thumbnail_bytes: pointer.thumbnail.clone(),
     }
 }
 
@@ -189,7 +358,7 @@ pub struct MessageDisplayData {
     pub sender_initials: String,
     pub content: String,
     pub timestamp: String,
-    pub timestamp_ms: i64,
+    pub timestamp_ns: String,  // Nanosecond timestamp as string for event matching
     pub is_edited: bool,
     pub is_deleted: bool,
     pub is_ai: bool,
@@ -221,7 +390,7 @@ impl MessageDisplayData {
             sender_avatar_url: SharedString::default(),
             content: self.content.clone().into(),
             timestamp: self.timestamp.clone().into(),
-            timestamp_ms: self.timestamp_ms as i32,
+            timestamp_ns: self.timestamp_ns.clone().into(),
             is_own: false, // Set by caller based on current user
             is_edited: self.is_edited,
             is_deleted: self.is_deleted,
@@ -237,6 +406,7 @@ impl MessageDisplayData {
             is_thread_reply: self.is_thread_reply,
             show_sender: true,
             delivery_status: self.delivery_status.clone().into(),
+            is_pinned: false,
         }
     }
 }
@@ -274,8 +444,12 @@ pub fn message_to_display_data_with_replies(
         sender_name: sender_name.to_string(),
         sender_initials: get_initials(sender_name),
         content: insert_word_breaks(msg.as_text().unwrap_or("")),
-        timestamp: msg.created_at.format("%H:%M").to_string(),
-        timestamp_ms: msg.created_at.timestamp_millis(),
+        timestamp: {
+            // Convert UTC to local time for display (consistent with sidebar)
+            use chrono::Local;
+            msg.created_at.with_timezone(&Local).format("%H:%M").to_string()
+        },
+        timestamp_ns: msg.sent_at.to_string(),
         is_edited: msg.is_edited,
         is_deleted: msg.is_deleted,
         is_ai: msg.targets_ai_bot,
@@ -293,6 +467,48 @@ pub fn message_to_display_data_with_replies(
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
         delivery_status: String::new(), // Set by caller based on receipt status
+    }
+}
+
+/// Convert a domain Message to MessageDisplayData with pre-converted attachments.
+///
+/// Use this when you have already converted attachments (e.g., using pointer fallback).
+pub fn message_to_display_data_with_attachments(
+    msg: &Message,
+    sender_name: &str,
+    attachment_data: Vec<AttachmentDisplayData>,
+) -> MessageDisplayData {
+    let reply_count_text = format_count(0, "reply", "replies");
+
+    MessageDisplayData {
+        message_id: msg.id.to_string(),
+        sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
+        sender_name: sender_name.to_string(),
+        sender_initials: get_initials(sender_name),
+        content: insert_word_breaks(msg.as_text().unwrap_or("")),
+        timestamp: {
+            // Convert UTC to local time for display (consistent with sidebar)
+            use chrono::Local;
+            msg.created_at.with_timezone(&Local).format("%H:%M").to_string()
+        },
+        timestamp_ns: msg.sent_at.to_string(),
+        is_edited: msg.is_edited,
+        is_deleted: msg.is_deleted,
+        is_ai: msg.targets_ai_bot,
+        has_attachments: !attachment_data.is_empty(),
+        attachment_count: attachment_data.len() as i32,
+        attachments: attachment_data,
+        has_reactions: !msg.reaction_counts.is_empty(),
+        reaction_summary: msg
+            .reaction_counts
+            .iter()
+            .map(|r| format!("{} {}", r.emoji, r.count))
+            .collect::<Vec<_>>()
+            .join(" "),
+        reply_count: 0,
+        reply_count_text,
+        is_thread_reply: msg.is_thread_reply(),
+        delivery_status: String::new(),
     }
 }
 
@@ -362,7 +578,7 @@ pub fn format_file_size(bytes: u64) -> String {
 }
 
 /// Map MIME type to category for UI display.
-fn mime_to_category(mime_type: &str) -> &'static str {
+pub fn mime_to_category(mime_type: &str) -> &'static str {
     if mime_type.starts_with("image/") {
         "image"
     } else if mime_type.starts_with("video/") {

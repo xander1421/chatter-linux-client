@@ -6,7 +6,7 @@ use chatter_linux::app::AppContext;
 use chatter_linux::domain::UserId;
 use chatter_linux::services::{build_edit_content, build_edit_content_with_channel};
 
-use super::helpers::{send_channel_content, send_dm_content};
+use super::helpers::{get_peer_id_from_dm_channel, send_channel_content, send_dm_content};
 use crate::MainWindow;
 
 /// Wire edit-message callback - enters edit mode with original message text.
@@ -73,6 +73,7 @@ pub fn wire_send_edit(window: &MainWindow, ctx: &AppContext) {
     let message_repo = ctx.message_repo.clone();
     let chat_state = ctx.chat_state.clone();
     let message_service = ctx.message_service();
+    let group_fanout = ctx.get_group_fanout();
 
     let weak_window = window.as_weak();
 
@@ -80,19 +81,32 @@ pub fn wire_send_edit(window: &MainWindow, ctx: &AppContext) {
         let message_id_str = message_id.to_string();
         let new_text_str = new_text.to_string();
 
-        // Get selected DM ID
-        let selected_dm_id = weak_window
+        // Get selected DM channel ID and look up peer
+        let (selected_dm_id, peer_user_id) = weak_window
             .upgrade()
-            .map(|w| w.get_selected_dm_id().to_string())
+            .map(|w| {
+                let dm_id = w.get_selected_dm_id().to_string();
+                let peer_id = if !dm_id.is_empty() {
+                    get_peer_id_from_dm_channel(&w, &dm_id)
+                } else {
+                    None
+                };
+                (dm_id, peer_id)
+            })
             .unwrap_or_default();
 
         let auth_state = auth_state.clone();
-        let grpc_pool = grpc_pool.clone();
+        let _grpc_pool = grpc_pool.clone();
         let message_repo = message_repo.clone();
         let weak = weak_window.clone();
 
         // DM edit via sealed sender
         if !selected_dm_id.is_empty() {
+            let peer_user_id = match peer_user_id {
+                Some(id) => id,
+                None => return,
+            };
+
             let mailbox_manager = mailbox_manager.clone();
             let database = database.clone();
             let message_service = message_service.clone();
@@ -108,7 +122,7 @@ pub fn wire_send_edit(window: &MainWindow, ctx: &AppContext) {
                         return;
                     }
 
-                    let peer_id: UserId = match selected_dm_id.parse() {
+                    let peer_id: UserId = match peer_user_id.parse() {
                         Ok(id) => id,
                         Err(_) => return,
                     };
@@ -135,7 +149,7 @@ pub fn wire_send_edit(window: &MainWindow, ctx: &AppContext) {
                         }
                     };
 
-                    let target_sent_timestamp = message.created_at.timestamp_millis() as u64;
+                    let target_sent_timestamp = message.sent_at;
 
                     // Build edit content
                     let content = build_edit_content(target_sent_timestamp, &new_text_str);
@@ -144,7 +158,6 @@ pub fn wire_send_edit(window: &MainWindow, ctx: &AppContext) {
                         content,
                         &peer_id,
                         database.clone(),
-                        grpc_pool,
                         message_service,
                         mailbox_manager,
                     )
@@ -179,6 +192,7 @@ pub fn wire_send_edit(window: &MainWindow, ctx: &AppContext) {
             // Channel edit via sender key
             let chat_state = chat_state.clone();
             let message_service = message_service.clone();
+            let group_fanout = group_fanout.clone();
 
             tokio::task::spawn_blocking(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
@@ -218,7 +232,7 @@ pub fn wire_send_edit(window: &MainWindow, ctx: &AppContext) {
                         }
                     };
 
-                    let target_sent_timestamp = message.created_at.timestamp_millis() as u64;
+                    let target_sent_timestamp = message.sent_at;
 
                     // Build edit content with channel context
                     let content = build_edit_content_with_channel(
@@ -231,7 +245,7 @@ pub fn wire_send_edit(window: &MainWindow, ctx: &AppContext) {
                         content,
                         &channel_id,
                         message_service,
-                        grpc_pool,
+                        group_fanout,
                     )
                     .await
                     {

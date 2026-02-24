@@ -38,9 +38,9 @@ export component ChannelListItem inherits Rectangle {
         // Channel icon (# for public, lock for private, @ for DM)
         Text {
             width: 20px;
-            text: root.channel-type == "public" ? "#"
-                : root.channel-type == "private" ? "\u{1F512}"
-                : "@";
+            text: root.channel-type == "public" ? "\u{1F4AC}\u{FE0F}"
+                : root.channel-type == "private" ? "\u{1F512}\u{FE0F}"
+                : "\u{1F464}\u{FE0F}";
             color: root.selected ? Colors.primary : Colors.text-secondary;
             font-size: 14px;
             vertical-alignment: center;
@@ -89,9 +89,9 @@ export component ChannelListItem inherits Rectangle {
 
         // Centered channel icon
         Text {
-            text: root.channel-type == "public" ? "#"
-                : root.channel-type == "private" ? "\u{1F512}"
-                : "@";
+            text: root.channel-type == "public" ? "\u{1F4AC}\u{FE0F}"
+                : root.channel-type == "private" ? "\u{1F512}\u{FE0F}"
+                : "\u{1F464}\u{FE0F}";
             color: root.selected ? Colors.primary : Colors.text-secondary;
             font-size: 18px;
             horizontal-alignment: center;

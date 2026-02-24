@@ -1,0 +1,325 @@
+// Video player modal component
+//
+// Full-screen video player with controls for playback, seeking, and volume.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component VideoPlayer inherits Rectangle {
+    // Properties
+    in property <bool> show: false;
+    in property <image> frame;  // Current video frame
+    in property <string> filename: "";
+    in property <float> progress: 0.0;  // 0.0 to 1.0
+    in property <string> elapsed: "0:00";
+    in property <string> duration: "0:00";
+    in property <bool> is-playing: false;
+    in property <float> volume: 1.0;  // 0.0 to 1.0
+
+    // Callbacks
+    callback close();
+    callback toggle-play-pause();
+    callback seek(float);  // position 0.0 to 1.0
+    callback set-volume(float);  // volume 0.0 to 1.0
+
+    // Only render when show is true
+    visible: root.show;
+    background: #000000f0;  // Nearly opaque black
+
+    // Close on backdrop click (outside video area)
+    backdrop := TouchArea {
+        clicked => {
+            root.close();
+        }
+    }
+
+    // Main layout
+    VerticalLayout {
+        alignment: center;
+        padding: Spacing.md;
+
+        // Header with filename and close button
+        HorizontalLayout {
+            height: 48px;
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            alignment: space-between;
+
+            // File info
+            VerticalLayout {
+                alignment: center;
+
+                Text {
+                    text: root.filename;
+                    color: Colors.text-primary;
+                    font-size: Typography.base;
+                    font-weight: Typography.medium;
+                    overflow: elide;
+                }
+            }
+
+            // Close button
+            Rectangle {
+                width: 40px;
+                height: 40px;
+                border-radius: 20px;
+                background: close-touch.has-hover ? Colors.surface-hover : transparent;
+
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    text: "\u{2715}";  // X mark
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                close-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+        }
+
+        // Video display area
+        Rectangle {
+            vertical-stretch: 1;
+            min-height: 200px;  // Ensure video area has minimum size
+            background: #000000;
+            border-radius: Spacing.radius-md;
+
+            // Prevent clicks from closing
+            TouchArea {
+                clicked => {
+                    // Toggle play/pause on video click
+                    root.toggle-play-pause();
+                }
+            }
+
+            // Video frame
+            Image {
+                source: root.frame;
+                image-fit: contain;
+                width: 100%;
+                height: 100%;
+            }
+
+            // Play/pause overlay indicator (shown briefly on toggle)
+            if !root.is-playing: Rectangle {
+                width: 80px;
+                height: 80px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: 40px;
+                background: #00000080;
+
+                Text {
+                    width: 100%;
+                    height: 100%;
+                    text: "\u{25B6}";  // Play triangle
+                    color: Colors.text-primary;
+                    font-size: 32px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Controls bar
+        Rectangle {
+            height: 80px;
+            background: transparent;
+
+            VerticalLayout {
+                padding: Spacing.sm;
+                spacing: Spacing.sm;
+
+                // Progress bar
+                Rectangle {
+                    height: 20px;
+
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        alignment: center;
+
+                        // Elapsed time
+                        Text {
+                            text: root.elapsed;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+                            width: 50px;
+                            horizontal-alignment: right;
+                        }
+
+                        // Progress track
+                        Rectangle {
+                            height: 6px;
+                            horizontal-stretch: 1;
+                            background: #333333;  // Visible on dark background
+                            border-radius: 3px;
+
+                            // Progress fill
+                            Rectangle {
+                                width: parent.width * root.progress;
+                                height: 100%;
+                                background: Colors.primary;
+                                border-radius: 3px;
+                            }
+
+                            // Seek handle
+                            Rectangle {
+                                x: parent.width * root.progress - 8px;
+                                y: -5px;
+                                width: 16px;
+                                height: 16px;
+                                border-radius: 8px;
+                                background: Colors.primary;
+                                visible: progress-touch.has-hover || progress-touch.pressed;
+                            }
+
+                            progress-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    // Calculate seek position
+                                    root.seek(self.mouse-x / self.width);
+                                }
+                                moved => {
+                                    if self.pressed {
+                                        root.seek(clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                    }
+                                }
+                            }
+                        }
+
+                        // Duration
+                        Text {
+                            text: root.duration;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+                            width: 50px;
+                        }
+                    }
+                }
+
+                // Control buttons row
+                HorizontalLayout {
+                    height: 44px;
+                    alignment: center;
+                    spacing: Spacing.lg;
+
+                    // Volume control
+                    HorizontalLayout {
+                        width: 120px;
+                        spacing: Spacing.xs;
+                        alignment: center;
+
+                        // Volume icon
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            border-radius: 16px;
+                            background: volume-icon-touch.has-hover ? Colors.surface-hover : transparent;
+
+                            Text {
+                                width: 100%;
+                                height: 100%;
+                                text: root.volume > 0 ? "\u{1F50A}\u{FE0F}" : "\u{1F507}\u{FE0F}";  // Speaker or muted (with emoji variant selector)
+                                font-size: 16px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            volume-icon-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    // Toggle mute
+                                    if root.volume > 0 {
+                                        root.set-volume(0.0);
+                                    } else {
+                                        root.set-volume(1.0);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Volume slider
+                        Rectangle {
+                            width: 80px;
+                            height: 6px;
+                            background: Colors.surface;
+                            border-radius: 3px;
+
+                            Rectangle {
+                                width: parent.width * root.volume;
+                                height: 100%;
+                                background: Colors.text-muted;
+                                border-radius: 3px;
+                            }
+
+                            volume-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.set-volume(clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                }
+                                moved => {
+                                    if self.pressed {
+                                        root.set-volume(clamp(self.mouse-x / self.width, 0.0, 1.0));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Play/Pause button
+                    Rectangle {
+                        width: 56px;
+                        height: 56px;
+                        border-radius: 28px;
+                        background: play-touch.has-hover ? Colors.primary-hover : Colors.primary;
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: root.is-playing ? "\u{23F8}" : "\u{25B6}";  // Pause or Play
+                            color: Colors.text-primary;
+                            font-size: 24px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        play-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.toggle-play-pause();
+                            }
+                        }
+                    }
+
+                    // Spacer to balance volume control
+                    Rectangle {
+                        width: 120px;
+                    }
+                }
+            }
+        }
+
+        // Footer hint
+        Rectangle {
+            height: 24px;
+
+            Text {
+                text: "Click video to play/pause \u{2022} Drag progress bar to seek";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

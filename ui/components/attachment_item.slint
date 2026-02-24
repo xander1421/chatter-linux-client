@@ -38,13 +38,13 @@ export component AttachmentItem inherits Rectangle {
                                   root.category == "archive" ? #fb923c :
                                   Colors.text-muted;
 
-    property <string> category-emoji: root.category == "image" ? "\u{1F5BC}" :
-                                      root.category == "video" ? "\u{1F3AC}" :
-                                      root.category == "audio" ? "\u{1F3B5}" :
-                                      root.category == "document" ? "\u{1F4C4}" :
-                                      root.category == "code" ? "\u{1F4DD}" :
-                                      root.category == "archive" ? "\u{1F4E6}" :
-                                      "\u{1F4CE}";
+    property <string> category-emoji: root.category == "image" ? "\u{1F5BC}\u{FE0F}" :
+                                      root.category == "video" ? "\u{1F3AC}\u{FE0F}" :
+                                      root.category == "audio" ? "\u{1F3B5}\u{FE0F}" :
+                                      root.category == "document" ? "\u{1F4C4}\u{FE0F}" :
+                                      root.category == "code" ? "\u{1F4DD}\u{FE0F}" :
+                                      root.category == "archive" ? "\u{1F4E6}\u{FE0F}" :
+                                      "\u{1F4CE}\u{FE0F}";
 
     // Styling
     height: 56px;
@@ -218,7 +218,7 @@ export component AttachmentItem inherits Rectangle {
                 Text {
                     width: 100%;
                     height: 100%;
-                    text: "\u{23F3}"; // Hourglass
+                    text: "\u{23F3}\u{FE0F}"; // Hourglass (with emoji variant selector)
                     font-size: Typography.xs;
                     horizontal-alignment: center;
                     vertical-alignment: center;

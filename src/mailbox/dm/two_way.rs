@@ -178,6 +178,9 @@ impl TwoWayAnonymity {
     }
 
     /// Poll a single mailbox by key.
+    ///
+    /// Paginates through all available messages until the mailbox is empty.
+    /// Each page requires a new challenge since challenges are single-use.
     async fn poll_single_mailbox(
         &self,
         mailbox_client: &mut MailboxClient,
@@ -186,51 +189,68 @@ impl TwoWayAnonymity {
         private_key: &[u8; 64],
         mailbox_id: &str,
     ) -> Result<PollResult, MailboxError> {
-        // Get challenge
-        let challenge_response = mailbox_client
-            .get_mailbox_challenge(public_key.to_vec())
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
-
-        // Sign challenge - extract 32-byte secret from 64-byte keypair
+        // Extract signing key once - 32-byte secret from 64-byte keypair
         let secret_bytes: [u8; 32] = private_key[..32]
             .try_into()
             .map_err(|_| MailboxError::BlindSignature("Invalid private key format".to_string()))?;
         let signing_key = SigningKey::from_bytes(&secret_bytes);
-        let signature = signing_key.sign(&challenge_response.challenge);
 
-        // Poll
-        let poll_response = mailbox_client
-            .poll_ephemeral_mailbox(
-                public_key.to_vec(),
-                signature.to_bytes().to_vec(),
-                challenge_response.challenge,
-                None,
-                DEFAULT_POLL_LIMIT,
-            )
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
+        let mut all_messages: Vec<ReceivedMessage> = Vec::new();
+        let mut after_message_id: Option<String> = None;
+
+        // Paginate through all messages
+        loop {
+            // Get a fresh challenge for each poll (challenges are single-use)
+            let challenge_response = mailbox_client
+                .get_mailbox_challenge(public_key.to_vec())
+                .await
+                .map_err(|e| MailboxError::Network(e.to_string()))?;
+
+            let signature = signing_key.sign(&challenge_response.challenge);
+
+            // Poll with cursor
+            let poll_response = mailbox_client
+                .poll_ephemeral_mailbox(
+                    public_key.to_vec(),
+                    signature.to_bytes().to_vec(),
+                    challenge_response.challenge,
+                    after_message_id.as_deref(),
+                    DEFAULT_POLL_LIMIT,
+                )
+                .await
+                .map_err(|e| MailboxError::Network(e.to_string()))?;
+
+            let page_count = poll_response.messages.len();
+            let has_more = page_count == DEFAULT_POLL_LIMIT as usize;
+
+            // Track last message ID for pagination cursor
+            if let Some(last_msg) = poll_response.messages.last() {
+                after_message_id = Some(last_msg.id.clone());
+            }
+
+            // Convert and collect messages
+            for m in poll_response.messages {
+                all_messages.push(ReceivedMessage {
+                    message_id: m.id,
+                    encrypted_envelope: m.encrypted_envelope,
+                    envelope_type: m.envelope_type,
+                    server_timestamp: m.timestamp,
+                });
+            }
+
+            // Stop if no more messages
+            if !has_more {
+                break;
+            }
+        }
 
         // Update poll timestamp
         self.conversation_manager.update_poll_time(mailbox_id)?;
 
-        let messages: Vec<ReceivedMessage> = poll_response
-            .messages
-            .into_iter()
-            .map(|m| ReceivedMessage {
-                message_id: m.id,
-                encrypted_envelope: m.encrypted_envelope,
-                envelope_type: m.envelope_type,
-                server_timestamp: m.timestamp,
-            })
-            .collect();
-
-        let has_more = messages.len() == DEFAULT_POLL_LIMIT as usize;
-
         Ok(PollResult {
             peer_id: *peer_id,
-            messages,
-            has_more,
+            messages: all_messages,
+            has_more: false, // We've fetched everything
         })
     }
 

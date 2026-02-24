@@ -1,6 +1,8 @@
 //! Proto/domain type conversions for channels.
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::Utc;
+
+use crate::util::time::TimestampNanos;
 
 use crate::domain::channel::{
     Channel, ChannelConfig, ChannelType, MemberRole, Membership, MessagePersistence,
@@ -31,8 +33,8 @@ pub fn proto_to_domain_channel(proto: &chat_v1::Channel) -> Result<Channel, Chan
     // Convert proto Config to domain ChannelConfig
     let config = proto_config_to_domain(proto.config.as_ref());
 
-    // Convert timestamp (proto uses millis)
-    let created_at = millis_to_datetime(proto.created_at);
+    // Convert timestamp (proto uses nanos)
+    let created_at = TimestampNanos::from_nanos(proto.created_at).to_datetime().unwrap_or_else(Utc::now);
 
     Ok(Channel {
         id,
@@ -134,13 +136,6 @@ pub fn domain_persistence_to_proto(
     }
 }
 
-/// Convert milliseconds timestamp to DateTime<Utc>.
-pub fn millis_to_datetime(millis: u64) -> DateTime<Utc> {
-    Utc.timestamp_millis_opt(millis as i64)
-        .single()
-        .unwrap_or_else(Utc::now)
-}
-
 /// Convert a proto ChannelMember to domain Membership.
 pub fn proto_to_domain_membership(
     channel_id: &ChannelId,
@@ -152,7 +147,7 @@ pub fn proto_to_domain_membership(
         .map_err(|_| ChannelError::InvalidInput("invalid user ID in member".to_string()))?;
 
     let role = proto_role_to_domain(proto.role);
-    let joined_at = millis_to_datetime(proto.joined_at);
+    let joined_at = TimestampNanos::from_nanos(proto.joined_at).to_datetime().unwrap_or_else(Utc::now);
 
     Ok(Membership {
         channel_id: *channel_id,
@@ -217,10 +212,10 @@ mod tests {
     }
 
     #[test]
-    fn test_millis_to_datetime() {
-        let millis = 1706140800000u64; // 2024-01-25 00:00:00 UTC
-        let dt = millis_to_datetime(millis);
-        assert_eq!(dt.timestamp_millis(), millis as i64);
+    fn test_nanos_to_datetime() {
+        let nanos = 1706140800_000_000_000u64; // 2024-01-25 00:00:00 UTC in nanoseconds
+        let dt = TimestampNanos::from_nanos(nanos).to_datetime().unwrap();
+        assert_eq!(dt.timestamp_nanos_opt().unwrap(), nanos as i64);
     }
 
     #[test]

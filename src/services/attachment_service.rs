@@ -8,11 +8,15 @@ use std::sync::Arc;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::crypto::attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
+use crate::crypto::secure_buffer::SecureBuffer;
+use crate::domain::attachment::ContentLocation;
 use crate::domain::attachment::{Attachment, AttachmentStatus, FileMetadata};
 use crate::domain::ids::{AttachmentId, ChannelId};
 use crate::network::grpc::file_client::FileClient;
 use crate::network::grpc::GrpcClientPool;
 use crate::proto::chat_v1::FileChunk;
+use crate::proto::content_v1::AttachmentPointer;
 use crate::storage::repositories::AttachmentRepository;
 
 /// Attachment service errors.
@@ -33,6 +37,14 @@ pub enum AttachmentError {
     /// Storage error.
     #[error("storage error: {0}")]
     StorageError(String),
+
+    /// Encryption error.
+    #[error("encryption error: {0}")]
+    EncryptionError(String),
+
+    /// Decryption error.
+    #[error("decryption error: {0}")]
+    DecryptionError(String),
 }
 
 /// Result of a successful file upload.
@@ -57,6 +69,73 @@ pub struct DownloadResult {
     pub file_size: u64,
     /// MIME type.
     pub mime_type: String,
+}
+
+/// Result of encrypted CDN upload for E2E attachments.
+///
+/// Contains all data needed to build an AttachmentPointer for the E2E message.
+pub struct CdnUploadResult {
+    /// Local attachment ID (stored in database).
+    pub attachment_id: AttachmentId,
+    /// CDN key for downloading the encrypted blob.
+    pub cdn_key: String,
+    /// Encryption key (64 bytes: AES key + HMAC key).
+    pub encryption_key: [u8; KEY_SET_LENGTH],
+    /// SHA-256 digest of the ciphertext.
+    pub digest: [u8; 32],
+    /// Original plaintext size (before padding).
+    pub plaintext_size: u64,
+    /// MIME type.
+    pub content_type: String,
+    /// Original filename.
+    pub file_name: String,
+    /// Audio waveform (32 samples, 0-255) - only for audio files.
+    pub waveform: Vec<u8>,
+    /// Duration in milliseconds - only for audio/video.
+    pub duration_ms: u64,
+    /// Thumbnail JPEG bytes - only for images/videos.
+    pub thumbnail: Vec<u8>,
+    /// Thumbnail width.
+    pub thumbnail_width: u32,
+    /// Thumbnail height.
+    pub thumbnail_height: u32,
+    /// Original image/video dimensions.
+    pub width: u32,
+    pub height: u32,
+}
+
+impl CdnUploadResult {
+    /// Convert to AttachmentPointer proto.
+    pub fn to_attachment_pointer(&self) -> AttachmentPointer {
+        tracing::debug!(
+            "Creating AttachmentPointer: cdn_key={}, content_type={}, \
+             thumbnail_bytes={}, thumbnail_size={}x{}, width={}, height={}, waveform_len={}",
+            self.cdn_key,
+            self.content_type,
+            self.thumbnail.len(),
+            self.thumbnail_width,
+            self.thumbnail_height,
+            self.width,
+            self.height,
+            self.waveform.len()
+        );
+        AttachmentPointer {
+            cdn_key: self.cdn_key.clone(),
+            encryption_key: self.encryption_key.to_vec(),
+            digest: self.digest.to_vec(),
+            plaintext_size: self.plaintext_size,
+            content_type: self.content_type.clone(),
+            file_name: self.file_name.clone(),
+            waveform: self.waveform.clone(),
+            duration_ms: self.duration_ms,
+            thumbnail: self.thumbnail.clone(),
+            thumbnail_width: self.thumbnail_width,
+            thumbnail_height: self.thumbnail_height,
+            width: self.width,
+            height: self.height,
+            ..Default::default()
+        }
+    }
 }
 
 /// Attachment service for file operations.
@@ -199,6 +278,106 @@ impl AttachmentService {
             .parse()
             .map_err(|e| AttachmentError::InvalidAttachment(format!("Invalid attachment ID '{}': {}", file_metadata.id, e)))?;
 
+        // Extract waveform and duration for audio files
+        // Must use spawn_blocking because FFmpeg is synchronous and doesn't work well on Tokio threads
+        let (waveform_samples, duration_ms) = if mime_type.starts_with("audio/") {
+            let waveform_start = std::time::Instant::now();
+            let path_for_waveform = file_path.to_path_buf();
+            let waveform = match tokio::task::spawn_blocking(move || {
+                crate::media::extract_waveform(&path_for_waveform)
+            }).await {
+                Ok(Ok(samples)) => {
+                    tracing::info!(
+                        "Extracted waveform for audio: {} samples, took {:?}",
+                        samples.len(),
+                        waveform_start.elapsed()
+                    );
+                    Some(samples)
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Failed to extract waveform: {}", e);
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("Waveform extraction task panicked: {}", e);
+                    None
+                }
+            };
+            let path_for_duration = file_path.to_path_buf();
+            let duration = tokio::task::spawn_blocking(move || {
+                crate::media::AudioPlayer::get_duration(&path_for_duration)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            }).await.unwrap_or(0);
+            tracing::info!("Audio duration: {}ms", duration);
+            (waveform, duration)
+        } else {
+            (None, 0)
+        };
+
+        // Generate thumbnail and get dimensions for images and videos
+        let (thumbnail, thumbnail_width, thumbnail_height, width, height, video_duration_ms) =
+            if mime_type.starts_with("image/") {
+                // Image processing can run on Tokio thread (uses image crate, not FFmpeg)
+                let (orig_w, orig_h) = crate::media::ImageProcessor::get_dimensions(file_path)
+                    .unwrap_or((0, 0));
+                let thumb_start = std::time::Instant::now();
+                match crate::media::ImageProcessor::generate_thumbnail_bytes(file_path) {
+                    Ok((bytes, thumb_w, thumb_h)) => {
+                        tracing::info!(
+                            "Generated AVIF thumbnail for image: {}x{} -> {}x{}, {} bytes, took {:?}",
+                            orig_w, orig_h, thumb_w, thumb_h, bytes.len(), thumb_start.elapsed()
+                        );
+                        (Some(bytes), Some(thumb_w), Some(thumb_h), Some(orig_w), Some(orig_h), 0u64)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to generate thumbnail: {}", e);
+                        (None, None, None, Some(orig_w), Some(orig_h), 0u64)
+                    }
+                }
+            } else if mime_type.starts_with("video/") {
+                // Video thumbnail uses FFmpeg - must use spawn_blocking
+                let thumb_start = std::time::Instant::now();
+                let path_for_thumb = file_path.to_path_buf();
+                match tokio::task::spawn_blocking(move || {
+                    crate::media::extract_video_thumbnail(&path_for_thumb)
+                }).await {
+                    Ok(Ok((bytes, thumb_w, thumb_h, vid_duration_ms))) => {
+                        let path_for_dims = file_path.to_path_buf();
+                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_dimensions(&path_for_dims)
+                                .unwrap_or((thumb_w, thumb_h))
+                        }).await.unwrap_or((thumb_w, thumb_h));
+                        tracing::info!(
+                            "Generated AVIF thumbnail for video: {}x{} -> {}x{}, {} bytes, duration {}ms, took {:?}",
+                            orig_w, orig_h, thumb_w, thumb_h, bytes.len(), vid_duration_ms, thumb_start.elapsed()
+                        );
+                        (Some(bytes), Some(thumb_w), Some(thumb_h), Some(orig_w), Some(orig_h), vid_duration_ms)
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!("Failed to generate video thumbnail: {}", e);
+                        let path_for_dims = file_path.to_path_buf();
+                        let path_for_dur = file_path.to_path_buf();
+                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_dimensions(&path_for_dims).unwrap_or((0, 0))
+                        }).await.unwrap_or((0, 0));
+                        let vid_duration = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_duration(&path_for_dur).unwrap_or(0)
+                        }).await.unwrap_or(0);
+                        (None, None, None, Some(orig_w), Some(orig_h), vid_duration)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Video thumbnail task panicked: {}", e);
+                        (None, None, None, None, None, 0u64)
+                    }
+                }
+            } else {
+                (None, None, None, None, None, 0u64)
+            };
+
+        // Use video duration if available
+        let final_duration_ms = if video_duration_ms > 0 { video_duration_ms } else { duration_ms };
+
         // Create domain Attachment and save to repository
         let domain_metadata = FileMetadata {
             name: filename.clone(),
@@ -206,15 +385,20 @@ impl AttachmentService {
             size: file_size,
             sha256: file_metadata.sha256.clone(),
             chunk_size: file_metadata.chunk_size,
-            width: None,
-            height: None,
-            duration_seconds: None,
+            width,
+            height,
+            duration_seconds: if final_duration_ms > 0 { Some((final_duration_ms / 1000) as f64) } else { None },
+            waveform_samples,
+            thumbnail,
+            thumbnail_width,
+            thumbnail_height,
         };
 
         let attachment = Attachment {
             id: attachment_id,
             metadata: domain_metadata,
             status: AttachmentStatus::Ready,
+            content_location: ContentLocation::NotDownloaded, // Legacy: local file, not in DB
             local_path: Some(file_path.to_string_lossy().to_string()),
             remote_url: None,
             encryption_key: None,
@@ -403,6 +587,98 @@ impl AttachmentService {
             local_path
         );
 
+        // Extract waveform and duration for audio files
+        // Must use spawn_blocking because FFmpeg is synchronous and doesn't work well on Tokio threads
+        let (waveform_samples, duration_ms) = if mime_type.starts_with("audio/") {
+            let path_for_waveform = local_path.clone();
+            let waveform = match tokio::task::spawn_blocking(move || {
+                crate::media::extract_waveform(&path_for_waveform)
+            }).await {
+                Ok(Ok(samples)) => {
+                    tracing::debug!("Extracted waveform for downloaded audio: {} samples", samples.len());
+                    Some(samples)
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Failed to extract waveform: {}", e);
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("Waveform extraction task panicked: {}", e);
+                    None
+                }
+            };
+            let path_for_duration = local_path.clone();
+            let duration = tokio::task::spawn_blocking(move || {
+                crate::media::AudioPlayer::get_duration(&path_for_duration)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            }).await.unwrap_or(0);
+            (waveform, duration)
+        } else {
+            (None, 0)
+        };
+
+        // Generate thumbnail and get dimensions for images and videos
+        let (thumbnail, thumbnail_width, thumbnail_height, width, height, video_duration_ms) =
+            if mime_type.starts_with("image/") {
+                // Image processing can run on Tokio thread (uses image crate, not FFmpeg)
+                let (orig_w, orig_h) = crate::media::ImageProcessor::get_dimensions(&local_path)
+                    .unwrap_or((0, 0));
+                match crate::media::ImageProcessor::generate_thumbnail_bytes(&local_path) {
+                    Ok((bytes, thumb_w, thumb_h)) => {
+                        tracing::debug!(
+                            "Generated thumbnail for downloaded image: {}x{} -> {}x{}, {} bytes",
+                            orig_w, orig_h, thumb_w, thumb_h, bytes.len()
+                        );
+                        (Some(bytes), Some(thumb_w), Some(thumb_h), Some(orig_w), Some(orig_h), 0u64)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to generate thumbnail: {}", e);
+                        (None, None, None, Some(orig_w), Some(orig_h), 0u64)
+                    }
+                }
+            } else if mime_type.starts_with("video/") {
+                // Video processing uses FFmpeg - must use spawn_blocking
+                let path_for_thumb = local_path.clone();
+                match tokio::task::spawn_blocking(move || {
+                    crate::media::extract_video_thumbnail(&path_for_thumb)
+                }).await {
+                    Ok(Ok((bytes, thumb_w, thumb_h, vid_duration_ms))) => {
+                        let path_for_dims = local_path.clone();
+                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_dimensions(&path_for_dims)
+                                .unwrap_or((thumb_w, thumb_h))
+                        }).await.unwrap_or((thumb_w, thumb_h));
+                        tracing::debug!(
+                            "Generated thumbnail for downloaded video: {}x{} -> {}x{}, {} bytes, {}ms",
+                            orig_w, orig_h, thumb_w, thumb_h, bytes.len(), vid_duration_ms
+                        );
+                        (Some(bytes), Some(thumb_w), Some(thumb_h), Some(orig_w), Some(orig_h), vid_duration_ms)
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!("Failed to generate video thumbnail: {}", e);
+                        let path_for_dims = local_path.clone();
+                        let path_for_dur = local_path.clone();
+                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_dimensions(&path_for_dims).unwrap_or((0, 0))
+                        }).await.unwrap_or((0, 0));
+                        let vid_duration = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_duration(&path_for_dur).unwrap_or(0)
+                        }).await.unwrap_or(0);
+                        (None, None, None, Some(orig_w), Some(orig_h), vid_duration)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Video thumbnail task panicked: {}", e);
+                        (None, None, None, None, None, 0u64)
+                    }
+                }
+            } else {
+                (None, None, None, None, None, 0u64)
+            };
+
+        // Use video duration if available
+        let final_duration_ms = if video_duration_ms > 0 { video_duration_ms } else { duration_ms };
+
         // Update repository with local path
         let domain_metadata = FileMetadata {
             name: filename.clone(),
@@ -410,15 +686,20 @@ impl AttachmentService {
             size: actual_size,
             sha256: expected_hash,
             chunk_size: CHUNK_SIZE as u32,
-            width: None,
-            height: None,
-            duration_seconds: None,
+            width,
+            height,
+            duration_seconds: if final_duration_ms > 0 { Some((final_duration_ms / 1000) as f64) } else { None },
+            waveform_samples,
+            thumbnail,
+            thumbnail_width,
+            thumbnail_height,
         };
 
         let attachment = Attachment {
             id: *attachment_id,
             metadata: domain_metadata,
             status: AttachmentStatus::Ready,
+            content_location: ContentLocation::NotDownloaded, // Legacy: local file, not in DB
             local_path: Some(local_path.to_string_lossy().to_string()),
             remote_url: None,
             encryption_key: None,
@@ -436,5 +717,679 @@ impl AttachmentService {
             file_size: actual_size,
             mime_type,
         })
+    }
+
+    // ==================== Encrypted CDN Operations ====================
+
+    /// Upload a file to CDN with client-side encryption.
+    ///
+    /// This is the Signal-style flow for E2E encrypted attachments:
+    /// 1. Read file content
+    /// 2. Encrypt with AES-256-CBC + HMAC-SHA256
+    /// 3. Get presigned upload URL from server
+    /// 4. Upload encrypted ciphertext via HTTP PUT
+    /// 5. Confirm upload with server
+    ///
+    /// Returns a `CdnUploadResult` with all data needed for AttachmentPointer.
+    pub async fn upload_to_cdn_encrypted(
+        &self,
+        grpc_pool: &GrpcClientPool,
+        file_path: &Path,
+    ) -> Result<CdnUploadResult, AttachmentError> {
+        // Read file content
+        let file_content = tokio::fs::read(file_path)
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("Failed to read file: {}", e)))?;
+
+        let plaintext_size = file_content.len() as u64;
+        let filename = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("attachment")
+            .to_string();
+
+        let mime_type = mime_guess::from_path(file_path)
+            .first_or_octet_stream()
+            .to_string();
+
+        tracing::debug!(
+            filename = %filename,
+            plaintext_size = plaintext_size,
+            mime_type = %mime_type,
+            "Encrypting attachment for CDN upload"
+        );
+
+        // Encrypt with Signal-compatible encryption
+        let encrypt_start = std::time::Instant::now();
+        let encrypted = AttachmentCrypto::encrypt(&file_content)
+            .map_err(|e| AttachmentError::EncryptionError(e.to_string()))?;
+
+        let encrypted_size = encrypted.ciphertext.len() as u64;
+        tracing::info!(
+            encrypted_size = encrypted_size,
+            elapsed = ?encrypt_start.elapsed(),
+            "Attachment encrypted"
+        );
+
+        // Get presigned upload URL
+        let mut file_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let upload_response = file_client
+            .get_attachment_upload_url(encrypted_size)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e)))?;
+
+        let cdn_key = upload_response.cdn_key;
+        let upload_url = upload_response.upload_url;
+
+        tracing::debug!(
+            cdn_key = %cdn_key,
+            "Got presigned URL, uploading encrypted content"
+        );
+
+        // Upload encrypted ciphertext via HTTP PUT
+        let upload_start = std::time::Instant::now();
+        let http_client = reqwest::Client::new();
+        let response = http_client
+            .put(&upload_url)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Length", encrypted_size)
+            .body(encrypted.ciphertext.clone())
+            .send()
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(AttachmentError::NetworkError(format!(
+                "CDN upload failed with status: {}",
+                response.status()
+            )));
+        }
+
+        tracing::info!(cdn_key = %cdn_key, elapsed = ?upload_start.elapsed(), "CDN upload complete");
+
+        // Confirm upload with server
+        file_client
+            .confirm_attachment_upload(&cdn_key)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e)))?;
+
+        // Generate deterministic attachment ID from cdn_key for consistent lookups
+        // This ensures sender and receiver use the same ID for the same attachment
+        let attachment_id = AttachmentId::from_cdn_key(&cdn_key);
+
+        // Extract waveform and duration for audio files
+        // Must use spawn_blocking because FFmpeg is synchronous and doesn't work well on Tokio threads
+        let (waveform_samples, duration_ms) = if mime_type.starts_with("audio/") {
+            let path_for_waveform = file_path.to_path_buf();
+            let waveform = match tokio::task::spawn_blocking(move || {
+                crate::media::extract_waveform(&path_for_waveform)
+            }).await {
+                Ok(Ok(samples)) => {
+                    // Log waveform stats for debugging
+                    let min = samples.iter().min().copied().unwrap_or(0);
+                    let max = samples.iter().max().copied().unwrap_or(0);
+                    let avg: f32 = if samples.is_empty() { 0.0 } else { samples.iter().map(|&s| s as f32).sum::<f32>() / samples.len() as f32 };
+                    tracing::info!(
+                        "Extracted waveform for CDN audio: {} samples, min={}, max={}, avg={:.1}, first_5={:?}",
+                        samples.len(), min, max, avg, &samples[..5.min(samples.len())]
+                    );
+                    Some(samples)
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Failed to extract waveform: {}", e);
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("Waveform extraction task panicked: {}", e);
+                    None
+                }
+            };
+            // Extract duration using audio player
+            let path_for_duration = file_path.to_path_buf();
+            let duration = tokio::task::spawn_blocking(move || {
+                crate::media::AudioPlayer::get_duration(&path_for_duration)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0)
+            }).await.unwrap_or(0);
+            (waveform, duration)
+        } else {
+            (None, 0)
+        };
+
+        // Generate thumbnail and get dimensions for images and videos
+        let (thumbnail, thumbnail_width, thumbnail_height, width, height, video_duration_ms) =
+            if mime_type.starts_with("image/") {
+                // Image processing can run on Tokio thread (uses image crate, not FFmpeg)
+                let (orig_w, orig_h) = crate::media::ImageProcessor::get_dimensions(file_path)
+                    .unwrap_or((0, 0));
+
+                // Generate thumbnail bytes
+                match crate::media::ImageProcessor::generate_thumbnail_bytes(file_path) {
+                    Ok((bytes, thumb_w, thumb_h)) => {
+                        tracing::debug!(
+                            "Generated thumbnail for image: {}x{} -> {}x{}, {} bytes",
+                            orig_w, orig_h, thumb_w, thumb_h, bytes.len()
+                        );
+                        (bytes, thumb_w, thumb_h, orig_w, orig_h, 0u64)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to generate thumbnail: {}", e);
+                        (Vec::new(), 0, 0, orig_w, orig_h, 0u64)
+                    }
+                }
+            } else if mime_type.starts_with("video/") {
+                // Video processing uses FFmpeg - must use spawn_blocking
+                let path_for_thumb = file_path.to_path_buf();
+                match tokio::task::spawn_blocking(move || {
+                    crate::media::extract_video_thumbnail(&path_for_thumb)
+                }).await {
+                    Ok(Ok((bytes, thumb_w, thumb_h, vid_duration_ms))) => {
+                        // Get original dimensions
+                        let path_for_dims = file_path.to_path_buf();
+                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_dimensions(&path_for_dims)
+                                .unwrap_or((thumb_w, thumb_h))
+                        }).await.unwrap_or((thumb_w, thumb_h));
+                        tracing::debug!(
+                            "Generated thumbnail for video: {}x{} -> {}x{}, {} bytes, {}ms",
+                            orig_w, orig_h, thumb_w, thumb_h, bytes.len(), vid_duration_ms
+                        );
+                        (bytes, thumb_w, thumb_h, orig_w, orig_h, vid_duration_ms)
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!("Failed to generate video thumbnail: {}", e);
+                        // Try to get at least dimensions and duration
+                        let path_for_dims = file_path.to_path_buf();
+                        let path_for_dur = file_path.to_path_buf();
+                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_dimensions(&path_for_dims).unwrap_or((0, 0))
+                        }).await.unwrap_or((0, 0));
+                        let vid_duration = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_duration(&path_for_dur).unwrap_or(0)
+                        }).await.unwrap_or(0);
+                        (Vec::new(), 0, 0, orig_w, orig_h, vid_duration)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Video thumbnail task panicked: {}", e);
+                        (Vec::new(), 0, 0, 0, 0, 0u64)
+                    }
+                }
+            } else {
+                (Vec::new(), 0, 0, 0, 0, 0u64)
+            };
+
+        // Use video duration if available (for video files)
+        let final_duration_ms = if video_duration_ms > 0 { video_duration_ms } else { duration_ms };
+
+        // Build metadata
+        let domain_metadata = FileMetadata {
+            name: filename.clone(),
+            mime_type: mime_type.clone(),
+            size: plaintext_size,
+            sha256: encrypted.digest.to_vec(), // Use ciphertext digest
+            chunk_size: 0,
+            width: if width > 0 { Some(width) } else { None },
+            height: if height > 0 { Some(height) } else { None },
+            duration_seconds: if final_duration_ms > 0 { Some((final_duration_ms / 1000) as f64) } else { None },
+            waveform_samples: waveform_samples.clone(),
+            thumbnail: if !thumbnail.is_empty() { Some(thumbnail.clone()) } else { None },
+            thumbnail_width: if thumbnail_width > 0 { Some(thumbnail_width) } else { None },
+            thumbnail_height: if thumbnail_height > 0 { Some(thumbnail_height) } else { None },
+        };
+
+        // Create attachment record with content stored in database
+        // NOTE: We do NOT store local_path - encrypted content goes in DB only
+        let attachment = Attachment {
+            id: attachment_id,
+            metadata: domain_metadata,
+            status: AttachmentStatus::Ready,
+            content_location: ContentLocation::InDatabase, // Content stored in DB
+            local_path: None, // No filesystem path - secure in-memory only
+            remote_url: Some(cdn_key.clone()), // Store cdn_key for re-download if needed
+            encryption_key: Some(encrypted.key.to_vec()),
+            encryption_iv: Some(encrypted.digest.to_vec()), // Store digest for verification
+            created_at: chrono::Utc::now(),
+        };
+
+        // Save to repository WITH encrypted content
+        // This stores the ciphertext directly in the database for secure playback
+        if let Err(e) = self.attachment_repo.insert_with_content(&attachment, &encrypted.ciphertext) {
+            tracing::warn!("Failed to save CDN attachment with content: {}", e);
+            // Fallback to insert without content (can be re-downloaded)
+            if let Err(e2) = self.attachment_repo.insert(&attachment) {
+                tracing::warn!("Fallback insert also failed: {}", e2);
+            }
+        } else {
+            tracing::debug!(
+                "Saved CDN attachment {} with {} bytes encrypted content to database",
+                attachment_id,
+                encrypted.ciphertext.len()
+            );
+        }
+
+        tracing::info!(
+            cdn_key = %cdn_key,
+            attachment_id = %attachment_id,
+            filename = %filename,
+            plaintext_size = plaintext_size,
+            encrypted_size = encrypted_size,
+            "Encrypted attachment uploaded to CDN and stored locally"
+        );
+
+        Ok(CdnUploadResult {
+            attachment_id,
+            cdn_key,
+            encryption_key: encrypted.key,
+            digest: encrypted.digest,
+            plaintext_size,
+            content_type: mime_type,
+            file_name: filename,
+            waveform: waveform_samples.unwrap_or_default(),
+            duration_ms: final_duration_ms,
+            thumbnail,
+            thumbnail_width,
+            thumbnail_height,
+            width,
+            height,
+        })
+    }
+
+    /// **DEPRECATED**: Use `download_to_database` + `decrypt_to_memory` instead.
+    ///
+    /// This method saves decrypted content to the filesystem, which is insecure.
+    /// The new secure flow:
+    /// 1. `download_to_database()` - stores encrypted content in DB
+    /// 2. `decrypt_to_memory()` - returns SecureBuffer that auto-zeroizes
+    ///
+    /// This legacy method is kept only for backward compatibility with tests.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use download_to_database + decrypt_to_memory for secure in-memory handling"
+    )]
+    #[allow(dead_code)]
+    pub async fn download_from_cdn_encrypted(
+        &self,
+        grpc_pool: &GrpcClientPool,
+        pointer: &AttachmentPointer,
+        download_dir: &Path,
+    ) -> Result<DownloadResult, AttachmentError> {
+        // Validate pointer has required fields
+        if pointer.cdn_key.is_empty() {
+            return Err(AttachmentError::InvalidAttachment("cdn_key is empty".to_string()));
+        }
+        if pointer.encryption_key.len() != KEY_SET_LENGTH {
+            return Err(AttachmentError::InvalidAttachment(format!(
+                "encryption_key must be {} bytes, got {}",
+                KEY_SET_LENGTH,
+                pointer.encryption_key.len()
+            )));
+        }
+        if pointer.digest.len() != 32 {
+            return Err(AttachmentError::InvalidAttachment(format!(
+                "digest must be 32 bytes, got {}",
+                pointer.digest.len()
+            )));
+        }
+
+        tracing::debug!(
+            cdn_key = %pointer.cdn_key,
+            filename = %pointer.file_name,
+            plaintext_size = pointer.plaintext_size,
+            "Downloading encrypted attachment from CDN"
+        );
+
+        // Get presigned download URL
+        let mut file_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let download_response = file_client
+            .get_attachment_download_url(&pointer.cdn_key)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to get download URL: {}", e)))?;
+
+        let download_url = download_response.download_url;
+
+        // Download encrypted ciphertext via HTTP GET
+        let http_client = reqwest::Client::new();
+        let response = http_client
+            .get(&download_url)
+            .send()
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("HTTP download failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(AttachmentError::NetworkError(format!(
+                "CDN download failed with status: {}",
+                response.status()
+            )));
+        }
+
+        let ciphertext = response
+            .bytes()
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to read response: {}", e)))?
+            .to_vec();
+
+        tracing::debug!(
+            cdn_key = %pointer.cdn_key,
+            ciphertext_size = ciphertext.len(),
+            "Downloaded ciphertext, decrypting"
+        );
+
+        // Convert key and digest to fixed-size arrays
+        let mut key = [0u8; KEY_SET_LENGTH];
+        key.copy_from_slice(&pointer.encryption_key);
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&pointer.digest);
+
+        // Decrypt
+        let plaintext = AttachmentCrypto::decrypt(
+            &ciphertext,
+            &key,
+            &digest,
+            pointer.plaintext_size as usize,
+        )
+        .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+
+        // Determine filename
+        let filename = if pointer.file_name.is_empty() {
+            format!("attachment-{}", pointer.cdn_key)
+        } else {
+            pointer.file_name.clone()
+        };
+
+        // Ensure download directory exists
+        tokio::fs::create_dir_all(download_dir)
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("Failed to create download dir: {}", e)))?;
+
+        // Save decrypted file
+        let local_path = download_dir.join(&filename);
+        tokio::fs::write(&local_path, &plaintext)
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("Failed to write file: {}", e)))?;
+
+        tracing::info!(
+            cdn_key = %pointer.cdn_key,
+            filename = %filename,
+            plaintext_size = plaintext.len(),
+            local_path = %local_path.display(),
+            "Decrypted attachment saved"
+        );
+
+        let mime_type = if pointer.content_type.is_empty() {
+            mime_guess::from_path(&local_path)
+                .first_or_octet_stream()
+                .to_string()
+        } else {
+            pointer.content_type.clone()
+        };
+
+        Ok(DownloadResult {
+            local_path,
+            filename,
+            file_size: plaintext.len() as u64,
+            mime_type,
+        })
+    }
+
+    // ==================== Secure In-Memory Operations ====================
+
+    /// Download encrypted content from CDN and store in database.
+    ///
+    /// Downloads the ciphertext and stores it directly in the database
+    /// WITHOUT decrypting. Decryption happens only during playback
+    /// via `decrypt_to_memory()`.
+    ///
+    /// This is the secure flow: encrypted content stored in SQLite,
+    /// decrypted only to memory during playback, then zeroized.
+    pub async fn download_to_database(
+        &self,
+        grpc_pool: &GrpcClientPool,
+        attachment_id: &AttachmentId,
+    ) -> Result<(), AttachmentError> {
+        // Get attachment with CDN key
+        let attachment = self
+            .attachment_repo
+            .get(attachment_id)
+            .map_err(|e| AttachmentError::StorageError(e.to_string()))?
+            .ok_or_else(|| {
+                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+            })?;
+
+        let cdn_key = attachment.remote_url.as_ref().ok_or_else(|| {
+            AttachmentError::InvalidAttachment("Attachment has no CDN key".to_string())
+        })?;
+
+        tracing::debug!(
+            attachment_id = %attachment_id,
+            cdn_key = %cdn_key,
+            "Downloading encrypted content to database"
+        );
+
+        // Get presigned download URL
+        let mut file_client =
+            crate::network::grpc::file_client::FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let download_response = file_client
+            .get_attachment_download_url(cdn_key)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to get download URL: {}", e)))?;
+
+        // Download encrypted ciphertext via HTTP GET
+        let http_client = reqwest::Client::new();
+        let response = http_client
+            .get(&download_response.download_url)
+            .send()
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("HTTP download failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(AttachmentError::NetworkError(format!(
+                "CDN download failed with status: {}",
+                response.status()
+            )));
+        }
+
+        let ciphertext = response
+            .bytes()
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to read response: {}", e)))?
+            .to_vec();
+
+        tracing::debug!(
+            attachment_id = %attachment_id,
+            ciphertext_size = ciphertext.len(),
+            "Downloaded ciphertext, storing in database"
+        );
+
+        // Store encrypted content in database (NOT decrypted)
+        self.attachment_repo
+            .store_encrypted_content(attachment_id, &ciphertext)
+            .map_err(|e| AttachmentError::StorageError(e.to_string()))?;
+
+        // Update attachment status
+        let mut updated = attachment;
+        updated.status = AttachmentStatus::Ready;
+        updated.content_location = ContentLocation::InDatabase;
+        self.attachment_repo
+            .update(&updated)
+            .map_err(|e| AttachmentError::StorageError(e.to_string()))?;
+
+        tracing::info!(
+            attachment_id = %attachment_id,
+            ciphertext_size = ciphertext.len(),
+            "Encrypted content stored in database"
+        );
+
+        Ok(())
+    }
+
+    /// Decrypt attachment content to memory.
+    ///
+    /// Reads encrypted content from database and decrypts it to a
+    /// `SecureBuffer` that auto-zeroizes when dropped.
+    ///
+    /// **Security**: The decrypted plaintext exists ONLY in memory
+    /// and is automatically wiped when the buffer goes out of scope.
+    pub fn decrypt_to_memory(
+        &self,
+        attachment_id: &AttachmentId,
+    ) -> Result<SecureBuffer, AttachmentError> {
+        // Get attachment metadata
+        let attachment = self
+            .attachment_repo
+            .get(attachment_id)
+            .map_err(|e| AttachmentError::StorageError(e.to_string()))?
+            .ok_or_else(|| {
+                AttachmentError::InvalidAttachment(format!("Attachment {} not found", attachment_id))
+            })?;
+
+        // Check if content is in database
+        if attachment.content_location != ContentLocation::InDatabase {
+            return Err(AttachmentError::InvalidAttachment(
+                "Attachment content not in database - download first".to_string(),
+            ));
+        }
+
+        // Get encryption keys
+        let encryption_key = attachment.encryption_key.as_ref().ok_or_else(|| {
+            AttachmentError::DecryptionError("No encryption key".to_string())
+        })?;
+        let digest = attachment.encryption_iv.as_ref().ok_or_else(|| {
+            AttachmentError::DecryptionError("No digest for verification".to_string())
+        })?;
+
+        if encryption_key.len() != KEY_SET_LENGTH {
+            return Err(AttachmentError::DecryptionError(format!(
+                "Invalid key length: expected {}, got {}",
+                KEY_SET_LENGTH,
+                encryption_key.len()
+            )));
+        }
+
+        // Get encrypted content from database
+        let ciphertext = self
+            .attachment_repo
+            .get_encrypted_content(attachment_id)
+            .map_err(|e| AttachmentError::StorageError(e.to_string()))?
+            .ok_or_else(|| {
+                AttachmentError::InvalidAttachment("Encrypted content not found in database".to_string())
+            })?;
+
+        tracing::debug!(
+            attachment_id = %attachment_id,
+            ciphertext_len = ciphertext.len(),
+            plaintext_size = attachment.metadata.size,
+            "Decrypting attachment to memory"
+        );
+
+        // Convert keys to fixed-size arrays
+        let mut key = [0u8; KEY_SET_LENGTH];
+        key.copy_from_slice(encryption_key);
+        let mut digest_arr = [0u8; 32];
+        if digest.len() >= 32 {
+            digest_arr.copy_from_slice(&digest[..32]);
+        } else {
+            digest_arr[..digest.len()].copy_from_slice(digest);
+        }
+
+        // Decrypt to memory
+        let plaintext = AttachmentCrypto::decrypt(
+            &ciphertext,
+            &key,
+            &digest_arr,
+            attachment.metadata.size as usize,
+        )
+        .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+
+        tracing::info!(
+            attachment_id = %attachment_id,
+            plaintext_len = plaintext.len(),
+            "Decrypted attachment to secure buffer"
+        );
+
+        Ok(SecureBuffer::new(plaintext))
+    }
+
+    /// Check if attachment content is available locally (in database).
+    pub fn has_local_content(&self, attachment_id: &AttachmentId) -> bool {
+        self.attachment_repo
+            .get(attachment_id)
+            .ok()
+            .flatten()
+            .is_some_and(|a| a.content_location == ContentLocation::InDatabase)
+    }
+
+    /// Get attachment metadata without loading content.
+    pub fn get_metadata(
+        &self,
+        attachment_id: &AttachmentId,
+    ) -> Result<Option<Attachment>, AttachmentError> {
+        self.attachment_repo
+            .get(attachment_id)
+            .map_err(|e| AttachmentError::StorageError(e.to_string()))
+    }
+
+    /// Export a decrypted attachment to a file.
+    ///
+    /// Decrypts the attachment content to memory and writes it to the
+    /// specified path. Used for "Save As" functionality.
+    ///
+    /// # Security Note
+    ///
+    /// This is the only method that writes decrypted content to disk.
+    /// It should only be called when the user explicitly requests to
+    /// export a file via "Save As".
+    pub fn export_to_file(
+        &self,
+        attachment_id: &AttachmentId,
+        destination: &Path,
+    ) -> Result<(), AttachmentError> {
+        // Decrypt to memory
+        let secure_buffer = self.decrypt_to_memory(attachment_id)?;
+
+        // Write to destination file
+        std::fs::write(destination, secure_buffer.as_slice())
+            .map_err(|e| AttachmentError::FileError(format!("Failed to write file: {}", e)))?;
+
+        tracing::info!(
+            attachment_id = %attachment_id,
+            destination = %destination.display(),
+            size = secure_buffer.len(),
+            "Exported attachment to file"
+        );
+
+        Ok(())
+        // secure_buffer dropped here -> memory zeroized
+    }
+
+    /// Export a decrypted attachment asynchronously.
+    ///
+    /// Same as export_to_file but runs the file write in a blocking task.
+    pub async fn export_to_file_async(
+        &self,
+        attachment_id: &AttachmentId,
+        destination: &Path,
+    ) -> Result<(), AttachmentError> {
+        // Decrypt to memory (sync operation on DB)
+        let secure_buffer = self.decrypt_to_memory(attachment_id)?;
+        let dest = destination.to_path_buf();
+        let att_id = *attachment_id;
+
+        // Write to file in blocking task
+        tokio::task::spawn_blocking(move || {
+            std::fs::write(&dest, secure_buffer.as_slice())
+                .map_err(|e| AttachmentError::FileError(format!("Failed to write file: {}", e)))?;
+
+            tracing::info!(
+                attachment_id = %att_id,
+                destination = %dest.display(),
+                "Exported attachment to file"
+            );
+
+            Ok::<(), AttachmentError>(())
+        })
+        .await
+        .map_err(|e| AttachmentError::FileError(format!("Export task failed: {}", e)))??;
+
+        Ok(())
     }
 }

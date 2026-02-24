@@ -14,7 +14,8 @@
 //! # Usage
 //!
 //! ```ignore
-//! // Derive call key from ECDH shared secret
+//! // Derive call key from identity keys
+//! let shared_secret = derive_call_shared_secret(&our_identity_pair, &peer_identity_public)?;
 //! let call_key = derive_call_key(&shared_secret, "call-id-123")?;
 //!
 //! // Or use CallKeyState for key lifecycle management
@@ -24,7 +25,9 @@
 //! ```
 
 use hkdf::Hkdf;
+use libsignal_protocol::{IdentityKey, IdentityKeyPair};
 use sha2::Sha256;
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519PrivateKey};
 
 use crate::error::CryptoError;
 
@@ -33,6 +36,59 @@ const CALL_KEY_SALT: &[u8] = b"ChatterCallKey-v1";
 
 /// Info prefix for call key derivation.
 const CALL_KEY_INFO_PREFIX: &[u8] = b"call-encryption:";
+
+/// Derive a shared secret from identity keys using X25519 ECDH.
+///
+/// Signal identity keys are Ed25519-based, so we convert to X25519 for key agreement.
+/// This uses the birational map from Ed25519 points to Curve25519 (Montgomery form).
+///
+/// # Arguments
+/// * `our_identity` - Our identity key pair
+/// * `peer_identity` - Peer's identity public key
+///
+/// # Returns
+/// 32-byte ECDH shared secret.
+pub fn derive_call_shared_secret(
+    our_identity: &IdentityKeyPair,
+    peer_identity: &IdentityKey,
+) -> Result<[u8; 32], CryptoError> {
+    use curve25519_dalek::edwards::CompressedEdwardsY;
+
+    // Get our private key bytes and peer's public key bytes
+    let our_private_bytes = our_identity.private_key().serialize();
+    let peer_public_bytes = peer_identity.serialize();
+
+    // The identity key serialization includes a type byte prefix (0x05 for DJB/Curve25519)
+    // Skip the first byte to get the actual 32-byte key
+    if peer_public_bytes.len() != 33 || peer_public_bytes[0] != 0x05 {
+        return Err(CryptoError::InvalidKeyFormat);
+    }
+    let peer_ed25519_public: [u8; 32] = peer_public_bytes[1..33]
+        .try_into()
+        .map_err(|_| CryptoError::InvalidKeyFormat)?;
+
+    // Convert peer's Ed25519 public key to X25519
+    // Ed25519 point (Edwards form) -> Curve25519 point (Montgomery form)
+    let ed_point = CompressedEdwardsY::from_slice(&peer_ed25519_public)
+        .map_err(|_| CryptoError::InvalidKeyFormat)?;
+    let ed_point = ed_point
+        .decompress()
+        .ok_or(CryptoError::InvalidKeyFormat)?;
+    let montgomery_point = ed_point.to_montgomery();
+    let peer_x25519_public = X25519PublicKey::from(*montgomery_point.as_bytes());
+
+    // Convert our private key to X25519
+    // Signal private keys are already in the right format (clamped scalar)
+    let our_x25519_private: [u8; 32] = our_private_bytes[..32]
+        .try_into()
+        .map_err(|_| CryptoError::InvalidKeyFormat)?;
+    let our_private = X25519PrivateKey::from(our_x25519_private);
+
+    // Compute ECDH shared secret
+    let shared_secret = our_private.diffie_hellman(&peer_x25519_public);
+
+    Ok(*shared_secret.as_bytes())
+}
 
 /// Derives a 32-byte call encryption key from a shared secret.
 ///

@@ -93,6 +93,9 @@ pub struct DeviceInboxProvider {
     grpc_pool: Arc<GrpcClientPool>,
     /// Event bus for domain events.
     event_bus: Option<EventBus>,
+    /// Deduplicator for DM messages.
+    /// Prevents "old counter" errors when acknowledgment fails and server re-delivers.
+    dm_deduplicator: Arc<crate::network::validation::MessageDeduplicator>,
 }
 
 impl DeviceInboxProvider {
@@ -121,6 +124,7 @@ impl DeviceInboxProvider {
     }
 
     /// Create a new device inbox provider with an event bus for domain events.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_event_bus(
         config: InboxConfig,
         message_client: Arc<tokio::sync::Mutex<MessageClient>>,
@@ -159,6 +163,7 @@ impl DeviceInboxProvider {
             database,
             grpc_pool,
             event_bus,
+            dm_deduplicator: Arc::new(crate::network::validation::MessageDeduplicator::with_default_capacity()),
         }
     }
 
@@ -184,6 +189,7 @@ impl DeviceInboxProvider {
         let grpc_pool = self.grpc_pool.clone();
         let shutdown_rx = self.shutdown_tx.subscribe();
         let event_bus = self.event_bus.clone();
+        let dm_deduplicator = self.dm_deduplicator.clone();
 
         let handle = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
@@ -203,6 +209,7 @@ impl DeviceInboxProvider {
                     grpc_pool,
                     shutdown_rx,
                     event_bus,
+                    dm_deduplicator,
                 )
                 .await;
             });
@@ -251,6 +258,7 @@ impl DeviceInboxProvider {
         grpc_pool: Arc<GrpcClientPool>,
         shutdown_rx: watch::Receiver<bool>,
         event_bus: Option<EventBus>,
+        dm_deduplicator: Arc<crate::network::validation::MessageDeduplicator>,
     ) {
         // Create DM infrastructure
         let two_way = TwoWayAnonymity::new(database.clone());
@@ -323,6 +331,7 @@ impl DeviceInboxProvider {
                 &message_repo,
                 &channel_repo,
                 domain_tx.as_ref(),
+                &dm_deduplicator,
             )
             .await;
 

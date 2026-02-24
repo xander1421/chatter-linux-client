@@ -61,6 +61,7 @@ impl ChannelClient {
     /// * `password` - Optional password for private channels
     /// * `description` - Optional channel description
     /// * `img_url` - Optional channel image URL
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_channel(
         &mut self,
         name: &str,

@@ -15,6 +15,7 @@ const MAX_BUFFER_AGE_MS: u64 = 30_000; // 30 seconds
 
 /// Ordering result for a message.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Message is the common case, boxing would add unnecessary indirection
 pub enum OrderingResult {
     /// Message is in order, ready for processing.
     Ready(Message),

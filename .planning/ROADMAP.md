@@ -614,6 +614,45 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 - Audio: Integration with existing `media/audio_player.rs`
 - Call state management and UI (incoming/outgoing/active call screens)
 
+### Phase 75: Secure In-Memory Attachment Handling
+**Goal**: Migrate from filesystem-based attachment storage to encrypted database storage with memory-only decryption
+**Depends on**: Phase 74
+**Research**: Unlikely (internal security hardening)
+**Status**: In Progress
+**Plans**: 0 plans
+
+**Security principle:** Decrypted content exists ONLY in memory, wiped immediately after use.
+
+**Key changes:**
+- SEND: File → Memory → Encrypt → DB (BLOB) + CDN
+- RECEIVE: CDN → DB (BLOB) → Memory (decrypt) → Player → Zeroize
+- SecureBuffer with ZeroizeOnDrop for auto-wiping
+- Linux memfd for video playback (fd: protocol)
+- Remove all local_path filesystem usage
+- Channel attachments use same encrypted CDN flow as DMs
+
+**Details:**
+[In progress - see .planning/refactor-ui-separation-of-concerns.md]
+
+### Phase 76: Refactor Large Service Files
+**Goal**: Split service files over 550 lines into focused modules for maintainability
+**Depends on**: Phase 75
+**Research**: Unlikely (internal refactoring)
+**Status**: Not started
+**Plans**: 0 plans
+
+**Target files (>550 lines):**
+- `message_service.rs` (3143 lines) → dm/, group/, storage/ modules
+- `inbox_events.rs` (2425 lines) → by event type
+- `signal_service.rs` (1486 lines) → session/, encryption/ modules
+- `attachment_service.rs` (1395 lines) → upload/, download/ modules
+- `message_gateway.rs` (1365 lines) → routing/, decryption/ modules
+- `channel/service.rs` (1302 lines) → crud/, membership/ modules
+- Additional files 550-1300 lines as needed
+
+**Details:**
+[To be planned - run /gsd:plan-phase 76]
+
 ## Progress
 
 **Execution Order:** Phases execute in numeric order (1 → 2 → ... → 70)
@@ -694,4 +733,6 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 | 71 | Complete UI Callback Wiring | 5 | Done | 2026-02-08 |
 | 72 | Channel Creation, Search & Join UI | 1 | Done | 2026-02-10 |
 | 73 | Signal Protocol Encryption Wiring | 1 | Done | 2026-02-10 |
-| 74 | LiveKit Video & Audio Calls | 4/5 | In Progress | - |
+| 74 | LiveKit Video & Audio Calls | 5 | Done | 2026-02-23 |
+| 75 | Secure In-Memory Attachment Handling | 0 | In Progress | - |
+| 76 | Refactor Large Service Files | 0 | Not started | - |

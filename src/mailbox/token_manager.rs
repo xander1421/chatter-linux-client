@@ -9,6 +9,7 @@
 //! - Tracking daily quota
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -84,18 +85,37 @@ impl TokenManager {
         &self,
         client: &mut MailboxClient,
     ) -> Result<ServerPublicKey, MailboxError> {
+        tracing::info!("TokenManager: refresh_server_key called");
+
         // Check for cached valid key first
+        tracing::info!("TokenManager: checking for cached server key...");
         if let Some(key) = self.get_cached_server_key()? {
+            tracing::info!("TokenManager: found cached key, checking validity...");
             if key.is_valid() {
+                tracing::info!("TokenManager: cached key is valid, using it");
                 return Ok(key);
             }
+            tracing::info!("TokenManager: cached key expired");
+        } else {
+            tracing::info!("TokenManager: no cached key found");
         }
 
-        // Fetch new key from server
-        let response = client
-            .get_blind_signature_public_key()
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
+        // Fetch new key from server with timeout to prevent hangs
+        tracing::info!("TokenManager: calling get_blind_signature_public_key RPC...");
+        let response = tokio::time::timeout(
+            Duration::from_secs(10),
+            client.get_blind_signature_public_key(),
+        )
+        .await
+        .map_err(|_| {
+            tracing::error!("get_blind_signature_public_key timed out after 10s");
+            MailboxError::Network("RPC timeout".to_string())
+        })?
+        .map_err(|e| {
+            tracing::error!("get_blind_signature_public_key failed: {}", e);
+            MailboxError::Network(e.to_string())
+        })?;
+        tracing::info!("Got blind signature public key from server");
 
         // Parse and validate the key
         let server_key = ServerPublicKey::from_der(
@@ -114,16 +134,17 @@ impl TokenManager {
     pub fn get_cached_server_key(&self) -> Result<Option<ServerPublicKey>, MailboxError> {
         let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-        let now_ms = std::time::SystemTime::now()
+        // valid_until is stored in nanoseconds (per proto spec)
+        let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
+            .map(|d| d.as_nanos() as i64)
             .unwrap_or(0);
 
         let result: Option<(String, Vec<u8>, i64)> = conn
             .query_row(
                 "SELECT key_id, public_key_der, valid_until FROM mailbox_server_keys
                  WHERE valid_until > ?1 ORDER BY valid_until DESC LIMIT 1",
-                rusqlite::params![now_ms],
+                rusqlite::params![now_nanos],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .ok();
@@ -175,17 +196,26 @@ impl TokenManager {
         client: &mut MailboxClient,
         count: u32,
     ) -> Result<u32, MailboxError> {
+        tracing::info!("TokenManager: request_tokens called, count={}", count);
+
         // Check quota
+        tracing::info!("TokenManager: resetting quota if needed...");
         self.reset_quota_if_needed()?;
+        tracing::info!("TokenManager: getting quota status...");
         let quota = self.get_quota_status()?;
+        tracing::info!("TokenManager: quota remaining={}", quota.remaining);
         if quota.remaining == 0 {
+            tracing::warn!("TokenManager: quota exhausted!");
             return Err(MailboxError::QuotaExhausted);
         }
 
         let request_count = count.min(quota.remaining);
+        tracing::info!("TokenManager: will request {} tokens", request_count);
 
         // Get/refresh server key
+        tracing::info!("TokenManager: refreshing server key...");
         let server_key = self.refresh_server_key(client).await?;
+        tracing::info!("TokenManager: got server key, generating keypairs...");
 
         // Generate ephemeral keypairs and blind them
         let mut blinded_keys = Vec::with_capacity(request_count as usize);
@@ -214,6 +244,8 @@ impl TokenManager {
             ));
         }
 
+        tracing::info!("TokenManager: generated {} keypairs, storing pending blinds...", pending_ops.len());
+
         // Store pending blinds
         for (id, pub_key, priv_key, op) in &pending_ops {
             self.store_pending_blind(
@@ -227,11 +259,16 @@ impl TokenManager {
             )?;
         }
 
+        tracing::info!("TokenManager: requesting signatures from server...");
         // Request signatures from server
         let response = client
             .get_mailbox_tokens(request_count as i32, blinded_keys)
             .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!("TokenManager: get_mailbox_tokens failed: {}", e);
+                MailboxError::Network(e.to_string())
+            })?;
+        tracing::info!("TokenManager: got {} signatures from server", response.blinded_signatures.len());
 
         // Update quota from response
         self.update_quota(response.remaining_quota as u32, response.quota_resets_at)?;
@@ -267,10 +304,12 @@ impl TokenManager {
             }
         }
 
+        tracing::info!("TokenManager: request_tokens complete, got {} tokens", success_count);
         Ok(success_count)
     }
 
     /// Store a pending blinding operation.
+    #[allow(clippy::too_many_arguments)]
     fn store_pending_blind(
         &self,
         id: &str,
@@ -351,6 +390,7 @@ impl TokenManager {
     /// Get an available (unused) token.
     ///
     /// Returns the oldest unused token or None if no tokens available.
+    #[allow(clippy::type_complexity)]
     pub fn get_available_token(&self) -> Result<Option<MailboxToken>, MailboxError> {
         let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
 
@@ -415,15 +455,23 @@ impl TokenManager {
 
     /// Get current quota status.
     pub fn get_quota_status(&self) -> Result<QuotaStatus, MailboxError> {
-        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        tracing::info!("TokenManager: get_quota_status - acquiring connection...");
+        let result: Option<(i64, i64)> = {
+            let conn = self.db.connection().map_err(|e| {
+                tracing::error!("TokenManager: get_quota_status - failed to get connection: {}", e);
+                MailboxError::Storage(e.to_string())
+            })?;
+            tracing::info!("TokenManager: get_quota_status - connection acquired, querying...");
 
-        let result: Option<(i64, i64)> = conn
-            .query_row(
+            conn.query_row(
                 "SELECT tokens_used_today, quota_resets_at FROM mailbox_quota WHERE id = 1",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .ok();
+            .ok()
+            // conn is dropped here, releasing the lock
+        };
+        tracing::info!("TokenManager: get_quota_status - query complete, result={:?}", result.is_some());
 
         match result {
             Some((used_today, resets_at)) => {
@@ -436,9 +484,11 @@ impl TokenManager {
                 })
             }
             None => {
-                // No quota record yet - initialize with full quota
-                let tomorrow_midnight = self.next_midnight_ms();
+                // No quota record yet - initialize with full quota (nanoseconds)
+                let tomorrow_midnight = self.next_midnight_nanos();
+                tracing::info!("TokenManager: initializing quota...");
                 self.initialize_quota(tomorrow_midnight)?;
+                tracing::info!("TokenManager: quota initialized");
                 Ok(QuotaStatus {
                     remaining: 10,
                     resets_at: tomorrow_midnight,
@@ -451,9 +501,10 @@ impl TokenManager {
     pub fn reset_quota_if_needed(&self) -> Result<(), MailboxError> {
         let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-        let now_ms = std::time::SystemTime::now()
+        // quota_resets_at is stored in nanoseconds (per proto spec)
+        let now_nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as i64)
+            .map(|d| d.as_nanos() as i64)
             .unwrap_or(0);
 
         let result: Option<i64> = conn
@@ -465,8 +516,8 @@ impl TokenManager {
             .ok();
 
         if let Some(resets_at) = result {
-            if now_ms >= resets_at {
-                let tomorrow_midnight = self.next_midnight_ms();
+            if now_nanos >= resets_at {
+                let tomorrow_midnight = self.next_midnight_nanos();
                 let now = Utc::now().to_rfc3339();
 
                 conn.execute(
@@ -514,8 +565,8 @@ impl TokenManager {
         Ok(())
     }
 
-    /// Calculate next midnight UTC in milliseconds.
-    fn next_midnight_ms(&self) -> u64 {
+    /// Calculate next midnight UTC in nanoseconds (consistent with proto spec).
+    fn next_midnight_nanos(&self) -> u64 {
         use chrono::{Duration, Timelike};
         let now = Utc::now();
         let tomorrow = now + Duration::days(1);
@@ -525,7 +576,7 @@ impl TokenManager {
             .and_then(|t| t.with_second(0))
             .and_then(|t| t.with_nanosecond(0))
             .unwrap_or(tomorrow);
-        midnight.timestamp_millis() as u64
+        midnight.timestamp_nanos_opt().unwrap_or(0) as u64
     }
 }
 

@@ -679,6 +679,7 @@ impl DmConversationManager {
     /// Get all active mailbox keys (for polling multiple conversations).
     ///
     /// Returns tuples of (peer_id, mailbox_public_key, mailbox_private_key, mailbox_id).
+    #[allow(clippy::type_complexity)]
     pub fn get_active_mailbox_keys(
         &self,
     ) -> Result<Vec<(UserId, [u8; 32], [u8; 64], String)>, MailboxError> {

@@ -11,6 +11,7 @@ use chrono::Utc;
 use crate::domain::ids::UserId;
 use crate::domain::user::{Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
 use crate::error::{NetworkError, StorageError};
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::user_client::UserClient;
 use crate::proto::chat_v1::{friend_requests_filter, user_event, FriendStatus, UserProfile};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
@@ -86,17 +87,28 @@ pub enum UserError {
 /// Orchestrates profile management, friends, blocking, and presence by
 /// coordinating network client and local storage.
 pub struct UserService {
+    grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
     user_repo: Arc<UserRepository>,
 }
 
 impl UserService {
     /// Create a new UserService with dependencies.
-    pub fn new(settings_repo: Arc<SettingsRepository>, user_repo: Arc<UserRepository>) -> Self {
+    pub fn new(
+        grpc_pool: Arc<GrpcClientPool>,
+        settings_repo: Arc<SettingsRepository>,
+        user_repo: Arc<UserRepository>,
+    ) -> Self {
         Self {
+            grpc_pool,
             settings_repo,
             user_repo,
         }
+    }
+
+    /// Create a user client for network operations.
+    fn user_client(&self) -> UserClient {
+        UserClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
     }
 
     /// Get the currently logged-in user ID.
@@ -118,23 +130,22 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `user_id` - ID of user whose profile to fetch
-    pub async fn get_user_profile(
-        &self,
-        user_client: &mut UserClient,
-        user_id: &UserId,
-    ) -> Result<Profile, UserError> {
+    pub async fn get_user_profile(&self, user_id: &UserId) -> Result<Profile, UserError> {
         // Check logged in
         let _ = self.current_user_id()?;
 
         // Call server (unary, returns proto UserProfile)
+        let mut user_client = self.user_client();
         let proto_profile = user_client
             .get_user_profile(&user_id.to_string())
             .await?;
 
         // Convert to domain Profile
         let profile = proto_to_domain_profile(&proto_profile)?;
+
+        // Ensure user record exists (profiles table has FK to users)
+        self.user_repo.ensure_user_exists(user_id)?;
 
         // Upsert to local storage
         self.user_repo.upsert_profile(&profile)?;
@@ -146,13 +157,11 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `display_name` - Optional new display name
     /// * `avatar_url` - Optional new avatar URL
     /// * `status_message` - Optional new status message
     pub async fn update_user_profile(
         &self,
-        user_client: &mut UserClient,
         display_name: Option<&str>,
         avatar_url: Option<&str>,
         status_message: Option<&StatusMessage>,
@@ -202,6 +211,7 @@ impl UserService {
         };
 
         // Call server (streaming)
+        let mut user_client = self.user_client();
         let mut stream = user_client
             .update_user_profile(proto_profile, update_mask)
             .await?;
@@ -237,12 +247,10 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `friend_id` - ID of user to send friend request to
     /// * `message` - Optional message to include with request
     pub async fn send_friend_request(
         &self,
-        user_client: &mut UserClient,
         friend_id: &UserId,
         message: Option<&str>,
     ) -> Result<Friendship, UserError> {
@@ -250,6 +258,7 @@ impl UserService {
         let current_user = self.current_user_id()?;
 
         // Call server (streaming response)
+        let mut user_client = self.user_client();
         let friend_id_str = friend_id.to_string();
         let mut stream = user_client
             .send_friend_request(&friend_id_str, message)
@@ -286,12 +295,10 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `friend_id` - ID of user who sent the request
     /// * `accept` - Whether to accept (true) or decline (false) the request
     pub async fn respond_friend_request(
         &self,
-        user_client: &mut UserClient,
         friend_id: &UserId,
         accept: bool,
     ) -> Result<FriendResponseResult, UserError> {
@@ -306,17 +313,26 @@ impl UserService {
         };
 
         // Call server (streaming response)
+        let mut user_client = self.user_client();
         let friend_id_str = friend_id.to_string();
         let mut stream = user_client
             .respond_friend_request(&friend_id_str, status, None)
             .await?;
 
         // Consume stream for confirmation and extract channel_id
+        // Server sends PENDING first, then ACCEPTED/DECLINED with channel_id
         let mut dm_channel_id = None;
         while let Some(event_result) = stream.next().await {
             let event = event_result?;
             if let Some(user_event::Event::FriendStatusChanged(ref status_response)) = event.event
             {
+                let status = status_response.status();
+                tracing::debug!(
+                    "Friend response event: status={:?}, channel_id={}",
+                    status,
+                    status_response.channel_id
+                );
+
                 // Extract channel_id if present
                 if !status_response.channel_id.is_empty() {
                     dm_channel_id = Some(status_response.channel_id.clone());
@@ -325,8 +341,13 @@ impl UserService {
                         status_response.channel_id
                     );
                 }
-                // Server confirmed the response
-                break;
+
+                // Only break on final status (not PENDING)
+                // PENDING is sent first, then ACCEPTED/DECLINED with channel_id
+                if status != FriendStatus::Pending {
+                    tracing::info!("Friend response final status: {:?}", status);
+                    break;
+                }
             }
         }
 
@@ -364,19 +385,14 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `limit` - Maximum number of friends to return
     /// * `offset` - Pagination offset
-    pub async fn list_friends(
-        &self,
-        user_client: &mut UserClient,
-        limit: u32,
-        offset: u32,
-    ) -> Result<Vec<Friendship>, UserError> {
+    pub async fn list_friends(&self, limit: u32, offset: u32) -> Result<Vec<Friendship>, UserError> {
         // Check logged in
         let current_user = self.current_user_id()?;
 
         // Call server (unary)
+        let mut user_client = self.user_client();
         let response = user_client
             .list_friends(limit as i32, offset as i32)
             .await?;
@@ -413,13 +429,11 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `filter` - Filter for request types
     /// * `limit` - Maximum number of requests to return
     /// * `offset` - Pagination offset
     pub async fn list_friend_requests(
         &self,
-        user_client: &mut UserClient,
         filter: FriendRequestFilter,
         limit: u32,
         offset: u32,
@@ -431,6 +445,7 @@ impl UserService {
         let proto_filter = filter.to_proto();
 
         // Call server (unary)
+        let mut user_client = self.user_client();
         let response = user_client
             .list_friend_requests(proto_filter, limit as i32, offset as i32)
             .await?;
@@ -482,17 +497,13 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `friend_id` - ID of friend to remove
-    pub async fn remove_friend(
-        &self,
-        user_client: &mut UserClient,
-        friend_id: &UserId,
-    ) -> Result<(), UserError> {
+    pub async fn remove_friend(&self, friend_id: &UserId) -> Result<(), UserError> {
         // Check logged in
         let current_user = self.current_user_id()?;
 
         // Call server (unary)
+        let mut user_client = self.user_client();
         user_client.remove_friend(&friend_id.to_string()).await?;
 
         // Delete from local storage (ignore NotFound)
@@ -511,17 +522,13 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `user_id` - ID of user to block
-    pub async fn block_user(
-        &self,
-        user_client: &mut UserClient,
-        user_id: &UserId,
-    ) -> Result<(), UserError> {
+    pub async fn block_user(&self, user_id: &UserId) -> Result<(), UserError> {
         // Check logged in
         let current_user = self.current_user_id()?;
 
         // Call server (streaming response)
+        let mut user_client = self.user_client();
         let user_id_str = user_id.to_string();
         let mut stream = user_client.block_user(&user_id_str).await?;
 
@@ -556,17 +563,13 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `user_id` - ID of user to unblock
-    pub async fn unblock_user(
-        &self,
-        user_client: &mut UserClient,
-        user_id: &UserId,
-    ) -> Result<(), UserError> {
+    pub async fn unblock_user(&self, user_id: &UserId) -> Result<(), UserError> {
         // Check logged in
         let current_user = self.current_user_id()?;
 
         // Call server (streaming response)
+        let mut user_client = self.user_client();
         let user_id_str = user_id.to_string();
         let mut stream = user_client.unblock_user(&user_id_str).await?;
 
@@ -591,19 +594,14 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `limit` - Maximum number of blocked users to return
     /// * `offset` - Pagination offset
-    pub async fn list_blocked_users(
-        &self,
-        user_client: &mut UserClient,
-        limit: u32,
-        offset: u32,
-    ) -> Result<Vec<UserId>, UserError> {
+    pub async fn list_blocked_users(&self, limit: u32, offset: u32) -> Result<Vec<UserId>, UserError> {
         // Check logged in
         let current_user = self.current_user_id()?;
 
         // Call server (unary)
+        let mut user_client = self.user_client();
         let response = user_client
             .list_blocked_users(limit as i32, offset as i32)
             .await?;
@@ -694,13 +692,11 @@ impl UserService {
     ///
     /// # Arguments
     ///
-    /// * `user_client` - Mutable reference to user client
     /// * `query` - Search query string
     /// * `limit` - Maximum number of results to return
     /// * `offset` - Pagination offset
     pub async fn search_users(
         &self,
-        user_client: &mut UserClient,
         query: &str,
         limit: u32,
         offset: u32,
@@ -709,6 +705,7 @@ impl UserService {
         let _ = self.current_user_id()?;
 
         // Call server (unary)
+        let mut user_client = self.user_client();
         let response = user_client
             .search_users(query, limit as i32, offset as i32)
             .await?;
@@ -1018,10 +1015,11 @@ mod tests {
         // We can't create a real UserService without actual repositories,
         // but we verify the construction pattern is correct.
         fn _verify_types(
+            grpc_pool: Arc<crate::network::grpc::client_pool::GrpcClientPool>,
             settings_repo: Arc<SettingsRepository>,
             user_repo: Arc<UserRepository>,
         ) {
-            let _service = UserService::new(settings_repo, user_repo);
+            let _service = UserService::new(grpc_pool, settings_repo, user_repo);
         }
     }
 

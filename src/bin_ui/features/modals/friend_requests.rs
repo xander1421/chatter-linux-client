@@ -1,4 +1,6 @@
 //! Friend requests modal callbacks.
+//!
+//! Uses UserService for all friend request operations - no direct network calls.
 
 use std::sync::Arc;
 
@@ -6,20 +8,15 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::ids::UserId;
-use chatter_linux::network::grpc::channel_client::ChannelClient;
-use chatter_linux::network::grpc::client_pool::GrpcClientPool;
-use chatter_linux::services::channel::converters::proto_to_domain_channel;
+use chatter_linux::services::channel::ChannelService;
 use chatter_linux::services::user_service::UserService;
-use chatter_linux::storage::ChannelRepository;
 
 use crate::bin_ui::converters::get_initials;
 use crate::{DMListItemData, MainWindow};
 
 pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
-    let grpc_pool = ctx.grpc_pool.clone();
-    let settings_repo = ctx.settings_repo.clone();
-    let user_repo = ctx.user_repo.clone();
-    let channel_repo = ctx.channel_repo.clone();
+    let user_service = Arc::new(ctx.user_service());
+    let channel_service = Arc::new(ctx.channel_service());
 
     // Switch tab
     let weak_window = window.as_weak();
@@ -37,17 +34,13 @@ pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
 
     // Accept friend request
     let weak_window = window.as_weak();
-    let grpc_pool_accept = grpc_pool.clone();
-    let settings_repo_accept = settings_repo.clone();
-    let user_repo_accept = user_repo.clone();
-    let channel_repo_accept = channel_repo.clone();
+    let user_service_accept = user_service.clone();
+    let channel_service_accept = channel_service.clone();
 
     window.on_friend_request_accept(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool_accept.clone();
-        let settings_repo = settings_repo_accept.clone();
-        let user_repo = user_repo_accept.clone();
-        let channel_repo = channel_repo_accept.clone();
+        let user_service = user_service_accept.clone();
+        let channel_service = channel_service_accept.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -71,16 +64,7 @@ pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(settings_repo, user_repo);
-            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
-
-            match user_service
-                .respond_friend_request(&mut user_client, &friend_id, true)
-                .await
-            {
+            match user_service.respond_friend_request(&friend_id, true).await {
                 Ok(result) => {
                     tracing::info!("Accepted friend request from {}", friend_id);
 
@@ -88,8 +72,8 @@ pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
                     if let Some(channel_id) = result.dm_channel_id {
                         add_dm_to_sidebar_on_accept(
                             weak.clone(),
-                            grpc_pool.clone(),
-                            channel_repo.clone(),
+                            channel_service.clone(),
+                            user_service.clone(),
                             &channel_id,
                             &user_id_str,
                         )
@@ -116,15 +100,11 @@ pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
 
     // Decline friend request
     let weak_window = window.as_weak();
-    let grpc_pool_decline = grpc_pool.clone();
-    let settings_repo_decline = settings_repo.clone();
-    let user_repo_decline = user_repo.clone();
+    let user_service_decline = user_service.clone();
 
     window.on_friend_request_decline(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool_decline.clone();
-        let settings_repo = settings_repo_decline.clone();
-        let user_repo = user_repo_decline.clone();
+        let user_service = user_service_decline.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -148,16 +128,7 @@ pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(settings_repo, user_repo);
-            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
-
-            match user_service
-                .respond_friend_request(&mut user_client, &friend_id, false)
-                .await
-            {
+            match user_service.respond_friend_request(&friend_id, false).await {
                 Ok(_) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -180,15 +151,11 @@ pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
 
     // Cancel friend request
     let weak_window = window.as_weak();
-    let grpc_pool_cancel = grpc_pool.clone();
-    let settings_repo_cancel = settings_repo.clone();
-    let user_repo_cancel = user_repo.clone();
+    let user_service_cancel = user_service.clone();
 
     window.on_friend_request_cancel(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool_cancel.clone();
-        let settings_repo = settings_repo_cancel.clone();
-        let user_repo = user_repo_cancel.clone();
+        let user_service = user_service_cancel.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -212,13 +179,7 @@ pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(settings_repo, user_repo);
-            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
-
-            match user_service.remove_friend(&mut user_client, &friend_id).await {
+            match user_service.remove_friend(&friend_id).await {
                 Ok(()) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -261,32 +222,56 @@ pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
 /// Add a DM channel to the sidebar after friend request acceptance.
 async fn add_dm_to_sidebar_on_accept(
     weak_window: slint::Weak<MainWindow>,
-    grpc_pool: Arc<GrpcClientPool>,
-    channel_repo: Arc<ChannelRepository>,
+    channel_service: Arc<ChannelService>,
+    user_service: Arc<UserService>,
     channel_id: &str,
     other_user_id: &str,
 ) {
-    // Fetch channel from server
-    let mut channel_client = ChannelClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+    // Parse channel ID
+    let channel_id_parsed: chatter_linux::domain::ids::ChannelId = match channel_id.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("Invalid channel ID {}: {}", channel_id, e);
+            return;
+        }
+    };
 
-    match channel_client.get_channel(channel_id).await {
-        Ok(proto_channel) => {
-            // Convert proto to domain and save to local repo
-            match proto_to_domain_channel(&proto_channel) {
-                Ok(channel) => {
-                    if let Err(e) = channel_repo.insert(&channel) {
-                        tracing::warn!("Failed to save DM channel to local repo: {}", e);
+    // Parse other user ID
+    let other_user_id_parsed: chatter_linux::domain::UserId = match other_user_id.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("Invalid user ID {}: {}", other_user_id, e);
+            return;
+        }
+    };
+
+    // Fetch channel and sync memberships using ChannelService
+    match channel_service
+        .get_channel_with_memberships(&channel_id_parsed)
+        .await
+    {
+        Ok(_channel) => {
+            // Fetch the OTHER user's profile to get their display name using UserService
+            let other_user_name = match user_service.get_user_profile(&other_user_id_parsed).await {
+                Ok(profile) => {
+                    if profile.display_name.is_empty() {
+                        other_user_id.to_string()
+                    } else {
+                        profile.display_name.clone()
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to convert proto channel: {}", e);
+                    tracing::warn!("Failed to fetch user profile for {}: {}", other_user_id, e);
+                    // Fallback to user ID if we can't get the profile
+                    other_user_id.to_string()
                 }
-            }
+            };
 
             // Create DMListItemData and add to UI
-            let other_user_name = proto_channel.name.clone();
             let other_user_id_owned = other_user_id.to_string();
+            let channel_id_owned = channel_id.to_string();
             let dm_item = DMListItemData {
+                channel_id: channel_id_owned.into(),
                 user_id: other_user_id_owned.clone().into(),
                 display_name: other_user_name.clone().into(),
                 avatar_url: SharedString::default(),
@@ -315,7 +300,11 @@ async fn add_dm_to_sidebar_on_accept(
 
                     // Update UI
                     w.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
-                    tracing::info!("Added DM to sidebar for user {}", other_user_id_owned);
+                    tracing::info!(
+                        "Added DM to sidebar for user {} ({})",
+                        other_user_name,
+                        other_user_id_owned
+                    );
                 }
             });
         }

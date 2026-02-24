@@ -44,6 +44,29 @@ impl UserRepository {
         Ok(())
     }
 
+    /// Ensure a user record exists (for FK constraints).
+    ///
+    /// Creates a minimal placeholder record if the user doesn't exist.
+    /// This is needed because the profiles table has a FK to users.
+    /// The placeholder uses the user_id as username and empty public_key.
+    pub fn ensure_user_exists(&self, user_id: &UserId) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+
+        // Use INSERT OR IGNORE to only insert if not exists
+        conn.execute(
+            "INSERT OR IGNORE INTO users (id, username, public_key, last_active, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                user_id.to_string(),
+                user_id.to_string(), // Use ID as placeholder username
+                Vec::<u8>::new(),    // Empty public key placeholder
+                Utc::now().to_rfc3339(),
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Get a user by ID.
     pub fn get(&self, id: &UserId) -> Result<Option<User>, StorageError> {
         let conn = self.db.connection()?;

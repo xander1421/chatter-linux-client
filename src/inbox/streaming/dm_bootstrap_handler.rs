@@ -3,21 +3,35 @@
 //! Subscribes to domain events and handles KeyExchangeReceived events
 //! to complete the DM bootstrap protocol. When a bootstrap message (64 bytes)
 //! is received, creates our mailbox and sends response to peer.
+//!
+//! # Protocol (NDSS '21)
+//!
+//! The response uses two encryption layers:
+//! 1. **Content Layer**: Signal Protocol (X3DH/Double Ratchet) with peer's identity
+//! 2. **Transport Layer**: Envelope encryption using ECDH(our_identity, peer_mailbox_ephemeral)
+//!
+//! The transport layer is stateless and ensures only the mailbox owner can decrypt.
 
+use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::broadcast;
+use libsignal_protocol::IdentityKeyPair;
+use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
+use x25519_dalek::StaticSecret as X25519PrivateKey;
 
+use crate::crypto::envelope_crypto::encrypt_envelope;
 use crate::domain::UserId;
 use crate::events::EventBus;
 use crate::inbox::handlers::DomainEvent;
-use crate::mailbox::dm::{BootstrapResponse, DmBootstrap};
-use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::mailbox::dm::{release_bootstrap_lock, BootstrapResponse, DmBootstrap};
+use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::MailboxClient;
 use crate::proto::mailbox_v1::EnvelopeType;
-use crate::services::MailboxManager;
-use crate::storage::Database;
+use crate::services::SignalService;
+use crate::storage::{Database, KeyStore, SettingsRepository};
+use crate::util::time::TimestampNanos;
 
 /// Spawn the DM bootstrap event handler from EventBus.
 ///
@@ -26,42 +40,51 @@ use crate::storage::Database;
 ///
 /// # Arguments
 ///
-/// * `db` - Database for DmBootstrap and conversation state
-/// * `grpc_pool` - gRPC client pool for MailboxClient
-/// * `mailbox_manager` - For sending response messages
+/// * `db_path` - Path to the SQLCipher database file
+/// * `db_passphrase` - Database encryption passphrase
+/// * `grpc_endpoint` - gRPC server endpoint URL
+/// * `auth_user_id` - Current user's ID for auth
+/// * `auth_device_id` - Current device ID for auth
+/// * `auth_token` - Auth token for gRPC calls
 /// * `event_bus` - EventBus to subscribe for domain events
 pub fn spawn_dm_bootstrap_handler_from_bus(
-    db: Arc<Database>,
-    grpc_pool: Arc<GrpcClientPool>,
-    mailbox_manager: Arc<MailboxManager>,
+    db_path: PathBuf,
+    db_passphrase: String,
+    grpc_endpoint: String,
+    auth_user_id: String,
+    auth_device_id: u32,
+    auth_token: String,
     event_bus: &EventBus,
 ) -> JoinHandle<()> {
     let event_rx = event_bus.subscribe_domain();
-    spawn_dm_bootstrap_handler_with_receiver(db, grpc_pool, mailbox_manager, event_rx)
+    spawn_dm_bootstrap_handler_with_receiver(
+        db_path,
+        db_passphrase,
+        grpc_endpoint,
+        auth_user_id,
+        auth_device_id,
+        auth_token,
+        event_rx,
+    )
 }
 
 /// Spawn the DM bootstrap event handler with a custom receiver.
 ///
-/// This function spawns a task that subscribes to domain events and handles
-/// KeyExchangeReceived events. When a 64-byte bootstrap message is received,
-/// it calls DmBootstrap::handle_incoming_bootstrap() and sends the response
-/// back to the peer's mailbox via sealed sender.
-///
-/// # Arguments
-///
-/// * `db` - Database for DmBootstrap and conversation state
-/// * `grpc_pool` - gRPC client pool for MailboxClient
-/// * `mailbox_manager` - For sending response messages
-/// * `event_rx` - Receiver for domain events
+/// Uses spawn_blocking with a nested runtime for Signal operations
+/// (libsignal's async stores aren't Send).
 pub fn spawn_dm_bootstrap_handler_with_receiver(
-    db: Arc<Database>,
-    grpc_pool: Arc<GrpcClientPool>,
-    mailbox_manager: Arc<MailboxManager>,
+    db_path: PathBuf,
+    db_passphrase: String,
+    grpc_endpoint: String,
+    auth_user_id: String,
+    auth_device_id: u32,
+    auth_token: String,
     mut event_rx: broadcast::Receiver<DomainEvent>,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let dm_bootstrap = DmBootstrap::new(db);
+    // Track in-progress bootstraps to prevent concurrent requests for same peer
+    let in_progress: Arc<Mutex<HashSet<UserId>>> = Arc::new(Mutex::new(HashSet::new()));
 
+    tokio::spawn(async move {
         tracing::info!("DM bootstrap handler started");
 
         loop {
@@ -72,21 +95,172 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                     ephemeral_public_key,
                     timestamp: _,
                 }) => {
-                    // Check if this is a bootstrap message (64 bytes)
+                    // Check key length to determine message type:
+                    // - 64 bytes = bootstrap message (mailbox + conversation key)
+                    // - 0 bytes = bootstrap REQUEST (peer wants us to initiate)
+                    // - 32 bytes = regular key exchange response
                     if ephemeral_public_key.len() == 64 {
-                        tracing::debug!(
+                        // Check if bootstrap is already in progress for this peer
+                        {
+                            let mut guard = in_progress.lock().await;
+                            if guard.contains(&sender_id) {
+                                tracing::debug!(
+                                    peer = %sender_id,
+                                    "BOOTSTRAP[3/4] Skipping - already in progress for this peer"
+                                );
+                                continue;
+                            }
+                            guard.insert(sender_id);
+                        }
+
+                        tracing::info!(
                             peer = %sender_id,
-                            "Received DM bootstrap message, processing..."
+                            key_len = ephemeral_public_key.len(),
+                            "BOOTSTRAP[3/4] Received 64-byte KeyExchange = bootstrap MESSAGE from peer"
                         );
 
-                        handle_bootstrap(
-                            &dm_bootstrap,
-                            sender_id,
-                            &ephemeral_public_key,
-                            &grpc_pool,
-                            &mailbox_manager,
-                        )
-                        .await;
+                        // Handle in spawn_blocking due to libsignal's non-Send stores
+                        let db_path = db_path.clone();
+                        let db_passphrase = db_passphrase.clone();
+                        let grpc_endpoint = grpc_endpoint.clone();
+                        let auth_user_id = auth_user_id.clone();
+                        let auth_token = auth_token.clone();
+                        let ephemeral_key = ephemeral_public_key.clone();
+                        let in_progress_clone = in_progress.clone();
+
+                        tokio::task::spawn_blocking(move || {
+                            tracing::debug!(
+                                peer = %sender_id,
+                                "BOOTSTRAP[3/4] spawn_blocking task started"
+                            );
+
+                            // Catch panics to ensure we log them
+                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                handle_bootstrap_blocking(
+                                    db_path,
+                                    db_passphrase,
+                                    grpc_endpoint,
+                                    auth_user_id,
+                                    auth_device_id,
+                                    auth_token,
+                                    sender_id,
+                                    ephemeral_key,
+                                );
+                            }));
+
+                            if let Err(e) = result {
+                                tracing::error!(
+                                    peer = %sender_id,
+                                    "BOOTSTRAP[3/4] PANIC in handle_bootstrap_blocking: {:?}",
+                                    e
+                                );
+                            }
+
+                            // Remove from in-progress set when done
+                            // Use futures::executor since we're in spawn_blocking
+                            let rt = tokio::runtime::Builder::new_current_thread()
+                                .build()
+                                .expect("Failed to create runtime for cleanup");
+                            rt.block_on(async {
+                                in_progress_clone.lock().await.remove(&sender_id);
+                            });
+
+                            tracing::debug!(
+                                peer = %sender_id,
+                                "BOOTSTRAP[3/4] spawn_blocking task completed"
+                            );
+                        });
+                    } else if ephemeral_public_key.is_empty() {
+                        // Bootstrap REQUEST: peer (higher UUID) wants us to initiate
+                        // Verify we are actually the lower UUID before initiating
+
+                        // Check if bootstrap is already in progress for this peer
+                        {
+                            let mut guard = in_progress.lock().await;
+                            if guard.contains(&sender_id) {
+                                tracing::debug!(
+                                    peer = %sender_id,
+                                    "BOOTSTRAP[2/4] Skipping REQUEST - already in progress for this peer"
+                                );
+                                continue;
+                            }
+                            guard.insert(sender_id);
+                        }
+
+                        tracing::info!(
+                            peer = %sender_id,
+                            our_id = %auth_user_id,
+                            key_len = ephemeral_public_key.len(),
+                            "BOOTSTRAP[2/4] Received 0-byte KeyExchange = bootstrap REQUEST from peer"
+                        );
+
+                        let our_uuid = match auth_user_id.parse::<uuid::Uuid>() {
+                            Ok(u) => u,
+                            Err(_) => {
+                                tracing::error!(
+                                    peer = %sender_id,
+                                    "BOOTSTRAP[2/4] FAILED - Invalid local user UUID"
+                                );
+                                // Remove from in-progress on early exit
+                                in_progress.lock().await.remove(&sender_id);
+                                continue;
+                            }
+                        };
+
+                        let peer_uuid = sender_id.as_uuid();
+
+                        tracing::debug!(
+                            our_uuid = %our_uuid,
+                            peer_uuid = %peer_uuid,
+                            we_are_lower = our_uuid < *peer_uuid,
+                            "BOOTSTRAP[2/4] Checking UUID order for deterministic initiator"
+                        );
+
+                        if our_uuid < *peer_uuid {
+                            // We ARE the lower UUID - we should initiate
+                            tracing::info!(
+                                peer = %sender_id,
+                                our_id = %auth_user_id,
+                                "BOOTSTRAP[2/4] We're lower UUID - will initiate bootstrap MESSAGE"
+                            );
+
+                            let db_path = db_path.clone();
+                            let db_passphrase = db_passphrase.clone();
+                            let grpc_endpoint = grpc_endpoint.clone();
+                            let auth_user_id = auth_user_id.clone();
+                            let auth_token = auth_token.clone();
+                            let in_progress_clone = in_progress.clone();
+
+                            tokio::task::spawn_blocking(move || {
+                                handle_bootstrap_request_blocking(
+                                    db_path,
+                                    db_passphrase,
+                                    grpc_endpoint,
+                                    auth_user_id,
+                                    auth_device_id,
+                                    auth_token,
+                                    sender_id,
+                                );
+                                // Remove from in-progress set when done
+                                let rt = tokio::runtime::Builder::new_current_thread()
+                                    .build()
+                                    .expect("Failed to create runtime for cleanup");
+                                rt.block_on(async {
+                                    in_progress_clone.lock().await.remove(&sender_id);
+                                });
+                            });
+                        } else {
+                            // We're the higher UUID - ignore (we shouldn't receive this)
+                            tracing::warn!(
+                                peer = %sender_id,
+                                our_id = %auth_user_id,
+                                our_uuid = %our_uuid,
+                                peer_uuid = %peer_uuid,
+                                "BOOTSTRAP[2/4] IGNORED - We're higher UUID, shouldn't receive REQUEST"
+                            );
+                            // Remove from in-progress since we're not handling it
+                            in_progress.lock().await.remove(&sender_id);
+                        }
                     } else {
                         tracing::trace!(
                             peer = %sender_id,
@@ -114,84 +288,693 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
     })
 }
 
-/// Handle an incoming DM bootstrap message.
-async fn handle_bootstrap(
-    dm_bootstrap: &DmBootstrap,
-    sender_id: UserId,
-    ephemeral_public_key: &[u8],
-    grpc_pool: &Arc<GrpcClientPool>,
-    mailbox_manager: &Arc<MailboxManager>,
+/// Handle bootstrap in a blocking context with nested runtime.
+///
+/// Creates fresh database and gRPC connections to avoid cross-runtime issues.
+#[allow(clippy::too_many_arguments)]
+fn handle_bootstrap_blocking(
+    db_path: PathBuf,
+    db_passphrase: String,
+    grpc_endpoint: String,
+    auth_user_id: String,
+    auth_device_id: u32,
+    auth_token: String,
+    peer_id: UserId,
+    ephemeral_public_key: Vec<u8>,
 ) {
-    // Create mailbox client for bootstrap operations
-    let mut mailbox_client = MailboxClient::new(
-        grpc_pool.channel(),
-        grpc_pool.auth_clone(),
+    tracing::info!(
+        peer = %peer_id,
+        "BOOTSTRAP[3/4] handle_bootstrap_blocking entered"
     );
 
-    // Process the incoming bootstrap
-    match dm_bootstrap
-        .handle_incoming_bootstrap(sender_id, ephemeral_public_key, &mut mailbox_client)
-        .await
+    // Create a new runtime for this blocking task
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
     {
-        Ok(Some(response)) => {
-            // Send bootstrap response to peer's mailbox
-            send_bootstrap_response(response, mailbox_manager).await;
-        }
-        Ok(None) => {
-            // Not a bootstrap message (shouldn't happen since we checked length)
-            tracing::debug!("handle_incoming_bootstrap returned None");
+        Ok(rt) => {
+            tracing::debug!(peer = %peer_id, "BOOTSTRAP[3/4] Nested runtime created");
+            rt
         }
         Err(e) => {
             tracing::error!(
-                peer = %sender_id,
+                peer = %peer_id,
                 error = %e,
-                "Failed to handle incoming DM bootstrap"
-            );
-        }
-    }
-}
-
-/// Send bootstrap response to peer's mailbox.
-async fn send_bootstrap_response(
-    response: BootstrapResponse,
-    mailbox_manager: &Arc<MailboxManager>,
-) {
-    // Build the response message
-    let response_message = match response.build_response_message() {
-        Ok(msg) => msg,
-        Err(e) => {
-            tracing::error!(
-                peer = %response.peer_id,
-                error = %e,
-                "Failed to build bootstrap response message"
+                "BOOTSTRAP[3/4] FAILED to create nested runtime"
             );
             return;
         }
     };
 
-    // Send to peer's mailbox
-    match mailbox_manager
-        .send_to_mailbox(
-            &response.peer_mailbox_public_key,
-            response_message,
-            EnvelopeType::SealedSender,
+    rt.block_on(async move {
+        let result = handle_bootstrap_async(
+            &db_path,
+            &db_passphrase,
+            &grpc_endpoint,
+            &auth_user_id,
+            auth_device_id,
+            &auth_token,
+            peer_id,
+            &ephemeral_public_key,
+        )
+        .await;
+
+        // Release the global bootstrap lock for this peer.
+        // This lock was held by the higher UUID user when they sent the REQUEST.
+        // Now that we've processed their MESSAGE, they can send actual messages.
+        release_bootstrap_lock(&peer_id);
+        tracing::debug!(
+            peer = %peer_id,
+            "BOOTSTRAP[3/4] Released global bootstrap lock for peer"
+        );
+
+        if let Err(e) = result {
+            tracing::error!(
+                peer = %peer_id,
+                error = %e,
+                "Failed to handle DM bootstrap"
+            );
+        }
+    });
+}
+
+/// Handle bootstrap REQUEST in a blocking context.
+///
+/// Called when we (lower UUID) receive a request from peer (higher UUID) to initiate.
+/// This enforces deterministic initiator selection per "Formal Security Analysis of Signal".
+fn handle_bootstrap_request_blocking(
+    db_path: PathBuf,
+    db_passphrase: String,
+    grpc_endpoint: String,
+    auth_user_id: String,
+    auth_device_id: u32,
+    auth_token: String,
+    peer_id: UserId,
+) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create runtime for bootstrap request handler");
+
+    rt.block_on(async move {
+        if let Err(e) = handle_bootstrap_request_async(
+            &db_path,
+            &db_passphrase,
+            &grpc_endpoint,
+            &auth_user_id,
+            auth_device_id,
+            &auth_token,
+            peer_id,
         )
         .await
-    {
-        Ok(()) => {
-            tracing::info!(
-                peer = %response.peer_id,
-                "Sent DM bootstrap response to peer's mailbox"
+        {
+            tracing::error!(
+                peer = %peer_id,
+                error = %e,
+                "Failed to handle bootstrap request"
             );
+        }
+    });
+}
+
+/// Handle bootstrap REQUEST asynchronously.
+///
+/// When higher UUID peer requests bootstrap, we (lower UUID) initiate:
+/// 1. Check if session already exists or is pending
+/// 2. If not, create our mailbox and send bootstrap message to peer
+async fn handle_bootstrap_request_async(
+    db_path: &std::path::Path,
+    db_passphrase: &str,
+    grpc_endpoint: &str,
+    auth_user_id: &str,
+    auth_device_id: u32,
+    auth_token: &str,
+    peer_id: UserId,
+) -> Result<(), String> {
+    use crate::mailbox::dm::DmConversationManager;
+    use crate::mailbox::TokenManager;
+    use crate::network::grpc::message_client::MessageClient;
+    use crate::proto::chat_v1::SealedSenderMessage;
+
+    // Create fresh database connection
+    let database = Arc::new(
+        Database::open(db_path, db_passphrase)
+            .map_err(|e| format!("Failed to open database: {}", e))?,
+    );
+
+    // Check if we already have a session or pending bootstrap
+    let conversation_manager = DmConversationManager::new(database.clone());
+    let existing = conversation_manager
+        .load_conversation(&peer_id)
+        .map_err(|e| format!("Failed to load conversation: {}", e))?;
+
+    if let Some(ref conv) = existing {
+        if !conv.needs_bootstrap() {
+            tracing::info!(
+                peer = %peer_id,
+                "Bootstrap request received but session already exists - ignoring"
+            );
+            return Ok(());
+        }
+
+        // Check if bootstrap is already in progress (we have our mailbox)
+        if conv.our_mailbox.is_some() {
+            tracing::info!(
+                peer = %peer_id,
+                "Bootstrap request received but we already initiated - waiting for response"
+            );
+            return Ok(());
+        }
+    }
+
+    tracing::info!(
+        peer = %peer_id,
+        "BOOTSTRAP[2/4] Processing REQUEST - initiating as lower UUID"
+    );
+
+    // Create fresh gRPC channel
+    tracing::debug!(
+        peer = %peer_id,
+        endpoint = %grpc_endpoint,
+        "BOOTSTRAP[2/4] Connecting to gRPC for bootstrap initiation"
+    );
+    let channel = tonic::transport::Channel::from_shared(grpc_endpoint.to_string())
+        .map_err(|e| format!("Invalid endpoint: {}", e))?
+        .connect()
+        .await
+        .map_err(|e| format!("Failed to connect: {}", e))?;
+
+    let auth_interceptor = crate::network::grpc::interceptors::AuthInterceptor::new();
+    auth_interceptor.set_basic(
+        format!("{}.{}", auth_user_id, auth_device_id),
+        auth_token.to_string(),
+    );
+
+    // Create DmBootstrap and initiate
+    let dm_bootstrap = DmBootstrap::new(database.clone());
+    let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
+
+    let bootstrap_result = dm_bootstrap
+        .initiate_dm(peer_id, &mut mailbox_client)
+        .await
+        .map_err(|e| format!("Failed to initiate bootstrap: {}", e))?;
+
+    tracing::info!(
+        peer = %peer_id,
+        mailbox_id = %bootstrap_result.our_mailbox.id,
+        bootstrap_msg_len = bootstrap_result.bootstrap_message.len(),
+        "BOOTSTRAP[2/4] Created mailbox, now encrypting 64-byte MESSAGE for peer"
+    );
+
+    // Encrypt bootstrap message with Signal Protocol
+    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
+    let key_store = Arc::new(KeyStore::new(database.clone()));
+    let signal_service = SignalService::new(key_store, settings_repo);
+
+    let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
+    let peer_id_str = peer_id.to_string();
+    let peer_device_id = 1u32;
+
+    let sealed_ciphertext = signal_service
+        .encrypt_message(&mut auth_client, &peer_id_str, peer_device_id, &bootstrap_result.bootstrap_message)
+        .await
+        .map_err(|e| format!("Failed to encrypt bootstrap: {}", e))?;
+
+    // Get anonymous credential - request tokens if needed
+    tracing::debug!(peer = %peer_id, "BOOTSTRAP[2/4] Checking for anonymous tokens");
+    let token_manager = TokenManager::new(database.clone());
+    let token = match token_manager.get_available_token() {
+        Ok(Some(t)) => {
+            tracing::debug!(peer = %peer_id, token_id = %t.id, "BOOTSTRAP[2/4] Found existing token");
+            t
+        }
+        Ok(None) => {
+            // No tokens - request more from server
+            tracing::info!(peer = %peer_id, "BOOTSTRAP[2/4] No tokens available, requesting from server");
+            let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
+            match token_manager.request_tokens(&mut mailbox_client, 5).await {
+                Ok(count) if count > 0 => {
+                    tracing::info!(peer = %peer_id, count, "BOOTSTRAP[2/4] Received {} tokens from server", count);
+                    token_manager
+                        .get_available_token()
+                        .map_err(|e| format!("Failed to get token after request: {}", e))?
+                        .ok_or_else(|| "No tokens after request".to_string())?
+                }
+                Ok(_) => {
+                    tracing::error!(peer = %peer_id, "BOOTSTRAP[2/4] FAILED - No tokens received from server");
+                    return Err("No tokens received from server".to_string());
+                }
+                Err(e) => {
+                    tracing::error!(peer = %peer_id, error = %e, "BOOTSTRAP[2/4] FAILED - Token request error");
+                    return Err(format!("Failed to request tokens: {}", e));
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(peer = %peer_id, error = %e, "BOOTSTRAP[2/4] FAILED - Token check error");
+            return Err(format!("Failed to check tokens: {}", e));
+        }
+    };
+
+    // Send to peer's device inbox
+    let mut message_client = MessageClient::new(channel, auth_interceptor);
+
+    let sealed_msg = SealedSenderMessage {
+        sealed_body: sealed_ciphertext,
+        server_key_id: 1,
+        timestamp: TimestampNanos::now().as_u64(),
+    };
+
+    message_client
+        .send_sealed_message_with_credential(
+            &peer_id_str,
+            peer_device_id,
+            sealed_msg,
+            &token.public_key,
+            &token.signature,
+            token.randomizer.as_deref(),
+        )
+        .await
+        .map_err(|e| format!("Failed to send bootstrap: {}", e))?;
+
+    let _ = token_manager.mark_token_used(&token.id);
+
+    tracing::info!(
+        peer = %peer_id,
+        "BOOTSTRAP[2/4] SUCCESS - 64-byte MESSAGE sent to peer's device inbox"
+    );
+    tracing::info!(
+        peer = %peer_id,
+        "BOOTSTRAP[2/4] Now waiting for peer to send RESPONSE to our mailbox"
+    );
+
+    Ok(())
+}
+
+/// Handle bootstrap asynchronously with fresh connections.
+#[allow(clippy::too_many_arguments)]
+async fn handle_bootstrap_async(
+    db_path: &std::path::Path,
+    db_passphrase: &str,
+    grpc_endpoint: &str,
+    auth_user_id: &str,
+    auth_device_id: u32,
+    auth_token: &str,
+    peer_id: UserId,
+    ephemeral_public_key: &[u8],
+) -> Result<(), String> {
+    tracing::info!(
+        peer = %peer_id,
+        key_len = ephemeral_public_key.len(),
+        "BOOTSTRAP[3/4] Processing 64-byte MESSAGE - will send RESPONSE"
+    );
+
+    // Create fresh database connection
+    tracing::info!(
+        peer = %peer_id,
+        db_path = %db_path.display(),
+        passphrase_len = db_passphrase.len(),
+        "BOOTSTRAP[3/4] Opening database connection"
+    );
+    let database = match Database::open(db_path, db_passphrase) {
+        Ok(db) => {
+            tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Database opened successfully");
+            Arc::new(db)
         }
         Err(e) => {
             tracing::error!(
-                peer = %response.peer_id,
+                peer = %peer_id,
                 error = %e,
-                "Failed to send bootstrap response to peer's mailbox"
+                "BOOTSTRAP[3/4] FAILED to open database"
             );
+            return Err(format!("Failed to open database: {}", e));
         }
+    };
+
+    // Create fresh gRPC channel
+    tracing::info!(
+        peer = %peer_id,
+        endpoint = %grpc_endpoint,
+        "BOOTSTRAP[3/4] Connecting to gRPC endpoint"
+    );
+    let channel = tonic::transport::Channel::from_shared(grpc_endpoint.to_string())
+        .map_err(|e| format!("Invalid endpoint: {}", e))?
+        .connect()
+        .await
+        .map_err(|e| format!("Failed to connect: {}", e))?;
+    tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] gRPC channel connected");
+
+    // Create auth interceptor
+    let auth_interceptor = crate::network::grpc::interceptors::AuthInterceptor::new();
+    auth_interceptor.set_basic(
+        format!("{}.{}", auth_user_id, auth_device_id),
+        auth_token.to_string(),
+    );
+
+    // Create DmBootstrap
+    tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Creating DmBootstrap");
+    let dm_bootstrap = DmBootstrap::new(database.clone());
+
+    // Create mailbox client
+    tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Creating mailbox client");
+    let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
+
+    // Release the bootstrap lock that was held since sending REQUEST
+    // (Higher UUID holds lock while waiting for MESSAGE - now release it for processing)
+    release_bootstrap_lock(&peer_id);
+    tracing::debug!(peer = %peer_id, "BOOTSTRAP[3/4] Released REQUEST lock before processing MESSAGE");
+
+    // Process the incoming bootstrap
+    tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Calling handle_incoming_bootstrap");
+    let response = match dm_bootstrap
+        .handle_incoming_bootstrap(peer_id, ephemeral_public_key, &mut mailbox_client)
+        .await
+    {
+        Ok(Some(resp)) => {
+            tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] handle_incoming_bootstrap returned response");
+            resp
+        }
+        Ok(None) => {
+            tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] handle_incoming_bootstrap returned None");
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::error!(peer = %peer_id, error = %e, "BOOTSTRAP[3/4] handle_incoming_bootstrap failed");
+            return Err(format!("Failed to handle bootstrap: {}", e));
+        }
+    };
+
+    // Send bootstrap response with two-layer encryption
+    send_bootstrap_response_with_envelope(
+        response,
+        database.clone(),
+        channel.clone(),
+        auth_interceptor.clone(),
+    )
+    .await?;
+
+    // Bootstrap complete for responder (higher UUID) - send any pending messages
+    tracing::info!(
+        peer = %peer_id,
+        "BOOTSTRAP[3/4] SUCCESS - RESPONSE sent to peer's DM mailbox"
+    );
+    tracing::info!(
+        peer = %peer_id,
+        "BOOTSTRAP[3/4] Now draining and sending pending messages (if any)"
+    );
+
+    send_pending_messages_after_bootstrap(
+        peer_id,
+        database,
+        channel,
+        auth_interceptor,
+    )
+    .await;
+
+    Ok(())
+}
+
+/// Send pending messages after bootstrap completes (responder side).
+///
+/// This is called after the higher UUID user responds to a bootstrap request.
+/// At this point, the shared secret is established and queued messages can be sent.
+async fn send_pending_messages_after_bootstrap(
+    peer_id: UserId,
+    database: Arc<Database>,
+    channel: tonic::transport::Channel,
+    auth_interceptor: crate::network::grpc::interceptors::AuthInterceptor,
+) {
+    use prost::Message as ProstMessage;
+    use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
+    use crate::mailbox::dm::DmConversationManager;
+    use crate::services::SignalService;
+    use crate::storage::repositories::SettingsRepository;
+
+    tracing::info!(
+        peer = %peer_id,
+        "BOOTSTRAP[3/4] Checking for pending messages to send (responder side)"
+    );
+
+    // Create Sesame manager to drain pending messages
+    let sesame_store = SqliteSesameStore::new(database.clone());
+    let sesame_manager = SesameManager::new(sesame_store);
+
+    // Drain pending messages for this peer
+    let pending = match sesame_manager.drain_pending_messages(&peer_id) {
+        Ok(msgs) => msgs,
+        Err(e) => {
+            tracing::error!(
+                peer = %peer_id,
+                error = %e,
+                "BOOTSTRAP[3/4] Failed to drain pending messages"
+            );
+            return;
+        }
+    };
+
+    if pending.is_empty() {
+        tracing::info!(
+            peer = %peer_id,
+            "BOOTSTRAP[3/4] No pending messages queued - nothing to send"
+        );
+        return;
     }
+
+    tracing::info!(
+        peer = %peer_id,
+        count = pending.len(),
+        "BOOTSTRAP[3/4] Found {} pending message(s) - sending now",
+        pending.len()
+    );
+
+    // Create services for sending
+    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
+    let key_store = Arc::new(crate::storage::KeyStore::new(database.clone()));
+    let signal_service = SignalService::new(key_store, settings_repo.clone());
+    let conversation_manager = DmConversationManager::new(database.clone());
+    let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
+
+    // Get conversation state for sending
+    let conversation = match conversation_manager.load_conversation(&peer_id) {
+        Ok(Some(conv)) => conv,
+        Ok(None) => {
+            tracing::error!(peer = %peer_id, "No conversation state after bootstrap");
+            return;
+        }
+        Err(e) => {
+            tracing::error!(peer = %peer_id, error = %e, "Failed to load conversation");
+            return;
+        }
+    };
+
+    let shared_secret = match conversation.conversation_key.and_then(|k| k.shared_secret) {
+        Some(s) => s,
+        None => {
+            tracing::error!(peer = %peer_id, "No shared secret after bootstrap");
+            return;
+        }
+    };
+
+    let peer_mailbox = match conversation.peer_mailbox {
+        Some(m) => m,
+        None => {
+            tracing::error!(peer = %peer_id, "No peer mailbox after bootstrap");
+            return;
+        }
+    };
+
+    // Create auth client for prekey fetching if needed
+    let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
+
+    let mut sent_count = 0;
+
+    for msg in pending {
+        // Parse content for timestamp and DataMessage.timestamp
+        let (content_ts, dm_ts) = match crate::proto::content_v1::Content::decode(msg.content.as_slice()) {
+            Ok(c) => {
+                let dm_timestamp = match &c.content {
+                    Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => dm.timestamp,
+                    _ => 0,
+                };
+                (c.timestamp, dm_timestamp)
+            }
+            Err(_) => (TimestampNanos::now().as_u64(), 0),
+        };
+        let timestamp = content_ts;
+        tracing::debug!(
+            peer = %peer_id,
+            content_timestamp = content_ts,
+            data_message_timestamp = dm_ts,
+            content_bytes_len = msg.content.len(),
+            "send_pending_messages_after_bootstrap: sending pending message"
+        );
+
+        // Encrypt with Signal Protocol
+        let signal_ciphertext = match signal_service
+            .encrypt_message(&mut auth_client, &peer_id.to_string(), 1, &msg.content)
+            .await
+        {
+            Ok(ct) => ct,
+            Err(e) => {
+                tracing::error!(
+                    peer = %peer_id,
+                    error = %e,
+                    "Failed to encrypt pending message with Signal"
+                );
+                continue;
+            }
+        };
+
+        // Encrypt with DM crypto (shared secret)
+        let dm_encrypted = match crate::crypto::dm_crypto::encrypt_dm_bytes(
+            &signal_ciphertext,
+            &shared_secret,
+        ) {
+            Ok(enc) => enc,
+            Err(e) => {
+                tracing::error!(
+                    peer = %peer_id,
+                    error = %e,
+                    "Failed to encrypt with DM shared secret"
+                );
+                continue;
+            }
+        };
+
+        // Send to peer's mailbox
+        if let Err(e) = mailbox_client
+            .send_to_ephemeral_mailbox(
+                peer_mailbox.public_key.to_vec(),
+                dm_encrypted,
+                crate::proto::mailbox_v1::EnvelopeType::Message as i32,
+            )
+            .await
+        {
+            tracing::error!(
+                peer = %peer_id,
+                error = %e,
+                "Failed to send pending message to mailbox"
+            );
+            continue;
+        }
+
+        sent_count += 1;
+        tracing::debug!(
+            peer = %peer_id,
+            timestamp,
+            "Sent pending message"
+        );
+    }
+
+    if sent_count > 0 {
+        tracing::info!(
+            peer = %peer_id,
+            sent = sent_count,
+            "Finished sending pending messages after bootstrap"
+        );
+    }
+}
+
+/// Send bootstrap response with proper two-layer encryption.
+///
+/// Layer 1 (Content): Signal Protocol encryption to peer's identity
+/// Layer 2 (Transport): Envelope encryption using ECDH(our_identity, peer_mailbox)
+async fn send_bootstrap_response_with_envelope(
+    response: BootstrapResponse,
+    database: Arc<Database>,
+    channel: tonic::transport::Channel,
+    auth_interceptor: crate::network::grpc::interceptors::AuthInterceptor,
+) -> Result<(), String> {
+    let peer_id = response.peer_id;
+
+    // Build the response message (KeyExchange proto)
+    let response_message = response
+        .build_response_message()
+        .map_err(|e| format!("Failed to build response message: {}", e))?;
+
+    // Layer 1: Encrypt content with Signal Protocol
+    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
+    let key_store = Arc::new(KeyStore::new(database.clone()));
+    let signal_service = SignalService::new(key_store.clone(), settings_repo);
+
+    let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
+    let peer_id_str = peer_id.to_string();
+    let device_id = 1u32;
+
+    let (signal_ciphertext, msg_type) = signal_service
+        .encrypt_message_identified(&mut auth_client, &peer_id_str, device_id, &response_message)
+        .await
+        .map_err(|e| format!("Failed to encrypt with Signal: {}", e))?;
+
+    tracing::debug!(
+        peer = %peer_id,
+        ciphertext_len = signal_ciphertext.len(),
+        msg_type,
+        "Encrypted bootstrap response content with Signal Protocol"
+    );
+
+    // Layer 2: Wrap in envelope encrypted with ECDH(our_identity, peer_mailbox)
+    // Get our X25519 identity key from the key store
+    let our_identity_private = get_identity_x25519_private(&key_store)
+        .map_err(|e| format!("Failed to get identity key: {}", e))?;
+
+    let envelope = encrypt_envelope(
+        &signal_ciphertext,
+        &our_identity_private,
+        &response.peer_mailbox_public_key,
+    )
+    .map_err(|e| format!("Failed to encrypt envelope: {}", e))?;
+
+    tracing::debug!(
+        peer = %peer_id,
+        envelope_len = envelope.len(),
+        "Encrypted bootstrap response envelope"
+    );
+
+    // Send to peer's ephemeral mailbox (anonymous send, no auth required)
+    // Bootstrap response uses MailboxClient directly because:
+    // - This is part of the bootstrap handshake, not regular messaging
+    // - TwoWayAnonymity is for post-bootstrap message exchange
+    // - We already have peer_mailbox_public_key from handle_incoming_bootstrap
+    let mut mailbox_client = MailboxClient::new(channel, auth_interceptor);
+
+    mailbox_client
+        .send_to_ephemeral_mailbox(
+            response.peer_mailbox_public_key.to_vec(),
+            envelope,
+            EnvelopeType::PrekeyMessage as i32,
+        )
+        .await
+        .map_err(|e| format!("Failed to send to mailbox: {}", e))?;
+
+    tracing::info!(
+        peer = %peer_id,
+        "Sent DM bootstrap response (Signal + envelope encrypted)"
+    );
+
+    Ok(())
+}
+
+/// Get our X25519 identity private key from the key store.
+fn get_identity_x25519_private(key_store: &Arc<KeyStore>) -> Result<X25519PrivateKey, String> {
+    // Get the identity key pair bytes from the store
+    let (_, key_pair_bytes) = key_store
+        .get_local_identity()
+        .map_err(|e| format!("Failed to get local identity: {}", e))?
+        .ok_or_else(|| "No local identity found".to_string())?;
+
+    // Parse into IdentityKeyPair
+    let identity_key_pair = IdentityKeyPair::try_from(key_pair_bytes.as_slice())
+        .map_err(|_| "Failed to parse identity key pair".to_string())?;
+
+    // The private key bytes from libsignal
+    let private_bytes = identity_key_pair.private_key().serialize();
+
+    // Convert to X25519 (the first 32 bytes of the serialized Curve25519 private key)
+    let mut key_bytes = [0u8; 32];
+    key_bytes.copy_from_slice(&private_bytes[..32]);
+
+    Ok(X25519PrivateKey::from(key_bytes))
 }
 
 #[cfg(test)]

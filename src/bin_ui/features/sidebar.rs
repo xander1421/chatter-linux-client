@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::channel::ChannelType;
@@ -102,7 +102,7 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
         let attachment_repo = attachment_repo.clone();
         let auth_state = auth_state.clone();
         let database = database.clone();
-        let grpc_pool = grpc_pool.clone();
+        let _grpc_pool = grpc_pool.clone();
         let message_service = message_service.clone();
         let mailbox_manager = mailbox_manager.clone();
 
@@ -110,21 +110,22 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
         stop_audio_playback();
 
         tokio::spawn(async move {
-            // Set loading state
+            // dm_id is now the channel_id directly (from DMListItemData.channel_id)
             let weak_loading = weak.clone();
+            let dm_id_for_ui = dm_id.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_loading.upgrade() {
                     w.set_loading_messages(true);
-                    w.set_selected_dm_id(dm_id.clone());
+                    w.set_selected_dm_id(dm_id_for_ui);
                     w.set_selected_channel_id("".into());
                 }
             });
 
-            // Parse channel ID (DMs are still channels)
+            // Parse channel ID directly
             let channel_id: ChannelId = match dm_id_str.parse() {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::error!("Invalid DM ID: {}", e);
+                    tracing::error!("Invalid DM channel ID: {}", e);
                     return;
                 }
             };
@@ -133,7 +134,7 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
             chat_state.set_active_channel(channel_id);
 
             // Load channel and messages
-            load_channel_into_ui(weak, &channel_id, channel_repo.clone(), message_repo.clone(), user_repo, attachment_repo).await;
+            load_channel_into_ui(weak.clone(), &channel_id, channel_repo.clone(), message_repo.clone(), user_repo, attachment_repo).await;
 
             // Send read receipts for unread messages from the peer
             if auth_state.is_logged_in() {
@@ -153,11 +154,11 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
                                 .cloned();
 
                             if let Some(peer_id) = peer_id {
-                                // Get timestamps of messages from the peer
+                                // Get sent_at timestamps (nanoseconds) of messages from the peer
                                 let unread_timestamps: Vec<u64> = messages
                                     .iter()
                                     .filter(|m| m.sender_id.as_ref() == Some(&peer_id))
-                                    .map(|m| m.created_at.timestamp_millis() as u64)
+                                    .map(|m| m.sent_at)
                                     .collect();
 
                                 if !unread_timestamps.is_empty() {
@@ -165,7 +166,6 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
                                         peer_id,
                                         unread_timestamps,
                                         database,
-                                        grpc_pool,
                                         message_service,
                                         mailbox_manager,
                                     );
@@ -455,17 +455,24 @@ pub async fn load_channel_into_ui(
     // Reverse to show oldest first (newest at bottom, like chat apps)
     display_messages.reverse();
 
-    // Update UI - special handling for SavedMessages
+    // Update UI - special handling for SavedMessages and DMs
     let is_saved_messages = channel.channel_type == ChannelType::SavedMessages;
-    let channel_name = if is_saved_messages {
-        "Saved Messages".to_string()
+    let is_dm = channel.channel_type == ChannelType::DirectMessage;
+    let channel_id_for_lookup = channel.id;
+
+    // For DMs, we'll look up the peer's display name in the event loop
+    // where we have access to the DM conversations model
+    let channel_name_from_repo = if is_saved_messages {
+        Some("Saved Messages".to_string())
+    } else if is_dm {
+        None // Will look up from DM conversations in event loop
     } else {
-        channel.name.clone()
+        Some(channel.name.clone())
     };
     let channel_type = channel_type_to_string(channel.channel_type);
     let member_count = 0i32;
-    // Don't show topic/description for SavedMessages
-    let topic = if is_saved_messages {
+    // Don't show topic/description for SavedMessages or DMs
+    let topic = if is_saved_messages || is_dm {
         String::new()
     } else {
         channel.description.clone().unwrap_or_default()
@@ -476,6 +483,24 @@ pub async fn load_channel_into_ui(
         if let Some(w) = window_weak.upgrade() {
             // Convert display data to Slint types (must be done on UI thread)
             let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint()).collect();
+
+            // For DMs, look up the peer's display name from DM conversations
+            let channel_name = channel_name_from_repo.unwrap_or_else(|| {
+                let conversations = w.get_dm_conversations();
+                let channel_id_str = channel_id_for_lookup.to_string();
+                for i in 0..conversations.row_count() {
+                    if let Some(item) = conversations.row_data(i) {
+                        if item.channel_id.as_str() == channel_id_str {
+                            let name = item.display_name.to_string();
+                            if !name.is_empty() {
+                                return name;
+                            }
+                        }
+                    }
+                }
+                // Fall back to channel_id if no name found
+                channel_id_str
+            });
 
             w.set_channel_name(channel_name.into());
             w.set_channel_type(channel_type.into());

@@ -58,6 +58,7 @@ impl AuthClient {
     /// Login with username and password.
     ///
     /// Returns session info and user profile on success.
+    #[allow(clippy::too_many_arguments)]
     pub async fn login(
         &mut self,
         username: &str,
@@ -165,6 +166,7 @@ impl AuthClient {
     /// * `profile_key` - 32-byte profile key; server derives UAK from this
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
+    #[allow(clippy::too_many_arguments)]
     pub async fn register(
         &mut self,
         username: &str,
@@ -215,6 +217,7 @@ impl AuthClient {
     /// * `profile_key` - 32-byte profile key; server derives UAK from this
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
+    #[allow(clippy::too_many_arguments)]
     pub async fn register_and_wait(
         &mut self,
         username: &str,
@@ -496,17 +499,39 @@ impl AuthClient {
         user_id: &str,
         device_id: &str,
     ) -> Result<GetPreKeyBundleResponse, NetworkError> {
+        tracing::debug!(
+            user_id,
+            device_id,
+            "AuthClient: fetching prekey bundle from server"
+        );
+
         let request = GetPreKeyBundleRequest {
             user_id: user_id.to_string(),
             device_id: device_id.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 
-        self.inner
+        let result = self.inner
             .get_pre_key_bundle(request)
             .await
             .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
+            .map_err(|s| {
+                tracing::error!(
+                    user_id,
+                    device_id,
+                    error = %s,
+                    "AuthClient: failed to fetch prekey bundle"
+                );
+                NetworkError::from_status(&s)
+            })?;
+
+        tracing::debug!(
+            user_id,
+            device_id,
+            has_result = result.result.is_some(),
+            "AuthClient: prekey bundle received"
+        );
+        Ok(result)
     }
 
     /// Fetch prekey bundles for all devices of a user.

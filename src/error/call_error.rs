@@ -35,4 +35,7 @@ pub enum CallError {
 
     #[error("Call ended")]
     CallEnded,
+
+    #[error("Track publish failed: {0}")]
+    TrackPublishFailed(String),
 }

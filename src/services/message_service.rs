@@ -4,15 +4,20 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::Utc;
+
+use crate::util::time::TimestampNanos;
 
 use crate::crypto::encrypt_dm_bytes;
 use crate::domain::ephemeral::MessageTTL;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use crate::domain::message::{Message, MessageContent, MixedContent, ReactionCount};
 use crate::error::{NetworkError, StorageError};
-use crate::mailbox::dm::{DmBootstrap, DmConversationManager};
-use crate::mailbox::group::GroupFanout;
+use crate::mailbox::dm::{
+    release_bootstrap_lock, try_acquire_bootstrap_lock, DmBootstrap, DmConversationManager,
+};
+use crate::mailbox::group::{GroupFanout, GroupMailboxManager};
+use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::message_client::MessageClient;
 use crate::network::grpc::MailboxClient;
@@ -21,6 +26,7 @@ use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::storage::Database;
 
+use crate::crypto::signal::{SesameManager, SqliteSesameStore};
 use crate::domain::channel::ChannelType;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::services::signal_service::SignalService;
@@ -72,31 +78,101 @@ pub enum MessageError {
     BootstrapInitiated,
 }
 
+/// Parameters for sending DM content.
+pub struct SendDmContentParams<'a> {
+    /// Auth client for key fetching.
+    pub auth_client: &'a mut AuthClient,
+    /// The peer's user ID.
+    pub peer_id: &'a UserId,
+    /// The Content proto to send.
+    pub content: crate::proto::content_v1::Content,
+    /// Database for conversation state.
+    pub database: Arc<Database>,
+    /// For sending to the peer's mailbox.
+    pub mailbox_manager: &'a MailboxManager,
+    /// Optional gRPC pool for bootstrap (needed for first DM).
+    pub grpc_pool: Option<&'a Arc<GrpcClientPool>>,
+    /// Optional attachment IDs for local storage when message is queued during bootstrap.
+    pub attachment_ids: Option<Vec<AttachmentId>>,
+    /// Optional channel ID for local storage.
+    pub channel_id: Option<ChannelId>,
+}
+
+/// Parameters for sending a DM message with attachments.
+pub struct SendDmMsgParams<'a> {
+    /// The peer's user ID.
+    pub peer_id: &'a UserId,
+    /// Message text.
+    pub text: &'a str,
+    /// Attachment pointers for the proto message.
+    pub attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
+    /// Local attachment IDs to store with the message.
+    pub attachment_ids: Vec<AttachmentId>,
+    /// The DM channel ID for local storage.
+    pub dm_channel_id: &'a ChannelId,
+    /// Database for conversation state.
+    pub database: Arc<Database>,
+    /// For sending to the peer's mailbox.
+    pub mailbox_manager: &'a MailboxManager,
+    /// Timestamp in nanoseconds (caller generates this for consistent UI/storage).
+    pub sent_at: u64,
+}
+
 /// Message service for all message operations.
 ///
 /// Orchestrates message sending, editing, and deletion by coordinating
 /// network client and local storage.
 pub struct MessageService {
+    grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
     message_repo: Arc<MessageRepository>,
     channel_repo: Arc<ChannelRepository>,
     signal_service: Arc<SignalService>,
+    /// Group mailbox manager for NDSS '21 per-group mailboxes.
+    group_mailbox_manager: Arc<GroupMailboxManager>,
+    /// Sesame session manager for multi-session handling and message queueing.
+    sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
 }
 
 impl MessageService {
     /// Create a new MessageService with dependencies.
     pub fn new(
+        grpc_pool: Arc<GrpcClientPool>,
         settings_repo: Arc<SettingsRepository>,
         message_repo: Arc<MessageRepository>,
         channel_repo: Arc<ChannelRepository>,
         signal_service: Arc<SignalService>,
+        group_mailbox_manager: Arc<GroupMailboxManager>,
+        sesame_manager: Arc<SesameManager<SqliteSesameStore>>,
     ) -> Self {
         Self {
+            grpc_pool,
             settings_repo,
             message_repo,
             channel_repo,
             signal_service,
+            group_mailbox_manager,
+            sesame_manager,
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Internal client helpers
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    fn message_client(&self) -> MessageClient {
+        MessageClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+    }
+
+    fn auth_client(&self) -> AuthClient {
+        AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+    }
+
+    fn channel_client(&self) -> crate::network::grpc::channel_client::ChannelClient {
+        crate::network::grpc::channel_client::ChannelClient::new(
+            self.grpc_pool.channel(),
+            self.grpc_pool.auth_clone(),
+        )
     }
 
     /// Get encryption settings for a channel.
@@ -220,7 +296,7 @@ impl MessageService {
 
         // If a new sender key was created, distribute SKDM to channel members
         if let Some(skdm) = skdm_opt {
-            self.distribute_sender_key(message_client, channel_id, &skdm).await?;
+            self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
         }
 
         // Call server
@@ -262,30 +338,65 @@ impl MessageService {
         Ok(message)
     }
 
-    /// Send encrypted control content to a channel (typing, reactions, etc.).
+    /// Send a message to a channel (simplified API - no client params).
     ///
-    /// Uses sender key encryption for E2E privacy. The content is sent as an
-    /// ephemeral encrypted message that is not stored by the server.
+    /// This is the preferred method - uses internal gRPC clients.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send(
+        &self,
+        group_fanout: Option<&GroupFanout>,
+        channel_id: &ChannelId,
+        text: &str,
+        attachment_ids: Vec<AttachmentId>,
+        thread_id: Option<&MessageId>,
+        mentioned_integrations: Vec<IntegrationId>,
+        targets_ai_bot: bool,
+    ) -> Result<Message, MessageError> {
+        let mut message_client = self.message_client();
+        let mut auth_client = self.auth_client();
+        let mut channel_client = self.channel_client();
+
+        self.send_message(
+            &mut message_client,
+            &mut auth_client,
+            &mut channel_client,
+            group_fanout,
+            channel_id,
+            text,
+            attachment_ids,
+            thread_id,
+            mentioned_integrations,
+            targets_ai_bot,
+        )
+        .await
+    }
+
+    /// Send control content to a group channel (typing indicators, reactions, etc.)
+    ///
+    /// Uses sender key encryption for E2E privacy. When `group_fanout` is provided,
+    /// also sends via member mailboxes for NDSS '21 traffic analysis resistance.
     ///
     /// # Arguments
     ///
     /// * `message_client` - Message client for sending
-    /// * `auth_client` - Auth client for key fetching
+    /// * `auth_client` - Auth client for key fetching and SKDM distribution
     /// * `channel_client` - Channel client for encryption settings
     /// * `channel_id` - Target channel
     /// * `content` - The Content proto to send (TypingMessage, Reaction, etc.)
+    /// * `group_fanout` - Optional GroupFanout for mailbox delivery (NDSS '21)
     pub async fn send_control_content(
         &self,
         message_client: &mut MessageClient,
-        _auth_client: &mut AuthClient,
+        auth_client: &mut AuthClient,
         channel_client: &mut crate::network::grpc::channel_client::ChannelClient,
         channel_id: &ChannelId,
         content: crate::proto::content_v1::Content,
+        group_fanout: Option<&GroupFanout>,
     ) -> Result<(), MessageError> {
         use prost::Message as ProstMessage;
 
         // Check logged in
-        let _ = self.current_user_id()?;
+        let sender_id = self.current_user_id()?;
 
         // Serialize the Content proto
         let plaintext = content.encode_to_vec();
@@ -309,7 +420,7 @@ impl MessageService {
             Ok((group_encrypted, skdm_opt)) => {
                 // Distribute SKDM if new sender key was created
                 if let Some(skdm) = skdm_opt {
-                    self.distribute_sender_key(message_client, channel_id, &skdm).await?;
+                    self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
                 }
 
                 // Serialize GroupEncrypted and wrap in EncryptedData
@@ -318,7 +429,7 @@ impl MessageService {
                     r#type: Some(chat_v1::message::content::Type::Encrypted(
                         chat_v1::EncryptedData {
                             version: chat_v1::CryptoVersion::SignalProtocol as i32,
-                            ciphertext: group_bytes,
+                            ciphertext: group_bytes.clone(),
                             associated_data: b"sender_key_control".to_vec(),
                             nonce: vec![],
                             auth_tag: vec![],
@@ -328,7 +439,7 @@ impl MessageService {
                     )),
                 };
 
-                // Send as ephemeral message (not stored)
+                // Send as ephemeral message via channel (fallback/legacy)
                 let _ = message_client
                     .send_message(
                         &channel_id.to_string(),
@@ -343,8 +454,26 @@ impl MessageService {
                     )
                     .await?;
 
+                // Also send via group mailboxes if available (NDSS '21 compliance)
+                if let Some(fanout) = group_fanout {
+                    // Use send_via_group_mailboxes for privacy-preserving delivery
+                    if let Err(e) = self.send_via_group_mailboxes(
+                        fanout,
+                        channel_id,
+                        &group_bytes,
+                        &sender_id,
+                    ).await {
+                        tracing::debug!(
+                            channel_id = %channel_id,
+                            error = %e,
+                            "Group mailbox delivery failed for control content (channel send succeeded)"
+                        );
+                    }
+                }
+
                 tracing::debug!(
                     channel_id = %channel_id,
+                    has_mailbox_fanout = group_fanout.is_some(),
                     "Sent encrypted control content"
                 );
                 Ok(())
@@ -358,6 +487,30 @@ impl MessageService {
                 Err(MessageError::EncryptionFailed(e.to_string()))
             }
         }
+    }
+
+    /// Send control content to a group channel (simplified API - no client params).
+    ///
+    /// This is the preferred method - uses internal gRPC clients.
+    pub async fn send_control(
+        &self,
+        channel_id: &ChannelId,
+        content: crate::proto::content_v1::Content,
+        group_fanout: Option<&GroupFanout>,
+    ) -> Result<(), MessageError> {
+        let mut message_client = self.message_client();
+        let mut auth_client = self.auth_client();
+        let mut channel_client = self.channel_client();
+
+        self.send_control_content(
+            &mut message_client,
+            &mut auth_client,
+            &mut channel_client,
+            channel_id,
+            content,
+            group_fanout,
+        )
+        .await
     }
 
     /// Send a GroupMailboxAddress announcement to a channel.
@@ -386,12 +539,35 @@ impl MessageService {
         let content = Content {
             content: Some(content::Content::GroupMailboxAddress(announcement)),
             ephemeral_reply_to: None,
-            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+            timestamp: TimestampNanos::now().as_u64(),
             padding: vec![],
         };
 
-        self.send_control_content(message_client, auth_client, channel_client, channel_id, content)
+        // No group fanout for mailbox announcements - they bootstrap the process
+        self.send_control_content(message_client, auth_client, channel_client, channel_id, content, None)
             .await
+    }
+
+    /// Send a GroupMailboxAddress announcement (simplified API - no client params).
+    ///
+    /// This is the preferred method - uses internal gRPC clients.
+    pub async fn announce_group_mailbox(
+        &self,
+        channel_id: &ChannelId,
+        announcement: crate::proto::content_v1::GroupMailboxAddress,
+    ) -> Result<(), MessageError> {
+        let mut message_client = self.message_client();
+        let mut auth_client = self.auth_client();
+        let mut channel_client = self.channel_client();
+
+        self.send_group_mailbox_announcement(
+            &mut message_client,
+            &mut auth_client,
+            &mut channel_client,
+            channel_id,
+            announcement,
+        )
+        .await
     }
 
     // ==================== DM Operations ====================
@@ -401,31 +577,46 @@ impl MessageService {
     /// Uses two encryption layers for privacy:
     /// 1. Signal Protocol (forward secrecy via Double Ratchet)
     /// 2. Mailbox encryption (sender anonymity via XChaCha20-Poly1305)
-    ///
-    /// # Arguments
-    ///
-    /// * `auth_client` - Auth client for key fetching
-    /// * `peer_id` - The peer's user ID
-    /// * `content` - The Content proto to send
-    /// * `database` - Database for conversation state
-    /// * `mailbox_manager` - For sending to the peer's mailbox
-    /// * `grpc_pool` - Optional gRPC pool for bootstrap (needed for first DM)
     pub async fn send_dm_content(
         &self,
-        auth_client: &mut AuthClient,
-        peer_id: &UserId,
-        content: crate::proto::content_v1::Content,
-        database: Arc<Database>,
-        mailbox_manager: &MailboxManager,
-        grpc_pool: Option<&Arc<GrpcClientPool>>,
+        params: SendDmContentParams<'_>,
     ) -> Result<(), MessageError> {
         use prost::Message as ProstMessage;
 
+        let SendDmContentParams {
+            auth_client,
+            peer_id,
+            content,
+            database,
+            mailbox_manager,
+            grpc_pool,
+            attachment_ids,
+            channel_id,
+        } = params;
+
+        tracing::info!(
+            peer_id = %peer_id,
+            has_grpc_pool = grpc_pool.is_some(),
+            "MessageService: send_dm_content called"
+        );
+
         // Load conversation to get peer's mailbox and shared secret
+        tracing::debug!(peer_id = %peer_id, "MessageService: loading conversation state");
         let conversation_manager = DmConversationManager::new(database.clone());
         let conversation = conversation_manager.load_conversation(peer_id).map_err(|e| {
+            tracing::error!(peer_id = %peer_id, error = %e, "MessageService: failed to load conversation");
             MessageError::DmError(format!("Failed to load conversation: {}", e))
         })?;
+
+        tracing::debug!(
+            peer_id = %peer_id,
+            conversation_exists = conversation.is_some(),
+            has_our_mailbox = conversation.as_ref().map(|c| c.our_mailbox.is_some()).unwrap_or(false),
+            has_peer_mailbox = conversation.as_ref().map(|c| c.peer_mailbox.is_some()).unwrap_or(false),
+            has_shared_secret = conversation.as_ref().map(|c| c.conversation_key.as_ref().map(|k| k.shared_secret.is_some()).unwrap_or(false)).unwrap_or(false),
+            is_ready = conversation.as_ref().map(|c| c.is_ready_to_send()).unwrap_or(false),
+            "MessageService: conversation state loaded"
+        );
 
         // Check if conversation exists and is ready
         let needs_bootstrap = match &conversation {
@@ -434,24 +625,272 @@ impl MessageService {
         };
 
         if needs_bootstrap {
-            // Auto-trigger bootstrap for first-time DM
-            tracing::info!(peer_id = %peer_id, "Conversation not ready, initiating DM bootstrap");
+            // Check if this is an ephemeral message (typing indicator, receipt) that should be dropped
+            // These don't make sense to queue - they're time-sensitive and only relevant in real-time
+            let is_ephemeral = matches!(
+                &content.content,
+                Some(crate::proto::content_v1::content::Content::Typing(_)) |
+                Some(crate::proto::content_v1::content::Content::Receipt(_))
+            );
+
+            if is_ephemeral {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    "Dropping ephemeral message (typing/receipt) - bootstrap not complete"
+                );
+                return Err(MessageError::BootstrapInitiated);
+            }
+
+            // Get our user ID for Sesame deterministic initiator selection
+            let our_user_id = self.current_user_id()?;
+
+            // Sesame algorithm: lower UUID initiates bootstrap, higher UUID waits
+            // This prevents race conditions where both sides try to initiate simultaneously
+            // Reference: "Formal Security Analysis of the Signal Protocol" - sorting identity keys
+            let we_are_initiator = our_user_id.as_uuid() < peer_id.as_uuid();
+
+            if !we_are_initiator {
+                // Acquire bootstrap lock EARLY to prevent concurrent REQUEST sends
+                // This must be the first thing we do to prevent race conditions
+                if !try_acquire_bootstrap_lock(peer_id) {
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        "BOOTSTRAP[1/4] Skipping - bootstrap already in progress for this peer"
+                    );
+                    // Still queue the message even if we skip the REQUEST
+                    let content_bytes = content.encode_to_vec();
+                    let _ = self.sesame_manager.queue_pending_message(
+                        peer_id,
+                        content_bytes,
+                        attachment_ids.clone().unwrap_or_default(),
+                        channel_id,
+                    );
+                    return Err(MessageError::BootstrapInitiated);
+                }
+
+                // We're the higher UUID - we should wait for peer to initiate
+                // Queue the message so it will be sent once bootstrap completes
+                let content_bytes = content.encode_to_vec();
+                if let Err(e) = self.sesame_manager.queue_pending_message(
+                    peer_id,
+                    content_bytes,
+                    attachment_ids.clone().unwrap_or_default(),
+                    channel_id,
+                ) {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "Sesame: Failed to queue message while waiting for peer bootstrap"
+                    );
+                } else {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        "Sesame: Message queued - will send after peer initiates bootstrap"
+                    );
+                }
+
+                // Check if we already received their bootstrap (conversation state might be pending)
+                let already_pending = conversation.as_ref()
+                    .map(|c| c.our_mailbox.is_some() || c.peer_mailbox.is_some())
+                    .unwrap_or(false);
+
+                if already_pending {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        our_id = %our_user_id,
+                        "Sesame: Bootstrap pending from peer (we're higher UUID) - message queued"
+                    );
+                    release_bootstrap_lock(peer_id);
+                    return Err(MessageError::BootstrapInitiated);
+                }
+
+                // Not pending - send a bootstrap REQUEST to prompt peer (lower UUID) to initiate
+                // This uses a KeyExchange with empty ephemeral_pk (0 bytes) as the signal
+                // Reference: Deterministic initiator selection from "Formal Security Analysis of Signal"
+                if let Some(grpc_pool) = grpc_pool {
+
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        our_id = %our_user_id,
+                        our_uuid = %our_user_id,
+                        peer_uuid = %peer_id,
+                        "BOOTSTRAP[1/4] Higher UUID sending REQUEST to lower UUID peer"
+                    );
+
+                    // Build bootstrap request: KeyExchange with empty ephemeral_pk
+                    let bootstrap_request = crate::proto::content_v1::KeyExchange {
+                        ephemeral_pk: vec![], // 0 bytes = bootstrap REQUEST
+                        conversation_id: our_user_id.to_string(),
+                        timestamp: TimestampNanos::now().as_u64(),
+                    };
+
+                    let request_content = crate::proto::content_v1::Content {
+                        content: Some(crate::proto::content_v1::content::Content::KeyExchange(bootstrap_request)),
+                        ephemeral_reply_to: None,
+                        timestamp: TimestampNanos::now().as_u64(),
+                        padding: vec![],
+                    };
+
+                    let request_bytes = request_content.encode_to_vec();
+
+                    // Encrypt and send to peer's device inbox
+                    let peer_device_id = 1u32;
+                    let peer_id_str = peer_id.to_string();
+
+                    match self.signal_service.encrypt_message(
+                        auth_client,
+                        &peer_id_str,
+                        peer_device_id,
+                        &request_bytes,
+                    ).await {
+                        Ok(sealed_ciphertext) => {
+                            // Get anonymous credential for the request - request tokens if needed
+                            let token_manager = TokenManager::new(database.clone());
+                            let token = match token_manager.get_available_token() {
+                                Ok(Some(t)) => Some(t),
+                                Ok(None) => {
+                                    // No tokens - request more
+                                    tracing::info!(
+                                        peer_id = %peer_id,
+                                        "No tokens for bootstrap request, requesting from server"
+                                    );
+                                    let mut mailbox_client = MailboxClient::new(
+                                        grpc_pool.channel(),
+                                        grpc_pool.auth_clone(),
+                                    );
+                                    match token_manager.request_tokens(&mut mailbox_client, 5).await {
+                                        Ok(count) if count > 0 => {
+                                            token_manager.get_available_token().ok().flatten()
+                                        }
+                                        Ok(_) => {
+                                            tracing::warn!(peer_id = %peer_id, "No tokens received from server");
+                                            None
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(peer_id = %peer_id, error = %e, "Failed to request tokens");
+                                            None
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(peer_id = %peer_id, error = %e, "Failed to check tokens");
+                                    None
+                                }
+                            };
+
+                            if let Some(token) = token {
+                                tracing::debug!(
+                                    peer_id = %peer_id,
+                                    token_id = %token.id,
+                                    "BOOTSTRAP[1/4] Got token, sending REQUEST to peer's device inbox"
+                                );
+
+                                let mut message_client = MessageClient::new(
+                                    grpc_pool.channel(),
+                                    grpc_pool.auth_clone(),
+                                );
+
+                                let sealed_msg = SealedSenderMessage {
+                                    sealed_body: sealed_ciphertext.clone(),
+                                    server_key_id: 1,
+                                    timestamp: TimestampNanos::now().as_u64(),
+                                };
+
+                                tracing::debug!(
+                                    peer_id = %peer_id,
+                                    sealed_body_len = sealed_ciphertext.len(),
+                                    "BOOTSTRAP[1/4] Sending sealed REQUEST (0-byte KeyExchange)"
+                                );
+
+                                if let Err(e) = message_client.send_sealed_message_with_credential(
+                                    &peer_id_str,
+                                    peer_device_id,
+                                    sealed_msg,
+                                    &token.public_key,
+                                    &token.signature,
+                                    token.randomizer.as_deref(),
+                                ).await {
+                                    tracing::error!(
+                                        peer_id = %peer_id,
+                                        error = %e,
+                                        "BOOTSTRAP[1/4] FAILED to send REQUEST - peer won't receive prompt"
+                                    );
+                                } else {
+                                    let _ = token_manager.mark_token_used(&token.id);
+                                    tracing::info!(
+                                        peer_id = %peer_id,
+                                        "BOOTSTRAP[1/4] SUCCESS - REQUEST sent to peer's device inbox"
+                                    );
+                                }
+                            } else {
+                                tracing::error!(
+                                    peer_id = %peer_id,
+                                    "BOOTSTRAP[1/4] FAILED - No anonymous tokens available"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                peer_id = %peer_id,
+                                error = %e,
+                                "Failed to encrypt bootstrap request"
+                            );
+                        }
+                    }
+
+                    // DON'T release lock here - keep it held until peer's bootstrap MESSAGE arrives
+                    // dm_bootstrap_handler will release it when processing the 64-byte MESSAGE
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        "BOOTSTRAP[1/4] Lock held - will be released when peer's MESSAGE arrives"
+                    );
+                } else {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        our_id = %our_user_id,
+                        "Sesame: No gRPC pool for bootstrap request - message queued, waiting for peer"
+                    );
+                    // Release lock when no grpc_pool (can't send REQUEST anyway)
+                    release_bootstrap_lock(peer_id);
+                }
+
+                return Err(MessageError::BootstrapInitiated);
+            }
+
+            // We're the lower UUID - we are the rightful initiator
+            tracing::info!(
+                peer_id = %peer_id,
+                our_id = %our_user_id,
+                "Sesame: We're lower UUID - initiating DM bootstrap"
+            );
 
             // Need grpc_pool for bootstrap
+            tracing::info!(peer_id = %peer_id, "Checking grpc_pool availability");
             let grpc_pool = grpc_pool.ok_or_else(|| {
+                tracing::error!(peer_id = %peer_id, "No gRPC pool for bootstrap");
                 MessageError::DmError("gRPC pool required for DM bootstrap".into())
             })?;
+            tracing::info!(peer_id = %peer_id, "grpc_pool is available");
 
+            tracing::info!(peer_id = %peer_id, "Creating DmBootstrap handler");
             let dm_bootstrap = DmBootstrap::new(database.clone());
             let mut mailbox_client =
                 MailboxClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
 
+            tracing::info!(peer_id = %peer_id, "Calling dm_bootstrap.initiate_dm()");
             match dm_bootstrap.initiate_dm(*peer_id, &mut mailbox_client).await {
                 Ok(bootstrap_result) => {
+                    tracing::debug!(peer_id = %peer_id, "Bootstrap result received, encrypting for sealed sender");
                     // Send bootstrap message via sealed sender (device inbox)
                     let peer_device_id = 1u32;
                     let peer_id_str = peer_id.to_string();
 
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        peer_device_id,
+                        message_len = bootstrap_result.bootstrap_message.len(),
+                        "Encrypting bootstrap message via Signal"
+                    );
                     match self
                         .signal_service
                         .encrypt_message(
@@ -463,6 +902,50 @@ impl MessageService {
                         .await
                     {
                         Ok(sealed_ciphertext) => {
+                            tracing::debug!(
+                                peer_id = %peer_id,
+                                ciphertext_len = sealed_ciphertext.len(),
+                                "Bootstrap encrypted, acquiring anonymous credential"
+                            );
+
+                            // Get anonymous credential for initial contact (NDSS '21)
+                            // Per NDSS '21 paper, we use a blind-signed token to prove sender legitimacy
+                            // without revealing identity. This prevents spam while preserving anonymity.
+                            let token_manager = TokenManager::new(database.clone());
+
+                            let credential_token = match token_manager.get_available_token() {
+                                Ok(Some(token)) => token,
+                                Ok(None) => {
+                                    // No tokens available - request new ones from server
+                                    tracing::info!(peer_id = %peer_id, "No tokens available, requesting from server");
+                                    let mut mailbox_client = MailboxClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+                                    if let Err(e) = token_manager.request_tokens(&mut mailbox_client, 5).await {
+                                        tracing::error!(peer_id = %peer_id, error = %e, "Failed to request anonymous tokens");
+                                        return Err(MessageError::DmError(format!("Failed to get anonymous token: {}", e)));
+                                    }
+
+                                    // Try again to get a token
+                                    match token_manager.get_available_token() {
+                                        Ok(Some(t)) => t,
+                                        Ok(None) => {
+                                            return Err(MessageError::DmError("No tokens available after request".into()));
+                                        }
+                                        Err(e) => {
+                                            return Err(MessageError::DmError(format!("Failed to get token: {}", e)));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    return Err(MessageError::DmError(format!("Failed to get anonymous token: {}", e)));
+                                }
+                            };
+
+                            tracing::debug!(
+                                peer_id = %peer_id,
+                                token_id = %credential_token.id,
+                                "Got anonymous credential, sending to device inbox"
+                            );
+
                             // Send to peer's device inbox via MessageClient
                             let mut message_client =
                                 MessageClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
@@ -470,27 +953,69 @@ impl MessageService {
                             let sealed_msg = SealedSenderMessage {
                                 sealed_body: sealed_ciphertext,
                                 server_key_id: 1, // Default server key
-                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                timestamp: TimestampNanos::now().as_u64(),
                             };
 
+                            // Use anonymous credential (blind-signed token) for initial contact
+                            // Server validates the signature to prove sender is legitimate, but doesn't know WHO
                             if let Err(e) = message_client
-                                .send_sealed_message(&peer_id_str, peer_device_id, sealed_msg)
+                                .send_sealed_message_with_credential(
+                                    &peer_id_str,
+                                    peer_device_id,
+                                    sealed_msg,
+                                    &credential_token.public_key,
+                                    &credential_token.signature,
+                                    credential_token.randomizer.as_deref(),
+                                )
                                 .await
                             {
-                                tracing::error!("Failed to send bootstrap to device inbox: {}", e);
+                                tracing::error!(peer_id = %peer_id, error = %e, "Failed to send bootstrap to device inbox");
                                 return Err(MessageError::DmError(format!(
                                     "Failed to send bootstrap: {}",
                                     e
                                 )));
                             }
+
+                            // Mark token as used (it's now spent for this purpose)
+                            if let Err(e) = token_manager.mark_token_used(&credential_token.id) {
+                                tracing::warn!(
+                                    peer_id = %peer_id,
+                                    token_id = %credential_token.id,
+                                    error = %e,
+                                    "Failed to mark anonymous token as used"
+                                );
+                            }
+
                             tracing::info!(
                                 peer_id = %peer_id,
-                                "DM bootstrap sent - waiting for key exchange response"
+                                "DM bootstrap sent successfully - waiting for key exchange response"
                             );
+
+                            // Queue the original message to be sent once bootstrap completes
+                            // Sesame algorithm: pending messages are delivered after session establishment
+                            let content_bytes = content.encode_to_vec();
+                            if let Err(e) = self.sesame_manager.queue_pending_message(
+                                peer_id,
+                                content_bytes,
+                                attachment_ids.clone().unwrap_or_default(),
+                                channel_id,
+                            ) {
+                                tracing::warn!(
+                                    peer_id = %peer_id,
+                                    error = %e,
+                                    "Failed to queue message for post-bootstrap delivery"
+                                );
+                            } else {
+                                tracing::info!(
+                                    peer_id = %peer_id,
+                                    "Message queued for delivery after bootstrap completes"
+                                );
+                            }
+
                             return Err(MessageError::BootstrapInitiated);
                         }
                         Err(e) => {
-                            tracing::error!("Failed to encrypt bootstrap message: {}", e);
+                            tracing::error!(peer_id = %peer_id, error = %e, "Failed to encrypt bootstrap message");
                             return Err(MessageError::EncryptionFailed(format!(
                                 "Bootstrap encrypt: {}",
                                 e
@@ -500,16 +1025,29 @@ impl MessageService {
                 }
                 Err(crate::error::MailboxError::ConversationExists) => {
                     // Conversation exists but not ready - waiting for key exchange
-                    tracing::debug!(
-                        peer_id = %peer_id,
-                        "Conversation exists, waiting for key exchange"
-                    );
-                    return Err(MessageError::DmError(
-                        "Waiting for peer to respond to key exchange".into(),
-                    ));
+                    // Queue the message to be sent once bootstrap completes
+                    let content_bytes = content.encode_to_vec();
+                    if let Err(e) = self.sesame_manager.queue_pending_message(
+                        peer_id,
+                        content_bytes,
+                        attachment_ids.clone().unwrap_or_default(),
+                        channel_id,
+                    ) {
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            error = %e,
+                            "Failed to queue message while waiting for key exchange"
+                        );
+                    } else {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            "Message queued - waiting for key exchange"
+                        );
+                    }
+                    return Err(MessageError::BootstrapInitiated);
                 }
                 Err(e) => {
-                    tracing::error!("Failed to initiate DM bootstrap: {}", e);
+                    tracing::error!(peer_id = %peer_id, error = %e, "Failed to initiate DM bootstrap");
                     return Err(MessageError::DmError(format!("Bootstrap failed: {}", e)));
                 }
             }
@@ -553,7 +1091,84 @@ impl MessageService {
             .map_err(|e| MessageError::DmError(format!("Failed to send to mailbox: {}", e)))?;
 
         tracing::debug!(peer_id = %peer_id, "Sent DM via two-layer encryption");
+
+        // Store sent message in database for persistence (only for DataMessages)
+        // Ephemeral messages (typing indicators, receipts) should not be stored
+        tracing::info!(peer_id = %peer_id, "send_dm_content: checking if should store message");
+        let our_user_id = self.current_user_id()?;
+        let text = match &content.content {
+            Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => {
+                tracing::info!(peer_id = %peer_id, text_len = dm.body.len(), "send_dm_content: DataMessage detected, will store");
+                dm.body.clone()
+            },
+            _ => {
+                // Not a DataMessage - don't store ephemeral messages (typing, receipts, etc.)
+                tracing::info!(peer_id = %peer_id, "Skipping storage for non-DataMessage content");
+                return Ok(());
+            }
+        };
+        if let Ok(Some(dm_channel)) = self.channel_repo.get_dm_channel_by_peer(&our_user_id, peer_id) {
+
+            // Use current timestamp for sent messages (Signal-style dedup)
+            let sent_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0);
+            let message = crate::domain::message::Message::new_text(
+                dm_channel.id,
+                Some(our_user_id),
+                text,
+                sent_at,
+            );
+
+            if let Err(e) = self.message_repo.insert(&message) {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    channel_id = %dm_channel.id,
+                    error = %e,
+                    "Failed to store sent DM in database"
+                );
+            } else {
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    channel_id = %dm_channel.id,
+                    message_id = %message.id,
+                    "Stored sent DM in database"
+                );
+            }
+        } else {
+            tracing::warn!(
+                peer_id = %peer_id,
+                "Could not find DM channel to store sent message"
+            );
+        }
+
         Ok(())
+    }
+
+    /// Send a Content proto to a DM peer (simplified API - no client params).
+    ///
+    /// This is the preferred method - uses internal gRPC clients.
+    pub async fn send_dm(
+        &self,
+        peer_id: &UserId,
+        content: crate::proto::content_v1::Content,
+        database: Arc<Database>,
+        mailbox_manager: &MailboxManager,
+    ) -> Result<(), MessageError> {
+        let mut auth_client = self.auth_client();
+
+        self.send_dm_content(SendDmContentParams {
+            auth_client: &mut auth_client,
+            peer_id,
+            content,
+            database,
+            mailbox_manager,
+            grpc_pool: Some(&self.grpc_pool),
+            attachment_ids: None,
+            channel_id: None,
+        })
+        .await
     }
 
     /// Send a text message to a DM peer.
@@ -577,16 +1192,340 @@ impl MessageService {
         mailbox_manager: &MailboxManager,
         grpc_pool: &Arc<GrpcClientPool>,
     ) -> Result<(), MessageError> {
-        let content = crate::services::build_text_content(text);
-        self.send_dm_content(
+        tracing::info!(
+            peer_id = %peer_id,
+            text_len = text.len(),
+            "MessageService: send_dm_text called"
+        );
+        let sent_at = TimestampNanos::now().as_u64();
+        let content = crate::services::build_text_content(text, sent_at);
+        tracing::debug!(peer_id = %peer_id, "MessageService: built text content, calling send_dm_content");
+        self.send_dm_content(SendDmContentParams {
             auth_client,
             peer_id,
             content,
             database,
             mailbox_manager,
-            Some(grpc_pool),
-        )
+            grpc_pool: Some(grpc_pool),
+            attachment_ids: None,
+            channel_id: None,
+        })
         .await
+    }
+
+    /// Send a DM with text and/or attachments.
+    ///
+    /// Uses Signal Protocol encryption with sealed sender for privacy.
+    ///
+    /// # Arguments
+    ///
+    /// * `auth_client` - Auth client for key fetching
+    /// * `peer_id` - The peer's user ID
+    /// * `text` - Message text (can be empty if attachments present)
+    /// * `attachment_pointers` - Attachment pointers to include
+    /// * `database` - Database for conversation state
+    /// * `mailbox_manager` - For sending to the peer's mailbox
+    /// * `grpc_pool` - gRPC pool for bootstrap (needed for first DM)
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_dm_message(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        text: &str,
+        attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
+        database: Arc<Database>,
+        mailbox_manager: &MailboxManager,
+        grpc_pool: &Arc<GrpcClientPool>,
+    ) -> Result<(), MessageError> {
+        tracing::info!(
+            peer_id = %peer_id,
+            text_len = text.len(),
+            attachment_count = attachment_pointers.len(),
+            "MessageService: send_dm_message called"
+        );
+        let sent_at = TimestampNanos::now().as_u64();
+        let content = crate::services::build_data_message_content(text, attachment_pointers, sent_at);
+        tracing::debug!(peer_id = %peer_id, "MessageService: built data message content, calling send_dm_content");
+        self.send_dm_content(SendDmContentParams {
+            auth_client,
+            peer_id,
+            content,
+            database,
+            mailbox_manager,
+            grpc_pool: Some(grpc_pool),
+            attachment_ids: None,
+            channel_id: None,
+        })
+        .await
+    }
+
+    /// Send a DM message with attachments (simplified API - no client params).
+    ///
+    /// This is the preferred method - uses internal gRPC clients.
+    /// Stores the sent message locally and returns it.
+    pub async fn send_dm_msg(
+        &self,
+        params: SendDmMsgParams<'_>,
+    ) -> Result<Message, MessageError> {
+        let SendDmMsgParams {
+            peer_id,
+            text,
+            attachment_pointers,
+            attachment_ids,
+            dm_channel_id,
+            database,
+            mailbox_manager,
+            sent_at,
+        } = params;
+
+        // Use caller-provided timestamp for proto AND storage (ensures UI matches DB)
+        let content = crate::services::build_data_message_content(text, attachment_pointers, sent_at);
+
+        // Send the message via Signal Protocol
+        let send_result = self.send_dm(peer_id, content, database.clone(), mailbox_manager).await;
+
+        // Create the message for local storage
+        let current_user_id = self.current_user_id()?;
+        let mut message = Message::new_text(*dm_channel_id, Some(current_user_id), text.to_string(), sent_at);
+        message.attachments = attachment_ids;
+
+        // Handle BootstrapInitiated specially - save message to DB before returning error
+        // This ensures queued messages survive UI reloads (which fetch from DB)
+        if let Err(MessageError::BootstrapInitiated) = &send_result {
+            // Save to local database even though message is queued for later sending
+            if let Err(e) = self.message_repo.insert(&message) {
+                tracing::warn!(
+                    message_id = %message.id,
+                    error = %e,
+                    "Failed to store queued DM message locally"
+                );
+            } else {
+                tracing::info!(
+                    message_id = %message.id,
+                    channel_id = %dm_channel_id,
+                    attachment_count = message.attachments.len(),
+                    "Stored queued DM message in local database (bootstrap pending)"
+                );
+            }
+            return Err(MessageError::BootstrapInitiated);
+        }
+
+        // Propagate other errors
+        send_result?;
+
+        // Store in local database (normal send succeeded)
+        if let Err(e) = self.message_repo.insert(&message) {
+            tracing::warn!(
+                message_id = %message.id,
+                error = %e,
+                "Failed to store sent DM message locally"
+            );
+        } else {
+            tracing::info!(
+                message_id = %message.id,
+                channel_id = %dm_channel_id,
+                attachment_count = message.attachments.len(),
+                "Stored sent DM message in local database"
+            );
+        }
+
+        Ok(message)
+    }
+
+    /// Send all pending messages for a peer after bootstrap completes.
+    ///
+    /// Called from the inbox event handler when DmBootstrapCompleted is received.
+    /// Drains the Sesame pending message queue and sends each message.
+    ///
+    /// # Arguments
+    ///
+    /// * `auth_client` - Auth client for key fetching
+    /// * `peer_id` - The peer whose bootstrap completed
+    /// * `database` - Database for conversation state
+    /// * `mailbox_manager` - For sending to the peer's mailbox
+    ///
+    /// # Returns
+    ///
+    /// Number of messages successfully sent, or error.
+    pub async fn send_pending_messages(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+        database: Arc<Database>,
+        mailbox_manager: &MailboxManager,
+    ) -> Result<usize, MessageError> {
+        use prost::Message as ProstMessage;
+
+        tracing::info!(
+            peer_id = %peer_id,
+            "PENDING_MESSAGES: Draining Sesame queue for peer"
+        );
+
+        // Drain pending messages from Sesame queue
+        let pending = self
+            .sesame_manager
+            .drain_pending_messages(peer_id)
+            .map_err(|e| {
+                tracing::error!(
+                    peer_id = %peer_id,
+                    error = %e,
+                    "PENDING_MESSAGES: Failed to drain pending messages"
+                );
+                MessageError::Storage(e)
+            })?;
+
+        if pending.is_empty() {
+            tracing::info!(
+                peer_id = %peer_id,
+                "PENDING_MESSAGES: Queue empty - no messages to send"
+            );
+            return Ok(0);
+        }
+
+        let pending_count = pending.len();
+        tracing::info!(
+            peer_id = %peer_id,
+            count = pending_count,
+            "PENDING_MESSAGES: Found {} message(s) to send",
+            pending_count
+        );
+
+        let mut sent_count = 0;
+
+        for msg in pending {
+            // Deserialize the content
+            let content = match crate::proto::content_v1::Content::decode(msg.content.as_slice()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "Failed to deserialize pending message content"
+                    );
+                    continue;
+                }
+            };
+
+            // Use the ORIGINAL timestamp from the proto (NOT a new one!)
+            // This ensures the stored message matches the sent message timestamp
+            let original_sent_at = content.timestamp;
+
+            // Send the message (no grpc_pool needed - conversation should be ready)
+            tracing::debug!(
+                peer_id = %peer_id,
+                msg_index = sent_count + 1,
+                timestamp = content.timestamp,
+                has_channel_id = msg.channel_id.is_some(),
+                attachment_count = msg.attachment_ids.len(),
+                "PENDING_MESSAGES: Sending message via send_dm_content"
+            );
+
+            match self
+                .send_dm_content(SendDmContentParams {
+                    auth_client,
+                    peer_id,
+                    content,
+                    database: database.clone(),
+                    mailbox_manager,
+                    grpc_pool: None,
+                    attachment_ids: Some(msg.attachment_ids.clone()),
+                    channel_id: msg.channel_id,
+                })
+                .await
+            {
+                Ok(()) => {
+                    sent_count += 1;
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        sent = sent_count,
+                        timestamp = original_sent_at,
+                        channel_id = ?msg.channel_id,
+                        "PENDING_MESSAGES: Successfully sent message #{}", sent_count
+                    );
+                    // Message was already saved to DB in send_dm_msg when BootstrapInitiated was returned
+                }
+                Err(e) => {
+                    tracing::error!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "PENDING_MESSAGES: FAILED to send message"
+                    );
+                    // Continue with other messages
+                }
+            }
+        }
+
+        tracing::info!(
+            peer_id = %peer_id,
+            sent = sent_count,
+            total = pending_count,
+            "PENDING_MESSAGES: Complete - sent {}/{} messages",
+            sent_count,
+            pending_count
+        );
+
+        Ok(sent_count)
+    }
+
+    /// Reset session with a peer and attempt to re-establish.
+    ///
+    /// This is called when session convergence fails and we need to
+    /// start fresh with the peer. It:
+    /// 1. Archives all existing sessions with the peer
+    /// 2. Marks the peer as stale (needs device refresh)
+    /// 3. Attempts to establish a new session by fetching their prekey bundle
+    ///
+    /// After calling this, subsequent messages will use the new session.
+    pub async fn reset_and_establish_session(
+        &self,
+        auth_client: &mut crate::network::grpc::auth_client::AuthClient,
+        peer_id: &UserId,
+        device_id: u32,
+    ) -> Result<(), MessageError> {
+        tracing::info!(
+            peer_id = %peer_id,
+            device_id,
+            "Resetting session with peer"
+        );
+
+        // Archive all sessions in Sesame
+        if let Err(e) = self.sesame_manager.archive_all_sessions(peer_id, device_id) {
+            tracing::warn!(
+                peer_id = %peer_id,
+                error = %e,
+                "Failed to archive Sesame sessions (continuing anyway)"
+            );
+        }
+
+        // Mark peer as stale
+        if let Err(e) = self.sesame_manager.mark_user_stale(peer_id) {
+            tracing::warn!(
+                peer_id = %peer_id,
+                error = %e,
+                "Failed to mark peer as stale (continuing anyway)"
+            );
+        }
+
+        // Establish a fresh session by fetching their prekey bundle
+        self.signal_service
+            .ensure_session(auth_client, &peer_id.to_string(), device_id)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    peer_id = %peer_id,
+                    error = %e,
+                    "Failed to establish new session after reset"
+                );
+                MessageError::EncryptionFailed(format!("Session establishment failed: {}", e))
+            })?;
+
+        tracing::info!(
+            peer_id = %peer_id,
+            device_id,
+            "Successfully reset and established new session"
+        );
+
+        Ok(())
     }
 
     /// Send an ephemeral (self-destructing) message to a channel.
@@ -966,7 +1905,7 @@ impl MessageService {
 
         // If a new sender key was created, distribute SKDM to channel members
         if let Some(skdm) = skdm_opt {
-            self.distribute_sender_key(message_client, channel_id, &skdm).await?;
+            self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
         }
 
         // Call server - note: reply_to is stored locally, not sent to server
@@ -1067,7 +2006,7 @@ impl MessageService {
 
         // If a new sender key was created, distribute SKDM to channel members
         if let Some(skdm) = skdm_opt {
-            self.distribute_sender_key(message_client, target_channel_id, &skdm).await?;
+            self.distribute_sender_key(auth_client, message_client, target_channel_id, &skdm).await?;
         }
 
         // Copy attachment IDs from source if any
@@ -1167,7 +2106,7 @@ impl MessageService {
 
         // If a new sender key was created, distribute SKDM to channel members
         if let Some(skdm) = skdm_opt {
-            self.distribute_sender_key(message_client, channel_id, &skdm).await?;
+            self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
         }
 
         // Call server - parent_id is thread_root_id for thread replies
@@ -1298,67 +2237,163 @@ impl MessageService {
 
     /// Distribute a sender key distribution message to channel members.
     ///
-    /// Sends the SKDM as a special message in the channel so all members
-    /// can receive it and decrypt future messages from this sender.
-    async fn distribute_sender_key(
+    /// Implements NDSS '21 pairwise distribution:
+    /// - Each member receives SKDM + our mailbox announcement
+    /// - Encrypted pairwise via Double Ratchet (Sealed Sender envelope)
+    /// - Sent to member's device inbox (server sees sender but not group correlation)
+    ///
+    /// This should be called:
+    /// - After creating a channel (distribute to initial members)
+    /// - After joining a channel (distribute to existing members)
+    /// - After a member joins (existing members distribute to new member)
+    ///
+    /// # Arguments
+    ///
+    /// * `auth_client` - For session establishment (X3DH if needed)
+    /// * `message_client` - For sending sealed messages
+    /// * `channel_id` - The group channel
+    /// * `skdm` - The sender key distribution message to distribute
+    pub async fn distribute_sender_key(
         &self,
+        auth_client: &mut AuthClient,
         message_client: &mut MessageClient,
         channel_id: &ChannelId,
         skdm: &crate::proto::content_v1::SenderKeyDistribution,
     ) -> Result<(), MessageError> {
+        use crate::proto::content_v1::{self, content};
         use prost::Message;
 
-        // Check if there are other members to distribute to
+        // Get our user ID
+        let our_user_id = self.settings_repo
+            .get_string(keys::CURRENT_USER_ID)
+            .map_err(MessageError::Storage)?
+            .ok_or(MessageError::NotLoggedIn)?;
+
+        // Get channel members (excluding ourselves)
         let members = self.channel_repo.list_members(channel_id).unwrap_or_default();
-        if members.len() <= 1 {
+        let other_members: Vec<_> = members
+            .iter()
+            .filter(|m| m.user_id.to_string() != our_user_id)
+            .collect();
+
+        if other_members.is_empty() {
             tracing::debug!(
                 channel_id = %channel_id,
-                member_count = members.len(),
                 "Skipping sender key distribution (no other members)"
             );
             return Ok(());
         }
 
-        // Serialize SKDM and send as encrypted message with special marker
-        let skdm_bytes = skdm.encode_to_vec();
+        // Get our mailbox public key for this channel (if available)
+        let ephemeral_reply_to: Option<Vec<u8>> = self.group_mailbox_manager
+            .load_group_state(channel_id)
+            .ok()
+            .flatten()
+            .and_then(|state| state.our_mailbox)
+            .map(|mailbox| mailbox.public_key.to_vec());
+        let has_mailbox = ephemeral_reply_to.is_some();
 
-        let skdm_content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Encrypted(
-                chat_v1::EncryptedData {
-                    version: chat_v1::CryptoVersion::SignalProtocol as i32,
-                    ciphertext: skdm_bytes,
-                    // Mark as SKDM distribution message
-                    associated_data: b"sender_key_distribution".to_vec(),
-                    nonce: vec![],
-                    auth_tag: vec![],
-                    signature: vec![],
-                    device_id: String::new(),
-                }
-            )),
+        // Build the Content proto with SKDM + our mailbox announcement
+        let timestamp = TimestampNanos::now().as_u64();
+
+        let skdm_content = content_v1::Content {
+            ephemeral_reply_to,
+            timestamp,
+            padding: vec![], // TODO: Add proper padding
+            content: Some(content::Content::SenderKey(skdm.clone())),
         };
 
-        // Send SKDM to channel - all members will receive and process it
-        message_client
-            .send_message(
-                &channel_id.to_string(),
-                skdm_content,
-                None,  // parent_id
-                false, // ephemeral
-                None,  // ephemeral_ttl
-                None,  // crypto_options
-                vec![], // mentioned_integrations
-                false,  // targets_ai_bot
-                vec![], // attachment_ids
-            )
-            .await?;
+        let plaintext = skdm_content.encode_to_vec();
+
+        // Distribute to each member pairwise via Sealed Sender
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for member in &other_members {
+            let member_id = member.user_id.to_string();
+
+            // Encrypt pairwise via Double Ratchet (X3DH if no session exists)
+            // Device ID 1 is the primary device; ideally we'd send to all devices
+            match self.signal_service
+                .encrypt_message(auth_client, &member_id, 1, &plaintext)
+                .await
+            {
+                Ok(sealed_bytes) => {
+                    // Create SealedSenderMessage proto
+                    let sealed_message = SealedSenderMessage {
+                        sealed_body: sealed_bytes,
+                        server_key_id: 0, // Server will use current key
+                        timestamp,
+                    };
+
+                    // Send to member's device inbox
+                    match message_client
+                        .send_sealed_message(&member_id, 0, sealed_message) // 0 = all devices
+                        .await
+                    {
+                        Ok(_) => {
+                            success_count += 1;
+                            tracing::debug!(
+                                channel_id = %channel_id,
+                                member_id = %member_id,
+                                "Distributed SKDM to member via sealed sender"
+                            );
+                        }
+                        Err(e) => {
+                            error_count += 1;
+                            tracing::warn!(
+                                channel_id = %channel_id,
+                                member_id = %member_id,
+                                error = %e,
+                                "Failed to send SKDM to member"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    error_count += 1;
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        member_id = %member_id,
+                        error = %e,
+                        "Failed to encrypt SKDM for member"
+                    );
+                }
+            }
+        }
 
         tracing::info!(
             channel_id = %channel_id,
-            member_count = members.len(),
-            "Distributed sender key to channel members"
+            total_members = other_members.len(),
+            success = success_count,
+            errors = error_count,
+            has_mailbox = has_mailbox,
+            "Distributed sender key via pairwise sealed sender"
         );
 
+        // Consider it success if at least one member received the SKDM
+        if success_count == 0 && !other_members.is_empty() {
+            return Err(MessageError::EncryptionFailed(
+                "Failed to distribute SKDM to any member".into()
+            ));
+        }
+
         Ok(())
+    }
+
+    /// Distribute sender key to channel members (simplified API - no client params).
+    ///
+    /// This is the preferred method - uses internal gRPC clients.
+    pub async fn distribute_skdm(
+        &self,
+        channel_id: &ChannelId,
+        skdm: &crate::proto::content_v1::SenderKeyDistribution,
+    ) -> Result<(), MessageError> {
+        let mut auth_client = self.auth_client();
+        let mut message_client = self.message_client();
+
+        self.distribute_sender_key(&mut auth_client, &mut message_client, channel_id, skdm)
+            .await
     }
 
     /// Send encrypted content to group member mailboxes via GroupFanout.
@@ -1504,29 +2539,12 @@ impl MessageService {
         );
 
         // Create the message locally first
-        let message_id = MessageId::new();
-        let now = Utc::now();
         let channel_id = ChannelId::from(sender_id); // SavedMessages channel_id = user_id
 
-        let message = Message {
-            id: message_id,
-            channel_id,
-            sender_id: Some(sender_id),
-            content: MessageContent::Text(trimmed_text.to_string()),
-            thread_id: None,
-            reply_to: None,
-            attachments: attachment_ids,
-            is_pinned: false,
-            is_edited: false,
-            is_deleted: false,
-            created_at: now,
-            updated_at: now,
-            edited_at: None,
-            reaction_counts: vec![],
-            current_user_reactions: vec![],
-            mentioned_integrations: vec![],
-            targets_ai_bot: false,
-        };
+        // Generate timestamp ONCE - used everywhere
+        let sent_at = TimestampNanos::now().as_u64();
+        let mut message = Message::new_text(channel_id, Some(sender_id), trimmed_text.to_string(), sent_at);
+        message.attachments = attachment_ids;
 
         // Store locally
         self.message_repo.insert(&message)?;
@@ -1535,7 +2553,7 @@ impl MessageService {
             // Only this device - we're done (local-only storage)
             tracing::info!(
                 "SavedMessages: stored locally only (single device), message_id={}",
-                message_id
+                message.id
             );
         } else {
             // Multiple devices - need to sync to other devices
@@ -1559,11 +2577,26 @@ impl MessageService {
                 "SavedMessages: multi-device sync not yet implemented. \
                  Message stored locally only. Other devices {:?} won't see message_id={}",
                 other_device_ids,
-                message_id
+                message.id
             );
         }
 
         Ok(message)
+    }
+
+    /// Send a message to SavedMessages (simplified API - no client params).
+    ///
+    /// This is the preferred method - uses internal gRPC clients.
+    pub async fn save_message(
+        &self,
+        text: &str,
+        attachment_ids: Vec<AttachmentId>,
+    ) -> Result<Message, MessageError> {
+        let mut auth_client = self.auth_client();
+        let mut message_client = self.message_client();
+
+        self.send_saved_message(&mut auth_client, &mut message_client, text, attachment_ids)
+            .await
     }
 
     /// Get messages from a thread.
@@ -1744,15 +2777,15 @@ fn proto_to_domain_message(
         .map(|rc| ReactionCount::new(rc.emoji.clone(), rc.count as u32))
         .collect();
 
-    // Convert timestamp (proto uses millis)
-    let created_at = millis_to_datetime(proto.timestamp);
+    // Convert timestamp (proto uses nanos)
+    let created_at = TimestampNanos::from_nanos(proto.timestamp).to_datetime().unwrap_or_else(Utc::now);
     let updated_at = if proto.updated_at > 0 {
-        millis_to_datetime(proto.updated_at)
+        TimestampNanos::from_nanos(proto.updated_at).to_datetime().unwrap_or(created_at)
     } else {
         created_at
     };
     let edited_at = if proto.edited && proto.edited_at > 0 {
-        Some(millis_to_datetime(proto.edited_at))
+        TimestampNanos::from_nanos(proto.edited_at).to_datetime()
     } else {
         None
     };
@@ -1768,6 +2801,7 @@ fn proto_to_domain_message(
         is_pinned: proto.pinned,
         is_edited: proto.edited,
         is_deleted: false,
+        sent_at: proto.timestamp,
         created_at,
         updated_at,
         edited_at,
@@ -1829,15 +2863,15 @@ fn proto_to_domain_message_with_sender(
         .map(|rc| ReactionCount::new(rc.emoji.clone(), rc.count as u32))
         .collect();
 
-    // Convert timestamp (proto uses millis)
-    let created_at = millis_to_datetime(proto.timestamp);
+    // Convert timestamp (proto uses nanos)
+    let created_at = TimestampNanos::from_nanos(proto.timestamp).to_datetime().unwrap_or_else(Utc::now);
     let updated_at = if proto.updated_at > 0 {
-        millis_to_datetime(proto.updated_at)
+        TimestampNanos::from_nanos(proto.updated_at).to_datetime().unwrap_or(created_at)
     } else {
         created_at
     };
     let edited_at = if proto.edited && proto.edited_at > 0 {
-        Some(millis_to_datetime(proto.edited_at))
+        TimestampNanos::from_nanos(proto.edited_at).to_datetime()
     } else {
         None
     };
@@ -1853,6 +2887,7 @@ fn proto_to_domain_message_with_sender(
         is_pinned: proto.pinned,
         is_edited: proto.edited,
         is_deleted: false,
+        sent_at: proto.timestamp,
         created_at,
         updated_at,
         edited_at,
@@ -1934,12 +2969,6 @@ fn proto_content_to_domain(
     }
 }
 
-/// Convert milliseconds timestamp to DateTime<Utc>.
-fn millis_to_datetime(millis: u64) -> DateTime<Utc> {
-    Utc.timestamp_millis_opt(millis as i64)
-        .single()
-        .unwrap_or_else(Utc::now)
-}
 
 
 
@@ -1990,10 +3019,10 @@ mod tests {
     }
 
     #[test]
-    fn test_millis_to_datetime() {
-        let millis = 1706140800000u64; // 2024-01-25 00:00:00 UTC
-        let dt = millis_to_datetime(millis);
-        assert_eq!(dt.timestamp_millis(), millis as i64);
+    fn test_nanos_to_datetime() {
+        let nanos = 1706140800_000_000_000u64; // 2024-01-25 00:00:00 UTC in nanoseconds
+        let dt = TimestampNanos::from_nanos(nanos).to_datetime().unwrap();
+        assert_eq!(dt.timestamp_nanos_opt().unwrap(), nanos as i64);
     }
 
     #[test]

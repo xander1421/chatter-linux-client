@@ -1,13 +1,16 @@
 //! Create channel modal callbacks.
+//!
+//! Uses ChannelService for all channel operations - no direct network calls.
+
+use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_linux::app::AppContext;
-use chatter_linux::domain::channel::ChannelType;
-use chatter_linux::network::grpc::{IntegrationClient, MailboxClient};
+use chatter_linux::domain::channel::{ChannelConfig, ChannelType, MessagePersistence};
+use chatter_linux::network::grpc::IntegrationClient;
 use chatter_linux::proto::chat_v1::IntegrationType;
 use chatter_linux::services::ai_service::AIService;
-use chatter_linux::services::channel::ChannelService;
 
 use crate::bin_ui::converters::channel_to_slint;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
@@ -17,14 +20,12 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
     let weak_window = window.as_weak();
     let grpc_pool = ctx.grpc_pool.clone();
     let settings_repo = ctx.settings_repo.clone();
+    let channel_service = Arc::new(ctx.channel_service());
     let channel_repo = ctx.channel_repo.clone();
     let message_repo = ctx.message_repo.clone();
     let user_repo = ctx.user_repo.clone();
     let attachment_repo = ctx.attachment_repo.clone();
     let chat_state = ctx.chat_state.clone();
-    let signal_service = ctx.signal_service.clone();
-    let group_coordinator = ctx.group_coordinator.clone();
-    let message_service = ctx.message_service.clone();
 
     window.on_create_channel(
         move |name: SharedString,
@@ -36,14 +37,12 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
             let weak = weak_window.clone();
             let grpc_pool = grpc_pool.clone();
             let settings_repo = settings_repo.clone();
+            let channel_service = channel_service.clone();
             let channel_repo = channel_repo.clone();
             let message_repo = message_repo.clone();
             let user_repo = user_repo.clone();
             let attachment_repo = attachment_repo.clone();
             let chat_state = chat_state.clone();
-            let signal_service = signal_service.clone();
-            let group_coordinator = group_coordinator.clone();
-            let message_service = message_service.clone();
             let name = name.to_string();
             let description = description.to_string();
             let template = template.to_string();
@@ -52,21 +51,13 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
 
             // Extract config values
             let is_private = config.is_private;
-            let is_encrypted = config.is_encrypted;
             let is_ephemeral = config.is_ephemeral;
             let ttl_hours = config.ttl_hours;
             let max_members = config.max_members;
             let password = config.password.to_string();
-            let _friends_only = config.friends_only; // TODO: pass to backend when API supports it
 
-            // Use spawn_blocking because SignalService stores aren't Send
-            tokio::task::spawn_blocking(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("Failed to create runtime for create channel");
-
-                rt.block_on(async move {
+            // Use tokio::spawn - ChannelService handles all network calls
+            tokio::spawn(async move {
                 let weak_loading = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak_loading.upgrade() {
@@ -82,18 +73,6 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
                     ChannelType::Public
                 };
 
-                let channel_service = ChannelService::new(settings_repo.clone(), channel_repo.clone(), signal_service, group_coordinator);
-
-                let mut channel_client =
-                    chatter_linux::network::grpc::channel_client::ChannelClient::new(
-                        grpc_pool.channel(),
-                        grpc_pool.auth_clone(),
-                    );
-                let mut mailbox_client = MailboxClient::new(
-                    grpc_pool.channel(),
-                    grpc_pool.auth_clone(),
-                );
-
                 let description_opt = if description.is_empty() {
                     None
                 } else {
@@ -107,78 +86,42 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
                 };
 
                 // Build domain ChannelConfig from UI config
-                let domain_config = chatter_linux::domain::channel::ChannelConfig {
+                let domain_config = ChannelConfig {
                     persistence: if is_ephemeral {
-                        chatter_linux::domain::channel::MessagePersistence::Ephemeral
+                        MessagePersistence::Ephemeral
                     } else {
-                        chatter_linux::domain::channel::MessagePersistence::Permanent
+                        MessagePersistence::Permanent
                     },
-                    max_members: if max_members > 0 {
-                        Some(max_members as u32)
-                    } else {
-                        None
-                    },
+                    max_members: if max_members > 0 { Some(max_members as u32) } else { None },
                     default_ttl_seconds: if is_ephemeral {
                         Some((ttl_hours as u32) * 3600)
                     } else {
                         None
                     },
-                    allow_reactions: true,
-                    allow_threads: true,
-                    allow_attachments: true,
-                    require_encryption: is_encrypted,
+                    require_encryption: is_private,
+                    ..Default::default()
                 };
 
+                // Create channel using ChannelService (handles stream + mailbox setup)
                 match channel_service
                     .create_channel(
-                        &mut channel_client,
-                        Some(&mut mailbox_client),
                         &name,
                         channel_type,
                         Some(domain_config),
                         description_opt,
-                        None,
+                        None, // img_url
                         password_opt,
-                        vec![],
+                        vec![], // initial_members - TODO: support inviting users
+                        is_private, // setup_mailbox for private channels
                     )
                     .await
                 {
-                    Ok((channel, mailbox_setup)) => {
-                        // If group mailbox was setup, send the announcement
-                        if let Some(setup_result) = mailbox_setup {
-                            let mut message_client = chatter_linux::network::grpc::MessageClient::new(
-                                grpc_pool.channel(),
-                                grpc_pool.auth_clone(),
-                            );
-                            let mut auth_client = chatter_linux::network::grpc::AuthClient::new(
-                                grpc_pool.channel(),
-                                grpc_pool.auth_clone(),
-                            );
-
-                            if let Err(e) = message_service
-                                .send_group_mailbox_announcement(
-                                    &mut message_client,
-                                    &mut auth_client,
-                                    &mut channel_client,
-                                    &channel.id,
-                                    setup_result.announcement,
-                                )
-                                .await
-                            {
-                                tracing::warn!(
-                                    channel_id = %channel.id,
-                                    error = %e,
-                                    "Failed to send group mailbox announcement"
-                                );
-                            } else {
-                                tracing::info!(
-                                    channel_id = %channel.id,
-                                    "Sent group mailbox announcement to channel"
-                                );
-                            }
-                        }
+                    Ok((channel, _mailbox_setup)) => {
                         let channel_id = channel.id;
                         let channel_id_str: SharedString = channel_id.to_string().into();
+
+                        // Set the created channel as active
+                        chat_state.set_active_channel(channel_id);
 
                         // If AI template, create and attach integration
                         if template == "ai-assistant" && !ai_provider.is_empty() && !ai_model.is_empty() {
@@ -192,7 +135,7 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
                             let provider_type = match ai_provider.as_str() {
                                 "claude" => IntegrationType::Claude,
                                 "openai" => IntegrationType::Openai,
-                                "ollama" => IntegrationType::Custom, // Ollama uses custom
+                                "ollama" => IntegrationType::Custom,
                                 _ => IntegrationType::Custom,
                             };
 
@@ -211,7 +154,6 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
                                 .await
                             {
                                 Ok(integration) => {
-                                    // Attach integration to channel
                                     match ai_service
                                         .add_integration_to_channel(
                                             &mut integration_client,
@@ -240,9 +182,6 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
                                 }
                             }
                         }
-
-                        // Set the newly created channel as active
-                        chat_state.set_active_channel(channel_id);
 
                         // Convert channel to Slint format for sidebar
                         let slint_channel = channel_to_slint(&channel);
@@ -301,7 +240,6 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
                         });
                     }
                 }
-                }); // rt.block_on(async move {
             });
         },
     );
@@ -317,114 +255,108 @@ pub fn wire_create_channel(window: &MainWindow, ctx: &AppContext) {
         let settings_repo = settings_repo.clone();
         let provider_str = provider.to_string();
 
-        tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create runtime for provider selection");
-
-            rt.block_on(async {
-                // Convert provider string to IntegrationType
-                let provider_type = match provider_str.as_str() {
-                    "claude" => IntegrationType::Claude,
-                    "openai" => IntegrationType::Openai,
-                    "ollama" => IntegrationType::Custom,
-                    _ => {
-                        // Unknown provider, clear models
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_create_channel_ai_models(ModelRc::new(VecModel::from(Vec::new())));
-                            }
-                        });
-                        return;
-                    }
-                };
-
-                // Create AI service and client
-                let ai_service = AIService::new(settings_repo);
-                let mut integration_client = IntegrationClient::new(
-                    grpc_pool.channel(),
-                    grpc_pool.auth_clone(),
-                );
-
-                // Fetch models from server
-                match ai_service.list_available_models(&mut integration_client, provider_type).await {
-                    Ok(available_models) => {
-                        let models: Vec<AIModelOption> = available_models
-                            .into_iter()
-                            .map(|m| AIModelOption {
-                                id: m.id.into(),
-                                name: m.display_name.into(),
-                                provider: provider_str.clone().into(),
-                            })
-                            .collect();
-
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_create_channel_ai_models(ModelRc::new(VecModel::from(models)));
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to fetch models for provider {}: {}", provider_str, e);
-                        // Fall back to static models for common providers
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                let fallback_models = match provider_str.as_str() {
-                                    "claude" => vec![
-                                        AIModelOption {
-                                            id: "claude-3-opus".into(),
-                                            name: "Claude 3 Opus".into(),
-                                            provider: "claude".into(),
-                                        },
-                                        AIModelOption {
-                                            id: "claude-3-sonnet".into(),
-                                            name: "Claude 3 Sonnet".into(),
-                                            provider: "claude".into(),
-                                        },
-                                        AIModelOption {
-                                            id: "claude-3-haiku".into(),
-                                            name: "Claude 3 Haiku".into(),
-                                            provider: "claude".into(),
-                                        },
-                                    ],
-                                    "openai" => vec![
-                                        AIModelOption {
-                                            id: "gpt-4".into(),
-                                            name: "GPT-4".into(),
-                                            provider: "openai".into(),
-                                        },
-                                        AIModelOption {
-                                            id: "gpt-4-turbo".into(),
-                                            name: "GPT-4 Turbo".into(),
-                                            provider: "openai".into(),
-                                        },
-                                        AIModelOption {
-                                            id: "gpt-3.5-turbo".into(),
-                                            name: "GPT-3.5 Turbo".into(),
-                                            provider: "openai".into(),
-                                        },
-                                    ],
-                                    "ollama" => vec![
-                                        AIModelOption {
-                                            id: "llama2".into(),
-                                            name: "Llama 2".into(),
-                                            provider: "ollama".into(),
-                                        },
-                                        AIModelOption {
-                                            id: "mistral".into(),
-                                            name: "Mistral".into(),
-                                            provider: "ollama".into(),
-                                        },
-                                    ],
-                                    _ => vec![],
-                                };
-                                w.set_create_channel_ai_models(ModelRc::new(VecModel::from(fallback_models)));
-                            }
-                        });
-                    }
+        // AIService doesn't use non-Send types, so we can use tokio::spawn directly
+        tokio::spawn(async move {
+            // Convert provider string to IntegrationType
+            let provider_type = match provider_str.as_str() {
+                "claude" => IntegrationType::Claude,
+                "openai" => IntegrationType::Openai,
+                "ollama" => IntegrationType::Custom,
+                _ => {
+                    // Unknown provider, clear models
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_create_channel_ai_models(ModelRc::new(VecModel::from(Vec::new())));
+                        }
+                    });
+                    return;
                 }
-            });
+            };
+
+            // Create AI service and client
+            let ai_service = AIService::new(settings_repo);
+            let mut integration_client = IntegrationClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Fetch models from server
+            match ai_service.list_available_models(&mut integration_client, provider_type).await {
+                Ok(available_models) => {
+                    let models: Vec<AIModelOption> = available_models
+                        .into_iter()
+                        .map(|m| AIModelOption {
+                            id: m.id.into(),
+                            name: m.display_name.into(),
+                            provider: provider_str.clone().into(),
+                        })
+                        .collect();
+
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_create_channel_ai_models(ModelRc::new(VecModel::from(models)));
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to fetch models for provider {}: {}", provider_str, e);
+                    // Fall back to static models for common providers
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            let fallback_models = match provider_str.as_str() {
+                                "claude" => vec![
+                                    AIModelOption {
+                                        id: "claude-3-opus".into(),
+                                        name: "Claude 3 Opus".into(),
+                                        provider: "claude".into(),
+                                    },
+                                    AIModelOption {
+                                        id: "claude-3-sonnet".into(),
+                                        name: "Claude 3 Sonnet".into(),
+                                        provider: "claude".into(),
+                                    },
+                                    AIModelOption {
+                                        id: "claude-3-haiku".into(),
+                                        name: "Claude 3 Haiku".into(),
+                                        provider: "claude".into(),
+                                    },
+                                ],
+                                "openai" => vec![
+                                    AIModelOption {
+                                        id: "gpt-4".into(),
+                                        name: "GPT-4".into(),
+                                        provider: "openai".into(),
+                                    },
+                                    AIModelOption {
+                                        id: "gpt-4-turbo".into(),
+                                        name: "GPT-4 Turbo".into(),
+                                        provider: "openai".into(),
+                                    },
+                                    AIModelOption {
+                                        id: "gpt-3.5-turbo".into(),
+                                        name: "GPT-3.5 Turbo".into(),
+                                        provider: "openai".into(),
+                                    },
+                                ],
+                                "ollama" => vec![
+                                    AIModelOption {
+                                        id: "llama2".into(),
+                                        name: "Llama 2".into(),
+                                        provider: "ollama".into(),
+                                    },
+                                    AIModelOption {
+                                        id: "mistral".into(),
+                                        name: "Mistral".into(),
+                                        provider: "ollama".into(),
+                                    },
+                                ],
+                                _ => vec![],
+                            };
+                            w.set_create_channel_ai_models(ModelRc::new(VecModel::from(fallback_models)));
+                        }
+                    });
+                }
+            }
         });
     });
 }

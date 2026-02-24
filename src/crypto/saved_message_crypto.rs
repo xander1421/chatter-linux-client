@@ -164,7 +164,7 @@ impl SavedMessageCrypto {
     ) -> Result<message::Content, CryptoError> {
         // Serialize source to JSON if provided (stored in associated_data)
         let associated_data = source
-            .map(|s| serde_json::to_vec(s))
+            .map(serde_json::to_vec)
             .transpose()
             .map_err(|e| CryptoError::EncryptionFailed(format!("failed to serialize source: {}", e)))?;
 

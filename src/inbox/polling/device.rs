@@ -12,7 +12,7 @@ use prost::Message as ProstMessage;
 use sha2::Digest;
 use tokio::sync::broadcast;
 
-use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::Message;
 use crate::domain::UserId;
 use crate::error::ServiceError;
@@ -50,10 +50,25 @@ pub async fn process_device_message(
         message_guid = %msg.message_guid,
         source_user_id = %msg.source_user_id,
         source_device_id = msg.source_device_id,
+        envelope_type = msg.envelope_type,
         envelope_len = msg.envelope.len(),
         queue_id = msg.queue_id,
         "[INBOX] Processing device message"
     );
+
+    // Check envelope type for identified sender (PreKey/Ciphertext vs SealedSender)
+    // envelope_type: 1=ciphertext, 2=prekey, 3=sealed_sender
+    let is_identified_sender = msg.envelope_type == 1 || msg.envelope_type == 2;
+    if is_identified_sender && !msg.source_user_id.is_empty() {
+        tracing::info!(
+            message_guid = %msg.message_guid,
+            source_user_id = %msg.source_user_id,
+            envelope_type = msg.envelope_type,
+            "[INBOX] Processing as identified sender message (PreKey/Ciphertext)"
+        );
+        process_identified_sender_message(msg, event_tx, stats, message_gateway, domain_tx).await;
+        return;
+    }
 
     // First, try to decode as EncryptedData (sender key encrypted channel message)
     if let Ok(encrypted_data) = EncryptedData::decode(msg.envelope.as_slice()) {
@@ -331,20 +346,19 @@ fn process_decrypted_data_message(
                 .parse::<MessageId>()
                 .unwrap_or_else(|_| MessageId::new());
 
-            // Create domain message
+            // Create domain message with sender's timestamp for Signal-style dedup
+            // created_at is derived from sent_at in Message::new_text()
             let mut message =
-                Message::new_text(channel_id, Some(*sender_id), data_message.body.clone());
+                Message::new_text(channel_id, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
             message.id = message_id;
 
-            // Set timestamp if available
-            if data_message.timestamp > 0 {
-                if let Some(dt) =
-                    chrono::DateTime::from_timestamp_millis(data_message.timestamp as i64)
-                {
-                    message.created_at = dt;
-                    message.updated_at = dt;
-                }
-            }
+            // Add attachment IDs to message (attachments are stored separately in attachment_repo)
+            message.attachments = data_message
+                .attachments
+                .iter()
+                .filter(|p| !p.cdn_key.is_empty())
+                .map(|p| AttachmentId::from_cdn_key(&p.cdn_key))
+                .collect();
 
             // Store message with deduplication
             match message_repo.insert_or_ignore(&message) {
@@ -411,6 +425,118 @@ fn process_decrypted_data_message(
                 error: format!("Failed to parse DataMessage: {}", e),
             });
             stats.write().messages_failed += 1;
+        }
+    }
+}
+
+/// Process an identified sender message (PreKey or Ciphertext).
+///
+/// This is the fallback path when sealed sender is not used.
+/// The server knows the sender (from Basic auth) and includes source_user_id.
+async fn process_identified_sender_message(
+    msg: &DeviceMessage,
+    event_tx: &broadcast::Sender<InboxEvent>,
+    stats: &Arc<RwLock<InboxStats>>,
+    message_gateway: &Arc<MessageGateway>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+) {
+    // Parse sender address
+    let sender_id: UserId = match msg.source_user_id.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!(
+                message_id = %msg.message_guid,
+                source_user_id = %msg.source_user_id,
+                error = %e,
+                "[INBOX] Invalid source_user_id in identified sender message"
+            );
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: format!("Invalid source_user_id: {}", e),
+            });
+            stats.write().messages_failed += 1;
+            return;
+        }
+    };
+
+    // Decrypt using regular Signal Protocol (not sealed sender)
+    match message_gateway
+        .decrypt_identified_message(&msg.envelope, &sender_id, msg.source_device_id)
+        .await
+    {
+        Ok(SealedSenderResult::KeyExchange {
+            sender_id,
+            conversation_id,
+            ephemeral_public_key,
+            timestamp,
+        }) => {
+            // Emit DomainEvent for KeyExchange so DM bootstrap handler can process it
+            if let Some(tx) = domain_tx {
+                let conv_id: crate::domain::ChannelId = conversation_id
+                    .parse()
+                    .unwrap_or_else(|_| {
+                        let hash = sha2::Sha256::digest(conversation_id.as_bytes());
+                        let mut uuid_bytes = [0u8; 16];
+                        uuid_bytes.copy_from_slice(&hash[..16]);
+                        uuid_bytes[6] = (uuid_bytes[6] & 0x0f) | 0x40;
+                        uuid_bytes[8] = (uuid_bytes[8] & 0x3f) | 0x80;
+                        crate::domain::ChannelId::from_uuid(uuid::Uuid::from_bytes(uuid_bytes))
+                    });
+
+                let _ = tx.send(DomainEvent::KeyExchangeReceived {
+                    sender_id,
+                    conversation_id: conv_id,
+                    ephemeral_public_key,
+                    timestamp,
+                });
+                tracing::info!(
+                    message_id = %msg.message_guid,
+                    sender_id = %sender_id,
+                    "Emitted KeyExchangeReceived domain event for DM bootstrap (identified sender)"
+                );
+            } else {
+                tracing::warn!(
+                    message_id = %msg.message_guid,
+                    "Received KeyExchange but no domain event sender configured"
+                );
+            }
+
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
+        Ok(SealedSenderResult::MessageStored) => {
+            tracing::info!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                "[INBOX] Identified sender message stored"
+            );
+            let _ = event_tx.send(InboxEvent::MessageReceived {
+                message_id: msg.message_guid.clone(),
+                envelope_type: EnvelopeType::PrekeyMessage,
+            });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            let mut s = stats.write();
+            s.messages_received += 1;
+            s.messages_processed += 1;
+        }
+        Err(e) => {
+            tracing::error!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                error = %e,
+                "[INBOX] Failed to decrypt identified sender message"
+            );
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: e.to_string(),
+            });
+            let mut s = stats.write();
+            s.messages_received += 1;
+            s.messages_failed += 1;
         }
     }
 }
@@ -563,18 +689,24 @@ pub fn dispatch_channel_control_content(
 ) {
     match inner {
         content::Content::Typing(typing) => {
+            tracing::info!(
+                sender_id = %sender_id,
+                action = typing.action,
+                channel_id = %typing.channel_id,
+                "DEVICE_INBOX: Received Typing content in control dispatch"
+            );
             if typing.channel_id.is_empty() {
-                tracing::debug!(
+                tracing::info!(
                     sender_id = %sender_id,
                     action = typing.action,
-                    "Channel typing received but missing channel_id"
+                    "DEVICE_INBOX: Channel typing has empty channel_id - might be DM?"
                 );
             } else if let Ok(channel_id) = typing.channel_id.parse::<ChannelId>() {
-                tracing::debug!(
+                tracing::info!(
                     sender_id = %sender_id,
                     channel_id = %channel_id,
                     action = typing.action,
-                    "Channel typing indicator received"
+                    "DEVICE_INBOX: Emitting ChannelTyping event"
                 );
                 let _ = event_tx.send(InboxEvent::ChannelTyping {
                     channel_id,
@@ -585,7 +717,7 @@ pub fn dispatch_channel_control_content(
                 tracing::warn!(
                     sender_id = %sender_id,
                     channel_id = %typing.channel_id,
-                    "Channel typing received with invalid channel_id"
+                    "DEVICE_INBOX: Channel typing has invalid channel_id"
                 );
             }
             stats.write().messages_processed += 1;

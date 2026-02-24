@@ -3,9 +3,9 @@
 use slint::ComponentHandle;
 
 use chatter_linux::app::AppContext;
-use chatter_linux::network::grpc::auth_client::AuthClient;
 use chatter_linux::services::auth_service::AuthService;
 
+use super::channel_events::spawn_channel_events_handler;
 use super::inbox_events::handle_inbox_event;
 use super::initial_data::load_initial_data;
 use crate::MainWindow;
@@ -24,10 +24,14 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
     let message_repo = ctx.message_repo.clone();
     let attachment_repo = ctx.attachment_repo.clone();
     let signal_service = ctx.signal_service.clone();
+    let group_coordinator = ctx.group_coordinator.clone();
+    let message_service = ctx.message_service.clone();
     let database = ctx.database.clone();
     let mailbox_manager = ctx.mailbox_manager.clone();
     let event_bus = ctx.event_bus.clone();
-    let group_coordinator = ctx.group_coordinator.clone();
+    let db_path = ctx.database.path().to_path_buf();
+    // Use cached passphrase from context (avoids multiple keyring prompts)
+    let db_passphrase = Some(ctx.db_passphrase.clone());
 
     let weak_window = window.as_weak();
 
@@ -45,10 +49,13 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
         let message_repo = message_repo.clone();
         let attachment_repo = attachment_repo.clone();
         let signal_service = signal_service.clone();
+        let group_coordinator = group_coordinator.clone();
+        let message_service = message_service.clone();
         let database = database.clone();
         let mailbox_manager = mailbox_manager.clone();
         let event_bus = event_bus.clone();
-        let group_coordinator = group_coordinator.clone();
+        let db_path = db_path.clone();
+        let db_passphrase = db_passphrase.clone();
         let weak = weak_window.clone();
         let username = username.to_string();
         let password = password.to_string();
@@ -63,8 +70,9 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                 }
             });
 
-            // Create auth service and client
+            // Create auth service with grpc_pool for internal client creation
             let auth_service = AuthService::new(
+                grpc_pool.clone(),
                 identity_manager,
                 prekey_manager,
                 user_repo.clone(),
@@ -73,14 +81,9 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                 auth_interceptor,
             );
 
-            let mut auth_client = AuthClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
-
-            // Attempt login
+            // Attempt login using simplified method
             match auth_service
-                .login(&mut auth_client, &username, &password, "linux-client")
+                .do_login(&username, &password, "linux-client")
                 .await
             {
                 Ok(result) => {
@@ -100,10 +103,29 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                             let mut event_rx = provider.subscribe();
                             let weak_for_events = weak.clone();
                             let user_repo_for_events = user_repo.clone();
+                            let channel_repo_for_events = channel_repo.clone();
+                            let attachment_repo_for_events = attachment_repo.clone();
+                            let grpc_pool_for_events = grpc_pool.clone();
+                            let message_service_for_events = message_service.clone();
+                            let database_for_events = database.clone();
+                            let mailbox_manager_for_events = mailbox_manager.clone();
+                            let event_bus_for_events = event_bus.clone();
 
                             tokio::spawn(async move {
                                 while let Ok(event) = event_rx.recv().await {
-                                    handle_inbox_event(event, &weak_for_events, &user_repo_for_events);
+                                    handle_inbox_event(
+                                        event,
+                                        &weak_for_events,
+                                        &user_repo_for_events,
+                                        &channel_repo_for_events,
+                                        &attachment_repo_for_events,
+                                        &grpc_pool_for_events,
+                                        &message_service_for_events,
+                                        &database_for_events,
+                                        &mailbox_manager_for_events,
+                                        &event_bus_for_events,
+                                    )
+                                    .await;
                                 }
                             });
                         }
@@ -112,13 +134,28 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                     }
 
                     // Spawn DM bootstrap handler for processing incoming key exchanges
+                    let auth_info = grpc_pool.auth_info();
                     let _bootstrap_handle = chatter_linux::inbox::spawn_dm_bootstrap_handler_from_bus(
-                        database.clone(),
-                        grpc_pool.clone(),
-                        mailbox_manager.clone(),
+                        db_path.clone(),
+                        db_passphrase.clone().unwrap_or_default(),
+                        grpc_pool.endpoint(),
+                        auth_info.user_id,
+                        auth_info.device_id,
+                        auth_info.token,
                         &event_bus,
                     );
                     tracing::debug!("DM bootstrap handler spawned");
+
+                    // Spawn channel events handler for member join/leave notifications
+                    let _channel_events_handle = spawn_channel_events_handler(
+                        weak.clone(),
+                        grpc_pool.clone(),
+                        channel_repo.clone(),
+                        message_repo.clone(),
+                        user_repo.clone(),
+                        signal_service.clone(),
+                    );
+                    tracing::debug!("Channel events handler spawned");
 
                     // Switch to main view
                     let weak_for_view = weak.clone();

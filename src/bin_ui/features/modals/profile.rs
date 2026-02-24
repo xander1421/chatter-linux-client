@@ -1,6 +1,8 @@
 //! Profile modal callbacks.
+//!
+//! Uses UserService for all profile operations - no direct network calls.
 
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::ids::UserId;
@@ -55,23 +57,45 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(settings_repo, user_repo);
-            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
+            let user_service = UserService::new(grpc_pool.clone(), settings_repo, user_repo);
 
-            match user_service
-                .send_friend_request(&mut user_client, &friend_id, None)
-                .await
-            {
+            match user_service.send_friend_request(&friend_id, None).await {
                 Ok(_) => {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                            tracing::info!("Friend request sent to {}", friend_id);
+                    tracing::info!("Friend request sent to {}", friend_id);
+
+                    // Refresh sent requests list via UserService
+                    use chatter_linux::services::user_service::FriendRequestFilter;
+                    match user_service.list_friend_requests(FriendRequestFilter::Sent, 50, 0).await {
+                        Ok(friendships) => {
+                            // We need to get the full profile info for each friend
+                            // For now, just use friend_id as display info
+                            let sent_requests: Vec<crate::FriendRequestData> = friendships
+                                .into_iter()
+                                .map(|f| crate::FriendRequestData {
+                                    user_id: f.friend_id.to_string().into(),
+                                    display_name: f.friend_id.to_string().into(),
+                                    username: "".into(),
+                                    avatar_url: "".into(),
+                                    sent_at: "".into(),
+                                })
+                                .collect();
+
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_profile_loading(false);
+                                    w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_requests)));
+                                }
+                            });
                         }
-                    });
+                        Err(e) => {
+                            tracing::warn!("Failed to refresh sent requests: {}", e);
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_profile_loading(false);
+                                }
+                            });
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::error!("Failed to send friend request: {}", e);
@@ -127,13 +151,9 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(settings_repo, user_repo);
-            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
+            let user_service = UserService::new(grpc_pool, settings_repo, user_repo);
 
-            match user_service.remove_friend(&mut user_client, &friend_id).await {
+            match user_service.remove_friend(&friend_id).await {
                 Ok(()) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -197,13 +217,9 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(settings_repo, user_repo);
-            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
+            let user_service = UserService::new(grpc_pool, settings_repo, user_repo);
 
-            match user_service.block_user(&mut user_client, &user_id).await {
+            match user_service.block_user(&user_id).await {
                 Ok(()) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -268,13 +284,9 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(settings_repo, user_repo);
-            let mut user_client = chatter_linux::network::grpc::user_client::UserClient::new(
-                grpc_pool.channel(),
-                grpc_pool.auth_clone(),
-            );
+            let user_service = UserService::new(grpc_pool, settings_repo, user_repo);
 
-            match user_service.unblock_user(&mut user_client, &user_id).await {
+            match user_service.unblock_user(&user_id).await {
                 Ok(()) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -301,12 +313,14 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
     let mailbox_manager = ctx.mailbox_manager.clone();
     let user_repo_dm = user_repo.clone();
     let chat_state = ctx.chat_state.clone();
+    let channel_repo = ctx.channel_repo.clone();
 
     window.on_profile_send_message(move || {
         let weak = weak_window.clone();
         let mailbox_manager = mailbox_manager.clone();
         let user_repo = user_repo_dm.clone();
         let _chat_state = chat_state.clone(); // Reserved for future DM state tracking
+        let channel_repo = channel_repo.clone();
 
         // Get profile user ID synchronously before spawning
         let profile_user_id = weak
@@ -390,15 +404,57 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                         })
                         .unwrap_or_else(|| "Unknown".to_string());
 
-                    // Update chat state to active DM
-                    // Note: For DMs, we use the peer_id as a pseudo-channel ID
-                    // A proper implementation would have a DM-specific state
+                    // Find the DM channel for this peer by checking memberships
+                    let dm_channel = channel_repo
+                        .list_by_type(chatter_linux::domain::channel::ChannelType::DirectMessage)
+                        .ok()
+                        .and_then(|channels| {
+                            channels.into_iter().find(|c| {
+                                // Check if peer is a member of this DM channel
+                                channel_repo.list_members(&c.id)
+                                    .map(|members| members.iter().any(|m| m.user_id == peer_id))
+                                    .unwrap_or(false)
+                            })
+                        });
 
-                    // Update UI to show the DM
+                    let channel_id_for_ui = dm_channel
+                        .as_ref()
+                        .map(|c| c.id.to_string())
+                        .unwrap_or_else(|| profile_id_for_ui.clone());
+
+                    // Create DM sidebar item data
+                    let initials = crate::bin_ui::converters::get_initials(&peer_name);
+                    let dm_item = crate::DMListItemData {
+                        channel_id: channel_id_for_ui.clone().into(),
+                        user_id: profile_id_for_ui.clone().into(),
+                        display_name: peer_name.clone().into(),
+                        initials: initials.into(),
+                        avatar_url: "".into(),
+                        presence_status: "offline".into(),
+                        last_message: "".into(),
+                        timestamp: "".into(),
+                        unread_count: dm_channel.as_ref().map(|c| c.unread_count as i32).unwrap_or(0),
+                    };
+
+                    // Update UI to show the DM and add to sidebar
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            // Add to sidebar if not already present
+                            let current_dms = w.get_dm_conversations();
+                            let mut dms: Vec<crate::DMListItemData> = (0..current_dms.row_count())
+                                .filter_map(|i| current_dms.row_data(i))
+                                .collect();
+
+                            let exists = dms.iter().any(|dm| dm.user_id.as_str() == profile_id_for_ui);
+                            if !exists {
+                                dms.push(dm_item);
+                                w.set_dm_conversations(ModelRc::new(VecModel::from(dms)));
+                                tracing::info!("Added DM to sidebar from profile modal");
+                            }
+
                             w.set_loading_messages(false);
-                            w.set_selected_dm_id(profile_id_for_ui.into());
+                            // Use channel_id for selection (matching updated dm_list.slint)
+                            w.set_selected_dm_id(channel_id_for_ui.into());
                             w.set_selected_channel_id("".into());
                             w.set_channel_name(peer_name.into());
                             w.set_channel_type("dm".into());

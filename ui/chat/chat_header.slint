@@ -38,7 +38,7 @@ export component ChatHeader inherits Rectangle {
         if channel-type == "dm" {
             "@"
         } else if channel-type == "private" {
-            "\u{1F512}"  // Lock emoji
+            "\u{1F512}\u{FE0F}"  // Lock emoji (with emoji variant selector)
         } else {
             "#"
         }
@@ -159,7 +159,7 @@ export component ChatHeader inherits Rectangle {
                 border-radius: Spacing.radius-sm;
 
                 Text {
-                    text: "\u{1F4DE}";  // Telephone receiver
+                    text: "\u{1F4DE}\u{FE0F}";  // Telephone receiver (with emoji variant selector)
                     font-size: Typography.base;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -181,7 +181,7 @@ export component ChatHeader inherits Rectangle {
                 border-radius: Spacing.radius-sm;
 
                 Text {
-                    text: "\u{1F4F9}";  // Video camera
+                    text: "\u{1F4F9}\u{FE0F}";  // Video camera (with emoji variant selector)
                     font-size: Typography.base;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -203,7 +203,7 @@ export component ChatHeader inherits Rectangle {
                 border-radius: Spacing.radius-sm;
 
                 Text {
-                    text: "\u{1F50D}";  // Magnifying glass
+                    text: "\u{1F50D}\u{FE0F}";  // Magnifying glass (with emoji variant selector)
                     font-size: Typography.base;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -225,7 +225,7 @@ export component ChatHeader inherits Rectangle {
                 border-radius: Spacing.radius-sm;
 
                 Text {
-                    text: "\u{2699}";  // Gear
+                    text: "\u{2699}\u{FE0F}";  // Gear (with emoji variant selector)
                     font-size: Typography.base;
                     horizontal-alignment: center;
                     vertical-alignment: center;

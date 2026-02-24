@@ -2,6 +2,10 @@
 //!
 //! Orchestrates call lifecycle: server API + LiveKit + E2EE.
 
+// LiveKit types don't implement Send+Sync, and MutexGuard across await is intentional
+#![allow(clippy::arc_with_non_send_sync)]
+#![allow(clippy::await_holding_lock)]
+
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -245,6 +249,51 @@ impl CallService {
     /// Get room connection state.
     pub fn room_state(&self) -> RoomState {
         self.room_manager.state()
+    }
+
+    /// Get the room manager for track publishing.
+    pub fn room_manager(&self) -> Arc<RoomManager> {
+        self.room_manager.clone()
+    }
+
+    /// Publish microphone audio to the current call.
+    pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
+        self.room_manager.publish_microphone(device_id).await
+    }
+
+    /// Publish camera video to the current call.
+    pub async fn publish_camera(&self, device_path: Option<&str>) -> Result<(), CallError> {
+        self.room_manager.publish_camera(device_path, None).await
+    }
+
+    /// Stop microphone capture.
+    pub fn stop_microphone(&self) {
+        self.room_manager.stop_microphone();
+    }
+
+    /// Stop camera capture.
+    pub fn stop_camera(&self) {
+        self.room_manager.stop_camera();
+    }
+
+    /// Toggle microphone mute.
+    pub fn set_microphone_muted(&self, muted: bool) {
+        self.room_manager.set_microphone_muted(muted);
+    }
+
+    /// Check if microphone is muted.
+    pub fn is_microphone_muted(&self) -> bool {
+        self.room_manager.is_microphone_muted()
+    }
+
+    /// Toggle camera enabled.
+    pub fn set_camera_enabled(&self, enabled: bool) {
+        self.room_manager.set_camera_enabled(enabled);
+    }
+
+    /// Check if camera is enabled.
+    pub fn is_camera_enabled(&self) -> bool {
+        self.room_manager.is_camera_enabled()
     }
 
     fn proto_call_info_to_domain(&self, info: &chat_v1::CallInfo, joiner_id: UserId) -> Result<Call, CallError> {

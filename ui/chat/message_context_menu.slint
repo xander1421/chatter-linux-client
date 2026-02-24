@@ -27,15 +27,15 @@ export component MessageContextMenu inherits Rectangle {
     callback forward-clicked(string);
     callback copy-clicked(string);
 
-    // Menu items
+    // Menu items (emoji with variant selectors for colorful rendering)
     property <[{icon: string, label: string, action: string, enabled: bool}]> menu-items: [
-        { icon: "\u{21A9}", label: "Reply", action: "reply", enabled: true },
-        { icon: "\u{270F}", label: "Edit", action: "edit", enabled: root.is-own-message },
-        { icon: "\u{1F4CC}", label: root.is-pinned ? "Unpin" : "Pin", action: "pin", enabled: true },
-        { icon: "\u{21AA}", label: "Forward", action: "forward", enabled: true },
-        { icon: "\u{1F4CB}", label: "Copy", action: "copy", enabled: true },
-        { icon: "\u{1F5D1}", label: "Delete for Everyone", action: "delete-everyone", enabled: root.is-own-message },
-        { icon: "\u{1F5D1}", label: "Delete for Me", action: "delete", enabled: true },
+        { icon: "\u{21A9}\u{FE0F}", label: "Reply", action: "reply", enabled: true },
+        { icon: "\u{270F}\u{FE0F}", label: "Edit", action: "edit", enabled: root.is-own-message },
+        { icon: "\u{1F4CC}\u{FE0F}", label: root.is-pinned ? "Unpin" : "Pin", action: "pin", enabled: true },
+        { icon: "\u{21AA}\u{FE0F}", label: "Forward", action: "forward", enabled: true },
+        { icon: "\u{1F4CB}\u{FE0F}", label: "Copy", action: "copy", enabled: true },
+        { icon: "\u{1F5D1}\u{FE0F}", label: "Delete for Everyone", action: "delete-everyone", enabled: root.is-own-message },
+        { icon: "\u{1F5D1}\u{FE0F}", label: "Delete for Me", action: "delete", enabled: true },
     ];
 
     // Only render when visible

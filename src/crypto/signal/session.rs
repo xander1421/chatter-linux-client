@@ -49,6 +49,11 @@ impl SessionManager {
         S: SessionStore,
         I: IdentityKeyStore,
     {
+        tracing::debug!(
+            address = %remote_address,
+            "SessionManager: establishing session with prekey bundle"
+        );
+
         process_prekey_bundle(
             remote_address,
             session_store,
@@ -58,8 +63,19 @@ impl SessionManager {
             rng,
         )
         .await
-        .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+        .map_err(|e| {
+            tracing::error!(
+                address = %remote_address,
+                error = %e,
+                "SessionManager: failed to process prekey bundle"
+            );
+            CryptoError::Protocol(e.to_string())
+        })?;
 
+        tracing::debug!(
+            address = %remote_address,
+            "SessionManager: session established successfully"
+        );
         Ok(())
     }
 
@@ -68,12 +84,30 @@ impl SessionManager {
         store: &S,
         remote_address: &ProtocolAddress,
     ) -> Result<bool, CryptoError> {
+        tracing::debug!(
+            address = %remote_address,
+            "SessionManager: checking if session exists"
+        );
+
         let session = store
             .load_session(remote_address)
             .await
-            .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(
+                    address = %remote_address,
+                    error = %e,
+                    "SessionManager: failed to load session"
+                );
+                CryptoError::Protocol(e.to_string())
+            })?;
 
-        Ok(session.is_some())
+        let exists = session.is_some();
+        tracing::debug!(
+            address = %remote_address,
+            exists,
+            "SessionManager: session check complete"
+        );
+        Ok(exists)
     }
 
     /// Get the session record for a remote address.

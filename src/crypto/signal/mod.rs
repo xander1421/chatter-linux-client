@@ -6,6 +6,7 @@ pub mod identity;
 pub mod prekey;
 pub mod sealed_sender;
 pub mod sender_key;
+pub mod sesame;
 pub mod session;
 pub mod store;
 
@@ -16,5 +17,9 @@ pub use sealed_sender::{
     ServerCertificate, UnidentifiedSenderMessageContent,
 };
 pub use sender_key::SenderKeyManager;
+pub use sesame::{
+    ConvergenceResult, DeviceRecord, PendingMessage, SesameManager, SesameStore, SessionEntry,
+    SqliteSesameStore, UserRecord, MAX_INACTIVE_SESSIONS, MAX_PENDING_MESSAGES,
+};
 pub use session::SessionManager;
 pub use store::SignalStore;

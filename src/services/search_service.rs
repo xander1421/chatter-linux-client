@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use chrono::{TimeZone, Utc};
+use chrono::Utc;
+
+use crate::util::time::TimestampNanos;
 
 use crate::domain::ids::{ChannelId, IntegrationId, MessageId, UserId};
 use crate::domain::message::{Message, MessageContent, MixedContent, ReactionCount};
@@ -340,15 +342,15 @@ fn proto_to_domain_message(proto: &chat_v1::Message) -> Result<Message, SearchEr
         .map(|rc| ReactionCount::new(rc.emoji.clone(), rc.count as u32))
         .collect();
 
-    // Convert timestamp (proto uses millis)
-    let created_at = millis_to_datetime(proto.timestamp);
+    // Convert timestamp (proto uses nanos)
+    let created_at = TimestampNanos::from_nanos(proto.timestamp).to_datetime().unwrap_or_else(Utc::now);
     let updated_at = if proto.updated_at > 0 {
-        millis_to_datetime(proto.updated_at)
+        TimestampNanos::from_nanos(proto.updated_at).to_datetime().unwrap_or(created_at)
     } else {
         created_at
     };
     let edited_at = if proto.edited && proto.edited_at > 0 {
-        Some(millis_to_datetime(proto.edited_at))
+        TimestampNanos::from_nanos(proto.edited_at).to_datetime()
     } else {
         None
     };
@@ -364,6 +366,7 @@ fn proto_to_domain_message(proto: &chat_v1::Message) -> Result<Message, SearchEr
         is_pinned: proto.pinned,
         is_edited: proto.edited,
         is_deleted: false,
+        sent_at: proto.timestamp,
         created_at,
         updated_at,
         edited_at,
@@ -409,12 +412,6 @@ fn proto_content_to_domain(
     }
 }
 
-/// Convert milliseconds timestamp to DateTime<Utc>.
-fn millis_to_datetime(millis: u64) -> chrono::DateTime<Utc> {
-    Utc.timestamp_millis_opt(millis as i64)
-        .single()
-        .unwrap_or_else(Utc::now)
-}
 
 #[cfg(test)]
 mod tests {
@@ -478,8 +475,8 @@ mod tests {
             },
         ];
         let server_results = vec![
-            Message::new_text(ChannelId::new(), None, "test".to_string()),
-            Message::new_text(ChannelId::new(), None, "test2".to_string()),
+            Message::new_text(ChannelId::new(), None, "test".to_string(), 0),
+            Message::new_text(ChannelId::new(), None, "test2".to_string(), 0),
         ];
 
         let local_count = local_results.len();
@@ -497,10 +494,10 @@ mod tests {
     }
 
     #[test]
-    fn test_millis_to_datetime() {
-        let millis = 1706140800000u64; // 2024-01-25 00:00:00 UTC
-        let dt = millis_to_datetime(millis);
-        assert_eq!(dt.timestamp_millis(), millis as i64);
+    fn test_nanos_to_datetime() {
+        let nanos = 1706140800_000_000_000u64; // 2024-01-25 00:00:00 UTC in nanoseconds
+        let dt = TimestampNanos::from_nanos(nanos).to_datetime().unwrap();
+        assert_eq!(dt.timestamp_nanos_opt().unwrap(), nanos as i64);
     }
 
     #[test]
