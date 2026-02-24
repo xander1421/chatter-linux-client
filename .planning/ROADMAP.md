@@ -639,19 +639,19 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 **Depends on**: Phase 75
 **Research**: Unlikely (internal refactoring)
 **Status**: In Progress
-**Plans**: 1/4 complete
+**Plans**: 3/4 complete
 
 **Target files (>550 lines):**
 - `message_service.rs` (3143 lines) → dm/, group/, storage/ modules ✅ (76-01)
 - `inbox_events.rs` (2425 lines) → by event type ✅ (76-02)
-- `signal_service.rs` (1486 lines) → session/, encryption/ modules
+- `signal_service.rs` (1486 lines) → session/, sender_key/, identity/ modules ✅ (76-03)
 - `attachment_service.rs` (1395 lines) → upload/, download/ modules
 - `message_gateway.rs` (1365 lines) → routing/, decryption/ modules
 - `channel/service.rs` (1302 lines) → crud/, membership/ modules
 - Additional files 550-1300 lines as needed
 
 **Details:**
-76-02 complete: inbox_events.rs split into inbox/ module (typing, utils, dm_handlers, channel_handlers)
+76-03 complete: signal_service.rs split into signal/ module (session, sender_key, identity)
 
 ## Progress
 
@@ -735,4 +735,4 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 | 73 | Signal Protocol Encryption Wiring | 1 | Done | 2026-02-10 |
 | 74 | LiveKit Video & Audio Calls | 5 | Done | 2026-02-23 |
 | 75 | Secure In-Memory Attachment Handling | 0 | In Progress | - |
-| 76 | Refactor Large Service Files | 1/4 | In Progress | - |
+| 76 | Refactor Large Service Files | 3/4 | In Progress | - |
