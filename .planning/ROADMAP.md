@@ -674,8 +674,8 @@ Prepares for PIN-based Secure Value Recovery (SVR) feature. The legacy `public_k
 **Goal**: Enforce proper layering by moving business logic from UI/handlers into services, centralizing cross-cutting concerns
 **Depends on**: Phase 77
 **Research**: Unlikely (internal refactoring based on codebase analysis)
-**Status**: Not started
-**Plans**: 0 plans
+**Status**: In Progress
+**Plans**: 2/5 complete
 
 **Scope (~20+ files):**
 
@@ -792,4 +792,4 @@ Based on comprehensive separation of concerns analysis identifying layer violati
 | 75 | Secure In-Memory Attachment Handling | 0 | In Progress | - |
 | 76 | Refactor Large Service Files | 3/4 | In Progress | - |
 | 77 | Rename public_key to svr_public_key | 0 | Not started | - |
-| 78 | Service Separation of Concerns | 0 | Not started | - |
+| 78 | Service Separation of Concerns | 2/5 | In Progress | - |
