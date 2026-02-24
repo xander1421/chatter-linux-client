@@ -2,6 +2,21 @@
 //!
 //! Processes incoming DM and channel events to update the UI in real-time.
 //!
+//! # Separation of Concerns
+//!
+//! This module follows these patterns for storage access:
+//!
+//! - **Services for business operations**: All operations that affect server state
+//!   (sending messages, creating channels, etc.) go through service layer
+//!   (MessageService, ChannelService, DmBootstrapService, etc.)
+//!
+//! - **Repository access for cache updates**: Repositories are used directly ONLY
+//!   to update local cache after server events or successful server operations.
+//!   This is the "write-back cache" pattern - the server is source of truth.
+//!
+//! - **Repository access for reads**: Reading display data (user profiles, message
+//!   content) from repositories is acceptable in handlers.
+//!
 //! This module is organized into:
 //! - `typing`: Typing timer management (Signal-style per-peer timers)
 //! - `utils`: Shared utilities (reaction summary, timestamp formatting)
