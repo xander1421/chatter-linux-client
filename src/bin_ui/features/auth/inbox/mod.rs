@@ -17,15 +17,17 @@ use std::sync::Arc;
 
 use slint::Model;
 
+use chatter_linux::crypto::IdentityKeyManager;
 use chatter_linux::events::EventBus;
 use chatter_linux::inbox::handlers::DomainEvent;
 use chatter_linux::inbox::InboxEvent;
 use chatter_linux::network::grpc::client_pool::GrpcClientPool;
 use chatter_linux::services::mailbox_manager::MailboxManager;
 use chatter_linux::services::message_service::MessageService;
-use chatter_linux::storage::{AttachmentRepository, ChannelRepository, Database, MessageRepository, UserRepository};
+use chatter_linux::services::CallWorkerHandle;
+use chatter_linux::storage::{AttachmentRepository, ChannelRepository, Database, KeyStore, MessageRepository, SettingsRepository, UserRepository};
 
-use crate::bin_ui::features::calls::cleanup_call_ui_state;
+use crate::bin_ui::features::calls::{cleanup_call_ui_state, on_dm_bootstrap_completed};
 use crate::MainWindow;
 
 // Re-export public items
@@ -44,6 +46,11 @@ pub async fn handle_inbox_event(
     database: &Arc<Database>,
     mailbox_manager: &Arc<MailboxManager>,
     event_bus: &EventBus,
+    // Call-related services for pending call bootstrap
+    call_service: &std::sync::OnceLock<CallWorkerHandle>,
+    settings_repo: &Arc<SettingsRepository>,
+    identity_manager: &Arc<IdentityKeyManager>,
+    key_store: &Arc<KeyStore>,
 ) {
     match event {
         InboxEvent::DmReceived {
@@ -345,6 +352,21 @@ pub async fn handle_inbox_event(
                 database.clone(),
                 mailbox_manager.clone(),
                 grpc_pool.clone(),
+            );
+
+            // Check if there's a pending call waiting for this bootstrap
+            // This schedules work on UI thread and returns immediately
+            on_dm_bootstrap_completed(
+                peer_id,
+                weak_window.clone(),
+                call_service,
+                message_service.clone(),
+                database.clone(),
+                mailbox_manager.clone(),
+                settings_repo.clone(),
+                identity_manager.clone(),
+                key_store.clone(),
+                channel_repo.clone(),
             );
         }
         InboxEvent::IncomingCall {

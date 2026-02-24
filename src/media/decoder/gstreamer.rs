@@ -91,6 +91,15 @@ impl GStreamerDecoder {
         // Get video info from the sink caps
         let info = Self::extract_video_info(&pipeline, &video_sink)?;
 
+        // Seek to position 0 to ensure video starts from the beginning
+        // Some containers have non-zero start times or preroll to non-zero positions
+        if let Err(e) = pipeline.seek_simple(
+            gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+            gst::ClockTime::ZERO,
+        ) {
+            tracing::warn!("Initial seek to 0 failed: {:?}", e);
+        }
+
         self.pipeline = Some(pipeline);
         self.video_sink = Some(video_sink);
         self.audio_sink = Some(audio_sink);
@@ -331,6 +340,17 @@ impl GStreamerDecoder {
         tracing::debug!("Extracting video info from sink caps...");
         let info = Self::extract_video_info(&pipeline, &video_sink)?;
         tracing::info!("Extracted video info: {}x{}, {}ms, {}fps", info.width, info.height, info.duration_ms, info.fps);
+
+        // Seek to position 0 to ensure video starts from the beginning
+        // Some containers have non-zero start times or preroll to non-zero positions
+        if let Err(e) = pipeline.seek_simple(
+            gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
+            gst::ClockTime::ZERO,
+        ) {
+            tracing::warn!("Initial seek to 0 failed: {:?}", e);
+        } else {
+            tracing::debug!("Seeked to start position 0");
+        }
 
         self.pipeline = Some(pipeline);
         self.video_sink = Some(video_sink);

@@ -35,11 +35,6 @@ fn uuid_from_bytes(bytes: &[u8]) -> Uuid {
     Uuid::from_bytes(uuid_bytes)
 }
 
-/// Create a deterministic UUID from a string.
-fn uuid_from_string(s: &str) -> Uuid {
-    uuid_from_bytes(s.as_bytes())
-}
-
 /// Create a deterministic UUID from a u64 timestamp.
 fn uuid_from_timestamp(ts: u64) -> Uuid {
     uuid_from_bytes(&ts.to_le_bytes())
@@ -91,7 +86,8 @@ impl AttachmentHandler {
         }
 
         // Generate deterministic attachment ID from cdn_key
-        let attachment_id = AttachmentId::from_uuid(uuid_from_string(&pointer.cdn_key));
+        // Uses AttachmentId::from_cdn_key to match upload path and dm_handlers
+        let attachment_id = AttachmentId::from_cdn_key(&pointer.cdn_key);
 
         // Build file metadata with sender-provided preview data
         let metadata = FileMetadata {
@@ -430,13 +426,13 @@ mod tests {
     }
 
     #[test]
-    fn test_uuid_from_string_deterministic() {
-        let uuid1 = uuid_from_string("test-key");
-        let uuid2 = uuid_from_string("test-key");
-        assert_eq!(uuid1, uuid2);
+    fn test_attachment_id_from_cdn_key_deterministic() {
+        let id1 = AttachmentId::from_cdn_key("test-cdn-key");
+        let id2 = AttachmentId::from_cdn_key("test-cdn-key");
+        assert_eq!(id1, id2);
 
-        let uuid3 = uuid_from_string("different-key");
-        assert_ne!(uuid1, uuid3);
+        let id3 = AttachmentId::from_cdn_key("different-cdn-key");
+        assert_ne!(id1, id3);
     }
 
     #[test]

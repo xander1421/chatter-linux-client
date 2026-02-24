@@ -281,6 +281,13 @@ impl AudioCapture {
         Ok(audio_source)
     }
 
+    /// Signal audio capture to stop (non-blocking).
+    ///
+    /// This only sets the running flag. Use `stop()` for full cleanup.
+    pub fn signal_stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+
     /// Stop audio capture.
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);

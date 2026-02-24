@@ -559,7 +559,7 @@ pub fn initials_from_name(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::ids::{ChannelId, MessageId, UserId};
+    use crate::domain::ids::{ChannelId, UserId};
     use crate::domain::message::{Message, MessageContent, ReactionCount};
     use crate::domain::SystemMessage;
 

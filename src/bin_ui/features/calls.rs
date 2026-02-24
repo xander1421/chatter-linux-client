@@ -8,15 +8,19 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use slint::{ComponentHandle, Model, ModelRc, Timer, TimerMode, VecModel};
 
+use chrono::{Duration, Utc};
+use uuid::Uuid;
+
 use chatter_linux::app::AppContext;
 use chatter_linux::calls::{AudioCapture, LiveKitRoomEvent, ScreenCapture, ScreenSourceType};
 use chatter_linux::domain::call::CallType;
-use chatter_linux::domain::ids::{CallId, ChannelId, UserId};
+use chatter_linux::domain::ids::{CallId, ChannelId, MessageId, UserId};
+use chatter_linux::domain::message::{CallMessage, CallMessageType, Message, MessageContent};
 use chatter_linux::inbox::handlers::DomainEvent;
-use chatter_linux::services::CallService;
+use chatter_linux::services::CallWorkerHandle;
 use chatter_linux::services::mailbox_manager::MailboxManager;
 use chatter_linux::services::message_service::MessageService;
-use chatter_linux::storage::{ChannelRepository, Database};
+use chatter_linux::storage::{ChannelRepository, Database, MessageRepository, UserRepository};
 use crate::{ActiveCallData, AudioDeviceData, CallParticipantData, MainWindow, ScreenSourceData};
 
 thread_local! {
@@ -129,6 +133,24 @@ fn stop_call_timer() {
     tracing::debug!("Call timer stopped");
 }
 
+/// Get the current call duration in seconds.
+///
+/// Returns 0 if no call is active or timer hasn't started.
+fn get_call_duration_secs() -> i64 {
+    CALL_START_NS.with(|start| {
+        if let Some(start_ns) = *start.borrow() {
+            let now = current_time_ns();
+            if now > start_ns {
+                ((now - start_ns) / 1_000_000_000) as i64
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    })
+}
+
 /// Clean up call UI state when a call ends remotely (via hangup notification).
 ///
 /// This must be called from the main UI thread via `invoke_from_event_loop`.
@@ -136,6 +158,89 @@ fn stop_call_timer() {
 pub fn cleanup_call_ui_state() {
     stop_call_timer();
     tracing::debug!("Call UI state cleaned up (remote hangup)");
+}
+
+/// Create and save a call history message to the database and UI.
+///
+/// # Arguments
+/// * `database` - Database connection
+/// * `channel_id` - Channel where the call occurred
+/// * `call_id` - Unique call identifier
+/// * `initiator_id` - User who initiated the call
+/// * `initiator_name` - Display name of the initiator
+/// * `is_outgoing` - True if we initiated the call
+/// * `duration_secs` - Call duration in seconds (0 for missed calls)
+/// * `is_missed` - True if the call was missed/declined
+fn create_call_history_message(
+    database: Arc<Database>,
+    channel_id: &ChannelId,
+    call_id: &str,
+    initiator_id: &UserId,
+    initiator_name: &str,
+    is_outgoing: bool,
+    duration_secs: i64,
+    is_missed: bool,
+) {
+    // Create call message content
+    let call_type = if is_missed {
+        CallMessageType::Missed
+    } else {
+        CallMessageType::Ended
+    };
+
+    let duration = if duration_secs > 0 {
+        Some(Duration::seconds(duration_secs))
+    } else {
+        None
+    };
+
+    let call_msg = CallMessage {
+        call_id: call_id.to_string(),
+        call_type,
+        initiator_id: *initiator_id,
+        initiator_name: initiator_name.to_string(),
+        started_at: None, // We don't track this currently
+        ended_at: Some(Utc::now()),
+        duration,
+        participant_count: 2, // DM calls have 2 participants
+    };
+
+    // Create the message
+    let message = Message {
+        id: MessageId(Uuid::new_v4()),
+        channel_id: *channel_id,
+        sender_id: Some(*initiator_id),
+        content: MessageContent::Call(call_msg),
+        thread_id: None,
+        reply_to: None,
+        attachments: vec![],
+        is_pinned: false,
+        is_edited: false,
+        is_deleted: false,
+        sent_at: current_time_ns(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        edited_at: None,
+        reaction_counts: vec![],
+        current_user_reactions: vec![],
+        mentioned_integrations: vec![],
+        targets_ai_bot: false,
+    };
+
+    // Save to database
+    let message_repo = MessageRepository::new(database);
+    if let Err(e) = message_repo.insert(&message) {
+        tracing::error!(error = %e, "Failed to save call history message");
+    } else {
+        tracing::info!(
+            call_id = call_id,
+            channel_id = %channel_id,
+            is_outgoing = is_outgoing,
+            is_missed = is_missed,
+            duration_secs = duration_secs,
+            "Saved call history message"
+        );
+    }
 }
 
 /// Wire room events to update UI (participant count, etc.).
@@ -360,7 +465,7 @@ fn wire_start_call(window: &MainWindow, ctx: &AppContext) {
 #[allow(clippy::too_many_arguments)]
 async fn start_call_impl(
     weak: slint::Weak<MainWindow>,
-    call_service: Arc<CallService>,
+    call_service: CallWorkerHandle,
     settings: Arc<chatter_linux::storage::SettingsRepository>,
     call_type: CallType,
     message_service: Arc<MessageService>,
@@ -427,9 +532,12 @@ async fn start_call_impl(
         match derive_call_encryption_key(&identity_manager, &key_store, &channel_repo, &channel_id, &user_id) {
             Ok(key) => key,
             Err(e) => {
-                tracing::error!("Failed to derive call encryption key: {}", e);
-                // Fall back to zeroed key (will still work but less secure)
-                [0u8; 32]
+                // No secure channel established yet - user needs to send a message first
+                tracing::warn!(
+                    "Cannot start call - no secure channel with peer: {}. Send a message first to establish encryption.",
+                    e
+                );
+                return;
             }
         }
     } else {
@@ -607,17 +715,20 @@ fn derive_call_encryption_key(
     let peer_id = get_dm_peer_id(channel_repo, channel_id, current_user_id)?
         .ok_or("Could not find peer in DM channel")?;
 
-    // Signal addresses are "{uuid}.{device_id}" - we use device 1 as default
-    let peer_address = format!("{}.1", peer_id);
-
     // Get peer's identity key from key store
+    // Use UUID-based lookup to find any device's identity key for this peer
+    // This handles cases where device ID might not be .1
     let peer_identity_bytes = key_store
-        .get_identity(&peer_address)?
-        .ok_or_else(|| format!("No identity key found for peer {}", peer_id))?;
+        .get_identity_by_uuid(&peer_id.to_string())?
+        .ok_or_else(|| format!(
+            "No identity key found for peer {} (no messages received from them yet?)",
+            peer_id
+        ))?;
 
-    // Parse peer's identity key
-    let peer_identity = IdentityKey::decode(&peer_identity_bytes)
-        .map_err(|_| "Failed to decode peer identity key")?;
+    // Parse peer's identity key (stored as serialized IdentityKey bytes)
+    // Use try_from to match how the Signal store decodes identity keys
+    let peer_identity = IdentityKey::try_from(peer_identity_bytes.as_slice())
+        .map_err(|e| format!("Failed to decode peer identity key ({} bytes): {:?}", peer_identity_bytes.len(), e))?;
 
     // Derive shared secret using ECDH
     let shared_secret = chatter_linux::crypto::derive_call_shared_secret(&our_identity, &peer_identity)?;
@@ -855,16 +966,20 @@ fn wire_active_call(window: &MainWindow, ctx: &AppContext) {
         let call_service = call_service.clone();
         let weak = window.as_weak();
         move || {
-            if let Some(service) = call_service.get() {
-                let is_muted = service.is_microphone_muted();
-                let new_state = !is_muted;
-                service.set_microphone_muted(new_state);
-                tracing::info!("Microphone muted: {}", new_state);
+            let call_service = call_service.clone();
+            let weak = weak.clone();
+            slint::spawn_local(async move {
+                if let Some(service) = call_service.get() {
+                    let is_muted = service.is_microphone_muted().await;
+                    let new_state = !is_muted;
+                    service.set_microphone_muted(new_state);
+                    tracing::info!("Microphone muted: {}", new_state);
 
-                if let Some(w) = weak.upgrade() {
-                    w.set_call_is_muted(new_state);
+                    if let Some(w) = weak.upgrade() {
+                        w.set_call_is_muted(new_state);
+                    }
                 }
-            }
+            }).unwrap();
         }
     });
 
@@ -873,16 +988,20 @@ fn wire_active_call(window: &MainWindow, ctx: &AppContext) {
         let call_service = call_service.clone();
         let weak = window.as_weak();
         move || {
-            if let Some(service) = call_service.get() {
-                let is_enabled = service.is_camera_enabled();
-                let new_state = !is_enabled;
-                service.set_camera_enabled(new_state);
-                tracing::info!("Camera enabled: {}", new_state);
+            let call_service = call_service.clone();
+            let weak = weak.clone();
+            slint::spawn_local(async move {
+                if let Some(service) = call_service.get() {
+                    let is_enabled = service.is_camera_enabled().await;
+                    let new_state = !is_enabled;
+                    service.set_camera_enabled(new_state);
+                    tracing::info!("Camera enabled: {}", new_state);
 
-                if let Some(w) = weak.upgrade() {
-                    w.set_call_is_video_enabled(new_state);
+                    if let Some(w) = weak.upgrade() {
+                        w.set_call_is_video_enabled(new_state);
+                    }
                 }
-            }
+            }).unwrap();
         }
     });
 
@@ -891,19 +1010,18 @@ fn wire_active_call(window: &MainWindow, ctx: &AppContext) {
         let call_service = call_service.clone();
         let weak = window.as_weak();
         move || {
-            if let Some(service) = call_service.get() {
-                let room_manager = service.room_manager();
-                let is_sharing = room_manager.is_screen_sharing();
-                let new_state = !is_sharing;
+            let call_service = call_service.clone();
+            let weak = weak.clone();
+            slint::spawn_local(async move {
+                if let Some(service) = call_service.get() {
+                    let is_sharing = service.is_screen_sharing().await;
+                    let new_state = !is_sharing;
 
-                if new_state {
-                    // Start screen share - use primary display
-                    let room_manager = room_manager.clone();
-                    let weak = weak.clone();
-                    slint::spawn_local(async move {
+                    if new_state {
+                        // Start screen share - use primary display
                         match chatter_linux::calls::ScreenCapture::primary_source() {
                             Ok(source) => {
-                                if let Err(e) = room_manager.publish_screen_share(source, None).await {
+                                if let Err(e) = service.publish_screen_share(source).await {
                                     tracing::error!("Failed to start screen share: {}", e);
                                 } else {
                                     tracing::info!("Screen share started");
@@ -916,16 +1034,16 @@ fn wire_active_call(window: &MainWindow, ctx: &AppContext) {
                                 tracing::error!("No screen source available: {}", e);
                             }
                         }
-                    }).unwrap();
-                } else {
-                    // Stop screen share
-                    room_manager.stop_screen_share();
-                    tracing::info!("Screen share stopped");
-                    if let Some(w) = weak.upgrade() {
-                        w.set_call_is_screen_sharing(false);
+                    } else {
+                        // Stop screen share
+                        service.stop_screen_share();
+                        tracing::info!("Screen share stopped");
+                        if let Some(w) = weak.upgrade() {
+                            w.set_call_is_screen_sharing(false);
+                        }
                     }
                 }
-            }
+            }).unwrap();
         }
     });
 
@@ -954,12 +1072,18 @@ fn wire_active_call(window: &MainWindow, ctx: &AppContext) {
             let settings_repo = settings_repo.clone();
 
             slint::spawn_local(async move {
+                // IMPORTANT: Update UI immediately BEFORE async operations
+                // This prevents the modal from staying visible if network calls block
+                stop_call_timer();
+                if let Some(w) = weak.upgrade() {
+                    w.set_active_call_visible(false);
+                }
                 if let Some(service) = call_service.get() {
                     // Get call info before leaving
-                    let call_info = service.active_call();
+                    let call_info = service.active_call().await;
 
                     // Send hangup notification for DM calls
-                    if let Some(call) = &call_info {
+                    if let Some(ref call) = call_info {
                         let channel_id = &call.channel_id;
 
                         // Get current user ID
@@ -1004,11 +1128,35 @@ fn wire_active_call(window: &MainWindow, ctx: &AppContext) {
                                         );
                                     }
                                 }
+
+                                // Create call history message
+                                let is_outgoing = call.initiator_id == user_id;
+                                let duration_secs = get_call_duration_secs();
+
+                                // Get initiator display name
+                                let user_repo = UserRepository::new(database.clone());
+                                let initiator_name = user_repo
+                                    .get(&call.initiator_id)
+                                    .ok()
+                                    .flatten()
+                                    .map(|u| u.username.clone())
+                                    .unwrap_or_else(|| call.initiator_id.to_string());
+
+                                create_call_history_message(
+                                    database.clone(),
+                                    channel_id,
+                                    &call.id.to_string(),
+                                    &call.initiator_id,
+                                    &initiator_name,
+                                    is_outgoing,
+                                    duration_secs,
+                                    false, // not missed - call was answered and ended normally
+                                );
                             }
                         }
                     }
 
-                    // Leave the call
+                    // Leave the call (async cleanup - UI already updated above)
                     match service.leave_call().await {
                         Ok(()) => {
                             tracing::info!("Left call successfully");
@@ -1017,13 +1165,6 @@ fn wire_active_call(window: &MainWindow, ctx: &AppContext) {
                             tracing::error!("Failed to leave call: {}", e);
                         }
                     }
-                }
-
-                // Stop call timer
-                stop_call_timer();
-
-                if let Some(w) = weak.upgrade() {
-                    w.set_active_call_visible(false);
                 }
             }).unwrap();
         }
@@ -1038,6 +1179,8 @@ fn wire_call_hangup_handler(window: &MainWindow, ctx: &AppContext) {
     let call_service = ctx.call_service.clone();
     let mut event_rx = ctx.event_bus.subscribe_domain();
     let weak = window.as_weak();
+    let database = ctx.database.clone();
+    let settings_repo = ctx.settings_repo.clone();
 
     // Spawn a task to handle incoming hangup events
     // Note: This runs in a slint::spawn_local context which keeps CallService on UI thread
@@ -1051,23 +1194,61 @@ fn wire_call_hangup_handler(window: &MainWindow, ctx: &AppContext) {
                     "Processing remote call hangup"
                 );
 
-                // Get CallService and call leave_call
+                // Get call duration BEFORE stopping the timer
+                let duration_secs = get_call_duration_secs();
+
+                // Get CallService and disconnect locally
+                // IMPORTANT: Don't call leave_call() here - that would make a server
+                // request which can block/timeout since the peer already ended the call.
+                // Just disconnect locally from LiveKit.
                 if let Some(service) = call_service.get() {
+                    // Get call info BEFORE disconnecting (for call history message)
+                    let call_info = service.active_call().await;
+
                     // Verify this hangup is for our active call
-                    let is_our_call = service.active_call()
+                    let is_our_call = call_info.as_ref()
                         .map(|c| c.id.to_string() == call_id)
                         .unwrap_or(false);
 
                     if is_our_call {
-                        match service.leave_call().await {
-                            Ok(()) => {
-                                tracing::info!("Successfully disconnected from call after peer hangup");
-                            }
-                            Err(e) => {
-                                // NotInCall error is expected if we already left
-                                tracing::debug!("leave_call on hangup: {}", e);
+                        // Create call history message before disconnecting
+                        if let Some(ref call) = call_info {
+                            // Get current user ID to determine if this was incoming
+                            let current_user_id = settings_repo
+                                .get_string(chatter_linux::storage::settings_keys::CURRENT_USER_ID)
+                                .ok()
+                                .flatten()
+                                .and_then(|s| UserId::from_str(&s).ok());
+
+                            if let Some(current_user_id) = current_user_id {
+                                // Incoming call = we didn't initiate it
+                                let is_outgoing = call.initiator_id == current_user_id;
+
+                                // Get initiator display name
+                                let user_repo = UserRepository::new(database.clone());
+                                let initiator_name = user_repo
+                                    .get(&call.initiator_id)
+                                    .ok()
+                                    .flatten()
+                                    .map(|u| u.username.clone())
+                                    .unwrap_or_else(|| call.initiator_id.to_string());
+
+                                create_call_history_message(
+                                    database.clone(),
+                                    &call.channel_id,
+                                    &call.id.to_string(),
+                                    &call.initiator_id,
+                                    &initiator_name,
+                                    is_outgoing,
+                                    duration_secs,
+                                    false, // not missed - peer hung up after call was connected
+                                );
                             }
                         }
+
+                        // Disconnect locally without calling server (peer already ended)
+                        service.disconnect_local().await;
+                        tracing::info!("Disconnected locally after peer hangup");
                     } else {
                         tracing::debug!(
                             call_id = %call_id,
@@ -1076,7 +1257,10 @@ fn wire_call_hangup_handler(window: &MainWindow, ctx: &AppContext) {
                     }
                 }
 
-                // Hide the call UI (also done in inbox_events.rs, but ensure it happens)
+                // Stop the call timer and hide the call UI
+                // IMPORTANT: Must stop timer to prevent calloop event loop issues
+                stop_call_timer();
+
                 if let Some(w) = weak.upgrade() {
                     w.set_active_call_visible(false);
                     w.set_incoming_call_visible(false);
@@ -1261,10 +1445,8 @@ fn wire_device_picker(window: &MainWindow, ctx: &AppContext) {
                     match ScreenCapture::list_sources() {
                         Ok(sources) => {
                             if let Some(source) = sources.into_iter().find(|s| s.id == source_id_u64) {
-                                let room_manager = service.room_manager();
-
                                 // Start screen share with the selected source
-                                if let Err(e) = room_manager.publish_screen_share(source, None).await {
+                                if let Err(e) = service.publish_screen_share(source).await {
                                     tracing::error!("Failed to start screen share: {}", e);
                                 } else {
                                     tracing::info!("Screen share started with source: {}", source_id_display);

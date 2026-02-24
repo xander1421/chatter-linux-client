@@ -12,20 +12,21 @@ export component MessageContextMenu inherits Rectangle {
     in property <length> position-x: 0;
     in property <length> position-y: 0;
 
-    // Message context
-    in property <string> message-id;
+    // Message context (Signal-style identification: sender_id + timestamp_ns)
+    in property <string> sender-id: "";
+    in property <string> timestamp-ns: "";
     in property <bool> is-own-message: false;  // Can edit/delete own messages
     in property <bool> is-pinned: false;
 
-    // Callbacks
+    // Callbacks - use (sender_id, timestamp_ns) for Signal-style lookups
     callback close();
-    callback reply-clicked(string);
-    callback edit-clicked(string);
-    callback delete-clicked(string);           // Delete for me (local only)
-    callback delete-everyone-clicked(string);  // Delete for everyone
-    callback pin-clicked(string);
-    callback forward-clicked(string);
-    callback copy-clicked(string);
+    callback reply-clicked(string, string);
+    callback edit-clicked(string, string);
+    callback delete-clicked(string, string);           // Delete for me (local only)
+    callback delete-everyone-clicked(string, string);  // Delete for everyone
+    callback pin-clicked(string, string);
+    callback forward-clicked(string, string);
+    callback copy-clicked(string, string);
 
     // Menu items (emoji with variant selectors for colorful rendering)
     property <[{icon: string, label: string, action: string, enabled: bool}]> menu-items: [
@@ -105,19 +106,19 @@ export component MessageContextMenu inherits Rectangle {
                 item-touch := TouchArea {
                     clicked => {
                         if item.action == "reply" {
-                            root.reply-clicked(root.message-id);
+                            root.reply-clicked(root.sender-id, root.timestamp-ns);
                         } else if item.action == "edit" {
-                            root.edit-clicked(root.message-id);
+                            root.edit-clicked(root.sender-id, root.timestamp-ns);
                         } else if item.action == "delete" {
-                            root.delete-clicked(root.message-id);
+                            root.delete-clicked(root.sender-id, root.timestamp-ns);
                         } else if item.action == "delete-everyone" {
-                            root.delete-everyone-clicked(root.message-id);
+                            root.delete-everyone-clicked(root.sender-id, root.timestamp-ns);
                         } else if item.action == "pin" {
-                            root.pin-clicked(root.message-id);
+                            root.pin-clicked(root.sender-id, root.timestamp-ns);
                         } else if item.action == "forward" {
-                            root.forward-clicked(root.message-id);
+                            root.forward-clicked(root.sender-id, root.timestamp-ns);
                         } else if item.action == "copy" {
-                            root.copy-clicked(root.message-id);
+                            root.copy-clicked(root.sender-id, root.timestamp-ns);
                         }
                         root.close();
                     }

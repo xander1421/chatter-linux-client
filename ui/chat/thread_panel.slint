@@ -31,7 +31,7 @@ export component ThreadPanel inherits Rectangle {
     callback send-reply(string);
     callback load-more-replies;
     callback message-clicked(string);
-    callback react-clicked(string);
+    callback react-clicked(string, string);  // (sender_id, timestamp_ns)
 
     // Panel sizing
     width: 320px;
@@ -254,6 +254,7 @@ export component ThreadPanel inherits Rectangle {
                         width: 100%;
                         message-id: item.message-id;
                         sender-id: item.sender-id;
+                        timestamp-ns: item.timestamp-ns;
                         sender-name: item.sender-name;
                         sender-initials: item.sender-initials;
                         sender-avatar-url: item.sender-avatar-url;
@@ -276,8 +277,8 @@ export component ThreadPanel inherits Rectangle {
                             root.message-clicked(id);
                         }
 
-                        react-clicked(id) => {
-                            root.react-clicked(id);
+                        react-clicked(sender-id, timestamp-ns) => {
+                            root.react-clicked(sender-id, timestamp-ns);
                         }
                     }
                 }

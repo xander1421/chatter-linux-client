@@ -32,12 +32,12 @@ export component MessageList inherits Rectangle {
     property <length> scroll-target: 0px;
     property <bool> animating: false;
 
-    // Callbacks
+    // Callbacks - Signal-style identification (sender_id, timestamp_ns)
     callback message-clicked(string);
-    callback reply-clicked(string);
-    callback react-clicked(string);
+    callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback react-clicked(string, string);  // (sender_id, timestamp_ns)
     callback thread-clicked(string);
-    callback more-clicked(string);
+    callback more-clicked(string, string);  // (sender_id, timestamp_ns)
     callback load-more();
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
@@ -177,6 +177,7 @@ export component MessageList inherits Rectangle {
                 width: parent.width - Spacing.md * 2;
                 message-id: item.message-id;
                 sender-id: item.sender-id;
+                timestamp-ns: item.timestamp-ns;
                 sender-name: item.sender-name;
                 sender-initials: item.sender-initials;
                 sender-avatar-url: item.sender-avatar-url;
@@ -205,20 +206,20 @@ export component MessageList inherits Rectangle {
                     root.message-clicked(id);
                 }
 
-                reply-clicked(id) => {
-                    root.reply-clicked(id);
+                reply-clicked(sender-id, timestamp-ns) => {
+                    root.reply-clicked(sender-id, timestamp-ns);
                 }
 
-                react-clicked(id) => {
-                    root.react-clicked(id);
+                react-clicked(sender-id, timestamp-ns) => {
+                    root.react-clicked(sender-id, timestamp-ns);
                 }
 
                 thread-clicked(id) => {
                     root.thread-clicked(id);
                 }
 
-                more-clicked(id) => {
-                    root.more-clicked(id);
+                more-clicked(sender-id, timestamp-ns) => {
+                    root.more-clicked(sender-id, timestamp-ns);
                 }
 
                 attachment-clicked(id) => {

@@ -49,6 +49,9 @@ fn wire_channel_selected(window: &MainWindow, ctx: &AppContext) {
         // Stop any playing audio when switching channels
         stop_audio_playback();
 
+        // Clear inline GIF animations to free memory
+        crate::bin_ui::gif_state::clear_inline_gifs();
+
         tokio::spawn(async move {
             // Set loading state
             let weak_loading = weak.clone();
@@ -108,6 +111,9 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
 
         // Stop any playing audio when switching channels
         stop_audio_playback();
+
+        // Clear inline GIF animations to free memory
+        crate::bin_ui::gif_state::clear_inline_gifs();
 
         tokio::spawn(async move {
             // dm_id is now the channel_id directly (from DMListItemData.channel_id)
@@ -199,6 +205,9 @@ fn wire_saved_messages(window: &MainWindow, ctx: &AppContext) {
 
         // Stop any playing audio when switching channels
         stop_audio_playback();
+
+        // Clear inline GIF animations to free memory
+        crate::bin_ui::gif_state::clear_inline_gifs();
 
         tokio::spawn(async move {
             // Get current user ID - saved messages channel_id = user_id
@@ -478,6 +487,7 @@ pub async fn load_channel_into_ui(
         channel.description.clone().unwrap_or_default()
     };
     let is_archived = channel.archived;
+    let attachment_repo_for_gifs = attachment_repo.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = window_weak.upgrade() {
@@ -509,6 +519,9 @@ pub async fn load_channel_into_ui(
             w.set_is_archived(is_archived);
             w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
             w.set_loading_messages(false);
+
+            // Auto-register GIF animations for inline playback
+            auto_register_gif_animations(w.as_weak(), attachment_repo_for_gifs);
         }
     });
 }
@@ -523,4 +536,142 @@ fn stop_audio_playback() {
     }
     // Clear the audio state
     audio_state::clear_state();
+}
+
+/// Auto-register GIF attachments for inline animation.
+/// This checks each GIF attachment and if content is available in DB, decrypts and registers it.
+fn auto_register_gif_animations(
+    window_weak: slint::Weak<MainWindow>,
+    attachment_repo: Arc<AttachmentRepository>,
+) {
+    use chatter_linux::domain::attachment::ContentLocation;
+    use chatter_linux::services::AttachmentService;
+
+    // Get messages from UI
+    let gif_attachments: Vec<(String, chatter_linux::domain::ids::AttachmentId)> = {
+        let Some(w) = window_weak.upgrade() else {
+            return;
+        };
+
+        let messages = w.get_messages();
+        let mut gifs = Vec::new();
+
+        for msg_idx in 0..messages.row_count() {
+            if let Some(msg) = messages.row_data(msg_idx) {
+                for att_idx in 0..msg.attachments.row_count() {
+                    if let Some(att) = msg.attachments.row_data(att_idx) {
+                        // Check if it's a GIF
+                        let mime = att.mime_type.to_string();
+                        let filename = att.filename.to_string();
+                        if mime == "image/gif" || filename.to_lowercase().ends_with(".gif") {
+                            if let Ok(att_id) = att.id.to_string().parse() {
+                                gifs.push((att.id.to_string(), att_id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        gifs
+    };
+
+    if gif_attachments.is_empty() {
+        return;
+    }
+
+    tracing::debug!("Found {} GIF attachments to auto-register", gif_attachments.len());
+
+    // Process each GIF in the background
+    let weak = window_weak.clone();
+    tokio::spawn(async move {
+        let attachment_service = AttachmentService::new(attachment_repo.clone());
+
+        for (att_id_str, att_id) in gif_attachments {
+            // Check if attachment has content in database
+            match attachment_repo.get(&att_id) {
+                Ok(Some(att)) if att.content_location == ContentLocation::InDatabase => {}
+                _ => continue, // Skip if not available
+            }
+
+            // Decrypt to memory
+            let data = match attachment_service.decrypt_to_memory(&att_id) {
+                Ok(buffer) => buffer.as_slice().to_vec(),
+                Err(e) => {
+                    tracing::debug!("Could not decrypt GIF {}: {}", att_id, e);
+                    continue;
+                }
+            };
+
+            // Decode GIF on background thread (blocking task)
+            let att_id_for_decode = att_id_str.clone();
+            let raw_frames = match tokio::task::spawn_blocking(move || {
+                use chatter_linux::media::gif::AnimatedGif;
+                match AnimatedGif::decode(&data) {
+                    Ok(Some(gif)) if gif.frames.len() > 1 => {
+                        let frames: Vec<(Vec<u8>, u32, u32, u64)> = gif.frames
+                            .into_iter()
+                            .map(|f| (f.data, f.width, f.height, f.delay.as_millis().max(20) as u64))
+                            .collect();
+                        Some(frames)
+                    }
+                    _ => None,
+                }
+            }).await {
+                Ok(Some(frames)) => frames,
+                Ok(None) => {
+                    tracing::debug!("GIF {} is not animated or decode failed", att_id_for_decode);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::debug!("GIF decode task failed for {}: {}", att_id_for_decode, e);
+                    continue;
+                }
+            };
+
+            // Register on UI thread (only converts raw data to Slint Images)
+            let att_id_for_ui = att_id_str.clone();
+            let weak_for_ui = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(first_frame) = crate::bin_ui::gif_state::register_inline_gif_from_raw(&att_id_for_ui, raw_frames) {
+                    // Update the thumbnail with the first frame
+                    if let Some(w) = weak_for_ui.upgrade() {
+                        update_gif_thumbnail(&w, &att_id_for_ui, first_frame);
+                    }
+                    tracing::debug!("Auto-registered GIF animation: {}", att_id_for_ui);
+                }
+            });
+        }
+    });
+}
+
+/// Update a single attachment's thumbnail in the message model.
+fn update_gif_thumbnail(window: &MainWindow, attachment_id: &str, image: slint::Image) {
+    use slint::{Model, VecModel};
+
+    let messages = window.get_messages();
+
+    for msg_idx in 0..messages.row_count() {
+        if let Some(msg) = messages.row_data(msg_idx) {
+            let attachments = &msg.attachments;
+
+            for att_idx in 0..attachments.row_count() {
+                if let Some(att) = attachments.row_data(att_idx) {
+                    if att.id.as_str() == attachment_id {
+                        let mut updated_att = att.clone();
+                        updated_att.thumbnail = image;
+                        updated_att.has_thumbnail = true;
+
+                        if let Some(att_model) = attachments
+                            .as_any()
+                            .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
+                        {
+                            att_model.set_row_data(att_idx, updated_att);
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+    }
 }

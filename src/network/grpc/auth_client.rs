@@ -64,7 +64,7 @@ impl AuthClient {
         username: &str,
         password_hash: &[u8],
         device_info: &str,
-        public_key: &[u8],
+        svr_public_key: &[u8],
         device_auth_token: &[u8],
         unidentified_access_key: &[u8; 16],
         device_id: Option<u32>,
@@ -72,7 +72,7 @@ impl AuthClient {
         let request = LoginRequest {
             username: username.to_string(),
             password_hash: password_hash.to_vec(),
-            public_key: public_key.to_vec(),
+            svr_public_key: svr_public_key.to_vec(),
             device_info: device_info.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
             device_auth_token: device_auth_token.to_vec(),
@@ -172,7 +172,7 @@ impl AuthClient {
         username: &str,
         password_hash: &[u8],
         display_name: &str,
-        public_key: &[u8],
+        svr_public_key: &[u8],
         device_info: &str,
         device_auth_token: &[u8],
         profile_key: &[u8; 32],
@@ -182,7 +182,7 @@ impl AuthClient {
         let request = RegisterRequest {
             username: username.to_string(),
             password_hash: password_hash.to_vec(),
-            public_key: public_key.to_vec(),
+            svr_public_key: svr_public_key.to_vec(),
             display_name: display_name.to_string(),
             avatar_url: String::new(),
             device_info: device_info.to_string(),
@@ -223,7 +223,7 @@ impl AuthClient {
         username: &str,
         password_hash: &[u8],
         display_name: &str,
-        public_key: &[u8],
+        svr_public_key: &[u8],
         device_info: &str,
         device_auth_token: &[u8],
         profile_key: &[u8; 32],
@@ -235,7 +235,7 @@ impl AuthClient {
                 username,
                 password_hash,
                 display_name,
-                public_key,
+                svr_public_key,
                 device_info,
                 device_auth_token,
                 profile_key,
@@ -316,17 +316,17 @@ impl AuthClient {
     ///
     /// * `reset_token` - Reset token from email
     /// * `new_password_hash` - New password hash
-    /// * `new_public_key` - Optional new Ed25519 public key for key rotation
+    /// * `new_svr_public_key` - Optional new SVR public key for key rotation
     pub async fn complete_password_reset(
         &mut self,
         reset_token: &str,
         new_password_hash: &[u8],
-        new_public_key: Option<&[u8]>,
+        new_svr_public_key: Option<&[u8]>,
     ) -> Result<AuthResponse, NetworkError> {
         let request = CompletePasswordResetRequest {
             reset_token: reset_token.to_string(),
             new_password_hash: new_password_hash.to_vec(),
-            new_public_key: new_public_key.map(|k| k.to_vec()).unwrap_or_default(),
+            new_svr_public_key: new_svr_public_key.map(|k| k.to_vec()).unwrap_or_default(),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
 

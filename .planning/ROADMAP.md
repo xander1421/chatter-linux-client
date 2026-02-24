@@ -653,6 +653,61 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 **Details:**
 76-03 complete: signal_service.rs split into signal/ module (session, sender_key, identity)
 
+### Phase 77: Rename public_key to svr_public_key
+**Goal**: Replace legacy public_key field with svr_public_key for Secure Value Recovery across full stack
+**Depends on**: Phase 76
+**Research**: Unlikely (field rename across proto/backend/client)
+**Status**: Not started
+**Plans**: 0 plans
+
+**Scope (~25 files):**
+- Proto: auth.proto, common.proto (field rename, keep field number 3)
+- Backend Go: types, repository, service, handlers, Temporal workflows/activities
+- Backend DB: New migration to rename column + index
+- Client Rust: domain, storage migration, repository, services
+- Mocks: Regenerate after interface changes
+
+**Details:**
+Prepares for PIN-based Secure Value Recovery (SVR) feature. The legacy `public_key` field is redundant with Signal Protocol's `prekey_bundle.identity_key` and will be repurposed for SVR.
+
+### Phase 78: Service Separation of Concerns
+**Goal**: Enforce proper layering by moving business logic from UI/handlers into services, centralizing cross-cutting concerns
+**Depends on**: Phase 77
+**Research**: Unlikely (internal refactoring based on codebase analysis)
+**Status**: Not started
+**Plans**: 0 plans
+
+**Scope (~20+ files):**
+
+Priority 1 (Critical - Security/Stability):
+- Create `DmBootstrapService` - Consolidate bootstrap logic from `bin_ui/features/auth/inbox/dm_handlers.rs` and `inbox/handlers/`
+- Create `SessionManagementService` - Centralize session reset/recovery/archive from `message/dm.rs` and UI handlers
+- Remove direct repository access from UI - All `*_repo.insert()` calls in `bin_ui/features/` should go through services
+
+Priority 2 (High - Architecture):
+- Create `ChannelEventService` - System message creation (member join/leave) belongs here, not in `channel_events.rs`
+- Create `SignalStateService` - Abstract KeyStore/Sesame access from UI layer (`login.rs`, `register.rs`)
+- Create `CurrentUserProvider` trait - Eliminate 15+ duplicate `current_user_id()` implementations
+
+Priority 3 (Medium - Cleanup):
+- Consolidate offline queue - Keep implementation in services, remove from `network/offline_queue.rs`
+- Move validation to services - Network layer should only deserialize, not validate
+- Create `MessageBuilderService` - Consolidate content builders from `gateway/builders.rs`
+
+Priority 4 (Low - Refactoring):
+- Create `ConverterService` - Proto ↔ Domain conversions in one place
+- Move storage initialization to services - Reduce UI coupling to database
+
+**Key violations to fix:**
+- `bin_ui/features/auth/channel_events.rs:172,270` - Direct `message_repo.insert()`, `channel_repo.update()`
+- `bin_ui/features/auth/inbox/dm_handlers.rs:1271,1280` - Direct `channel_repo.insert()`
+- `bin_ui/features/auth/inbox/dm_handlers.rs:36-75` - `handle_convergence_failure()` duplicates service logic
+- `bin_ui/features/auth/login.rs` - Direct `ctx.key_store` access
+- `services/message/dm.rs:401-417` - `sesame_manager` accessed directly instead of through service
+
+**Details:**
+Based on comprehensive separation of concerns analysis identifying layer violations between UI, handlers, services, and storage.
+
 ## Progress
 
 **Execution Order:** Phases execute in numeric order (1 → 2 → ... → 70)
@@ -736,3 +791,5 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 | 74 | LiveKit Video & Audio Calls | 5 | Done | 2026-02-23 |
 | 75 | Secure In-Memory Attachment Handling | 0 | In Progress | - |
 | 76 | Refactor Large Service Files | 3/4 | In Progress | - |
+| 77 | Rename public_key to svr_public_key | 0 | Not started | - |
+| 78 | Service Separation of Concerns | 0 | Not started | - |

@@ -7,7 +7,7 @@ use slint::{Image, ModelRc, SharedString, VecModel};
 use chatter_linux::domain::attachment::{Attachment, AttachmentStatus};
 use chatter_linux::domain::channel::{Channel, ChannelType};
 use chatter_linux::domain::ids::AttachmentId;
-use chatter_linux::domain::message::Message;
+use chatter_linux::domain::message::{Message, MessageContent};
 use chatter_linux::proto::content_v1::AttachmentPointer;
 use chatter_linux::state::PendingAttachment;
 
@@ -371,16 +371,54 @@ pub struct MessageDisplayData {
     pub reply_count_text: String,
     pub is_thread_reply: bool,
     pub delivery_status: String,
+    // Call message fields
+    pub is_call: bool,
+    pub call_message_type: String,  // "started", "ended", "missed" (raw from domain)
+    pub call_initiator_id: String,  // User ID of who initiated the call
+    pub call_duration: String,      // "1 min 30 s" or empty
 }
 
 impl MessageDisplayData {
     /// Convert to Slint MessageItemData (must be called on UI thread).
+    ///
+    /// For call messages, use `to_slint_with_user` to properly determine call direction.
     pub fn to_slint(&self) -> MessageItemData {
+        self.to_slint_with_user("")
+    }
+
+    /// Convert to Slint MessageItemData with current user context.
+    ///
+    /// The `current_user_id` is used to determine call direction (outgoing vs incoming).
+    pub fn to_slint_with_user(&self, current_user_id: &str) -> MessageItemData {
         let slint_attachments: Vec<MessageAttachmentData> = self
             .attachments
             .iter()
             .map(|a| a.to_slint())
             .collect();
+
+        // Determine call type based on who initiated
+        let call_type = if self.is_call {
+            match self.call_message_type.as_str() {
+                "missed" => "missed".to_string(),
+                _ => {
+                    // If we initiated, it's outgoing; otherwise incoming
+                    if self.call_initiator_id == current_user_id {
+                        "outgoing".to_string()
+                    } else {
+                        "incoming".to_string()
+                    }
+                }
+            }
+        } else {
+            String::new()
+        };
+
+        // For call messages, is_own is based on who initiated
+        let is_own = if self.is_call {
+            self.call_initiator_id == current_user_id
+        } else {
+            self.sender_id == current_user_id
+        };
 
         MessageItemData {
             message_id: self.message_id.clone().into(),
@@ -391,7 +429,7 @@ impl MessageDisplayData {
             content: self.content.clone().into(),
             timestamp: self.timestamp.clone().into(),
             timestamp_ns: self.timestamp_ns.clone().into(),
-            is_own: false, // Set by caller based on current user
+            is_own,
             is_edited: self.is_edited,
             is_deleted: self.is_deleted,
             is_system: false,
@@ -407,6 +445,9 @@ impl MessageDisplayData {
             show_sender: true,
             delivery_status: self.delivery_status.clone().into(),
             is_pinned: false,
+            is_call: self.is_call,
+            call_type: call_type.into(),
+            call_duration: self.call_duration.clone().into(),
         }
     }
 }
@@ -438,6 +479,26 @@ pub fn message_to_display_data_with_replies(
     let reply_count = reply_count.unwrap_or(0);
     let reply_count_text = format_count(reply_count, "reply", "replies");
 
+    // Extract call information if this is a call message
+    let (is_call, call_message_type, call_initiator_id, call_duration) =
+        if let MessageContent::Call(call_msg) = &msg.content {
+            use chatter_linux::domain::message::CallMessageType;
+            let msg_type = match call_msg.call_type {
+                CallMessageType::Started => "started",
+                CallMessageType::Ended => "ended",
+                CallMessageType::Missed => "missed",
+            };
+            let duration = call_msg.duration_display().unwrap_or_default();
+            (
+                true,
+                msg_type.to_string(),
+                call_msg.initiator_id.to_string(),
+                duration,
+            )
+        } else {
+            (false, String::new(), String::new(), String::new())
+        };
+
     MessageDisplayData {
         message_id: msg.id.to_string(),
         sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
@@ -467,18 +528,43 @@ pub fn message_to_display_data_with_replies(
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
         delivery_status: String::new(), // Set by caller based on receipt status
+        is_call,
+        call_message_type,
+        call_initiator_id,
+        call_duration,
     }
 }
 
 /// Convert a domain Message to MessageDisplayData with pre-converted attachments.
 ///
 /// Use this when you have already converted attachments (e.g., using pointer fallback).
+#[allow(dead_code)]
 pub fn message_to_display_data_with_attachments(
     msg: &Message,
     sender_name: &str,
     attachment_data: Vec<AttachmentDisplayData>,
 ) -> MessageDisplayData {
     let reply_count_text = format_count(0, "reply", "replies");
+
+    // Extract call information if this is a call message
+    let (is_call, call_message_type, call_initiator_id, call_duration) =
+        if let MessageContent::Call(call_msg) = &msg.content {
+            use chatter_linux::domain::message::CallMessageType;
+            let msg_type = match call_msg.call_type {
+                CallMessageType::Started => "started",
+                CallMessageType::Ended => "ended",
+                CallMessageType::Missed => "missed",
+            };
+            let duration = call_msg.duration_display().unwrap_or_default();
+            (
+                true,
+                msg_type.to_string(),
+                call_msg.initiator_id.to_string(),
+                duration,
+            )
+        } else {
+            (false, String::new(), String::new(), String::new())
+        };
 
     MessageDisplayData {
         message_id: msg.id.to_string(),
@@ -509,6 +595,10 @@ pub fn message_to_display_data_with_attachments(
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
         delivery_status: String::new(),
+        is_call,
+        call_message_type,
+        call_initiator_id,
+        call_duration,
     }
 }
 

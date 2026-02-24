@@ -143,6 +143,29 @@ impl KeyStore {
         Ok(count > 0)
     }
 
+    /// Get a remote identity key by UUID prefix (any device ID).
+    ///
+    /// This is useful for call encryption where we need the peer's identity
+    /// but don't care which device it came from.
+    ///
+    /// Note: Address format in the store is "{uuid}:{device_id}" (colon separator).
+    pub fn get_identity_by_uuid(&self, uuid: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        let conn = self.db.connection()?;
+        // Match addresses like "uuid:1", "uuid:2", etc. (colon separator)
+        let pattern = format!("{}:%", uuid);
+        let mut stmt = conn.prepare(
+            "SELECT identity_key FROM remote_identities WHERE address LIKE ?1 LIMIT 1"
+        )?;
+
+        let result: Result<Vec<u8>, _> = stmt.query_row(params![pattern], |row| row.get(0));
+
+        match result {
+            Ok(key) => Ok(Some(key)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
     // ========================================================================
     // Pre-keys (One-time)
     // ========================================================================

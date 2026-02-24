@@ -188,6 +188,11 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                     );
 
                     // Get current user info for display
+                    let current_user_id = auth_state
+                        .get()
+                        .current_user_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
                     let current_user_name = auth_state
                         .get()
                         .display_name
@@ -270,7 +275,7 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                                     // so reactions can match by timestamp
                                     let msg_item = MessageItemData {
                                         message_id: message_id_str.into(),
-                                        sender_id: SharedString::default(), // Own message
+                                        sender_id: current_user_id.into(), // Own message - need sender_id for Signal-style lookup
                                         sender_name: sender_name.into(),
                                         sender_initials: sender_initials.into(),
                                         sender_avatar_url: SharedString::default(),
@@ -293,6 +298,9 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                                         show_sender: true,
                                         delivery_status: "sent".into(),
                                         is_pinned: false,
+                                        is_call: false,
+                                        call_type: SharedString::default(),
+                                        call_duration: SharedString::default(),
                                     };
 
                                     // Add to message list
@@ -343,9 +351,11 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                             let sent_text = text.clone();
                             let sender_name = current_user_name.clone();
                             let sender_initials = get_initials(&sender_name);
+                            // Convert UTC to local time for display
                             let timestamp = chatter_linux::util::time::TimestampNanos::from_nanos(sent_at)
                                 .to_datetime()
-                                .unwrap_or_else(chrono::Utc::now);
+                                .unwrap_or_else(chrono::Utc::now)
+                                .with_timezone(&chrono::Local);
                             let timestamp_str = timestamp.format("%H:%M").to_string();
                             let message_id = uuid::Uuid::new_v4().to_string();
                             let has_attachments = sent_attachment_count > 0;
@@ -370,7 +380,7 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                                     // Create message item for queued DM
                                     let msg_item = MessageItemData {
                                         message_id: message_id.into(),
-                                        sender_id: SharedString::default(), // Own message
+                                        sender_id: current_user_id.clone().into(), // Own message - need sender_id for Signal-style lookup
                                         sender_name: sender_name.into(),
                                         sender_initials: sender_initials.into(),
                                         sender_avatar_url: SharedString::default(),
@@ -393,6 +403,9 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                                         show_sender: true,
                                         delivery_status: "sending".into(), // Will update when bootstrap completes
                                         is_pinned: false,
+                                        is_call: false,
+                                        call_type: SharedString::default(),
+                                        call_duration: SharedString::default(),
                                     };
 
                                     // Add to message list

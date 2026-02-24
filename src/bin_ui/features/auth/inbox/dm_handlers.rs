@@ -7,7 +7,7 @@ use std::sync::Arc;
 use slint::{Model, ModelRc, VecModel};
 
 use chatter_linux::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
-use chatter_linux::domain::ids::{AttachmentId, MessageId};
+use chatter_linux::domain::ids::AttachmentId;
 use chatter_linux::network::grpc::client_pool::GrpcClientPool;
 use chatter_linux::proto::content_v1::AttachmentPointer;
 use chatter_linux::services::mailbox_manager::MailboxManager;
@@ -15,8 +15,7 @@ use chatter_linux::services::message_service::MessageService;
 use chatter_linux::storage::{AttachmentRepository, ChannelRepository, Database, MessageRepository, UserRepository};
 
 use crate::bin_ui::converters::{
-    attachment_pointer_to_display_data, get_initials,
-    message_to_display_data_with_attachments, AttachmentDisplayData, MessageDisplayData,
+    attachment_pointer_to_display_data, get_initials, AttachmentDisplayData,
 };
 use crate::bin_ui::features::chat::get_dm_channel_from_peer;
 use crate::{DMListItemData, MainWindow, MessageItemData};
@@ -156,17 +155,18 @@ pub(crate) fn handle_dm_bootstrap_completed(
 // DM Event Handlers
 // =============================================================================
 
-/// Auto-download image attachments in background and update UI.
+/// Auto-download all attachments in background.
 ///
-/// This enables images to display inline without requiring user to click "View".
-/// Downloads encrypted content to database (no filesystem), then decrypts to memory for display.
-async fn auto_download_image_attachments(
+/// Downloads encrypted content to database (no filesystem) as soon as pointer arrives.
+/// For images, generates thumbnail. For GIFs, registers for inline animation.
+async fn auto_download_attachments(
     pointers: Vec<AttachmentPointer>,
     grpc_pool: Arc<GrpcClientPool>,
     attachment_repo: Arc<AttachmentRepository>,
     weak_window: slint::Weak<MainWindow>,
     peer_id: String,
 ) {
+    use chatter_linux::media::gif::AnimatedGif;
     use chatter_linux::media::ImageProcessor;
     use chatter_linux::services::AttachmentService;
 
@@ -175,11 +175,15 @@ async fn auto_download_image_attachments(
     for pointer in pointers {
         let cdn_key = pointer.cdn_key.clone();
         let att_id = AttachmentId::from_cdn_key(&cdn_key);
+        let is_image = pointer.content_type.starts_with("image/");
+        let is_gif = pointer.content_type == "image/gif"
+            || pointer.file_name.to_lowercase().ends_with(".gif");
 
         tracing::info!(
             cdn_key = %cdn_key,
             filename = %pointer.file_name,
-            "Auto-downloading image attachment to database"
+            content_type = %pointer.content_type,
+            "Auto-downloading attachment to database"
         );
 
         // SECURE: Download encrypted content to database (not filesystem)
@@ -190,7 +194,7 @@ async fn auto_download_image_attachments(
             Ok(()) => {
                 tracing::info!(
                     cdn_key = %cdn_key,
-                    "Image attachment downloaded to database"
+                    "Attachment downloaded to database"
                 );
 
                 // Update attachment status
@@ -206,59 +210,127 @@ async fn auto_download_image_attachments(
                     }
                 }
 
-                // SECURE: Decrypt to memory for UI display
-                match attachment_service.decrypt_to_memory(&att_id) {
-                    Ok(secure_buffer) => {
-                        // Get dimensions first (slint::Image is not Send)
-                        match ImageProcessor::get_dimensions_from_memory(secure_buffer.as_slice()) {
-                            Ok((width, height)) => {
-                                // Copy bytes for the event loop (secure_buffer zeroizes on drop)
-                                let image_bytes = secure_buffer.as_slice().to_vec();
-                                let cdn_key_for_ui = cdn_key.clone();
-                                let peer_id_clone = peer_id.clone();
-                                let weak = weak_window.clone();
+                // For GIFs, decode and register for inline animation
+                if is_gif {
+                    match attachment_service.decrypt_to_memory(&att_id) {
+                        Ok(secure_buffer) => {
+                            let data = secure_buffer.as_slice().to_vec();
+                            let att_id_str = att_id.to_string();
+                            let weak = weak_window.clone();
+                            let peer_id_clone = peer_id.clone();
 
-                                // Create image inside event loop (slint::Image is not Send)
-                                let _ = slint::invoke_from_event_loop(move || {
-                                    if let Some(window) = weak.upgrade() {
-                                        match ImageProcessor::memory_to_slint_image(&image_bytes) {
-                                            Ok(image) => {
-                                                update_attachment_thumbnail_from_image(
-                                                    &window,
-                                                    &cdn_key_for_ui,
-                                                    image,
-                                                    width as i32,
-                                                    height as i32,
-                                                    &peer_id_clone,
-                                                );
+                            // Decode GIF in background thread
+                            tokio::task::spawn_blocking(move || {
+                                match AnimatedGif::decode(&data) {
+                                    Ok(Some(gif)) if gif.frames.len() > 1 => {
+                                        // Convert to raw frame data for registration
+                                        let raw_frames: Vec<(Vec<u8>, u32, u32, u64)> = gif.frames
+                                            .into_iter()
+                                            .map(|f| (f.data, f.width, f.height, f.delay.as_millis().max(20) as u64))
+                                            .collect();
+
+                                        // Register on UI thread
+                                        let att_id_for_ui = att_id_str.clone();
+                                        let _ = slint::invoke_from_event_loop(move || {
+                                            if let Some(first_frame) = crate::bin_ui::gif_state::register_inline_gif_from_raw(&att_id_for_ui, raw_frames) {
+                                                if let Some(window) = weak.upgrade() {
+                                                    update_attachment_thumbnail_in_messages(
+                                                        &window,
+                                                        &att_id_for_ui,
+                                                        first_frame,
+                                                        &peer_id_clone,
+                                                    );
+                                                }
+                                                tracing::info!("Auto-registered GIF animation: {}", att_id_for_ui);
                                             }
-                                            Err(e) => {
-                                                tracing::error!(
-                                                    cdn_key = %cdn_key_for_ui,
-                                                    error = ?e,
-                                                    "Failed to create slint image from memory"
-                                                );
-                                            }
+                                        });
+                                    }
+                                    Ok(Some(gif)) => {
+                                        // Single-frame GIF, just show as static image
+                                        if let Some(frame) = gif.frames.into_iter().next() {
+                                            let _ = slint::invoke_from_event_loop(move || {
+                                                if let Some(window) = weak.upgrade() {
+                                                    if let Ok(image) = ImageProcessor::memory_to_slint_image(&frame.data) {
+                                                        update_attachment_thumbnail_in_messages(
+                                                            &window,
+                                                            &att_id_str,
+                                                            image,
+                                                            &peer_id_clone,
+                                                        );
+                                                    }
+                                                }
+                                            });
                                         }
                                     }
-                                });
-                                // secure_buffer dropped here -> memory zeroized
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    cdn_key = %cdn_key,
-                                    error = ?e,
-                                    "Failed to get image dimensions"
-                                );
-                            }
+                                    Ok(None) => {
+                                        tracing::debug!("GIF decode returned None: {}", att_id_str);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to decode GIF {}: {:?}", att_id_str, e);
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                cdn_key = %cdn_key,
+                                error = %e,
+                                "Failed to decrypt GIF for animation"
+                            );
                         }
                     }
-                    Err(e) => {
-                        tracing::error!(
-                            cdn_key = %cdn_key,
-                            error = %e,
-                            "Failed to decrypt attachment to memory"
-                        );
+                }
+                // For non-GIF images without thumbnails, generate thumbnail
+                else if is_image && pointer.thumbnail.is_empty() {
+                    match attachment_service.decrypt_to_memory(&att_id) {
+                        Ok(secure_buffer) => {
+                            match ImageProcessor::get_dimensions_from_memory(secure_buffer.as_slice()) {
+                                Ok((width, height)) => {
+                                    let image_bytes = secure_buffer.as_slice().to_vec();
+                                    let cdn_key_for_ui = cdn_key.clone();
+                                    let peer_id_clone = peer_id.clone();
+                                    let weak = weak_window.clone();
+
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(window) = weak.upgrade() {
+                                            match ImageProcessor::memory_to_slint_image(&image_bytes) {
+                                                Ok(image) => {
+                                                    update_attachment_thumbnail_from_image(
+                                                        &window,
+                                                        &cdn_key_for_ui,
+                                                        image,
+                                                        width as i32,
+                                                        height as i32,
+                                                        &peer_id_clone,
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    tracing::error!(
+                                                        cdn_key = %cdn_key_for_ui,
+                                                        error = ?e,
+                                                        "Failed to create slint image from memory"
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        cdn_key = %cdn_key,
+                                        error = ?e,
+                                        "Failed to get image dimensions"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                cdn_key = %cdn_key,
+                                error = %e,
+                                "Failed to decrypt attachment for thumbnail"
+                            );
+                        }
                     }
                 }
             }
@@ -266,8 +338,49 @@ async fn auto_download_image_attachments(
                 tracing::error!(
                     cdn_key = %cdn_key,
                     error = %e,
-                    "Failed to download image attachment to database"
+                    "Failed to download attachment to database"
                 );
+            }
+        }
+    }
+}
+
+/// Update attachment thumbnail in messages (simpler version without dimensions).
+fn update_attachment_thumbnail_in_messages(
+    window: &MainWindow,
+    attachment_id: &str,
+    image: slint::Image,
+    peer_id: &str,
+) {
+    // Check if this is the active conversation
+    let selected_dm_id = window.get_selected_dm_id().to_string();
+    if !selected_dm_id.contains(peer_id) && !peer_id.is_empty() {
+        return;
+    }
+
+    let messages = window.get_messages();
+
+    for msg_idx in 0..messages.row_count() {
+        if let Some(msg) = messages.row_data(msg_idx) {
+            let attachments = &msg.attachments;
+
+            for att_idx in 0..attachments.row_count() {
+                if let Some(att) = attachments.row_data(att_idx) {
+                    if att.id.as_str() == attachment_id {
+                        let mut updated_att = att.clone();
+                        updated_att.thumbnail = image;
+                        updated_att.has_thumbnail = true;
+
+                        if let Some(att_model) = attachments
+                            .as_any()
+                            .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
+                        {
+                            att_model.set_row_data(att_idx, updated_att);
+                            tracing::debug!("Updated GIF thumbnail in message list: {}", attachment_id);
+                        }
+                        return;
+                    }
+                }
             }
         }
     }
@@ -346,7 +459,7 @@ pub(crate) fn handle_dm_received(
     user_repo: &UserRepository,
     attachment_repo: &Arc<AttachmentRepository>,
     grpc_pool: &Arc<GrpcClientPool>,
-    message_repo: &Arc<MessageRepository>,
+    _message_repo: &Arc<MessageRepository>,
     peer_id: chatter_linux::domain::UserId,
     text: String,
     timestamp: u64,
@@ -355,11 +468,10 @@ pub(crate) fn handle_dm_received(
 ) {
     tracing::info!("DM received from {}: {} chars, {} attachments", peer_id, text.len(), attachments.len());
 
-    // Collect image attachments for auto-download (thumbnails)
-    // Note: Audio waveforms are now included in AttachmentPointer from sender
-    let mut image_pointers: Vec<AttachmentPointer> = Vec::new();
+    // Collect attachments for auto-download
+    let mut download_pointers: Vec<AttachmentPointer> = Vec::new();
 
-    // Store attachment metadata in database for later download
+    // Store attachment metadata in database, queue for download
     for pointer in &attachments {
         if pointer.cdn_key.is_empty() {
             continue;
@@ -386,7 +498,7 @@ pub(crate) fn handle_dm_received(
         let attachment = Attachment {
             id: att_id,
             metadata,
-            status: AttachmentStatus::Pending, // Pending download
+            status: AttachmentStatus::Pending, // Will be updated after download
             content_location: ContentLocation::NotDownloaded,
             local_path: None,
             remote_url: Some(pointer.cdn_key.clone()), // Store cdn_key here
@@ -414,30 +526,26 @@ pub(crate) fn handle_dm_received(
                 id = %att_id,
                 cdn_key = %pointer.cdn_key,
                 filename = %pointer.file_name,
-                "Stored DM attachment metadata for later download"
+                "Stored DM attachment metadata"
             );
 
-            // Queue image attachments for auto-download ONLY if sender didn't provide thumbnail
-            // Sender-provided thumbnails are instant (no download/decrypt needed)
-            if pointer.content_type.starts_with("image/")
-                && !pointer.encryption_key.is_empty()
-                && pointer.thumbnail.is_empty()
-            {
-                image_pointers.push(pointer.clone());
+            // Queue ALL attachments with encryption keys for auto-download
+            if !pointer.encryption_key.is_empty() {
+                download_pointers.push(pointer.clone());
             }
         }
     }
 
-    // Auto-download image attachments in background
-    if !image_pointers.is_empty() {
+    // Auto-download ALL attachments in background
+    if !download_pointers.is_empty() {
         let grpc_pool = grpc_pool.clone();
         let attachment_repo = attachment_repo.clone();
         let weak_for_download = weak_window.clone();
         let peer_id_for_download = peer_id.to_string();
 
         tokio::spawn(async move {
-            auto_download_image_attachments(
-                image_pointers,
+            auto_download_attachments(
+                download_pointers,
                 grpc_pool,
                 attachment_repo,
                 weak_for_download,
@@ -445,9 +553,6 @@ pub(crate) fn handle_dm_received(
             ).await;
         });
     }
-
-    // Note: Audio waveform is now included in AttachmentPointer (sender-side generated)
-    // No need to auto-download audio just for waveform display
 
     // Try to get display name from profile, fall back to user
     let sender_name_from_repo = user_repo
@@ -467,106 +572,28 @@ pub(crate) fn handle_dm_received(
 
     let peer_id_str = peer_id.to_string();
 
-    // Build lookup map from attachment pointers for fallback display
-    // Key: AttachmentId derived from cdn_key, Value: display data from pointer
-    let pointer_display_map: std::collections::HashMap<AttachmentId, AttachmentDisplayData> = attachments
+    // Build attachment display data from pointers for immediate display
+    let attachment_display: Vec<AttachmentDisplayData> = attachments
         .iter()
         .filter(|p| !p.cdn_key.is_empty())
-        .map(|p| (AttachmentId::from_cdn_key(&p.cdn_key), attachment_pointer_to_display_data(p)))
+        .map(|p| attachment_pointer_to_display_data(p))
         .collect();
-
-    // Fetch messages from DB (already sorted by sent_at)
-    // Look up the message by ID to get its channel_id, then fetch all messages for that channel
-    let display_messages: Option<Vec<MessageDisplayData>> = message_id
-        .parse::<MessageId>()
-        .ok()
-        .and_then(|msg_id| message_repo.get(&msg_id).ok().flatten())
-        .and_then(|msg| {
-            let channel_id = msg.channel_id;
-            // Fetch messages for this channel (DB returns sorted by sent_at DESC)
-            message_repo.list_for_channel(&channel_id, None, 100).ok()
-        })
-        .map(|messages| {
-            // Convert to display format
-            let mut display: Vec<MessageDisplayData> = messages
-                .iter()
-                .map(|msg| {
-                    let sender_name = if let Some(sender_id) = &msg.sender_id {
-                        user_repo
-                            .get_profile(sender_id)
-                            .ok()
-                            .flatten()
-                            .map(|p| p.display_name)
-                            .or_else(|| user_repo.get(sender_id).ok().flatten().map(|u| u.username))
-                            .unwrap_or_else(|| sender_id.to_string())
-                    } else {
-                        "Unknown".to_string()
-                    };
-
-                    // Resolve attachments: try DB first, fall back to pointer data
-                    let resolved_attachments: Vec<Attachment> = msg
-                        .attachments
-                        .iter()
-                        .filter_map(|att_id| attachment_repo.get(att_id).ok().flatten())
-                        .collect();
-
-                    // Get display data, using pointer fallback for missing attachments
-                    let attachment_display: Vec<AttachmentDisplayData> = msg
-                        .attachments
-                        .iter()
-                        .map(|att_id| {
-                            // First try to find in resolved DB attachments
-                            if let Some(att) = resolved_attachments.iter().find(|a| &a.id == att_id) {
-                                crate::bin_ui::converters::attachment_to_display_data(att)
-                            } else if let Some(pointer_data) = pointer_display_map.get(att_id) {
-                                // Fall back to pointer data for immediate display
-                                pointer_data.clone()
-                            } else {
-                                // Shouldn't happen, but create placeholder
-                                AttachmentDisplayData {
-                                    id: att_id.to_string(),
-                                    filename: "Unknown".to_string(),
-                                    size_display: "".to_string(),
-                                    mime_type: "application/octet-stream".to_string(),
-                                    category: "file".to_string(),
-                                    thumbnail_url: String::new(),
-                                    download_url: String::new(),
-                                    local_path: None,
-                                    is_image: false,
-                                    is_video: false,
-                                    width: 0,
-                                    height: 0,
-                                    is_playing: false,
-                                    icon: "📎".to_string(),
-                                    icon_color: slint::Color::from_argb_u8(255, 107, 114, 128),
-                                    waveform: vec![10; 32],
-                                    duration_display: String::new(),
-                                    is_uploading: false,
-                                    is_downloading: false,
-                                    progress: 0.0,
-                                    thumbnail_bytes: Vec::new(),
-                                }
-                            }
-                        })
-                        .collect();
-
-                    message_to_display_data_with_attachments(msg, &sender_name, attachment_display)
-                })
-                .collect();
-            // Reverse to show oldest first (DB returns newest first)
-            display.reverse();
-            display
-        });
 
     // Build preview and timestamp for sidebar
     let timestamp_str = format_timestamp(timestamp);
-    let preview = if text.is_empty() && !attachments.is_empty() {
-        format!("📎 {} attachment{}", attachments.len(), if attachments.len() == 1 { "" } else { "s" })
+    let attachment_count = attachments.len();
+    let preview = if text.is_empty() && attachment_count > 0 {
+        format!("📎 {} attachment{}", attachment_count, if attachment_count == 1 { "" } else { "s" })
     } else if text.len() > 50 {
         format!("{}...", &text[..47])
     } else {
         text.clone()
     };
+
+    // Clone data needed for the UI thread
+    let message_id_for_ui = message_id.clone();
+    let text_for_ui = text.clone();
+    let has_attachments = attachment_count > 0;
 
     let weak = weak_window.clone();
 
@@ -602,24 +629,73 @@ pub(crate) fn handle_dm_received(
         clear_typing_for_peer(&window, &peer_id_str);
 
         if is_active {
-            if let Some(display_messages) = display_messages {
-                // Check if user is at bottom before updating
-                let was_at_bottom = window.get_is_at_bottom();
+            // Check if user is at bottom before updating
+            let was_at_bottom = window.get_is_at_bottom();
 
-                // Convert to Slint types and set (messages already sorted by DB)
-                let slint_messages: Vec<MessageItemData> = display_messages
+            // Get current messages model
+            let current_model = window.get_messages();
+            let mut messages: Vec<MessageItemData> = (0..current_model.row_count())
+                .filter_map(|i| current_model.row_data(i))
+                .collect();
+
+            // Check if this message is already in the UI
+            // Use Signal-style dedup: (sender_id, timestamp) since server message_id could vary
+            let timestamp_ns_str = timestamp.to_string();
+            let already_exists = messages.iter().any(|m| {
+                m.sender_id.as_str() == peer_id_str && m.timestamp_ns.as_str() == timestamp_ns_str
+            });
+
+            if !already_exists {
+                // Convert attachment display data to Slint types
+                let slint_attachments: Vec<crate::MessageAttachmentData> = attachment_display
                     .iter()
-                    .map(|m| m.to_slint())
+                    .map(|a| a.to_slint())
                     .collect();
-                window.set_messages(ModelRc::new(VecModel::from(slint_messages)));
 
-                // Auto-scroll to bottom if user was at bottom before new message
-                if was_at_bottom {
-                    // Setting scroll position to large negative scrolls to bottom
-                    // The actual value will be clamped by the Flickable
-                    window.set_message_scroll_position(-99999.0);
-                    window.set_is_at_bottom(true);
-                }
+                // Create the new message item
+                let new_msg = MessageItemData {
+                    message_id: message_id_for_ui.into(),
+                    sender_id: peer_id_str.clone().into(),
+                    sender_name: sender_name.clone().into(),
+                    sender_initials: get_initials(&sender_name).into(),
+                    sender_avatar_url: slint::SharedString::default(),
+                    content: text_for_ui.into(),
+                    timestamp: timestamp_str.clone().into(),
+                    timestamp_ns: timestamp.to_string().into(),
+                    is_own: false,
+                    is_edited: false,
+                    is_deleted: false,
+                    is_system: false,
+                    is_ai: false,
+                    has_attachments,
+                    attachment_count: attachment_count as i32,
+                    attachments: ModelRc::new(VecModel::from(slint_attachments)),
+                    has_reactions: false,
+                    reaction_summary: slint::SharedString::default(),
+                    reply_count: 0,
+                    reply_count_text: slint::SharedString::default(),
+                    is_thread_reply: false,
+                    show_sender: true,
+                    delivery_status: "delivered".into(),
+                    is_pinned: false,
+                    is_call: false,
+                    call_type: slint::SharedString::default(),
+                    call_duration: slint::SharedString::default(),
+                };
+
+                // Append and sort by timestamp
+                messages.push(new_msg);
+                messages.sort_by_key(|m| m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0));
+
+                window.set_messages(ModelRc::new(VecModel::from(messages)));
+            }
+
+            // Auto-scroll to bottom if user was at bottom before new message
+            if was_at_bottom {
+                // Setting scroll position to large negative scrolls to bottom
+                // The actual value will be clamped by the Flickable
+                window.set_message_scroll_position(-99999.0);
+                window.set_is_at_bottom(true);
             }
         }
 

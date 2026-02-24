@@ -123,57 +123,6 @@ impl MessageService {
 
         tracing::debug!(peer_id = %peer_id, "Sent DM via two-layer encryption");
 
-        // Store sent message in database for persistence (only for DataMessages)
-        self.store_sent_dm_message(peer_id, &content).await?;
-
-        Ok(())
-    }
-
-    /// Store sent DM message in database (only for DataMessages).
-    async fn store_sent_dm_message(
-        &self,
-        peer_id: &UserId,
-        content: &crate::proto::content_v1::Content,
-    ) -> Result<(), MessageError> {
-        let our_user_id = self.current_user_id()?;
-
-        let text = match &content.content {
-            Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => {
-                tracing::info!(peer_id = %peer_id, text_len = dm.body.len(), "send_dm_content: DataMessage detected, will store");
-                dm.body.clone()
-            },
-            _ => {
-                // Not a DataMessage - don't store ephemeral messages
-                return Ok(());
-            }
-        };
-
-        if let Ok(Some(dm_channel)) = self.channel_repo.get_dm_channel_by_peer(&our_user_id, peer_id) {
-            let sent_at = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0);
-            let message = Message::new_text(dm_channel.id, Some(our_user_id), text, sent_at);
-
-            if let Err(e) = self.message_repo.insert(&message) {
-                tracing::warn!(
-                    peer_id = %peer_id,
-                    channel_id = %dm_channel.id,
-                    error = %e,
-                    "Failed to store sent DM in database"
-                );
-            } else {
-                tracing::debug!(
-                    peer_id = %peer_id,
-                    channel_id = %dm_channel.id,
-                    message_id = %message.id,
-                    "Stored sent DM in database"
-                );
-            }
-        } else {
-            tracing::warn!(peer_id = %peer_id, "Could not find DM channel to store sent message");
-        }
-
         Ok(())
     }
 
@@ -221,13 +170,24 @@ impl MessageService {
             auth_client,
             peer_id,
             content,
-            database,
+            database: database.clone(),
             mailbox_manager,
             grpc_pool: Some(grpc_pool),
             attachment_ids: None,
             channel_id: None,
         })
-        .await
+        .await?;
+
+        // Store the message locally
+        let our_user_id = self.current_user_id()?;
+        if let Ok(Some(dm_channel)) = self.channel_repo.get_dm_channel_by_peer(&our_user_id, peer_id) {
+            let message = Message::new_text(dm_channel.id, Some(our_user_id), text.to_string(), sent_at);
+            if let Err(e) = self.message_repo.insert(&message) {
+                tracing::warn!(peer_id = %peer_id, error = %e, "Failed to store sent text DM");
+            }
+        }
+
+        Ok(())
     }
 
     /// Send a DM with text and/or attachments.
@@ -282,42 +242,30 @@ impl MessageService {
         // Use caller-provided timestamp for proto AND storage
         let content = crate::services::build_data_message_content(text, attachment_pointers, sent_at);
 
-        // Send the message via Signal Protocol
-        let send_result = self.send_dm(peer_id, content, database.clone(), mailbox_manager).await;
+        // Send the message via Signal Protocol - pass attachment_ids for storage
+        let mut auth_client = self.auth_client();
+        self.send_dm_content(SendDmContentParams {
+            auth_client: &mut auth_client,
+            peer_id,
+            content,
+            database,
+            mailbox_manager,
+            grpc_pool: Some(&self.grpc_pool),
+            attachment_ids: None,
+            channel_id: None,
+        }).await?;
 
-        // Create the message for local storage
+        // Store the message locally with attachments
         let current_user_id = self.current_user_id()?;
         let mut message = Message::new_text(*dm_channel_id, Some(current_user_id), text.to_string(), sent_at);
         message.attachments = attachment_ids;
 
-        // Handle bootstrap initiated case specially
-        match send_result {
-            Ok(()) => {
-                // Message sent successfully - it's already stored in send_dm_content
-                // But we need to update with attachments
-                if !message.attachments.is_empty() {
-                    // Update the stored message with attachment IDs
-                    if let Err(e) = self.message_repo.update(&message) {
-                        tracing::warn!(
-                            peer_id = %peer_id,
-                            error = %e,
-                            "Failed to update message with attachment IDs"
-                        );
-                    }
-                }
-            }
-            Err(MessageError::BootstrapInitiated) => {
-                // Store the message locally even though bootstrap was initiated
-                // It will be sent once bootstrap completes
-                if let Err(e) = self.message_repo.insert(&message) {
-                    tracing::warn!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "Failed to store message during bootstrap"
-                    );
-                }
-            }
-            Err(e) => return Err(e),
+        if let Err(e) = self.message_repo.insert(&message) {
+            tracing::warn!(
+                peer_id = %peer_id,
+                error = %e,
+                "Failed to store sent DM with attachments"
+            );
         }
 
         Ok(message)

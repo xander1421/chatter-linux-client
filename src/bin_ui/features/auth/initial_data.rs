@@ -109,7 +109,8 @@ pub async fn load_initial_data(
                                 }
                             })
                             .unwrap_or_default();
-                        let ts = msg.created_at.format("%H:%M").to_string();
+                        // Convert UTC to local time for display
+                        let ts = msg.created_at.with_timezone(&chrono::Local).format("%H:%M").to_string();
                         (preview, ts)
                     }
                     _ => (String::new(), String::new()),

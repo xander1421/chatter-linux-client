@@ -17,6 +17,7 @@ pub mod v013_group_mailboxes;
 pub mod v015_ephemeral_messages;
 pub mod v016_message_sent_at;
 pub mod v017_encrypted_attachment_content;
+pub mod v018_rename_svr_public_key;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -37,6 +38,7 @@ pub use v013_group_mailboxes::V013GroupMailboxes;
 pub use v015_ephemeral_messages::V015EphemeralMessages;
 pub use v016_message_sent_at::V016MessageSentAt;
 pub use v017_encrypted_attachment_content::V017EncryptedAttachmentContent;
+pub use v018_rename_svr_public_key::V018RenameSvrPublicKey;
 
 /// Trait for database migrations.
 ///
@@ -172,4 +174,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V015EphemeralMessages)
         .register(V016MessageSentAt)
         .register(V017EncryptedAttachmentContent)
+        .register(V018RenameSvrPublicKey)
 }

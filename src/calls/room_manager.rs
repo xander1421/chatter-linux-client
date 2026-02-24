@@ -79,6 +79,10 @@ pub struct RoomManager {
     video_capture: Arc<RwLock<VideoCapture>>,
     /// Screen capture manager.
     screen_capture: Arc<RwLock<ScreenCapture>>,
+    /// Key provider for E2EE key updates (stored for ratcheting).
+    key_provider: Arc<RwLock<Option<KeyProvider>>>,
+    /// Current encryption key epoch (for coordinated ratcheting).
+    key_epoch: Arc<RwLock<u32>>,
 }
 
 impl RoomManager {
@@ -92,6 +96,8 @@ impl RoomManager {
             audio_capture: Arc::new(RwLock::new(AudioCapture::new())),
             video_capture: Arc::new(RwLock::new(VideoCapture::new())),
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
+            key_provider: Arc::new(RwLock::new(None)),
+            key_epoch: Arc::new(RwLock::new(0)),
         };
         (manager, event_rx)
     }
@@ -298,6 +304,13 @@ impl RoomManager {
             encryption_key,
         );
 
+        // Store key provider for later ratcheting
+        {
+            let mut kp = self.key_provider.write();
+            *kp = Some(key_provider.clone());
+        }
+        *self.key_epoch.write() = 0;
+
         // Configure room with E2EE
         let mut room_options = RoomOptions::default();
         room_options.auto_subscribe = true;
@@ -347,28 +360,37 @@ impl RoomManager {
     }
 
     /// Disconnect from the current room.
+    ///
+    /// This method is safe to call from the UI thread. Capture threads are
+    /// signaled to stop (non-blocking) and will clean themselves up.
+    /// Thread joins happen in Drop to ensure proper cleanup.
     pub async fn disconnect(&self) {
-        // Stop all capture threads first to prevent blocking
+        // Update state immediately so UI can respond
+        self.set_state(RoomState::Disconnected);
+
+        // Signal all capture threads to stop (non-blocking, just sets atomic flags)
+        // The threads will exit on their own, joins happen in Drop
         {
-            let mut audio = self.audio_capture.write();
-            audio.stop();
+            let audio = self.audio_capture.read();
+            audio.signal_stop();
         }
         {
-            let mut video = self.video_capture.write();
-            video.stop();
+            let video = self.video_capture.read();
+            video.signal_stop();
         }
         {
-            let mut screen = self.screen_capture.write();
-            screen.stop();
+            let screen = self.screen_capture.read();
+            screen.signal_stop();
         }
 
+        // Take the room handle
         let room = {
             let mut room_guard = self.room.write();
             room_guard.take()
         };
 
+        // Close the LiveKit room with timeout
         if let Some(room) = room {
-            // Use a timeout to prevent hanging if room close takes too long
             match tokio::time::timeout(
                 tokio::time::Duration::from_secs(3),
                 room.close()
@@ -378,7 +400,7 @@ impl RoomManager {
             }
         }
 
-        self.set_state(RoomState::Disconnected);
+        tracing::info!("Disconnect completed (capture cleanup deferred)");
     }
 
     /// Get current state.
@@ -397,6 +419,78 @@ impl RoomManager {
             participant_count
         } else {
             0
+        }
+    }
+
+    /// Ratchet the encryption key for forward secrecy.
+    ///
+    /// This advances the key to a new epoch, providing forward secrecy
+    /// so that compromise of a later key doesn't reveal earlier messages.
+    /// Should be called periodically during long calls.
+    ///
+    /// Returns the new key epoch, or None if not connected.
+    pub fn ratchet_key(&self) -> Option<u32> {
+        let kp = self.key_provider.read();
+        if let Some(ref key_provider) = *kp {
+            // Get current epoch for key index
+            let current_epoch = *self.key_epoch.read();
+
+            // LiveKit's ratchet_shared_key derives the next key from the current one
+            // key_index 0 is the shared key slot
+            if let Some(_new_key) = key_provider.ratchet_shared_key(current_epoch as i32) {
+                // Track our epoch
+                let mut epoch = self.key_epoch.write();
+                *epoch += 1;
+                let new_epoch = *epoch;
+
+                tracing::info!(epoch = new_epoch, "E2EE key ratcheted");
+                Some(new_epoch)
+            } else {
+                tracing::warn!("Key ratchet failed");
+                None
+            }
+        } else {
+            tracing::warn!("Cannot ratchet key: not connected");
+            None
+        }
+    }
+
+    /// Get the current key epoch.
+    pub fn key_epoch(&self) -> u32 {
+        *self.key_epoch.read()
+    }
+
+    /// Set a new encryption key (for external key management).
+    ///
+    /// This replaces the current key with a new one derived externally.
+    /// In shared key mode, this sets the key at the next epoch index.
+    ///
+    /// Note: For normal operation, prefer `ratchet_key()` which uses
+    /// LiveKit's internal key derivation. Use this only when you need
+    /// to sync keys from an external source (e.g., CallKeyState).
+    pub fn set_encryption_key(&self, key: Vec<u8>) -> bool {
+        let kp = self.key_provider.read();
+        let room = self.room.read();
+
+        if let (Some(key_provider), Some(room)) = (&*kp, &*room) {
+            // Increment epoch first
+            let mut epoch = self.key_epoch.write();
+            *epoch += 1;
+            let new_epoch = *epoch;
+
+            // Set key using local participant's identity at the new epoch index
+            let local_identity = room.local_participant().identity();
+            let success = key_provider.set_key(&local_identity, new_epoch as i32, key);
+
+            if success {
+                tracing::info!(epoch = new_epoch, "E2EE key updated externally");
+            } else {
+                tracing::warn!(epoch = new_epoch, "Failed to set E2EE key");
+            }
+            success
+        } else {
+            tracing::warn!("Cannot set key: not connected");
+            false
         }
     }
 

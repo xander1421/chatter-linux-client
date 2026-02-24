@@ -1,0 +1,149 @@
+// Key exchange modal for establishing secure connection before calls
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component KeyExchangeModal inherits Rectangle {
+    in property <bool> show: false;
+    in property <bool> is-loading: false;
+    in property <string> peer-name: "this contact";
+
+    callback exchange-keys();
+    callback cancel();
+
+    // Full screen overlay
+    width: 100%;
+    height: 100%;
+    background: #00000099;
+    opacity: show ? 1.0 : 0.0;
+    visible: show;
+
+    animate opacity { duration: 200ms; }
+
+    if show: Rectangle {
+        // Center card
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 360px;
+        height: 280px;
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: #00000066;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: Spacing.lg;
+            padding: Spacing.xxl;
+
+            // Lock icon
+            Rectangle {
+                width: 64px;
+                height: 64px;
+                horizontal-stretch: 0;
+                border-radius: 32px;
+                background: Colors.primary.with-alpha(0.15);
+
+                Text {
+                    text: is-loading ? "\u{1F504}" : "\u{1F512}";
+                    font-size: 32px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+            }
+
+            // Title and description
+            VerticalLayout {
+                alignment: center;
+                spacing: Spacing.sm;
+
+                Text {
+                    text: is-loading ? "Establishing Connection..." : "Secure Connection Required";
+                    font-size: Typography.lg;
+                    font-weight: Typography.semibold;
+                    color: Colors.text-primary;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: is-loading
+                        ? "Please wait while we exchange encryption keys..."
+                        : "You haven't messaged " + peer-name + " before. Exchange encryption keys to enable secure calling.";
+                    font-size: Typography.sm;
+                    color: Colors.text-secondary;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Buttons
+            if !is-loading: HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.lg;
+
+                // Cancel button
+                Rectangle {
+                    width: 100px;
+                    height: 40px;
+                    border-radius: Spacing.radius-md;
+                    background: cancel-hover.has-hover ? Colors.surface-hover : Colors.surface;
+
+                    cancel-hover := TouchArea {
+                        clicked => { cancel(); }
+                    }
+
+                    Text {
+                        text: "Cancel";
+                        font-size: Typography.base;
+                        color: Colors.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+
+                // Exchange keys button
+                Rectangle {
+                    width: 140px;
+                    height: 40px;
+                    border-radius: Spacing.radius-md;
+                    background: exchange-hover.has-hover ? Colors.primary-hover : Colors.primary;
+
+                    exchange-hover := TouchArea {
+                        clicked => { exchange-keys(); }
+                    }
+
+                    Text {
+                        text: "Exchange Keys";
+                        font-size: Typography.base;
+                        font-weight: Typography.medium;
+                        color: Colors.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+            }
+
+            // Loading indicator
+            if is-loading: Rectangle {
+                height: 40px;
+                // Simple loading dots would go here
+                Text {
+                    text: "...";
+                    font-size: Typography.xl;
+                    color: Colors.primary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+            }
+        }
+    }
+}

@@ -2,15 +2,9 @@
 //!
 //! Run with: cargo test --package chatter-linux --lib network::grpc::upload_test -- --nocapture
 
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-use futures::Stream;
 use sha2::{Digest, Sha256};
-use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 
-use crate::error::NetworkError;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{

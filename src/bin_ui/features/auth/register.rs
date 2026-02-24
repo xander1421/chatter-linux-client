@@ -29,6 +29,7 @@ pub fn wire_register(window: &MainWindow, ctx: &AppContext) {
     let database = ctx.database.clone();
     let mailbox_manager = ctx.mailbox_manager.clone();
     let event_bus = ctx.event_bus.clone();
+    let call_service = ctx.call_service.clone();
     let db_path = ctx.database.path().to_path_buf();
     // Use cached passphrase from context (avoids multiple keyring prompts)
     let db_passphrase = Some(ctx.db_passphrase.clone());
@@ -55,6 +56,7 @@ pub fn wire_register(window: &MainWindow, ctx: &AppContext) {
             let database = database.clone();
             let mailbox_manager = mailbox_manager.clone();
             let event_bus = event_bus.clone();
+            let call_service = call_service.clone();
             let db_path = db_path.clone();
             let db_passphrase = db_passphrase.clone();
             let weak = weak_window.clone();
@@ -71,6 +73,11 @@ pub fn wire_register(window: &MainWindow, ctx: &AppContext) {
                         w.set_register_error("".into());
                     }
                 });
+
+                // Clone identity_manager and key_store before moving into AuthService
+                // (needed later for inbox event handler)
+                let identity_manager_for_inbox = identity_manager.clone();
+                let key_store_for_inbox = key_store.clone();
 
                 // Create auth service with grpc_pool for internal client creation
                 let auth_service = AuthService::new(
@@ -112,6 +119,10 @@ pub fn wire_register(window: &MainWindow, ctx: &AppContext) {
                                 let database_for_events = database.clone();
                                 let mailbox_manager_for_events = mailbox_manager.clone();
                                 let event_bus_for_events = event_bus.clone();
+                                let call_service_for_events = call_service.clone();
+                                let settings_repo_for_events = settings_repo.clone();
+                                let identity_manager_for_events = identity_manager_for_inbox.clone();
+                                let key_store_for_events = key_store_for_inbox.clone();
 
                                 tokio::spawn(async move {
                                     while let Ok(event) = event_rx.recv().await {
@@ -126,6 +137,10 @@ pub fn wire_register(window: &MainWindow, ctx: &AppContext) {
                                             &database_for_events,
                                             &mailbox_manager_for_events,
                                             &event_bus_for_events,
+                                            &call_service_for_events,
+                                            &settings_repo_for_events,
+                                            &identity_manager_for_events,
+                                            &key_store_for_events,
                                         )
                                         .await;
                                     }

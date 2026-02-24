@@ -39,8 +39,8 @@ const CALL_KEY_INFO_PREFIX: &[u8] = b"call-encryption:";
 
 /// Derive a shared secret from identity keys using X25519 ECDH.
 ///
-/// Signal identity keys are Ed25519-based, so we convert to X25519 for key agreement.
-/// This uses the birational map from Ed25519 points to Curve25519 (Montgomery form).
+/// Signal identity keys use Curve25519 (X25519) keys with a 0x05 type prefix.
+/// The public key bytes are already in Montgomery form, so no conversion is needed.
 ///
 /// # Arguments
 /// * `our_identity` - Our identity key pair
@@ -52,33 +52,24 @@ pub fn derive_call_shared_secret(
     our_identity: &IdentityKeyPair,
     peer_identity: &IdentityKey,
 ) -> Result<[u8; 32], CryptoError> {
-    use curve25519_dalek::edwards::CompressedEdwardsY;
-
     // Get our private key bytes and peer's public key bytes
     let our_private_bytes = our_identity.private_key().serialize();
     let peer_public_bytes = peer_identity.serialize();
 
     // The identity key serialization includes a type byte prefix (0x05 for DJB/Curve25519)
-    // Skip the first byte to get the actual 32-byte key
+    // Skip the first byte to get the actual 32-byte X25519 public key
     if peer_public_bytes.len() != 33 || peer_public_bytes[0] != 0x05 {
         return Err(CryptoError::InvalidKeyFormat);
     }
-    let peer_ed25519_public: [u8; 32] = peer_public_bytes[1..33]
+    let peer_x25519_bytes: [u8; 32] = peer_public_bytes[1..33]
         .try_into()
         .map_err(|_| CryptoError::InvalidKeyFormat)?;
 
-    // Convert peer's Ed25519 public key to X25519
-    // Ed25519 point (Edwards form) -> Curve25519 point (Montgomery form)
-    let ed_point = CompressedEdwardsY::from_slice(&peer_ed25519_public)
-        .map_err(|_| CryptoError::InvalidKeyFormat)?;
-    let ed_point = ed_point
-        .decompress()
-        .ok_or(CryptoError::InvalidKeyFormat)?;
-    let montgomery_point = ed_point.to_montgomery();
-    let peer_x25519_public = X25519PublicKey::from(*montgomery_point.as_bytes());
+    // Signal public keys are already X25519 (Curve25519 in Montgomery form)
+    // No conversion needed - use them directly
+    let peer_x25519_public = X25519PublicKey::from(peer_x25519_bytes);
 
-    // Convert our private key to X25519
-    // Signal private keys are already in the right format (clamped scalar)
+    // Signal private keys are already clamped scalars suitable for X25519
     let our_x25519_private: [u8; 32] = our_private_bytes[..32]
         .try_into()
         .map_err(|_| CryptoError::InvalidKeyFormat)?;
@@ -274,5 +265,35 @@ mod tests {
         let key_vec = state.current_key_vec();
         assert_eq!(key_vec.len(), 32);
         assert_eq!(key_vec.as_slice(), state.current_key());
+    }
+
+    #[test]
+    fn test_derive_call_shared_secret() {
+        // Generate two identity key pairs
+        let mut rng = rand::rng();
+        let alice_identity = IdentityKeyPair::generate(&mut rng);
+        let bob_identity = IdentityKeyPair::generate(&mut rng);
+
+        // Debug: print the key format
+        let alice_public = alice_identity.identity_key();
+        let alice_serialized = alice_public.serialize();
+        println!("Alice identity key serialized: {:?}", alice_serialized);
+        println!("Length: {}, First byte: 0x{:02x}", alice_serialized.len(), alice_serialized[0]);
+
+        // Try to derive shared secret
+        let result = derive_call_shared_secret(&alice_identity, bob_identity.identity_key());
+        
+        match &result {
+            Ok(secret) => println!("Success! Secret: {:?}", &secret[..8]),
+            Err(e) => println!("Error: {:?}", e),
+        }
+
+        assert!(result.is_ok(), "derive_call_shared_secret should succeed");
+
+        // Verify both parties derive the same secret
+        let alice_to_bob = derive_call_shared_secret(&alice_identity, bob_identity.identity_key()).unwrap();
+        let bob_to_alice = derive_call_shared_secret(&bob_identity, alice_identity.identity_key()).unwrap();
+
+        assert_eq!(alice_to_bob, bob_to_alice, "Both parties should derive the same shared secret");
     }
 }

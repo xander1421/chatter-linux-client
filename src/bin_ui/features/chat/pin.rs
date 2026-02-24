@@ -76,9 +76,9 @@ fn resolve_attachments(message: &Message, attachment_repo: &AttachmentRepository
 }
 
 /// Wire pin-message callback for DM and channel conversations.
+/// Uses Signal-style (sender_id, timestamp_ns) for message identification.
 pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
     let auth_state = ctx.auth_state.clone();
-    let grpc_pool = ctx.grpc_pool.clone();
     let mailbox_manager = ctx.mailbox_manager.clone();
     let database = ctx.database.clone();
     let message_repo = ctx.message_repo.clone();
@@ -90,9 +90,15 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
 
     let weak_window = window.as_weak();
 
-    window.on_pin_message(move |message_id: SharedString| {
-        let message_id_str = message_id.to_string();
-        tracing::info!(message_id = %message_id_str, "UI callback: pin/unpin triggered");
+    // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
+    window.on_pin_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
+        let sender_id_str = sender_id.to_string();
+        let timestamp_ns_str = timestamp_ns.to_string();
+        tracing::info!(
+            sender_id = %sender_id_str,
+            timestamp_ns = %timestamp_ns_str,
+            "UI callback: pin/unpin triggered (Signal-style lookup)"
+        );
 
         // Get selected DM channel ID and look up peer
         let (selected_dm_id, peer_user_id) = weak_window
@@ -109,7 +115,6 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
             .unwrap_or_default();
 
         let auth_state = auth_state.clone();
-        let _grpc_pool = grpc_pool.clone();
         let message_repo = message_repo.clone();
         let weak = weak_window.clone();
 
@@ -142,20 +147,33 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                         Err(_) => return,
                     };
 
-                    // Parse message ID
-                    let msg_id: chatter_linux::domain::MessageId = match message_id_str.parse() {
+                    // Parse sender_id for Signal-style lookup
+                    let target_sender_id: UserId = match sender_id_str.parse() {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::error!(error = %e, "Invalid message ID for pin");
+                            tracing::error!(error = %e, sender_id = %sender_id_str, "Invalid sender ID for pin");
                             return;
                         }
                     };
 
-                    // Look up the message
-                    let message = match message_repo.get(&msg_id) {
+                    // Parse timestamp for Signal-style lookup
+                    let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::error!(error = %e, timestamp = %timestamp_ns_str, "Invalid timestamp for pin");
+                            return;
+                        }
+                    };
+
+                    // Signal-style lookup: (sender_id, sent_at)
+                    let message = match message_repo.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                         Ok(Some(msg)) => msg,
                         Ok(None) => {
-                            tracing::error!(message_id = %msg_id, "Message not found for pin");
+                            tracing::error!(
+                                sender_id = %target_sender_id,
+                                timestamp = target_sent_timestamp,
+                                "Message not found for pin (Signal-style lookup)"
+                            );
                             return;
                         }
                         Err(e) => {
@@ -164,21 +182,21 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                         }
                     };
 
+                    let msg_id = message.id;
                     let target_author_aci = message
                         .sender_id
                         .map(|id| id.to_string())
                         .unwrap_or_default();
-                    let target_sent_timestamp = message.sent_at;
 
                     // Toggle pin state
                     let unpin = message.is_pinned;
                     let action = if unpin { "unpin" } else { "pin" };
 
                     tracing::debug!(
-                        message_id = %msg_id,
+                        sender_id = %sender_id_str,
+                        timestamp = target_sent_timestamp,
                         peer = %peer_id,
                         author = %target_author_aci,
-                        timestamp = target_sent_timestamp,
                         action = %action,
                         "Sending DM pin/unpin"
                     );
@@ -203,7 +221,12 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                         return;
                     }
 
-                    tracing::info!(message_id = %msg_id, action = %action, "DM pin/unpin sent successfully");
+                    tracing::info!(
+                        sender_id = %sender_id_str,
+                        timestamp = %timestamp_ns_str,
+                        action = %action,
+                        "DM pin/unpin sent successfully"
+                    );
 
                     // Update locally
                     let new_pinned_state = !unpin;
@@ -212,7 +235,11 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                     if let Err(e) = message_repo.update(&updated_message) {
                         tracing::error!(error = %e, "Failed to update pin status locally");
                     } else {
-                        tracing::debug!(message_id = %msg_id, pinned = new_pinned_state, "Updated pin status locally");
+                        tracing::debug!(
+                            sender_id = %sender_id_str,
+                            pinned = new_pinned_state,
+                            "Updated pin status locally"
+                        );
 
                         // Update pinned state for header bar
                         if new_pinned_state {
@@ -227,18 +254,23 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                         let preview_text = generate_pinned_preview(&message, &attachments);
                         tracing::debug!(preview = %preview_text, "Generated pinned preview");
 
-                        // Update UI to reflect pin state change
+                        // Update UI to reflect pin state change using Signal-style lookup
+                        let sender_id_for_ui = sender_id_str.clone();
+                        let timestamp_for_ui = timestamp_ns_str.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                // Update message model
+                                // Update message model using Signal-style (sender_id, timestamp_ns)
                                 let current_model = w.get_messages();
                                 let messages: Vec<_> = (0..current_model.row_count())
                                     .filter_map(|i| current_model.row_data(i))
                                     .map(|mut m| {
-                                        if m.message_id.as_str() == message_id_str.as_str() {
+                                        if m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                        {
                                             m.is_pinned = new_pinned_state;
                                             tracing::info!(
-                                                message_id = %message_id_str,
+                                                sender_id = %sender_id_for_ui,
+                                                timestamp = %timestamp_for_ui,
                                                 pinned = new_pinned_state,
                                                 "UI updated: toggled pin state"
                                             );
@@ -289,20 +321,33 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                         None => return,
                     };
 
-                    // Parse message ID
-                    let msg_id: chatter_linux::domain::MessageId = match message_id_str.parse() {
+                    // Parse sender_id for Signal-style lookup
+                    let target_sender_id: UserId = match sender_id_str.parse() {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::error!(error = %e, "Invalid message ID for channel pin");
+                            tracing::error!(error = %e, sender_id = %sender_id_str, "Invalid sender ID for channel pin");
                             return;
                         }
                     };
 
-                    // Look up the message
-                    let message = match message_repo.get(&msg_id) {
+                    // Parse timestamp for Signal-style lookup
+                    let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::error!(error = %e, timestamp = %timestamp_ns_str, "Invalid timestamp for channel pin");
+                            return;
+                        }
+                    };
+
+                    // Signal-style lookup: (sender_id, sent_at)
+                    let message = match message_repo.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                         Ok(Some(msg)) => msg,
                         Ok(None) => {
-                            tracing::error!(message_id = %msg_id, "Message not found for channel pin");
+                            tracing::error!(
+                                sender_id = %target_sender_id,
+                                timestamp = target_sent_timestamp,
+                                "Message not found for channel pin (Signal-style lookup)"
+                            );
                             return;
                         }
                         Err(e) => {
@@ -311,21 +356,21 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                         }
                     };
 
+                    let msg_id = message.id;
                     let target_author_aci = message
                         .sender_id
                         .map(|id| id.to_string())
                         .unwrap_or_default();
-                    let target_sent_timestamp = message.sent_at;
 
                     // Toggle pin state
                     let unpin = message.is_pinned;
                     let action = if unpin { "unpin" } else { "pin" };
 
                     tracing::debug!(
-                        message_id = %msg_id,
+                        sender_id = %sender_id_str,
+                        timestamp = target_sent_timestamp,
                         channel = %channel_id,
                         author = %target_author_aci,
-                        timestamp = target_sent_timestamp,
                         action = %action,
                         "Sending channel pin/unpin"
                     );
@@ -351,7 +396,13 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                         return;
                     }
 
-                    tracing::info!(message_id = %msg_id, channel = %channel_id, action = %action, "Channel pin/unpin sent successfully");
+                    tracing::info!(
+                        sender_id = %sender_id_str,
+                        timestamp = %timestamp_ns_str,
+                        channel = %channel_id,
+                        action = %action,
+                        "Channel pin/unpin sent successfully"
+                    );
 
                     // Update locally
                     let new_pinned_state = !unpin;
@@ -360,7 +411,12 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                     if let Err(e) = message_repo.update(&updated_message) {
                         tracing::error!(error = %e, "Failed to update pin status locally");
                     } else {
-                        tracing::debug!(message_id = %msg_id, channel = %channel_id, pinned = new_pinned_state, "Updated channel pin status locally");
+                        tracing::debug!(
+                            sender_id = %sender_id_str,
+                            channel = %channel_id,
+                            pinned = new_pinned_state,
+                            "Updated channel pin status locally"
+                        );
 
                         // Update pinned state for header bar
                         if new_pinned_state {
@@ -375,18 +431,23 @@ pub fn wire_pin_message(window: &MainWindow, ctx: &AppContext) {
                         let preview_text = generate_pinned_preview(&message, &attachments);
                         tracing::debug!(preview = %preview_text, "Generated channel pinned preview");
 
-                        // Update UI to reflect pin state change
+                        // Update UI to reflect pin state change using Signal-style lookup
+                        let sender_id_for_ui = sender_id_str.clone();
+                        let timestamp_for_ui = timestamp_ns_str.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                // Update message model
+                                // Update message model using Signal-style (sender_id, timestamp_ns)
                                 let current_model = w.get_messages();
                                 let messages: Vec<_> = (0..current_model.row_count())
                                     .filter_map(|i| current_model.row_data(i))
                                     .map(|mut m| {
-                                        if m.message_id.as_str() == message_id_str.as_str() {
+                                        if m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                        {
                                             m.is_pinned = new_pinned_state;
                                             tracing::info!(
-                                                message_id = %message_id_str,
+                                                sender_id = %sender_id_for_ui,
+                                                timestamp = %timestamp_for_ui,
                                                 pinned = new_pinned_state,
                                                 "UI updated: toggled channel pin state"
                                             );

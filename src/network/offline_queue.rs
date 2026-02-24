@@ -1029,7 +1029,7 @@ mod tests {
 
         // Test that operation size limit is enforced
         let large_content = vec![0u8; 2000]; // Larger than 1024 limit when serialized
-        let result = queue.enqueue(OperationType::SendMessage {
+        let _result = queue.enqueue(OperationType::SendMessage {
             channel_id: "ch".to_string(),
             content: large_content,
         });

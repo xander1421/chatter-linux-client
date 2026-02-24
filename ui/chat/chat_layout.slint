@@ -62,10 +62,10 @@ export component ChatLayout inherits Rectangle {
 
     // Message list callbacks
     callback message-clicked(string);
-    callback reply-clicked(string);
-    callback react-clicked(string);
+    callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback react-clicked(string, string);  // (sender_id, timestamp_ns)
     callback thread-clicked(string);
-    callback more-clicked(string);
+    callback more-clicked(string, string);  // (sender_id, timestamp_ns)
     callback view-attachment(string);  // attachment ID - for viewing attachment in messages
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
@@ -153,17 +153,17 @@ export component ChatLayout inherits Rectangle {
             message-clicked(id) => {
                 root.message-clicked(id);
             }
-            reply-clicked(id) => {
-                root.reply-clicked(id);
+            reply-clicked(sender-id, timestamp-ns) => {
+                root.reply-clicked(sender-id, timestamp-ns);
             }
-            react-clicked(id) => {
-                root.react-clicked(id);
+            react-clicked(sender-id, timestamp-ns) => {
+                root.react-clicked(sender-id, timestamp-ns);
             }
             thread-clicked(id) => {
                 root.thread-clicked(id);
             }
-            more-clicked(id) => {
-                root.more-clicked(id);
+            more-clicked(sender-id, timestamp-ns) => {
+                root.more-clicked(sender-id, timestamp-ns);
             }
             load-more => {
                 root.load-more();

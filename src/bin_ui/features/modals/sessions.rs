@@ -15,8 +15,8 @@ fn session_to_slint(s: Session) -> SessionInfo {
         device_id: s.device_id as i32,
         device_info: s.device_info.into(),
         ip_address: s.ip_address.into(),
-        last_used: s.last_used.format("%Y-%m-%d %H:%M").to_string().into(),
-        created_at: s.created_at.format("%Y-%m-%d").to_string().into(),
+        last_used: s.last_used.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string().into(),
+        created_at: s.created_at.with_timezone(&chrono::Local).format("%Y-%m-%d").to_string().into(),
         is_current: s.is_current,
     }
 }

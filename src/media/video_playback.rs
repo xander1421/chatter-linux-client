@@ -355,6 +355,12 @@ where
     state.set_loading(false);
     state.set_playing(true);
 
+    // Explicitly seek to 0 at start - GStreamer may pre-roll to end of video for some containers
+    if let Err(e) = dec.seek(0) {
+        tracing::warn!("Initial seek to 0 failed: {}", e);
+    }
+    state.set_position(0.0);
+
     let mut last_frame_time = Instant::now();
 
     // Main playback loop
@@ -364,16 +370,7 @@ where
             break;
         }
 
-        // Handle pause
-        while !state.is_playing() && !state.should_stop() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        if state.should_stop() {
-            break;
-        }
-
-        // Handle seek requests
+        // Handle seek requests BEFORE pause check so seeking works when paused
         if let Some(seek_pos) = state.take_seek_request() {
             let seek_ms = (seek_pos * 1000.0) as u64;
             tracing::debug!("Seeking to {} seconds ({}ms)", seek_pos, seek_ms);
@@ -384,6 +381,33 @@ where
                 state.set_position(seek_pos);
                 tracing::debug!("Seek completed to {} seconds", seek_pos);
             }
+        }
+
+        // Handle pause - placed AFTER seek so users can seek while paused
+        while !state.is_playing() && !state.should_stop() {
+            // Check for seek requests while paused
+            if let Some(seek_pos) = state.take_seek_request() {
+                let seek_ms = (seek_pos * 1000.0) as u64;
+                tracing::debug!("Seeking while paused to {} seconds ({}ms)", seek_pos, seek_ms);
+
+                if let Err(e) = dec.seek(seek_ms) {
+                    tracing::warn!("Seek failed: {}", e);
+                } else {
+                    state.set_position(seek_pos);
+
+                    // Decode one frame to show the new position immediately
+                    // This gives visual feedback when scrubbing while paused
+                    if let Ok(Some(frame)) = dec.decode_video_frame() {
+                        state.set_position(frame.timestamp_ms as f64 / 1000.0);
+                        frame_callback(frame.width, frame.height, frame.data);
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        if state.should_stop() {
+            break;
         }
 
         // Decode and process audio if available

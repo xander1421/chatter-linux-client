@@ -1,0 +1,26 @@
+// Animated image component for GIF playback
+//
+// Displays an animated image by cycling through frames.
+// Frames and timing are controlled from Rust via slint::Timer.
+
+export component AnimatedImage inherits Rectangle {
+    // Current frame to display (updated by Rust timer)
+    in property <image> current-frame;
+
+    // Whether animation is active
+    in property <bool> playing: true;
+
+    // Fallback for non-animated images
+    in property <image> static-image;
+
+    // Use static image if no current frame
+    property <bool> has-frame: current-frame.width > 0;
+
+    // Display the image
+    Image {
+        width: 100%;
+        height: 100%;
+        source: has-frame ? current-frame : static-image;
+        image-fit: contain;
+    }
+}

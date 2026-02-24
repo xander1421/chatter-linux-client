@@ -39,7 +39,7 @@ import { PdfPreviewPanel } from "components/mod.slint";
 import { VideoPlayer } from "components/mod.slint";
 
 // Import call UI
-import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
+import { IncomingCallModal, KeyExchangeModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
 
 // Re-export types for Rust binding
 export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData }
@@ -153,8 +153,10 @@ export component App inherits Rectangle {
     // ========== Reaction picker state ==========
     in-out property <bool> reaction-picker-visible: false;
     in-out property <string> reaction-picker-message-id: "";
+    in-out property <string> reaction-picker-sender-id: "";
+    in-out property <string> reaction-picker-timestamp-ns: "";
     in property <[EmojiData]> reaction-picker-emojis: [];
-    callback reaction-selected(string, string);  // (message_id, emoji)
+    callback reaction-selected(string, string, string, string);  // (sender_id, timestamp_ns, message_id, emoji)
 
     // ========== Composer emoji picker state ==========
     in-out property <bool> composer-emoji-picker-visible: false;
@@ -181,18 +183,20 @@ export component App inherits Rectangle {
 
     // ========== Message context menu state ==========
     in-out property <bool> context-menu-visible: false;
-    in-out property <string> context-menu-message-id: "";
+    in-out property <string> context-menu-sender-id: "";
+    in-out property <string> context-menu-timestamp-ns: "";
     in-out property <length> context-menu-x: 0px;
     in-out property <length> context-menu-y: 0px;
     in property <bool> context-menu-is-own-message: false;
     in property <bool> context-menu-is-pinned: false;
-    callback reply-message(string);           // message_id
-    callback edit-message(string);           // message_id
-    callback delete-message(string);         // message_id (delete for me)
-    callback delete-everyone-message(string); // message_id (delete for everyone)
-    callback pin-message(string);            // message_id
-    callback forward-message-action(string); // message_id (distinct from forward-message modal callback)
-    callback copy-message(string);           // message_id
+    // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
+    callback reply-message(string, string);
+    callback edit-message(string, string);
+    callback delete-message(string, string);         // (delete for me)
+    callback delete-everyone-message(string, string); // (delete for everyone)
+    callback pin-message(string, string);
+    callback forward-message-action(string, string);
+    callback copy-message(string, string);
 
     // ========== Pinned bar state ==========
     in property <bool> has-pinned-messages: false;
@@ -318,6 +322,11 @@ export component App inherits Rectangle {
     in property <image> call-local-video-frame;
     in property <[image]> call-remote-video-frames;
 
+    // Key exchange modal properties
+    in-out property <bool> key-exchange-visible: false;
+    in-out property <bool> key-exchange-loading: false;
+    in-out property <string> key-exchange-peer-name: "";
+
     // Device picker properties
     in-out property <bool> device-picker-visible: false;
     in-out property <string> device-picker-type: "audio"; // "audio", "audio_output", or "screen"
@@ -350,10 +359,10 @@ export component App inherits Rectangle {
     callback search-clicked();
     callback chat-settings-clicked();
     callback message-clicked(string);
-    callback reply-clicked(string);
-    callback react-clicked(string);
+    callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback react-clicked(string, string);  // (sender_id, timestamp_ns)
     callback thread-clicked(string);
-    callback more-clicked(string);
+    callback more-clicked(string, string);  // (sender_id, timestamp_ns)
     callback view-attachment(string);  // attachment ID - for viewing/opening attachments
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
@@ -443,6 +452,8 @@ export component App inherits Rectangle {
     callback audio-device-selected(string);   // device_id
     callback audio-output-selected(string);   // device_id
     callback screen-source-selected(string);  // source_id
+    callback key-exchange-confirm();          // User confirmed key exchange
+    callback key-exchange-cancel();           // User cancelled key exchange
 
     background: Colors.background;
 
@@ -589,14 +600,15 @@ export component App inherits Rectangle {
                 pinned-go-to-message => { root.pinned-go-to-message(); }
                 pinned-dismiss-clicked => { root.pinned-dismiss-clicked(); }
                 message-clicked(id) => { root.message-clicked(id); }
-                reply-clicked(id) => { root.reply-clicked(id); }
-                react-clicked(id) => {
-                    root.reaction-picker-message-id = id;
+                reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
+                react-clicked(sender-id, timestamp-ns) => {
+                    root.reaction-picker-sender-id = sender-id;
+                    root.reaction-picker-timestamp-ns = timestamp-ns;
                     root.reaction-picker-visible = true;
-                    root.react-clicked(id);
+                    root.react-clicked(sender-id, timestamp-ns);
                 }
                 thread-clicked(id) => { root.thread-clicked(id); }
-                more-clicked(id) => { root.more-clicked(id); }
+                more-clicked(sender-id, timestamp-ns) => { root.more-clicked(sender-id, timestamp-ns); }
                 view-attachment(id) => { root.view-attachment(id); }
                 audio-seek(id, pos) => { root.audio-seek(id, pos); }
                 load-more => { root.load-more(); }
@@ -628,10 +640,11 @@ export component App inherits Rectangle {
                 send-reply(text) => { root.send-thread-reply(text); }
                 load-more-replies => { root.load-more-thread-replies(); }
                 message-clicked(id) => { root.message-clicked(id); }
-                react-clicked(id) => {
-                    root.reaction-picker-message-id = id;
+                react-clicked(sender-id, timestamp-ns) => {
+                    root.reaction-picker-sender-id = sender-id;
+                    root.reaction-picker-timestamp-ns = timestamp-ns;
                     root.reaction-picker-visible = true;
-                    root.react-clicked(id);
+                    root.react-clicked(sender-id, timestamp-ns);
                 }
             }
         }
@@ -918,6 +931,20 @@ export component App inherits Rectangle {
     }
 
     // ========== Call overlays (rendered above modals) ==========
+    // Key exchange modal (shown before call when no secure channel exists)
+    KeyExchangeModal {
+        show: root.key-exchange-visible;
+        is-loading: root.key-exchange-loading;
+        peer-name: root.key-exchange-peer-name;
+
+        exchange-keys => {
+            root.key-exchange-confirm();
+        }
+        cancel => {
+            root.key-exchange-cancel();
+        }
+    }
+
     // Incoming call modal
     IncomingCallModal {
         show: root.incoming-call-visible;
@@ -1132,13 +1159,15 @@ export component App inherits Rectangle {
     ReactionPicker {
         show: root.reaction-picker-visible;
         message-id: root.reaction-picker-message-id;
+        sender-id: root.reaction-picker-sender-id;
+        timestamp-ns: root.reaction-picker-timestamp-ns;
         emoji-list: root.reaction-picker-emojis;
         position-x: root.width / 2 - 140px;  // Center horizontally
         position-y: root.height / 2 - 176px;  // Center vertically
 
-        reaction-selected(msg-id, emoji) => {
+        reaction-selected(sender-id, timestamp-ns, msg-id, emoji) => {
             root.reaction-picker-visible = false;
-            root.reaction-selected(msg-id, emoji);
+            root.reaction-selected(sender-id, timestamp-ns, msg-id, emoji);
         }
 
         close => {
@@ -1223,7 +1252,8 @@ export component App inherits Rectangle {
     // Message context menu overlay
     MessageContextMenu {
         show: root.context-menu-visible;
-        message-id: root.context-menu-message-id;
+        sender-id: root.context-menu-sender-id;
+        timestamp-ns: root.context-menu-timestamp-ns;
         position-x: root.context-menu-x;
         position-y: root.context-menu-y;
         is-own-message: root.context-menu-is-own-message;
@@ -1232,33 +1262,33 @@ export component App inherits Rectangle {
         close => {
             root.context-menu-visible = false;
         }
-        reply-clicked(id) => {
+        reply-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
-            root.reply-message(id);
+            root.reply-message(sender-id, timestamp-ns);
         }
-        edit-clicked(id) => {
+        edit-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
-            root.edit-message(id);
+            root.edit-message(sender-id, timestamp-ns);
         }
-        delete-clicked(id) => {
+        delete-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
-            root.delete-message(id);
+            root.delete-message(sender-id, timestamp-ns);
         }
-        delete-everyone-clicked(id) => {
+        delete-everyone-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
-            root.delete-everyone-message(id);
+            root.delete-everyone-message(sender-id, timestamp-ns);
         }
-        pin-clicked(id) => {
+        pin-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
-            root.pin-message(id);
+            root.pin-message(sender-id, timestamp-ns);
         }
-        forward-clicked(id) => {
+        forward-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
-            root.forward-message-action(id);
+            root.forward-message-action(sender-id, timestamp-ns);
         }
-        copy-clicked(id) => {
+        copy-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
-            root.copy-message(id);
+            root.copy-message(sender-id, timestamp-ns);
         }
     }
 

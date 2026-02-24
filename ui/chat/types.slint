@@ -54,4 +54,8 @@ export struct MessageItemData {
     show-sender: bool,
     delivery-status: string,  // "sent", "delivered", "read", or "" for non-own messages
     is-pinned: bool,          // Whether message is pinned
+    // Call message fields
+    is-call: bool,            // Whether this is a call event message
+    call-type: string,        // "outgoing", "incoming", "missed"
+    call-duration: string,    // Formatted duration "1 min 30 s" or empty for missed
 }

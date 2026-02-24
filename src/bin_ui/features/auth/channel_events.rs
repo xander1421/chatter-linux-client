@@ -411,6 +411,9 @@ fn update_ui_with_system_message(
                     show_sender: false,
                     delivery_status: SharedString::default(),
                     is_pinned: false,
+                    is_call: false,
+                    call_type: SharedString::default(),
+                    call_duration: SharedString::default(),
                 };
 
                 // Append to messages list

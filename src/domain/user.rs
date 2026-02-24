@@ -43,22 +43,22 @@ impl PresenceStatus {
 pub struct User {
     pub id: UserId,
     pub username: String,
-    /// Ed25519 public key for identity verification.
-    pub public_key: Vec<u8>,
+    /// SVR (Secure Value Recovery) public key for PIN-based key recovery.
+    pub svr_public_key: Vec<u8>,
     pub last_active: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
 
 impl User {
-    /// Create a new user with the given ID, username, and public key.
+    /// Create a new user with the given ID, username, and SVR public key.
     /// Sets created_at and last_active to the current time.
     #[must_use]
-    pub fn new(id: UserId, username: String, public_key: Vec<u8>) -> Self {
+    pub fn new(id: UserId, username: String, svr_public_key: Vec<u8>) -> Self {
         let now = Utc::now();
         Self {
             id,
             username,
-            public_key,
+            svr_public_key,
             last_active: now,
             created_at: now,
         }

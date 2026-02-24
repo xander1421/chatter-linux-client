@@ -11,8 +11,10 @@ export component ReactionPicker inherits Rectangle {
     // Visibility
     in property <bool> show: false;
 
-    // Message being reacted to
-    in property <string> message-id;
+    // Message being reacted to (Signal-style identification)
+    in property <string> message-id: "";
+    in property <string> sender-id: "";
+    in property <string> timestamp-ns: "";
 
     // Emoji data (passed through to EmojiPicker)
     in property <[EmojiData]> emoji-list: [];
@@ -26,7 +28,7 @@ export component ReactionPicker inherits Rectangle {
     in property <length> position-y: 0;
 
     // Callbacks
-    callback reaction-selected(string, string); // (message_id, emoji)
+    callback reaction-selected(string, string, string, string); // (sender_id, timestamp_ns, message_id, emoji)
     callback close;
     callback category-changed(int);
     callback search-changed(string);
@@ -105,7 +107,7 @@ export component ReactionPicker inherits Rectangle {
                                 width: 100%;
                                 height: 100%;
                                 clicked => {
-                                    root.reaction-selected(root.message-id, emoji);
+                                    root.reaction-selected(root.sender-id, root.timestamp-ns, root.message-id, emoji);
                                     root.close();
                                 }
                             }
@@ -128,7 +130,7 @@ export component ReactionPicker inherits Rectangle {
                 search-query <=> root.search-query;
 
                 emoji-selected(emoji) => {
-                    root.reaction-selected(root.message-id, emoji);
+                    root.reaction-selected(root.sender-id, root.timestamp-ns, root.message-id, emoji);
                     root.close();
                 }
 

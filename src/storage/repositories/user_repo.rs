@@ -31,12 +31,12 @@ impl UserRepository {
     pub fn insert(&self, user: &User) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO users (id, username, public_key, last_active, created_at)
+            "INSERT INTO users (id, username, svr_public_key, last_active, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 user.id.to_string(),
                 user.username,
-                user.public_key,
+                user.svr_public_key,
                 user.last_active.to_rfc3339(),
                 user.created_at.to_rfc3339(),
             ],
@@ -48,18 +48,18 @@ impl UserRepository {
     ///
     /// Creates a minimal placeholder record if the user doesn't exist.
     /// This is needed because the profiles table has a FK to users.
-    /// The placeholder uses the user_id as username and empty public_key.
+    /// The placeholder uses the user_id as username and empty svr_public_key.
     pub fn ensure_user_exists(&self, user_id: &UserId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
 
         // Use INSERT OR IGNORE to only insert if not exists
         conn.execute(
-            "INSERT OR IGNORE INTO users (id, username, public_key, last_active, created_at)
+            "INSERT OR IGNORE INTO users (id, username, svr_public_key, last_active, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 user_id.to_string(),
                 user_id.to_string(), // Use ID as placeholder username
-                Vec::<u8>::new(),    // Empty public key placeholder
+                Vec::<u8>::new(),    // Empty SVR public key placeholder
                 Utc::now().to_rfc3339(),
                 Utc::now().to_rfc3339(),
             ],
@@ -71,7 +71,7 @@ impl UserRepository {
     pub fn get(&self, id: &UserId) -> Result<Option<User>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, username, public_key, last_active, created_at
+            "SELECT id, username, svr_public_key, last_active, created_at
              FROM users WHERE id = ?1",
         )?;
 
@@ -81,7 +81,7 @@ impl UserRepository {
                     rusqlite::Error::InvalidParameterName("Invalid UUID".into())
                 })?,
                 username: row.get(1)?,
-                public_key: row.get(2)?,
+                svr_public_key: row.get(2)?,
                 last_active: parse_datetime(&row.get::<_, String>(3)?),
                 created_at: parse_datetime(&row.get::<_, String>(4)?),
             })
@@ -98,7 +98,7 @@ impl UserRepository {
     pub fn get_by_username(&self, username: &str) -> Result<Option<User>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, username, public_key, last_active, created_at
+            "SELECT id, username, svr_public_key, last_active, created_at
              FROM users WHERE username = ?1",
         )?;
 
@@ -108,7 +108,7 @@ impl UserRepository {
                     rusqlite::Error::InvalidParameterName("Invalid UUID".into())
                 })?,
                 username: row.get(1)?,
-                public_key: row.get(2)?,
+                svr_public_key: row.get(2)?,
                 last_active: parse_datetime(&row.get::<_, String>(3)?),
                 created_at: parse_datetime(&row.get::<_, String>(4)?),
             })
@@ -125,11 +125,11 @@ impl UserRepository {
     pub fn update(&self, user: &User) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE users SET username = ?1, public_key = ?2, last_active = ?3
+            "UPDATE users SET username = ?1, svr_public_key = ?2, last_active = ?3
              WHERE id = ?4",
             params![
                 user.username,
-                user.public_key,
+                user.svr_public_key,
                 user.last_active.to_rfc3339(),
                 user.id.to_string(),
             ],

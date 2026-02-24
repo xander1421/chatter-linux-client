@@ -5,10 +5,12 @@
 //! - Channel messages (sent and received)
 //! - System messages (member join/leave)
 //! - Saved messages (Note to Self)
+//! - Signal-style (sender_id, sent_at) lookups
 
 mod common;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 
 use chatter_linux::domain::channel::{Channel, ChannelType};
@@ -19,6 +21,15 @@ use chatter_linux::storage::{ChannelRepository, Database, MessageRepository};
 // ============================================================================
 // Test Setup Helpers
 // ============================================================================
+
+/// Atomic counter for generating unique timestamps in tests.
+static TIMESTAMP_COUNTER: AtomicU64 = AtomicU64::new(1_700_000_000_000_000_000);
+
+/// Generate a unique nanosecond timestamp for testing.
+/// Each call returns a timestamp ~1ms later than the previous.
+fn next_timestamp_ns() -> u64 {
+    TIMESTAMP_COUNTER.fetch_add(1_000_000, Ordering::SeqCst)
+}
 
 fn setup_test_db() -> (TempDir, Arc<Database>) {
     let temp_dir = TempDir::new().unwrap();
@@ -69,7 +80,8 @@ fn test_dm_message_storage_roundtrip() {
     let dm_channel = create_dm_channel(&channel_repo, &alice, &bob);
 
     // Store a sent message (Alice -> Bob)
-    let sent_msg = Message::new_text(dm_channel.id, Some(alice), "Hello Bob!".to_string());
+    let sent_at = next_timestamp_ns();
+    let sent_msg = Message::new_text(dm_channel.id, Some(alice), "Hello Bob!".to_string(), sent_at);
     message_repo.insert(&sent_msg).unwrap();
 
     // Verify message is stored
@@ -78,6 +90,7 @@ fn test_dm_message_storage_roundtrip() {
     let loaded_msg = loaded.unwrap();
     assert_eq!(loaded_msg.channel_id, dm_channel.id);
     assert_eq!(loaded_msg.sender_id, Some(alice));
+    assert_eq!(loaded_msg.sent_at, sent_at);
     match &loaded_msg.content {
         MessageContent::Text(text) => assert_eq!(text, "Hello Bob!"),
         _ => panic!("Expected text message"),
@@ -97,7 +110,8 @@ fn test_dm_message_received_storage() {
     let dm_channel = create_dm_channel(&channel_repo, &alice, &bob);
 
     // Simulate receiving a message from Bob
-    let received_msg = Message::new_text(dm_channel.id, Some(bob), "Hi Alice!".to_string());
+    let sent_at = next_timestamp_ns();
+    let received_msg = Message::new_text(dm_channel.id, Some(bob), "Hi Alice!".to_string(), sent_at);
 
     // Use insert_or_ignore like the polling code does
     let inserted = message_repo.insert_or_ignore(&received_msg).unwrap();
@@ -139,9 +153,9 @@ fn test_dm_messages_list_by_channel() {
     let dm_ac = create_dm_channel(&channel_repo, &alice, &charlie);
 
     // Store messages in both channels
-    let msg1 = Message::new_text(dm_ab.id, Some(alice), "Hi Bob".to_string());
-    let msg2 = Message::new_text(dm_ab.id, Some(bob), "Hi Alice".to_string());
-    let msg3 = Message::new_text(dm_ac.id, Some(alice), "Hi Charlie".to_string());
+    let msg1 = Message::new_text(dm_ab.id, Some(alice), "Hi Bob".to_string(), next_timestamp_ns());
+    let msg2 = Message::new_text(dm_ab.id, Some(bob), "Hi Alice".to_string(), next_timestamp_ns());
+    let msg3 = Message::new_text(dm_ac.id, Some(alice), "Hi Charlie".to_string(), next_timestamp_ns());
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
@@ -171,12 +185,14 @@ fn test_channel_message_storage() {
     let sender = UserId::new();
 
     // Store a channel message
-    let msg = Message::new_text(channel.id, Some(sender), "Hello channel!".to_string());
+    let sent_at = next_timestamp_ns();
+    let msg = Message::new_text(channel.id, Some(sender), "Hello channel!".to_string(), sent_at);
     message_repo.insert(&msg).unwrap();
 
     // Verify storage
     let loaded = message_repo.get(&msg.id).unwrap().unwrap();
     assert_eq!(loaded.channel_id, channel.id);
+    assert_eq!(loaded.sent_at, sent_at);
     match &loaded.content {
         MessageContent::Text(text) => assert_eq!(text, "Hello channel!"),
         _ => panic!("Expected text message"),
@@ -194,7 +210,8 @@ fn test_channel_message_deduplication() {
 
     // Create message with specific ID
     let msg_id = MessageId::new();
-    let mut msg = Message::new_text(channel.id, Some(sender), "Test message".to_string());
+    let sent_at = next_timestamp_ns();
+    let mut msg = Message::new_text(channel.id, Some(sender), "Test message".to_string(), sent_at);
     msg.id = msg_id;
 
     // First insert should succeed
@@ -219,7 +236,7 @@ fn test_private_channel_message_storage() {
     let channel = create_test_channel(&channel_repo, ChannelType::Private);
     let sender = UserId::new();
 
-    let msg = Message::new_text(channel.id, Some(sender), "Private message".to_string());
+    let msg = Message::new_text(channel.id, Some(sender), "Private message".to_string(), next_timestamp_ns());
     message_repo.insert(&msg).unwrap();
 
     let loaded = message_repo.get(&msg.id).unwrap().unwrap();
@@ -249,7 +266,7 @@ fn test_saved_messages_storage() {
     channel_repo.insert(&channel).unwrap();
 
     // Store a saved message
-    let msg = Message::new_text(channel_id, Some(user), "Note to self".to_string());
+    let msg = Message::new_text(channel_id, Some(user), "Note to self".to_string(), next_timestamp_ns());
     message_repo.insert(&msg).unwrap();
 
     // Verify storage
@@ -274,6 +291,7 @@ fn test_system_message_user_joined() {
     let joined_user = UserId::new();
 
     // Create system message for user join
+    let now = chrono::Utc::now();
     let msg = Message {
         id: MessageId::new(),
         channel_id: channel.id,
@@ -285,8 +303,9 @@ fn test_system_message_user_joined() {
         is_pinned: false,
         is_edited: false,
         is_deleted: false,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        sent_at: next_timestamp_ns(),
+        created_at: now,
+        updated_at: now,
         edited_at: None,
         reaction_counts: Vec::new(),
         current_user_reactions: Vec::new(),
@@ -317,6 +336,7 @@ fn test_system_message_user_left() {
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
     let left_user = UserId::new();
 
+    let now = chrono::Utc::now();
     let msg = Message {
         id: MessageId::new(),
         channel_id: channel.id,
@@ -328,8 +348,9 @@ fn test_system_message_user_left() {
         is_pinned: false,
         is_edited: false,
         is_deleted: false,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        sent_at: next_timestamp_ns(),
+        created_at: now,
+        updated_at: now,
         edited_at: None,
         reaction_counts: Vec::new(),
         current_user_reactions: Vec::new(),
@@ -362,7 +383,7 @@ fn test_message_update() {
     let sender = UserId::new();
 
     // Insert original message
-    let mut msg = Message::new_text(channel.id, Some(sender), "Original text".to_string());
+    let mut msg = Message::new_text(channel.id, Some(sender), "Original text".to_string(), next_timestamp_ns());
     message_repo.insert(&msg).unwrap();
 
     // Update the message
@@ -389,7 +410,7 @@ fn test_message_soft_delete() {
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
     let sender = UserId::new();
 
-    let mut msg = Message::new_text(channel.id, Some(sender), "To be deleted".to_string());
+    let mut msg = Message::new_text(channel.id, Some(sender), "To be deleted".to_string(), next_timestamp_ns());
     message_repo.insert(&msg).unwrap();
 
     // Soft delete
@@ -459,16 +480,17 @@ fn test_messages_ordered_by_timestamp() {
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
     let sender = UserId::new();
 
-    // Create messages with different timestamps
+    // Create messages with different sent_at timestamps
+    let base_ts = 1_700_000_000_000_000_000u64;
+
+    let mut msg1 = Message::new_text(channel.id, Some(sender), "First".to_string(), base_ts);
+    let mut msg2 = Message::new_text(channel.id, Some(sender), "Second".to_string(), base_ts + 5_000_000_000);
+    let mut msg3 = Message::new_text(channel.id, Some(sender), "Third".to_string(), base_ts + 10_000_000_000);
+
+    // Also set created_at to ensure they differ
     let now = chrono::Utc::now();
-
-    let mut msg1 = Message::new_text(channel.id, Some(sender), "First".to_string());
     msg1.created_at = now - chrono::Duration::seconds(10);
-
-    let mut msg2 = Message::new_text(channel.id, Some(sender), "Second".to_string());
     msg2.created_at = now - chrono::Duration::seconds(5);
-
-    let mut msg3 = Message::new_text(channel.id, Some(sender), "Third".to_string());
     msg3.created_at = now;
 
     // Insert in random order
@@ -506,7 +528,7 @@ fn test_bulk_message_storage() {
 
     // Insert 100 messages
     for i in 0..100 {
-        let msg = Message::new_text(channel.id, Some(sender), format!("Message {}", i));
+        let msg = Message::new_text(channel.id, Some(sender), format!("Message {}", i), next_timestamp_ns());
         message_repo.insert(&msg).unwrap();
     }
 
@@ -533,7 +555,7 @@ fn test_concurrent_dm_channels() {
 
     // Store messages in each channel
     for (channel, peer) in &channels {
-        let msg = Message::new_text(channel.id, Some(*peer), "Hello!".to_string());
+        let msg = Message::new_text(channel.id, Some(*peer), "Hello!".to_string(), next_timestamp_ns());
         message_repo.insert(&msg).unwrap();
     }
 
@@ -542,4 +564,359 @@ fn test_concurrent_dm_channels() {
         let messages = message_repo.list_for_channel(&channel.id, None, 100).unwrap();
         assert_eq!(messages.len(), 1);
     }
+}
+
+// ============================================================================
+// Signal-Style (sender_id, sent_at) Lookup Tests
+// ============================================================================
+
+#[test]
+fn test_get_by_sender_timestamp_basic() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Create message with known timestamp
+    let sent_at = 1_700_000_001_234_567_890u64;
+    let msg = Message::new_text(channel.id, Some(sender), "Signal-style test".to_string(), sent_at);
+    message_repo.insert(&msg).unwrap();
+
+    // Lookup by (sender_id, sent_at) - Signal-style
+    let found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap();
+    assert!(found.is_some());
+    let found_msg = found.unwrap();
+    assert_eq!(found_msg.id, msg.id);
+    assert_eq!(found_msg.sender_id, Some(sender));
+    assert_eq!(found_msg.sent_at, sent_at);
+    match &found_msg.content {
+        MessageContent::Text(text) => assert_eq!(text, "Signal-style test"),
+        _ => panic!("Expected text message"),
+    }
+}
+
+#[test]
+fn test_get_by_sender_timestamp_not_found() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Create message
+    let sent_at = 1_700_000_001_234_567_890u64;
+    let msg = Message::new_text(channel.id, Some(sender), "Test message".to_string(), sent_at);
+    message_repo.insert(&msg).unwrap();
+
+    // Try to find with wrong timestamp
+    let wrong_ts = 1_700_000_002_000_000_000u64;
+    let not_found = message_repo.get_by_sender_timestamp(&sender, wrong_ts).unwrap();
+    assert!(not_found.is_none(), "Should not find message with wrong timestamp");
+
+    // Try to find with wrong sender
+    let wrong_sender = UserId::new();
+    let not_found = message_repo.get_by_sender_timestamp(&wrong_sender, sent_at).unwrap();
+    assert!(not_found.is_none(), "Should not find message with wrong sender");
+}
+
+#[test]
+fn test_get_by_sender_timestamp_multiple_senders() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let alice = UserId::new();
+    let bob = UserId::new();
+
+    // Both users send messages at different times
+    let alice_ts = 1_700_000_001_000_000_000u64;
+    let bob_ts = 1_700_000_002_000_000_000u64;
+
+    let alice_msg = Message::new_text(channel.id, Some(alice), "Hello from Alice".to_string(), alice_ts);
+    let bob_msg = Message::new_text(channel.id, Some(bob), "Hello from Bob".to_string(), bob_ts);
+
+    message_repo.insert(&alice_msg).unwrap();
+    message_repo.insert(&bob_msg).unwrap();
+
+    // Each lookup should find the correct message
+    let found_alice = message_repo.get_by_sender_timestamp(&alice, alice_ts).unwrap().unwrap();
+    assert_eq!(found_alice.id, alice_msg.id);
+
+    let found_bob = message_repo.get_by_sender_timestamp(&bob, bob_ts).unwrap().unwrap();
+    assert_eq!(found_bob.id, bob_msg.id);
+
+    // Cross lookups should fail
+    assert!(message_repo.get_by_sender_timestamp(&alice, bob_ts).unwrap().is_none());
+    assert!(message_repo.get_by_sender_timestamp(&bob, alice_ts).unwrap().is_none());
+}
+
+#[test]
+fn test_get_by_sender_timestamp_same_sender_different_times() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Same sender sends multiple messages at different times
+    let ts1 = 1_700_000_001_000_000_000u64;
+    let ts2 = 1_700_000_002_000_000_000u64;
+    let ts3 = 1_700_000_003_000_000_000u64;
+
+    let msg1 = Message::new_text(channel.id, Some(sender), "First".to_string(), ts1);
+    let msg2 = Message::new_text(channel.id, Some(sender), "Second".to_string(), ts2);
+    let msg3 = Message::new_text(channel.id, Some(sender), "Third".to_string(), ts3);
+
+    message_repo.insert(&msg1).unwrap();
+    message_repo.insert(&msg2).unwrap();
+    message_repo.insert(&msg3).unwrap();
+
+    // Each timestamp should find the correct message
+    let found1 = message_repo.get_by_sender_timestamp(&sender, ts1).unwrap().unwrap();
+    let found2 = message_repo.get_by_sender_timestamp(&sender, ts2).unwrap().unwrap();
+    let found3 = message_repo.get_by_sender_timestamp(&sender, ts3).unwrap().unwrap();
+
+    match &found1.content {
+        MessageContent::Text(t) => assert_eq!(t, "First"),
+        _ => panic!("Expected text"),
+    }
+    match &found2.content {
+        MessageContent::Text(t) => assert_eq!(t, "Second"),
+        _ => panic!("Expected text"),
+    }
+    match &found3.content {
+        MessageContent::Text(t) => assert_eq!(t, "Third"),
+        _ => panic!("Expected text"),
+    }
+}
+
+// ============================================================================
+// Signal-Style Deduplication Tests
+// ============================================================================
+
+#[test]
+fn test_signal_style_deduplication_same_sender_timestamp() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Create two messages with same (sender_id, sent_at) but different message_ids
+    // This simulates the same message arriving twice with different server-assigned IDs
+    let sent_at = 1_700_000_001_234_567_890u64;
+
+    let mut msg1 = Message::new_text(channel.id, Some(sender), "Original message".to_string(), sent_at);
+    let original_id = msg1.id;
+
+    let mut msg2 = Message::new_text(channel.id, Some(sender), "Duplicate delivery".to_string(), sent_at);
+    msg2.id = MessageId::new(); // Different message ID
+
+    // First insert should succeed
+    let first = message_repo.insert_or_ignore(&msg1).unwrap();
+    assert!(first, "First message should be inserted");
+
+    // Second insert with same (sender_id, sent_at) should be ignored
+    let second = message_repo.insert_or_ignore(&msg2).unwrap();
+    assert!(!second, "Duplicate (sender_id, sent_at) should be ignored");
+
+    // Verify only one message exists
+    let messages = message_repo.list_for_channel(&channel.id, None, 100).unwrap();
+    assert_eq!(messages.len(), 1);
+
+    // And it should be the original one
+    assert_eq!(messages[0].id, original_id);
+    match &messages[0].content {
+        MessageContent::Text(t) => assert_eq!(t, "Original message"),
+        _ => panic!("Expected text"),
+    }
+}
+
+#[test]
+fn test_signal_style_allows_different_senders_same_timestamp() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let alice = UserId::new();
+    let bob = UserId::new();
+
+    // Two different senders can have the same timestamp
+    let same_ts = 1_700_000_001_234_567_890u64;
+
+    let alice_msg = Message::new_text(channel.id, Some(alice), "From Alice".to_string(), same_ts);
+    let bob_msg = Message::new_text(channel.id, Some(bob), "From Bob".to_string(), same_ts);
+
+    // Both should be inserted successfully
+    let first = message_repo.insert_or_ignore(&alice_msg).unwrap();
+    assert!(first, "Alice's message should be inserted");
+
+    let second = message_repo.insert_or_ignore(&bob_msg).unwrap();
+    assert!(second, "Bob's message should be inserted (different sender)");
+
+    // Verify both messages exist
+    let messages = message_repo.list_for_channel(&channel.id, None, 100).unwrap();
+    assert_eq!(messages.len(), 2);
+}
+
+// ============================================================================
+// Message Action Tests (Edit, Delete, Pin using Signal-style lookup)
+// ============================================================================
+
+#[test]
+fn test_edit_message_via_signal_style_lookup() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Create original message
+    let sent_at = 1_700_000_001_234_567_890u64;
+    let msg = Message::new_text(channel.id, Some(sender), "Original text".to_string(), sent_at);
+    message_repo.insert(&msg).unwrap();
+
+    // Simulate edit action: lookup by (sender_id, sent_at) and update
+    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    found.content = MessageContent::Text("Edited text".to_string());
+    found.is_edited = true;
+    found.edited_at = Some(chrono::Utc::now());
+    message_repo.update(&found).unwrap();
+
+    // Verify edit persisted
+    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    assert!(reloaded.is_edited);
+    match &reloaded.content {
+        MessageContent::Text(t) => assert_eq!(t, "Edited text"),
+        _ => panic!("Expected text"),
+    }
+}
+
+#[test]
+fn test_delete_message_via_signal_style_lookup() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Create message
+    let sent_at = 1_700_000_001_234_567_890u64;
+    let msg = Message::new_text(channel.id, Some(sender), "To be deleted".to_string(), sent_at);
+    message_repo.insert(&msg).unwrap();
+
+    // Simulate delete action: lookup by (sender_id, sent_at) and soft delete
+    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    found.is_deleted = true;
+    message_repo.update(&found).unwrap();
+
+    // Verify delete persisted
+    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    assert!(reloaded.is_deleted);
+}
+
+#[test]
+fn test_pin_message_via_signal_style_lookup() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Create message
+    let sent_at = 1_700_000_001_234_567_890u64;
+    let msg = Message::new_text(channel.id, Some(sender), "Pin this message".to_string(), sent_at);
+    message_repo.insert(&msg).unwrap();
+
+    // Simulate pin action: lookup by (sender_id, sent_at) and pin
+    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    assert!(!found.is_pinned);
+    found.is_pinned = true;
+    message_repo.update(&found).unwrap();
+
+    // Verify pin persisted
+    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    assert!(reloaded.is_pinned);
+
+    // Unpin
+    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    found.is_pinned = false;
+    message_repo.update(&found).unwrap();
+
+    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    assert!(!reloaded.is_pinned);
+}
+
+#[test]
+fn test_reaction_via_signal_style_lookup() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Create message
+    let sent_at = 1_700_000_001_234_567_890u64;
+    let msg = Message::new_text(channel.id, Some(sender), "React to this".to_string(), sent_at);
+    message_repo.insert(&msg).unwrap();
+
+    // Simulate reaction: lookup by (sender_id, sent_at) and add reaction
+    let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    use chatter_linux::domain::message::ReactionCount;
+    found.reaction_counts.push(ReactionCount {
+        emoji: "👍".to_string(),
+        count: 1,
+    });
+    found.current_user_reactions.push("👍".to_string());
+    message_repo.update(&found).unwrap();
+
+    // Verify reaction persisted
+    let reloaded = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
+    assert_eq!(reloaded.reaction_counts.len(), 1);
+    assert_eq!(reloaded.reaction_counts[0].emoji, "👍");
+    assert_eq!(reloaded.reaction_counts[0].count, 1);
+    assert!(reloaded.current_user_reactions.contains(&"👍".to_string()));
+}
+
+// ============================================================================
+// Cross-Channel Signal-Style Lookup Tests
+// ============================================================================
+
+#[test]
+fn test_signal_style_lookup_across_channels() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel1 = create_test_channel(&channel_repo, ChannelType::Public);
+    let channel2 = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Same sender sends messages in different channels
+    let ts1 = 1_700_000_001_000_000_000u64;
+    let ts2 = 1_700_000_002_000_000_000u64;
+
+    let msg1 = Message::new_text(channel1.id, Some(sender), "In channel 1".to_string(), ts1);
+    let msg2 = Message::new_text(channel2.id, Some(sender), "In channel 2".to_string(), ts2);
+
+    message_repo.insert(&msg1).unwrap();
+    message_repo.insert(&msg2).unwrap();
+
+    // Signal-style lookup should find messages regardless of channel
+    let found1 = message_repo.get_by_sender_timestamp(&sender, ts1).unwrap().unwrap();
+    let found2 = message_repo.get_by_sender_timestamp(&sender, ts2).unwrap().unwrap();
+
+    assert_eq!(found1.channel_id, channel1.id);
+    assert_eq!(found2.channel_id, channel2.id);
 }

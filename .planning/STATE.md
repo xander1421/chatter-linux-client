@@ -302,6 +302,8 @@ None.
 - Phase 74 added: LiveKit Video & Audio Calls (WebRTC via livekit Rust SDK)
 - Phase 75 added: Secure In-Memory Attachment Handling (encrypted DB storage, memory-only decryption)
 - Phase 76 added: Refactor Large Service Files (split files >550 lines into focused modules)
+- Phase 77 added: Rename public_key to svr_public_key (prepare for Secure Value Recovery feature)
+- Phase 78 added: Service Separation of Concerns (enforce proper layering, move business logic from UI/handlers into services)
 
 ## Session Continuity
 

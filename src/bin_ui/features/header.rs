@@ -186,8 +186,8 @@ fn wire_search_callbacks(window: &MainWindow, ctx: &AppContext) {
                     })
                     .unwrap_or_else(|| "Unknown".to_string());
 
-                // Format timestamp
-                let timestamp = msg.created_at.format("%b %d, %H:%M").to_string();
+                // Format timestamp (convert UTC to local time)
+                let timestamp = msg.created_at.with_timezone(&chrono::Local).format("%b %d, %H:%M").to_string();
 
                 // Get content preview
                 let content_preview = msg
@@ -534,8 +534,17 @@ fn wire_load_more(window: &MainWindow, ctx: &AppContext) {
                     let current_model = w.get_messages();
                     let current_count = current_model.row_count();
 
-                    // Prepend older messages to current (older go at top)
-                    let mut combined = slint_messages;
+                    // Collect current message IDs for deduplication
+                    let current_ids: std::collections::HashSet<String> = (0..current_count)
+                        .filter_map(|i| current_model.row_data(i))
+                        .map(|msg| msg.message_id.to_string())
+                        .collect();
+
+                    // Prepend older messages to current (older go at top), skipping duplicates
+                    let mut combined: Vec<_> = slint_messages
+                        .into_iter()
+                        .filter(|msg| !current_ids.contains(msg.message_id.as_str()))
+                        .collect();
                     for i in 0..current_count {
                         if let Some(msg) = current_model.row_data(i) {
                             combined.push(msg);

@@ -13,6 +13,7 @@ use chatter_linux::domain::ids::{AttachmentId, MessageId};
 use chatter_linux::media::{FilePicker, FilePickerConfig, ImageProcessor};
 use chatter_linux::services::AttachmentService;
 use chatter_linux::system::ExternalOpener;
+use zeroize::Zeroize;
 
 use crate::bin_ui::audio_state;
 use crate::bin_ui::converters::format_file_size;
@@ -212,6 +213,8 @@ pub fn wire(window: &MainWindow, ctx: &AppContext) {
 
 fn wire_close_image_viewer(window: &MainWindow) {
     window.on_close_image_viewer(|| {
+        // Stop any GIF animation when closing the viewer
+        crate::bin_ui::gif_state::stop_gif_animation();
         tracing::debug!("Image viewer closed");
     });
 }
@@ -379,21 +382,31 @@ fn wire_reply_clicked(window: &MainWindow, ctx: &AppContext) {
     let weak_window = window.as_weak();
     let message_repo = ctx.message_repo.clone();
 
-    window.on_reply_clicked(move |message_id: SharedString| {
-        let message_id_str = message_id.to_string();
+    // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
+    window.on_reply_clicked(move |sender_id: SharedString, timestamp_ns: SharedString| {
+        let sender_id_str = sender_id.to_string();
+        let timestamp_str = timestamp_ns.to_string();
         let weak = weak_window.clone();
         let message_repo = message_repo.clone();
 
         tokio::spawn(async move {
-            let msg_id: MessageId = match message_id_str.parse() {
+            // Parse sender_id and timestamp for Signal-style lookup
+            let target_sender: chatter_linux::domain::ids::UserId = match sender_id_str.parse() {
                 Ok(id) => id,
                 Err(e) => {
-                    tracing::error!("Invalid message ID for reply: {}", e);
+                    tracing::error!(error = %e, "Invalid sender ID for reply");
+                    return;
+                }
+            };
+            let target_timestamp: u64 = match timestamp_str.parse() {
+                Ok(ts) => ts,
+                Err(e) => {
+                    tracing::error!(error = %e, "Invalid timestamp for reply");
                     return;
                 }
             };
 
-            let reply_preview = match message_repo.get(&msg_id) {
+            let reply_preview = match message_repo.get_by_sender_timestamp(&target_sender, target_timestamp) {
                 Ok(Some(msg)) => {
                     let sender = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                     let content = msg.as_text().unwrap_or("").to_string();
@@ -412,7 +425,7 @@ fn wire_reply_clicked(window: &MainWindow, ctx: &AppContext) {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     w.set_composer_placeholder(placeholder.into());
-                    tracing::info!("Reply mode activated for message: {}", msg_id);
+                    tracing::info!(sender = %sender_id_str, timestamp = %timestamp_str, "Reply mode activated");
                 }
             });
         });
@@ -422,14 +435,16 @@ fn wire_reply_clicked(window: &MainWindow, ctx: &AppContext) {
 fn wire_react_clicked(window: &MainWindow) {
     let weak_window = window.as_weak();
 
-    window.on_react_clicked(move |message_id: SharedString| {
-        let message_id_str = message_id.to_string();
+    // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
+    window.on_react_clicked(move |sender_id: SharedString, timestamp_ns: SharedString| {
+        let sender_id_str = sender_id.to_string();
+        let timestamp_str = timestamp_ns.to_string();
         let weak = weak_window.clone();
-        tracing::debug!("React clicked for message: {}", message_id_str);
+        tracing::debug!(sender = %sender_id_str, timestamp = %timestamp_str, "React clicked");
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(_w) = weak.upgrade() {
-                tracing::info!("Emoji picker requested for message: {}", message_id_str);
+                tracing::info!(sender = %sender_id_str, timestamp = %timestamp_str, "Emoji picker requested");
             }
         });
     });
@@ -537,27 +552,60 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
 
         // SECURE IN-MEMORY PLAYBACK: Content is in database, decrypt to memory
         if content_in_database && attachment.status == AttachmentStatus::Ready {
-            tracing::debug!("Attachment {} ready in DB, decrypting to memory", att_id);
+            tracing::debug!("Attachment {} ready in DB, spawning async decryption", att_id);
 
-            let attachment_service = AttachmentService::new(attachment_repo.clone());
             let filename = attachment.metadata.name.clone();
             let file_size = attachment.metadata.size;
             let mime_type = attachment.metadata.mime_type.clone();
+            let attachment_repo_for_decrypt = attachment_repo.clone();
+            let att_id_for_decrypt = att_id;
 
-            // Decrypt to secure memory buffer (auto-zeroizes on drop)
-            let secure_buffer = match attachment_service.decrypt_to_memory(&att_id) {
-                Ok(buffer) => buffer,
-                Err(e) => {
-                    tracing::error!("Failed to decrypt attachment to memory: {}", e);
-                    return;
-                }
-            };
+            // Show loading state immediately for images
+            let is_image_check = FileMetadata::is_image_file(&filename, &mime_type);
+            if is_image_check {
+                let weak_loading = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_loading.upgrade() {
+                        w.set_image_viewer_filename("Loading...".into());
+                        w.set_image_viewer_size("Decrypting...".into());
+                        w.set_image_viewer_visible(true);
+                    }
+                });
+            }
 
-            let is_audio = mime_type.starts_with("audio/");
-            let is_image = FileMetadata::is_image_file(&filename, &mime_type);
-            let is_video = mime_type.starts_with("video/");
+            // Spawn async task - don't block UI thread
+            let weak_for_task = weak.clone();
+            let attachment_id_for_task = attachment_id.clone();
+            tokio::spawn(async move {
+                let attachment_service = AttachmentService::new(attachment_repo_for_decrypt);
 
-            if is_audio {
+                // Decrypt in blocking task (CPU-bound)
+                let secure_buffer = match tokio::task::spawn_blocking(move || {
+                    attachment_service.decrypt_to_memory(&att_id_for_decrypt)
+                }).await {
+                    Ok(Ok(buffer)) => buffer,
+                    Ok(Err(e)) => {
+                        tracing::error!("Failed to decrypt attachment: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak_for_task.upgrade() {
+                                w.set_image_viewer_visible(false);
+                            }
+                        });
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::error!("Decrypt task panicked: {}", e);
+                        return;
+                    }
+                };
+
+                let weak = weak_for_task;
+                let attachment_id = attachment_id_for_task;
+                let is_audio = mime_type.starts_with("audio/");
+                let is_image = FileMetadata::is_image_file(&filename, &mime_type);
+                let is_video = mime_type.starts_with("video/");
+
+                if is_audio {
                 // Play audio from memory buffer (no disk access)
                 let player_arc = audio_state::get_audio_player();
                 match player_arc.lock() {
@@ -624,30 +672,51 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
                     Err(e) => {
                         tracing::error!("Failed to lock audio player: {}", e);
                     }
-                }
-            } else if is_image {
-                // Load image from memory (secure: no filesystem)
-                let data = secure_buffer.as_slice().to_vec();
+                    }
+                } else if is_image {
+                    // Load image from memory (secure: no filesystem)
+                let mut data = secure_buffer.as_slice().to_vec();
                 let filename_for_ui = filename.clone();
                 let size_display = format_file_size(file_size);
+                let att_id_for_inline = att_id.to_string();
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        match ImageProcessor::memory_to_slint_image(&data) {
-                            Ok(img) => {
-                                w.set_image_viewer_source(img);
-                                w.set_image_viewer_filename(filename_for_ui.into());
-                                w.set_image_viewer_size(size_display.into());
-                                w.set_image_viewer_visible(true);
-                                tracing::info!("Opened image from memory in viewer");
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to load image from memory: {:?}", e);
+                        // Check if it's an animated GIF - use combined function for
+                        // viewer animation AND inline animation (shared decode)
+                        let weak_for_gif = w.as_weak();
+                        if let Some(first_frame) = crate::bin_ui::gif_state::start_gif_animation_and_inline(
+                            &data,
+                            &weak_for_gif,
+                            &att_id_for_inline,
+                        ) {
+                            // Animated GIF - use the first frame and start animation
+                            w.set_image_viewer_source(first_frame);
+                            w.set_image_viewer_filename(filename_for_ui.into());
+                            w.set_image_viewer_size(size_display.into());
+                            w.set_image_viewer_visible(true);
+                            crate::bin_ui::gif_state::resume();
+                            tracing::info!("Opened animated GIF in viewer");
+                        } else {
+                            // Static image - use standard image loading
+                            match ImageProcessor::memory_to_slint_image(&data) {
+                                Ok(img) => {
+                                    w.set_image_viewer_source(img);
+                                    w.set_image_viewer_filename(filename_for_ui.into());
+                                    w.set_image_viewer_size(size_display.into());
+                                    w.set_image_viewer_visible(true);
+                                    tracing::info!("Opened image from memory in viewer");
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to load image from memory: {:?}", e);
+                                }
                             }
                         }
                     }
-                });
-            } else if is_video {
+                    // SECURITY: Zeroize decrypted data after use
+                    data.zeroize();
+                    });
+                } else if is_video {
                 // Play video from memory using memfd (secure: no filesystem)
                 let data = secure_buffer.as_slice().to_vec();
                 let filename_for_video = filename.clone();
@@ -673,9 +742,9 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
                     Err(e) => {
                         tracing::error!("Failed to start video from memory: {}", e);
                     }
-                }
-            } else {
-                // For code/text files, decode and display from memory
+                    }
+                } else {
+                    // For code/text files, decode and display from memory
                 if FileMetadata::is_code_file(&filename, &mime_type) {
                     let data = secure_buffer.as_slice().to_vec();
                     let text = String::from_utf8_lossy(&data).to_string();
@@ -762,10 +831,12 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
                         } else {
                             tracing::debug!("Save As dialog cancelled");
                         }
-                    });
+                        });
+                    }
                 }
-            }
-            // secure_buffer is dropped here -> memory zeroized
+                // secure_buffer is dropped here -> memory zeroized
+            });
+            // Async decryption spawned - return early
             return;
         }
 
@@ -871,19 +942,35 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
                             let data = secure_buffer.as_slice().to_vec();
                             let filename_for_ui = file_name.clone();
                             let size_display = format_file_size(file_size);
+                            let att_id_for_inline = att_id_str_for_task.clone();
 
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak.upgrade() {
-                                    match ImageProcessor::memory_to_slint_image(&data) {
-                                        Ok(img) => {
-                                            w.set_image_viewer_source(img);
-                                            w.set_image_viewer_filename(filename_for_ui.into());
-                                            w.set_image_viewer_size(size_display.into());
-                                            w.set_image_viewer_visible(true);
-                                            tracing::info!("Opened image from memory");
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Failed to load image from memory: {:?}", e);
+                                    // Check if it's an animated GIF
+                                    let weak_for_gif = w.as_weak();
+                                    if let Some(first_frame) = crate::bin_ui::gif_state::start_gif_animation_and_inline(
+                                        &data,
+                                        &weak_for_gif,
+                                        &att_id_for_inline,
+                                    ) {
+                                        w.set_image_viewer_source(first_frame);
+                                        w.set_image_viewer_filename(filename_for_ui.into());
+                                        w.set_image_viewer_size(size_display.into());
+                                        w.set_image_viewer_visible(true);
+                                        crate::bin_ui::gif_state::resume();
+                                        tracing::info!("Opened animated GIF from download");
+                                    } else {
+                                        match ImageProcessor::memory_to_slint_image(&data) {
+                                            Ok(img) => {
+                                                w.set_image_viewer_source(img);
+                                                w.set_image_viewer_filename(filename_for_ui.into());
+                                                w.set_image_viewer_size(size_display.into());
+                                                w.set_image_viewer_visible(true);
+                                                tracing::info!("Opened image from memory");
+                                            }
+                                            Err(e) => {
+                                                tracing::error!("Failed to load image from memory: {:?}", e);
+                                            }
                                         }
                                     }
                                 }

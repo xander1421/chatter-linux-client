@@ -150,6 +150,63 @@ impl MessageRepository {
         }
     }
 
+    /// Get a message by sender ID and timestamp (Signal-style lookup).
+    ///
+    /// This is the preferred lookup method for reactions, edits, pins, and other
+    /// message actions because it uses the Signal Protocol's (sender_id, sent_at)
+    /// tuple which is consistent across devices, unlike server-assigned message IDs.
+    pub fn get_by_sender_timestamp(
+        &self,
+        sender_id: &UserId,
+        sent_at: u64,
+    ) -> Result<Option<Message>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_id, sender_id, content_json,
+                    thread_id, reply_to, attachments_json,
+                    is_pinned, is_edited, is_deleted,
+                    sent_at, created_at, updated_at, edited_at,
+                    reaction_counts_json, current_user_reactions_json,
+                    mentioned_integrations_json, targets_ai_bot
+             FROM messages WHERE sender_id = ?1 AND sent_at = ?2",
+        )?;
+
+        let result = stmt.query_row(params![sender_id.to_string(), sent_at as i64], row_to_message);
+
+        match result {
+            Ok(message) => Ok(Some(message?)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// List recent messages by sender (for debugging Signal-style lookups).
+    pub fn list_by_sender(
+        &self,
+        sender_id: &UserId,
+        limit: u32,
+    ) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, channel_id, sender_id, content_json,
+                    thread_id, reply_to, attachments_json,
+                    is_pinned, is_edited, is_deleted,
+                    sent_at, created_at, updated_at, edited_at,
+                    reaction_counts_json, current_user_reactions_json,
+                    mentioned_integrations_json, targets_ai_bot
+             FROM messages WHERE sender_id = ?1
+             ORDER BY sent_at DESC LIMIT ?2",
+        )?;
+
+        let rows = stmt.query_map(params![sender_id.to_string(), limit], row_to_message)?;
+
+        let mut messages = Vec::new();
+        for row in rows {
+            messages.push(row??);
+        }
+        Ok(messages)
+    }
+
     /// Update an existing message.
     pub fn update(&self, message: &Message) -> Result<(), StorageError> {
         let conn = self.db.connection()?;

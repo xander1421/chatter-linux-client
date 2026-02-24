@@ -13,6 +13,7 @@ export component MessageItem inherits Rectangle {
     // Message identity
     in property <string> message-id: "";
     in property <string> sender-id: "";
+    in property <string> timestamp-ns: "";  // Nanosecond timestamp for Signal-style (sender_id, timestamp) lookups
 
     // Sender info
     in property <string> sender-name: "";
@@ -30,6 +31,11 @@ export component MessageItem inherits Rectangle {
     in property <bool> is-system: false;
     in property <bool> is-ai: false;
     in property <bool> show-sender: true;
+
+    // Call message
+    in property <bool> is-call: false;
+    in property <string> call-type: "";      // "outgoing", "incoming", "missed"
+    in property <string> call-duration: "";  // "1 min 30 s" or empty for missed
 
     // Attachments
     in property <bool> has-attachments: false;
@@ -54,11 +60,11 @@ export component MessageItem inherits Rectangle {
     // Internal hover state - true when hovering message OR action buttons
     property <bool> is-hovered: touch.has-hover || action-buttons-touch.has-hover;
 
-    // Callbacks
-    callback reply-clicked(string);
-    callback react-clicked(string);
+    // Callbacks - Signal-style identification (sender_id, timestamp_ns)
+    callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback react-clicked(string, string);  // (sender_id, timestamp_ns)
     callback thread-clicked(string);
-    callback more-clicked(string);
+    callback more-clicked(string, string);  // (sender_id, timestamp_ns)
     callback message-clicked(string);
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
@@ -117,7 +123,7 @@ export component MessageItem inherits Rectangle {
                     reply-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            root.reply-clicked(root.message-id);
+                            root.reply-clicked(root.sender-id, root.timestamp-ns);
                         }
                     }
                 }
@@ -139,7 +145,7 @@ export component MessageItem inherits Rectangle {
                     react-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            root.react-clicked(root.message-id);
+                            root.react-clicked(root.sender-id, root.timestamp-ns);
                         }
                     }
                 }
@@ -161,7 +167,7 @@ export component MessageItem inherits Rectangle {
                     more-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            root.more-clicked(root.message-id);
+                            root.more-clicked(root.sender-id, root.timestamp-ns);
                         }
                     }
                 }
@@ -176,7 +182,7 @@ export component MessageItem inherits Rectangle {
         spacing: Spacing.xs;
 
         // System message (centered, italic)
-        if root.is-system: Rectangle {
+        if root.is-system && !root.is-call: Rectangle {
             // 100% width for text wrapping
             width: 100%;
             height: system-text.preferred-height;
@@ -189,6 +195,102 @@ export component MessageItem inherits Rectangle {
                 font-italic: true;
                 horizontal-alignment: center;
                 wrap: word-wrap;
+            }
+        }
+
+        // Call message
+        if root.is-call: HorizontalLayout {
+            width: 100%;
+            spacing: Spacing.sm;
+            alignment: root.is-own ? end : start;  // Outgoing = right, Incoming = left
+
+            // Call card
+            Rectangle {
+                property <bool> is-missed: root.call-type == "missed";
+                property <bool> is-outgoing: root.call-type == "outgoing";
+
+                width: call-content.preferred-width + Spacing.lg * 2;
+                height: call-content.preferred-height + Spacing.md * 2;
+                background: is-missed ? Colors.error.transparentize(0.9) : Colors.surface;
+                border-radius: Spacing.radius-md;
+                border-width: 1px;
+                border-color: is-missed ? Colors.error.transparentize(0.7) : Colors.surface-hover;
+
+                call-content := HorizontalLayout {
+                    padding: Spacing.md;
+                    spacing: Spacing.md;
+                    alignment: center;
+
+                    // Arrow and text
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+
+                        HorizontalLayout {
+                            spacing: Spacing.xs;
+                            alignment: start;
+
+                            // Direction arrow
+                            Text {
+                                property <string> arrow: is-outgoing ? "\u{2197}" : "\u{2199}";  // ↗ or ↙
+                                text: arrow;
+                                color: is-missed ? Colors.error : (is-outgoing ? Colors.success : Colors.primary);
+                                font-size: Typography.sm;
+                                vertical-alignment: center;
+                            }
+
+                            // Call type text
+                            Text {
+                                text: is-missed ? "Missed call" : (is-outgoing ? "Outgoing call" : "Incoming call");
+                                color: is-missed ? Colors.error : Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.medium;
+                            }
+                        }
+
+                        // Time and duration
+                        HorizontalLayout {
+                            spacing: Spacing.xs;
+                            alignment: start;
+
+                            Text {
+                                text: root.timestamp;
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                            }
+
+                            if root.call-duration != "": Text {
+                                text: ", " + root.call-duration;
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                            }
+                        }
+                    }
+
+                    // Phone icon
+                    Rectangle {
+                        width: 40px;
+                        height: 40px;
+                        border-radius: 20px;
+                        background: is-missed ? Colors.error.transparentize(0.8) : Colors.primary.transparentize(0.85);
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "\u{1F4DE}";  // Phone receiver
+                            font-size: 18px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                call-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.message-clicked(root.message-id);
+                    }
+                }
             }
         }
 
@@ -776,7 +878,7 @@ export component MessageItem inherits Rectangle {
                     reactions-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            root.react-clicked(root.message-id);
+                            root.react-clicked(root.sender-id, root.timestamp-ns);
                         }
                     }
                 }

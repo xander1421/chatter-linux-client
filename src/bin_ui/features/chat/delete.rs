@@ -14,9 +14,9 @@ use crate::MainWindow;
 
 /// Wire delete-message callback for DM and channel conversations.
 /// Delete-for-me: deletes locally and syncs to own devices, does not notify peer/channel.
+/// Uses Signal-style (sender_id, timestamp_ns) for message identification.
 pub fn wire_delete_message(window: &MainWindow, ctx: &AppContext) {
     let auth_state = ctx.auth_state.clone();
-    let grpc_pool = ctx.grpc_pool.clone();
     let mailbox_manager = ctx.mailbox_manager.clone();
     let database = ctx.database.clone();
     let message_repo = ctx.message_repo.clone();
@@ -26,9 +26,15 @@ pub fn wire_delete_message(window: &MainWindow, ctx: &AppContext) {
 
     let weak_window = window.as_weak();
 
-    window.on_delete_message(move |message_id: SharedString| {
-        let message_id_str = message_id.to_string();
-        tracing::info!(message_id = %message_id_str, "UI callback: delete-for-me triggered");
+    // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
+    window.on_delete_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
+        let sender_id_str = sender_id.to_string();
+        let timestamp_ns_str = timestamp_ns.to_string();
+        tracing::info!(
+            sender_id = %sender_id_str,
+            timestamp_ns = %timestamp_ns_str,
+            "UI callback: delete-for-me triggered (Signal-style lookup)"
+        );
 
         // Get selected DM channel ID and look up peer
         let (selected_dm_id, peer_user_id) = weak_window
@@ -45,7 +51,6 @@ pub fn wire_delete_message(window: &MainWindow, ctx: &AppContext) {
             .unwrap_or_default();
 
         let auth_state = auth_state.clone();
-        let _grpc_pool = grpc_pool.clone();
         let message_repo = message_repo.clone();
         let weak = weak_window.clone();
 
@@ -76,33 +81,46 @@ pub fn wire_delete_message(window: &MainWindow, ctx: &AppContext) {
                         Err(_) => return,
                     };
 
-                    // Parse message ID
-                    let msg_id: chatter_linux::domain::MessageId = match message_id_str.parse() {
+                    // Parse sender_id for Signal-style lookup
+                    let target_sender_id: UserId = match sender_id_str.parse() {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::error!("Invalid message ID for delete: {}", e);
+                            tracing::error!(error = %e, sender_id = %sender_id_str, "Invalid sender ID for delete");
                             return;
                         }
                     };
 
-                    // Look up the message
-                    let message = match message_repo.get(&msg_id) {
+                    // Parse timestamp for Signal-style lookup
+                    let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::error!(error = %e, timestamp = %timestamp_ns_str, "Invalid timestamp for delete");
+                            return;
+                        }
+                    };
+
+                    // Signal-style lookup: (sender_id, sent_at)
+                    let message = match message_repo.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                         Ok(Some(msg)) => msg,
                         Ok(None) => {
-                            tracing::error!("Message not found for delete: {}", msg_id);
+                            tracing::error!(
+                                sender_id = %target_sender_id,
+                                timestamp = target_sent_timestamp,
+                                "Message not found for delete (Signal-style lookup)"
+                            );
                             return;
                         }
                         Err(e) => {
-                            tracing::error!("Failed to look up message for delete: {}", e);
+                            tracing::error!(error = %e, "Failed to look up message for delete");
                             return;
                         }
                     };
 
+                    let msg_id = message.id;
                     let target_author_aci = message
                         .sender_id
                         .map(|id| id.to_string())
                         .unwrap_or_default();
-                    let target_sent_timestamp = message.sent_at;
                     let conversation_id = peer_id.to_string();
 
                     // Build delete-for-me content (syncs to own devices)
@@ -113,10 +131,10 @@ pub fn wire_delete_message(window: &MainWindow, ctx: &AppContext) {
                     );
 
                     tracing::debug!(
-                        message_id = %msg_id,
+                        sender_id = %sender_id_str,
+                        timestamp = target_sent_timestamp,
                         peer = %peer_id,
                         author = %target_author_aci,
-                        timestamp = target_sent_timestamp,
                         "Sending DM delete-for-me"
                     );
 
@@ -133,26 +151,40 @@ pub fn wire_delete_message(window: &MainWindow, ctx: &AppContext) {
                         return;
                     }
 
-                    tracing::info!(message_id = %msg_id, "DM delete-for-me sent successfully");
+                    tracing::info!(
+                        sender_id = %sender_id_str,
+                        timestamp = %timestamp_ns_str,
+                        "DM delete-for-me sent successfully"
+                    );
 
                     // Delete locally
                     if let Err(e) = message_repo.delete(&msg_id) {
                         tracing::error!(error = %e, "Failed to delete message locally");
                     } else {
-                        tracing::debug!(message_id = %msg_id, peer = %peer_id, "Deleted DM message locally");
+                        tracing::debug!(
+                            sender_id = %sender_id_str,
+                            peer = %peer_id,
+                            "Deleted DM message locally"
+                        );
 
-                        // Update UI to remove message
+                        // Update UI to remove message using Signal-style lookup
+                        let sender_id_for_ui = sender_id_str.clone();
+                        let timestamp_for_ui = timestamp_ns_str.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 let current_model = w.get_messages();
                                 let before_count = current_model.row_count();
                                 let messages: Vec<_> = (0..current_model.row_count())
                                     .filter_map(|i| current_model.row_data(i))
-                                    .filter(|m| m.message_id.as_str() != message_id_str.as_str())
+                                    .filter(|m| {
+                                        !(m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
+                                    })
                                     .collect();
                                 let after_count = messages.len();
                                 tracing::info!(
-                                    message_id = %message_id_str,
+                                    sender_id = %sender_id_for_ui,
+                                    timestamp = %timestamp_for_ui,
                                     before = before_count,
                                     after = after_count,
                                     "UI updated: removed message from model"
@@ -185,40 +217,53 @@ pub fn wire_delete_message(window: &MainWindow, ctx: &AppContext) {
                         None => return,
                     };
 
-                    // Parse message ID
-                    let msg_id: chatter_linux::domain::MessageId = match message_id_str.parse() {
+                    // Parse sender_id for Signal-style lookup
+                    let target_sender_id: UserId = match sender_id_str.parse() {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::error!("Invalid message ID for channel delete: {}", e);
+                            tracing::error!(error = %e, sender_id = %sender_id_str, "Invalid sender ID for channel delete");
                             return;
                         }
                     };
 
-                    // Look up the message
-                    let message = match message_repo.get(&msg_id) {
+                    // Parse timestamp for Signal-style lookup
+                    let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::error!(error = %e, timestamp = %timestamp_ns_str, "Invalid timestamp for channel delete");
+                            return;
+                        }
+                    };
+
+                    // Signal-style lookup: (sender_id, sent_at)
+                    let message = match message_repo.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                         Ok(Some(msg)) => msg,
                         Ok(None) => {
-                            tracing::error!("Message not found for channel delete: {}", msg_id);
+                            tracing::error!(
+                                sender_id = %target_sender_id,
+                                timestamp = target_sent_timestamp,
+                                "Message not found for channel delete (Signal-style lookup)"
+                            );
                             return;
                         }
                         Err(e) => {
-                            tracing::error!("Failed to look up message for channel delete: {}", e);
+                            tracing::error!(error = %e, "Failed to look up message for channel delete");
                             return;
                         }
                     };
 
+                    let msg_id = message.id;
                     let target_author_aci = message
                         .sender_id
                         .map(|id| id.to_string())
                         .unwrap_or_default();
-                    let target_sent_timestamp = message.sent_at;
                     let conversation_id = channel_id.to_string();
 
                     tracing::debug!(
-                        message_id = %msg_id,
+                        sender_id = %sender_id_str,
+                        timestamp = target_sent_timestamp,
                         channel = %channel_id,
                         author = %target_author_aci,
-                        timestamp = target_sent_timestamp,
                         "Sending channel delete-for-me"
                     );
 
@@ -241,26 +286,41 @@ pub fn wire_delete_message(window: &MainWindow, ctx: &AppContext) {
                         return;
                     }
 
-                    tracing::info!(message_id = %msg_id, channel = %channel_id, "Channel delete-for-me sent successfully");
+                    tracing::info!(
+                        sender_id = %sender_id_str,
+                        timestamp = %timestamp_ns_str,
+                        channel = %channel_id,
+                        "Channel delete-for-me sent successfully"
+                    );
 
                     // Delete locally
                     if let Err(e) = message_repo.delete(&msg_id) {
                         tracing::error!(error = %e, "Failed to delete message locally");
                     } else {
-                        tracing::debug!(message_id = %msg_id, channel = %channel_id, "Deleted channel message locally");
+                        tracing::debug!(
+                            sender_id = %sender_id_str,
+                            channel = %channel_id,
+                            "Deleted channel message locally"
+                        );
 
-                        // Update UI to remove message
+                        // Update UI to remove message using Signal-style lookup
+                        let sender_id_for_ui = sender_id_str.clone();
+                        let timestamp_for_ui = timestamp_ns_str.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 let current_model = w.get_messages();
                                 let before_count = current_model.row_count();
                                 let messages: Vec<_> = (0..current_model.row_count())
                                     .filter_map(|i| current_model.row_data(i))
-                                    .filter(|m| m.message_id.as_str() != message_id_str.as_str())
+                                    .filter(|m| {
+                                        !(m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
+                                    })
                                     .collect();
                                 let after_count = messages.len();
                                 tracing::info!(
-                                    message_id = %message_id_str,
+                                    sender_id = %sender_id_for_ui,
+                                    timestamp = %timestamp_for_ui,
                                     before = before_count,
                                     after = after_count,
                                     "UI updated: removed channel message from model"
@@ -277,9 +337,9 @@ pub fn wire_delete_message(window: &MainWindow, ctx: &AppContext) {
 
 /// Wire delete-everyone-message callback for DM and channel conversations.
 /// Sends delete notification to peer/channel so they remove the message too.
+/// Uses Signal-style (sender_id, timestamp_ns) for message identification.
 pub fn wire_delete_everyone_message(window: &MainWindow, ctx: &AppContext) {
     let auth_state = ctx.auth_state.clone();
-    let grpc_pool = ctx.grpc_pool.clone();
     let mailbox_manager = ctx.mailbox_manager.clone();
     let database = ctx.database.clone();
     let message_repo = ctx.message_repo.clone();
@@ -289,9 +349,15 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ctx: &AppContext) {
 
     let weak_window = window.as_weak();
 
-    window.on_delete_everyone_message(move |message_id: SharedString| {
-        let message_id_str = message_id.to_string();
-        tracing::info!(message_id = %message_id_str, "UI callback: delete-for-everyone triggered");
+    // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
+    window.on_delete_everyone_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
+        let sender_id_str = sender_id.to_string();
+        let timestamp_ns_str = timestamp_ns.to_string();
+        tracing::info!(
+            sender_id = %sender_id_str,
+            timestamp_ns = %timestamp_ns_str,
+            "UI callback: delete-for-everyone triggered (Signal-style lookup)"
+        );
 
         // Get selected DM channel ID and look up peer
         let (selected_dm_id, peer_user_id) = weak_window
@@ -308,7 +374,6 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ctx: &AppContext) {
             .unwrap_or_default();
 
         let auth_state = auth_state.clone();
-        let _grpc_pool = grpc_pool.clone();
         let message_repo = message_repo.clone();
         let weak = weak_window.clone();
 
@@ -339,34 +404,47 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ctx: &AppContext) {
                         Err(_) => return,
                     };
 
-                    // Parse message ID
-                    let msg_id: chatter_linux::domain::MessageId = match message_id_str.parse() {
+                    // Parse sender_id for Signal-style lookup
+                    let target_sender_id: UserId = match sender_id_str.parse() {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::error!("Invalid message ID for delete-everyone: {}", e);
+                            tracing::error!(error = %e, sender_id = %sender_id_str, "Invalid sender ID for delete-everyone");
                             return;
                         }
                     };
 
-                    // Look up the message to get timestamp
-                    let message = match message_repo.get(&msg_id) {
+                    // Parse timestamp for Signal-style lookup
+                    let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::error!(error = %e, timestamp = %timestamp_ns_str, "Invalid timestamp for delete-everyone");
+                            return;
+                        }
+                    };
+
+                    // Signal-style lookup: (sender_id, sent_at)
+                    let message = match message_repo.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                         Ok(Some(msg)) => msg,
                         Ok(None) => {
-                            tracing::error!("Message not found for delete-everyone: {}", msg_id);
+                            tracing::error!(
+                                sender_id = %target_sender_id,
+                                timestamp = target_sent_timestamp,
+                                "Message not found for delete-everyone (Signal-style lookup)"
+                            );
                             return;
                         }
                         Err(e) => {
-                            tracing::error!("Failed to look up message for delete-everyone: {}", e);
+                            tracing::error!(error = %e, "Failed to look up message for delete-everyone");
                             return;
                         }
                     };
 
-                    let target_sent_timestamp = message.sent_at;
+                    let msg_id = message.id;
 
                     tracing::debug!(
-                        message_id = %msg_id,
-                        peer = %peer_id,
+                        sender_id = %sender_id_str,
                         timestamp = target_sent_timestamp,
+                        peer = %peer_id,
                         "Sending DM delete-for-everyone"
                     );
 
@@ -386,26 +464,41 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ctx: &AppContext) {
                         return;
                     }
 
-                    tracing::info!(message_id = %msg_id, peer = %peer_id, "DM delete-for-everyone sent successfully");
+                    tracing::info!(
+                        sender_id = %sender_id_str,
+                        timestamp = %timestamp_ns_str,
+                        peer = %peer_id,
+                        "DM delete-for-everyone sent successfully"
+                    );
 
                     // Delete locally
                     if let Err(e) = message_repo.delete(&msg_id) {
                         tracing::error!(error = %e, "Failed to delete message locally");
                     } else {
-                        tracing::debug!(message_id = %msg_id, peer = %peer_id, "Deleted DM message locally for everyone");
+                        tracing::debug!(
+                            sender_id = %sender_id_str,
+                            peer = %peer_id,
+                            "Deleted DM message locally for everyone"
+                        );
 
-                        // Update UI to remove message
+                        // Update UI to remove message using Signal-style lookup
+                        let sender_id_for_ui = sender_id_str.clone();
+                        let timestamp_for_ui = timestamp_ns_str.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 let current_model = w.get_messages();
                                 let before_count = current_model.row_count();
                                 let messages: Vec<_> = (0..current_model.row_count())
                                     .filter_map(|i| current_model.row_data(i))
-                                    .filter(|m| m.message_id.as_str() != message_id_str.as_str())
+                                    .filter(|m| {
+                                        !(m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
+                                    })
                                     .collect();
                                 let after_count = messages.len();
                                 tracing::info!(
-                                    message_id = %message_id_str,
+                                    sender_id = %sender_id_for_ui,
+                                    timestamp = %timestamp_for_ui,
                                     before = before_count,
                                     after = after_count,
                                     "UI updated: removed message (delete-everyone)"
@@ -438,34 +531,47 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ctx: &AppContext) {
                         None => return,
                     };
 
-                    // Parse message ID
-                    let msg_id: chatter_linux::domain::MessageId = match message_id_str.parse() {
+                    // Parse sender_id for Signal-style lookup
+                    let target_sender_id: UserId = match sender_id_str.parse() {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::error!("Invalid message ID for channel delete-everyone: {}", e);
+                            tracing::error!(error = %e, sender_id = %sender_id_str, "Invalid sender ID for channel delete-everyone");
                             return;
                         }
                     };
 
-                    // Look up the message to get timestamp
-                    let message = match message_repo.get(&msg_id) {
+                    // Parse timestamp for Signal-style lookup
+                    let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::error!(error = %e, timestamp = %timestamp_ns_str, "Invalid timestamp for channel delete-everyone");
+                            return;
+                        }
+                    };
+
+                    // Signal-style lookup: (sender_id, sent_at)
+                    let message = match message_repo.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                         Ok(Some(msg)) => msg,
                         Ok(None) => {
-                            tracing::error!("Message not found for channel delete-everyone: {}", msg_id);
+                            tracing::error!(
+                                sender_id = %target_sender_id,
+                                timestamp = target_sent_timestamp,
+                                "Message not found for channel delete-everyone (Signal-style lookup)"
+                            );
                             return;
                         }
                         Err(e) => {
-                            tracing::error!("Failed to look up message for channel delete-everyone: {}", e);
+                            tracing::error!(error = %e, "Failed to look up message for channel delete-everyone");
                             return;
                         }
                     };
 
-                    let target_sent_timestamp = message.sent_at;
+                    let msg_id = message.id;
 
                     tracing::debug!(
-                        message_id = %msg_id,
-                        channel = %channel_id,
+                        sender_id = %sender_id_str,
                         timestamp = target_sent_timestamp,
+                        channel = %channel_id,
                         "Sending channel delete-for-everyone"
                     );
 
@@ -488,26 +594,41 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ctx: &AppContext) {
                         return;
                     }
 
-                    tracing::info!(message_id = %msg_id, channel = %channel_id, "Channel delete-for-everyone sent successfully");
+                    tracing::info!(
+                        sender_id = %sender_id_str,
+                        timestamp = %timestamp_ns_str,
+                        channel = %channel_id,
+                        "Channel delete-for-everyone sent successfully"
+                    );
 
                     // Delete locally
                     if let Err(e) = message_repo.delete(&msg_id) {
                         tracing::error!(error = %e, "Failed to delete message locally");
                     } else {
-                        tracing::debug!(message_id = %msg_id, channel = %channel_id, "Deleted channel message locally for everyone");
+                        tracing::debug!(
+                            sender_id = %sender_id_str,
+                            channel = %channel_id,
+                            "Deleted channel message locally for everyone"
+                        );
 
-                        // Update UI to remove message
+                        // Update UI to remove message using Signal-style lookup
+                        let sender_id_for_ui = sender_id_str.clone();
+                        let timestamp_for_ui = timestamp_ns_str.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 let current_model = w.get_messages();
                                 let before_count = current_model.row_count();
                                 let messages: Vec<_> = (0..current_model.row_count())
                                     .filter_map(|i| current_model.row_data(i))
-                                    .filter(|m| m.message_id.as_str() != message_id_str.as_str())
+                                    .filter(|m| {
+                                        !(m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
+                                    })
                                     .collect();
                                 let after_count = messages.len();
                                 tracing::info!(
-                                    message_id = %message_id_str,
+                                    sender_id = %sender_id_for_ui,
+                                    timestamp = %timestamp_for_ui,
                                     before = before_count,
                                     after = after_count,
                                     "UI updated: removed channel message (delete-everyone)"

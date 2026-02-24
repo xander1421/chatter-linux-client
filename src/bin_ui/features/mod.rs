@@ -13,6 +13,8 @@ pub mod navigation;
 pub mod sidebar;
 pub mod thread;
 
+use slint::ComponentHandle;
+
 use chatter_linux::app::AppContext;
 use crate::MainWindow;
 
@@ -28,4 +30,7 @@ pub fn wire_all(window: &MainWindow, ctx: &AppContext) {
     modals::wire(window, ctx);
     thread::wire(window, ctx);
     calls::wire(window, ctx);
+
+    // Initialize inline GIF animation system
+    crate::bin_ui::gif_state::init_inline_animations(window.as_weak());
 }

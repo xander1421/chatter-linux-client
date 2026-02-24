@@ -194,14 +194,29 @@ impl CallService {
                 .ok_or(CallError::NotInCall)?
         };
 
-        // Leave on server
+        // Leave on server with timeout to prevent blocking
+        // If server is slow/unreachable, we still want to disconnect locally
         {
             let mut client = self.call_client.write();
-            client.leave_call(&call_id).await
-                .map_err(|e| CallError::ServerError(e.to_string()))?;
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(3),
+                client.leave_call(&call_id)
+            ).await {
+                Ok(Ok(())) => {
+                    tracing::debug!("Server acknowledged call leave");
+                }
+                Ok(Err(e)) => {
+                    // Server error - log but continue with local disconnect
+                    tracing::warn!("Server leave_call error (continuing): {}", e);
+                }
+                Err(_) => {
+                    // Timeout - log but continue with local disconnect
+                    tracing::warn!("Server leave_call timed out (continuing with local disconnect)");
+                }
+            }
         }
 
-        // Disconnect from LiveKit
+        // Disconnect from LiveKit (already has internal timeout)
         self.room_manager.disconnect().await;
 
         // Clear active call
@@ -234,6 +249,21 @@ impl CallService {
         *self.active_call.write() = None;
 
         Ok(())
+    }
+
+    /// Disconnect locally from LiveKit without notifying the server.
+    ///
+    /// Use this when receiving a remote hangup notification - the peer already
+    /// told us they're ending the call, so we just need to disconnect locally.
+    /// Calling the server would be redundant and could block/timeout.
+    pub async fn disconnect_local(&self) {
+        // Disconnect from LiveKit
+        self.room_manager.disconnect().await;
+
+        // Clear active call
+        *self.active_call.write() = None;
+
+        tracing::info!("Disconnected locally from call (no server notification)");
     }
 
     /// Get the currently active call.

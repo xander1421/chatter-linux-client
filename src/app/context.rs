@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::crypto::signal::{IdentityKeyManager, PreKeyManager, SenderKeyManager, SesameManager, SessionManager, SqliteSesameStore};
 use crate::error::{NetworkError, StorageError, SystemError};
-use crate::services::CallService;
+use crate::services::CallWorkerHandle;
 use crate::events::EventBus;
 use crate::media::gif::GifClient;
 use crate::mailbox::group::{GroupCoordinator, GroupFanout, GroupMailboxManager};
@@ -151,8 +151,9 @@ pub struct AppContext {
     pub group_fanout: std::sync::OnceLock<Arc<GroupFanout>>,
     /// GIF client for Tenor API (optional, requires TENOR_API_KEY).
     pub gif_client: Option<Arc<GifClient>>,
-    /// Call service for voice/video calls (initialized after connect).
-    pub call_service: std::sync::OnceLock<Arc<CallService>>,
+    /// Call worker for voice/video calls (initialized after connect).
+    /// Runs on dedicated thread with non-Send LiveKit types.
+    pub call_service: std::sync::OnceLock<CallWorkerHandle>,
 
     // State stores
     /// UI preferences state.
@@ -547,25 +548,25 @@ impl AppContext {
         self.group_coordinator.clone()
     }
 
-    /// Initialize the call service for voice/video calls.
+    /// Initialize the call worker for voice/video calls.
     ///
     /// Must be called after `grpc_pool.connect()` succeeds.
     /// Safe to call multiple times - only initializes once.
-    #[allow(clippy::arc_with_non_send_sync)] // LiveKit types don't implement Send+Sync
+    /// Spawns a dedicated thread for non-Send LiveKit types.
     pub fn init_call_service(&self) {
         self.call_service.get_or_init(|| {
             let call_client = crate::network::grpc::CallClient::new(
                 self.grpc_pool.channel(),
                 self.grpc_pool.auth_clone(),
             );
-            Arc::new(CallService::new(call_client))
+            CallWorkerHandle::spawn(call_client)
         });
     }
 
-    /// Get the call service.
+    /// Get the call worker handle.
     ///
     /// Returns None if not yet initialized (call `init_call_service()` first).
-    pub fn get_call_service(&self) -> Option<Arc<CallService>> {
+    pub fn get_call_service(&self) -> Option<CallWorkerHandle> {
         self.call_service.get().cloned()
     }
 

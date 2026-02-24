@@ -120,14 +120,11 @@ impl ChatHandler {
             MessageId::from_uuid(uuid_from_timestamp(q.id))
         });
 
-        // Parse attachment IDs
+        // Parse attachment IDs (must match upload path - uses from_cdn_key)
         let attachments: Vec<AttachmentId> = data_message
             .attachments
             .iter()
-            .map(|ptr| {
-                // Generate attachment ID from cdn_key
-                AttachmentId::from_uuid(uuid_from_string(&ptr.cdn_key))
-            })
+            .map(|ptr| AttachmentId::from_cdn_key(&ptr.cdn_key))
             .collect();
 
         // Parse mentioned integrations (AI bots)
@@ -167,7 +164,7 @@ impl ChatHandler {
                 let attachment_ids: Vec<AttachmentId> = data_message
                     .attachments
                     .iter()
-                    .map(|ptr| AttachmentId::from_uuid(uuid_from_string(&ptr.cdn_key)))
+                    .map(|ptr| AttachmentId::from_cdn_key(&ptr.cdn_key))
                     .collect();
                 Ok(MessageContent::Mixed(MixedContent::attachments_only(
                     attachment_ids,
@@ -178,7 +175,7 @@ impl ChatHandler {
                 let attachment_ids: Vec<AttachmentId> = data_message
                     .attachments
                     .iter()
-                    .map(|ptr| AttachmentId::from_uuid(uuid_from_string(&ptr.cdn_key)))
+                    .map(|ptr| AttachmentId::from_cdn_key(&ptr.cdn_key))
                     .collect();
                 Ok(MessageContent::Mixed(MixedContent::new(
                     data_message.body.clone(),

@@ -664,10 +664,19 @@ async fn handle_bootstrap_async(
         }
     };
 
+    // Create a SINGLE SignalService instance for all encryptions in this bootstrap flow.
+    // This is critical - using separate instances can cause session counter desync.
+    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
+    let key_store = Arc::new(KeyStore::new(database.clone()));
+    let signal_service = SignalService::new(key_store.clone(), settings_repo.clone());
+    let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
+
     // Send bootstrap response with two-layer encryption
     send_bootstrap_response_with_envelope(
         response,
-        database.clone(),
+        &signal_service,
+        &mut auth_client,
+        &key_store,
         channel.clone(),
         auth_interceptor.clone(),
     )
@@ -686,6 +695,8 @@ async fn handle_bootstrap_async(
     send_pending_messages_after_bootstrap(
         peer_id,
         database,
+        &signal_service,
+        &mut auth_client,
         channel,
         auth_interceptor,
     )
@@ -698,17 +709,20 @@ async fn handle_bootstrap_async(
 ///
 /// This is called after the higher UUID user responds to a bootstrap request.
 /// At this point, the shared secret is established and queued messages can be sent.
+///
+/// IMPORTANT: Uses the same SignalService instance as the bootstrap response
+/// to ensure session counters stay in sync.
 async fn send_pending_messages_after_bootstrap(
     peer_id: UserId,
     database: Arc<Database>,
+    signal_service: &SignalService,
+    auth_client: &mut AuthClient,
     channel: tonic::transport::Channel,
     auth_interceptor: crate::network::grpc::interceptors::AuthInterceptor,
 ) {
     use prost::Message as ProstMessage;
     use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
     use crate::mailbox::dm::DmConversationManager;
-    use crate::services::SignalService;
-    use crate::storage::repositories::SettingsRepository;
 
     tracing::info!(
         peer = %peer_id,
@@ -747,10 +761,7 @@ async fn send_pending_messages_after_bootstrap(
         pending.len()
     );
 
-    // Create services for sending
-    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
-    let key_store = Arc::new(crate::storage::KeyStore::new(database.clone()));
-    let signal_service = SignalService::new(key_store, settings_repo.clone());
+    // Use shared signal_service (passed in) to keep session counters in sync
     let conversation_manager = DmConversationManager::new(database.clone());
     let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
 
@@ -783,9 +794,6 @@ async fn send_pending_messages_after_bootstrap(
         }
     };
 
-    // Create auth client for prekey fetching if needed
-    let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
-
     let mut sent_count = 0;
 
     for msg in pending {
@@ -811,7 +819,7 @@ async fn send_pending_messages_after_bootstrap(
 
         // Encrypt with Signal Protocol
         let signal_ciphertext = match signal_service
-            .encrypt_message(&mut auth_client, &peer_id.to_string(), 1, &msg.content)
+            .encrypt_message(auth_client, &peer_id.to_string(), 1, &msg.content)
             .await
         {
             Ok(ct) => ct,
@@ -879,9 +887,14 @@ async fn send_pending_messages_after_bootstrap(
 ///
 /// Layer 1 (Content): Signal Protocol encryption to peer's identity
 /// Layer 2 (Transport): Envelope encryption using ECDH(our_identity, peer_mailbox)
+///
+/// IMPORTANT: Uses the shared SignalService instance to ensure session counters
+/// stay in sync with pending message sending.
 async fn send_bootstrap_response_with_envelope(
     response: BootstrapResponse,
-    database: Arc<Database>,
+    signal_service: &SignalService,
+    auth_client: &mut AuthClient,
+    key_store: &Arc<KeyStore>,
     channel: tonic::transport::Channel,
     auth_interceptor: crate::network::grpc::interceptors::AuthInterceptor,
 ) -> Result<(), String> {
@@ -892,17 +905,12 @@ async fn send_bootstrap_response_with_envelope(
         .build_response_message()
         .map_err(|e| format!("Failed to build response message: {}", e))?;
 
-    // Layer 1: Encrypt content with Signal Protocol
-    let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
-    let key_store = Arc::new(KeyStore::new(database.clone()));
-    let signal_service = SignalService::new(key_store.clone(), settings_repo);
-
-    let mut auth_client = AuthClient::new(channel.clone(), auth_interceptor.clone());
+    // Layer 1: Encrypt content with Signal Protocol (using shared signal_service)
     let peer_id_str = peer_id.to_string();
     let device_id = 1u32;
 
     let (signal_ciphertext, msg_type) = signal_service
-        .encrypt_message_identified(&mut auth_client, &peer_id_str, device_id, &response_message)
+        .encrypt_message_identified(auth_client, &peer_id_str, device_id, &response_message)
         .await
         .map_err(|e| format!("Failed to encrypt with Signal: {}", e))?;
 
@@ -915,7 +923,7 @@ async fn send_bootstrap_response_with_envelope(
 
     // Layer 2: Wrap in envelope encrypted with ECDH(our_identity, peer_mailbox)
     // Get our X25519 identity key from the key store
-    let our_identity_private = get_identity_x25519_private(&key_store)
+    let our_identity_private = get_identity_x25519_private(key_store)
         .map_err(|e| format!("Failed to get identity key: {}", e))?;
 
     let envelope = encrypt_envelope(
@@ -979,8 +987,6 @@ fn get_identity_x25519_private(key_store: &Arc<KeyStore>) -> Result<X25519Privat
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_bootstrap_message_detection() {
         // 64-byte keys are bootstrap messages

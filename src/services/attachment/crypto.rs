@@ -2,7 +2,8 @@
 
 use std::path::Path;
 
-use crate::crypto::attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
+use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
+use crate::crypto::attachment_crypto_fast::decrypt_single_pass;
 use crate::crypto::secure_buffer::SecureBuffer;
 use crate::domain::attachment::ContentLocation;
 use crate::domain::ids::AttachmentId;
@@ -79,8 +80,9 @@ impl AttachmentService {
             digest_arr[..digest.len()].copy_from_slice(digest);
         }
 
-        // Decrypt to memory
-        let plaintext = AttachmentCrypto::decrypt(
+        // Decrypt to memory using optimized single-pass verification
+        // This computes digest and HMAC in one pass, reducing memory bandwidth by ~50%
+        let plaintext = decrypt_single_pass(
             &ciphertext,
             &key,
             &digest_arr,

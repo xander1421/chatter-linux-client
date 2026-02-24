@@ -11,9 +11,11 @@ use crate::bin_ui::features::auth::update_reaction_summary;
 use crate::MainWindow;
 
 /// Wire reaction selected callback for DM and channel conversations.
+///
+/// Uses Signal-style (sender_id, timestamp_ns) tuple for message identification
+/// instead of unreliable server message IDs.
 pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
     let auth_state = ctx.auth_state.clone();
-    let grpc_pool = ctx.grpc_pool.clone();
     let mailbox_manager = ctx.mailbox_manager.clone();
     let database = ctx.database.clone();
     let message_repo = ctx.message_repo.clone();
@@ -23,10 +25,20 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
 
     let weak_window = window.as_weak();
 
-    window.on_reaction_selected(move |message_id: SharedString, emoji: SharedString| {
+    // Callback signature: (sender_id, timestamp_ns, message_id, emoji)
+    window.on_reaction_selected(move |sender_id: SharedString, timestamp_ns: SharedString, message_id: SharedString, emoji: SharedString| {
+        let sender_id_str = sender_id.to_string();
+        let timestamp_ns_str = timestamp_ns.to_string();
         let message_id_str = message_id.to_string();
         let emoji_str = emoji.to_string();
-        tracing::info!(message_id = %message_id_str, emoji = %emoji_str, "UI callback: reaction selected");
+
+        tracing::info!(
+            sender_id = %sender_id_str,
+            timestamp_ns = %timestamp_ns_str,
+            message_id = %message_id_str,
+            emoji = %emoji_str,
+            "UI callback: reaction selected (Signal-style lookup)"
+        );
 
         // Get selected DM channel ID and look up peer
         let (selected_dm_id, peer_user_id) = weak_window
@@ -43,7 +55,6 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
             .unwrap_or_default();
 
         let auth_state = auth_state.clone();
-        let _grpc_pool = grpc_pool.clone();
         let message_repo = message_repo.clone();
         let weak = weak_window.clone();
 
@@ -74,20 +85,33 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
                         Err(_) => return,
                     };
 
-                    // Parse message ID
-                    let msg_id: chatter_linux::domain::MessageId = match message_id_str.parse() {
+                    // Parse sender_id for Signal-style lookup
+                    let target_sender_id: UserId = match sender_id_str.parse() {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::error!(error = %e, "Invalid message ID for reaction");
+                            tracing::error!(error = %e, sender_id = %sender_id_str, "Invalid sender ID for reaction");
                             return;
                         }
                     };
 
-                    // Look up the message to get sender and timestamp
-                    let message = match message_repo.get(&msg_id) {
+                    // Parse timestamp for Signal-style lookup
+                    let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::error!(error = %e, timestamp = %timestamp_ns_str, "Invalid timestamp for reaction");
+                            return;
+                        }
+                    };
+
+                    // Signal-style lookup: (sender_id, sent_at)
+                    let message = match message_repo.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                         Ok(Some(msg)) => msg,
                         Ok(None) => {
-                            tracing::error!(message_id = %msg_id, "Message not found for reaction");
+                            tracing::error!(
+                                sender_id = %target_sender_id,
+                                timestamp = target_sent_timestamp,
+                                "Message not found for reaction (Signal-style lookup)"
+                            );
                             return;
                         }
                         Err(e) => {
@@ -96,21 +120,18 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
                         }
                     };
 
-                    // Get the message author (target_author_aci)
+                    // Get the message author (target_author_aci) - should match sender_id
                     let target_author_aci = message
                         .sender_id
                         .map(|id| id.to_string())
                         .unwrap_or_default();
 
-                    // Get the message timestamp (nanoseconds since epoch)
-                    let target_sent_timestamp = message.sent_at;
-
                     tracing::debug!(
-                        message_id = %msg_id,
+                        sender_id = %sender_id_str,
+                        timestamp = target_sent_timestamp,
                         peer = %peer_id,
                         emoji = %emoji_str,
                         author = %target_author_aci,
-                        timestamp = target_sent_timestamp,
                         "Sending DM reaction"
                     );
 
@@ -135,21 +156,27 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
                         tracing::error!(error = %e, "Failed to send DM reaction");
                     } else {
                         tracing::info!(
-                            message_id = %msg_id,
+                            sender_id = %sender_id_str,
+                            timestamp = %timestamp_ns_str,
                             emoji = %emoji_str,
                             peer = %peer_id,
                             "DM reaction sent successfully"
                         );
 
-                        // Update UI to reflect reaction
+                        // Update UI to reflect reaction using Signal-style (sender_id, timestamp_ns)
                         let emoji_for_update = emoji_str.clone();
+                        let sender_id_for_ui = sender_id_str.clone();
+                        let timestamp_for_ui = timestamp_ns_str.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 let current_model = w.get_messages();
                                 let messages: Vec<_> = (0..current_model.row_count())
                                     .filter_map(|i| current_model.row_data(i))
                                     .map(|mut m| {
-                                        if m.message_id.as_str() == message_id_str.as_str() {
+                                        // Signal-style UI lookup: match by (sender_id, timestamp_ns)
+                                        if m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                        {
                                             let new_summary = update_reaction_summary(
                                                 &m.reaction_summary.to_string(),
                                                 &emoji_for_update,
@@ -158,7 +185,8 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
                                             m.reaction_summary = new_summary.clone().into();
                                             m.has_reactions = !new_summary.is_empty();
                                             tracing::info!(
-                                                message_id = %message_id_str,
+                                                sender_id = %sender_id_for_ui,
+                                                timestamp = %timestamp_for_ui,
                                                 emoji = %emoji_for_update,
                                                 summary = %new_summary,
                                                 "UI updated: added reaction"
@@ -195,20 +223,33 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
                         None => return,
                     };
 
-                    // Parse message ID
-                    let msg_id: chatter_linux::domain::MessageId = match message_id_str.parse() {
+                    // Parse sender_id for Signal-style lookup
+                    let target_sender_id: UserId = match sender_id_str.parse() {
                         Ok(id) => id,
                         Err(e) => {
-                            tracing::error!(error = %e, "Invalid message ID for channel reaction");
+                            tracing::error!(error = %e, sender_id = %sender_id_str, "Invalid sender ID for channel reaction");
                             return;
                         }
                     };
 
-                    // Look up the message to get sender and timestamp
-                    let message = match message_repo.get(&msg_id) {
+                    // Parse timestamp for Signal-style lookup
+                    let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
+                        Ok(ts) => ts,
+                        Err(e) => {
+                            tracing::error!(error = %e, timestamp = %timestamp_ns_str, "Invalid timestamp for channel reaction");
+                            return;
+                        }
+                    };
+
+                    // Signal-style lookup: (sender_id, sent_at)
+                    let message = match message_repo.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                         Ok(Some(msg)) => msg,
                         Ok(None) => {
-                            tracing::error!(message_id = %msg_id, "Message not found for channel reaction");
+                            tracing::error!(
+                                sender_id = %target_sender_id,
+                                timestamp = target_sent_timestamp,
+                                "Message not found for channel reaction (Signal-style lookup)"
+                            );
                             return;
                         }
                         Err(e) => {
@@ -221,14 +262,13 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
                         .sender_id
                         .map(|id| id.to_string())
                         .unwrap_or_default();
-                    let target_sent_timestamp = message.sent_at;
 
                     tracing::debug!(
-                        message_id = %msg_id,
+                        sender_id = %sender_id_str,
+                        timestamp = target_sent_timestamp,
                         channel = %channel_id,
                         emoji = %emoji_str,
                         author = %target_author_aci,
-                        timestamp = target_sent_timestamp,
                         "Sending channel reaction"
                     );
 
@@ -252,21 +292,27 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
                         tracing::error!(error = %e, "Failed to send channel reaction");
                     } else {
                         tracing::info!(
-                            message_id = %msg_id,
+                            sender_id = %sender_id_str,
+                            timestamp = %timestamp_ns_str,
                             emoji = %emoji_str,
                             channel = %channel_id,
                             "Channel reaction sent successfully"
                         );
 
-                        // Update UI to reflect reaction
+                        // Update UI to reflect reaction using Signal-style (sender_id, timestamp_ns)
                         let emoji_for_update = emoji_str.clone();
+                        let sender_id_for_ui = sender_id_str.clone();
+                        let timestamp_for_ui = timestamp_ns_str.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 let current_model = w.get_messages();
                                 let messages: Vec<_> = (0..current_model.row_count())
                                     .filter_map(|i| current_model.row_data(i))
                                     .map(|mut m| {
-                                        if m.message_id.as_str() == message_id_str.as_str() {
+                                        // Signal-style UI lookup: match by (sender_id, timestamp_ns)
+                                        if m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                        {
                                             let new_summary = update_reaction_summary(
                                                 &m.reaction_summary.to_string(),
                                                 &emoji_for_update,
@@ -275,7 +321,8 @@ pub fn wire_reaction_selected(window: &MainWindow, ctx: &AppContext) {
                                             m.reaction_summary = new_summary.clone().into();
                                             m.has_reactions = !new_summary.is_empty();
                                             tracing::info!(
-                                                message_id = %message_id_str,
+                                                sender_id = %sender_id_for_ui,
+                                                timestamp = %timestamp_for_ui,
                                                 emoji = %emoji_for_update,
                                                 summary = %new_summary,
                                                 "UI updated: added channel reaction"

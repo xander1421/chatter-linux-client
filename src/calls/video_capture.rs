@@ -426,7 +426,15 @@ impl VideoCapture {
         }
     }
 
-    /// Stop video capture.
+    /// Signal video capture to stop (non-blocking).
+    ///
+    /// This only sets the running flag. The capture thread will exit
+    /// on its own. Use `stop()` for blocking cleanup with thread join.
+    pub fn signal_stop(&self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+
+    /// Stop video capture (blocks waiting for capture thread to exit).
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
         if let Some(handle) = self.capture_handle.take() {

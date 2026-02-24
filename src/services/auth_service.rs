@@ -216,7 +216,7 @@ impl AuthService {
             let user = User {
                 id: user_id,
                 username: username.to_string(),
-                public_key: identity_public_key.to_vec(),
+                svr_public_key: Vec::new(), // SVR key will be set during PIN setup
                 last_active: chrono::Utc::now(),
                 created_at: chrono::Utc::now(),
             };
@@ -400,7 +400,7 @@ impl AuthService {
         let user = User {
             id: user_id,
             username: username.to_string(),
-            public_key: identity_public_key.to_vec(),
+            svr_public_key: Vec::new(), // SVR key will be set during PIN setup
             last_active: chrono::Utc::now(),
             created_at: chrono::Utc::now(),
         };

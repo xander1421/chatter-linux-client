@@ -115,6 +115,8 @@ export component MainWindow inherits Window {
     // ========== Reaction picker state ==========
     in-out property <bool> reaction-picker-visible <=> app.reaction-picker-visible;
     in-out property <string> reaction-picker-message-id <=> app.reaction-picker-message-id;
+    in-out property <string> reaction-picker-sender-id <=> app.reaction-picker-sender-id;
+    in-out property <string> reaction-picker-timestamp-ns <=> app.reaction-picker-timestamp-ns;
     in property <[EmojiData]> reaction-picker-emojis <=> app.reaction-picker-emojis;
     callback reaction-selected <=> app.reaction-selected;
 
@@ -143,7 +145,8 @@ export component MainWindow inherits Window {
 
     // ========== Message context menu state ==========
     in-out property <bool> context-menu-visible <=> app.context-menu-visible;
-    in-out property <string> context-menu-message-id <=> app.context-menu-message-id;
+    in-out property <string> context-menu-sender-id <=> app.context-menu-sender-id;
+    in-out property <string> context-menu-timestamp-ns <=> app.context-menu-timestamp-ns;
     in-out property <length> context-menu-x <=> app.context-menu-x;
     in-out property <length> context-menu-y <=> app.context-menu-y;
     in property <bool> context-menu-is-own-message <=> app.context-menu-is-own-message;
@@ -279,6 +282,11 @@ export component MainWindow inherits Window {
     in property <image> call-local-video-frame <=> app.call-local-video-frame;
     in property <[image]> call-remote-video-frames <=> app.call-remote-video-frames;
 
+    // Key exchange modal properties
+    in-out property <bool> key-exchange-visible <=> app.key-exchange-visible;
+    in-out property <bool> key-exchange-loading <=> app.key-exchange-loading;
+    in-out property <string> key-exchange-peer-name <=> app.key-exchange-peer-name;
+
     // Device picker properties
     in-out property <bool> device-picker-visible <=> app.device-picker-visible;
     in-out property <string> device-picker-type <=> app.device-picker-type;
@@ -388,6 +396,8 @@ export component MainWindow inherits Window {
     callback audio-device-selected <=> app.audio-device-selected;
     callback audio-output-selected <=> app.audio-output-selected;
     callback screen-source-selected <=> app.screen-source-selected;
+    callback key-exchange-confirm <=> app.key-exchange-confirm;
+    callback key-exchange-cancel <=> app.key-exchange-cancel;
 
     // App fills the entire window - explicit sizing ensures width flows to children
     app := App {
