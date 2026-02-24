@@ -1,0 +1,148 @@
+//! Thread operations.
+//!
+//! Send thread replies and fetch thread messages.
+
+use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
+use crate::domain::message::{Message, MessageContent};
+use crate::network::grpc::auth_client::AuthClient;
+use crate::network::grpc::channel_client::ChannelClient;
+use crate::network::grpc::message_client::MessageClient;
+use crate::proto::chat_v1;
+
+use super::core::proto_to_domain_message_with_sender;
+use super::{MessageError, MessageService};
+
+impl MessageService {
+    /// Send a reply within a thread.
+    ///
+    /// Creates a new message in an existing thread. The parent_id is set to
+    /// the thread root message ID.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_thread_reply(
+        &self,
+        message_client: &mut MessageClient,
+        auth_client: &mut AuthClient,
+        channel_client: &mut ChannelClient,
+        channel_id: &ChannelId,
+        text: &str,
+        thread_root_id: &MessageId,
+        attachment_ids: Vec<AttachmentId>,
+        mentioned_integrations: Vec<IntegrationId>,
+        targets_ai_bot: bool,
+    ) -> Result<Message, MessageError> {
+        // Check logged in
+        let sender_id = self.current_user_id()?;
+
+        // Validate content - must have text or attachments
+        let trimmed_text = text.trim();
+        if trimmed_text.is_empty() && attachment_ids.is_empty() {
+            return Err(MessageError::InvalidContent(
+                "thread reply must have text or attachments".to_string(),
+            ));
+        }
+
+        // Build proto content
+        let content = chat_v1::message::Content {
+            r#type: Some(chat_v1::message::content::Type::Text(trimmed_text.to_string())),
+        };
+
+        // Get encryption settings from channel config
+        let (is_dm, require_encryption) = self
+            .get_channel_encryption_settings(channel_id, channel_client)
+            .await?;
+
+        let (content_to_send, skdm_opt) = self.prepare_encrypted_content(
+            auth_client,
+            channel_id,
+            trimmed_text.as_bytes(),
+            content,
+            is_dm,
+            require_encryption,
+        ).await;
+
+        // If a new sender key was created, distribute SKDM to channel members
+        if let Some(skdm) = skdm_opt {
+            self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
+        }
+
+        // Call server - parent_id is thread_root_id for thread replies
+        let proto_message = message_client
+            .send_message(
+                &channel_id.to_string(),
+                content_to_send,
+                Some(&thread_root_id.to_string()), // parent_id = thread_root_id
+                false, // ephemeral
+                None,  // ephemeral_ttl
+                None,  // crypto_options
+                mentioned_integrations.iter().map(|id| id.to_string()).collect(),
+                targets_ai_bot,
+                attachment_ids.iter().map(|id| id.to_string()).collect(),
+            )
+            .await?;
+
+        // Convert to domain message and preserve attachment IDs
+        let mut message = super::core::proto_to_domain_message(&proto_message, sender_id)?;
+        message.attachments = attachment_ids;
+
+        // For sent messages, store original plaintext locally (not encrypted server response)
+        message.content = MessageContent::Text(trimmed_text.to_string());
+
+        // Store locally
+        self.message_repo.insert(&message)?;
+
+        Ok(message)
+    }
+
+    /// Get messages from a thread.
+    ///
+    /// Fetches messages from a specific thread.
+    pub async fn get_thread_messages(
+        &self,
+        message_client: &mut MessageClient,
+        channel_id: &ChannelId,
+        thread_root_id: &MessageId,
+        limit: u32,
+        before: Option<&MessageId>,
+    ) -> Result<Vec<Message>, MessageError> {
+        use crate::proto::chat_v1::MessageSortDirection;
+
+        // Check logged in
+        let _ = self.current_user_id()?;
+
+        // Fetch from server with thread_root_id filter
+        let response = message_client
+            .get_messages(
+                &channel_id.to_string(),
+                limit as i32,
+                Some(&thread_root_id.to_string()), // thread_root_id filter
+                None, // page_token
+                MessageSortDirection::SortNewestFirst,
+                before.map(|id| id.to_string()).as_deref(),
+                None, // reference_time
+            )
+            .await?;
+
+        // Convert proto messages to domain messages and store locally
+        let mut messages = Vec::with_capacity(response.messages.len());
+        for proto in &response.messages {
+            // Parse sender ID from proto author_id
+            let sender_id: Option<UserId> = if proto.author_id.is_empty() {
+                None
+            } else {
+                proto.author_id.parse().ok()
+            };
+
+            let message = proto_to_domain_message_with_sender(proto, sender_id)?;
+
+            // Upsert to local storage (insert or update)
+            match self.message_repo.get(&message.id)? {
+                Some(_) => self.message_repo.update(&message)?,
+                None => self.message_repo.insert(&message)?,
+            }
+
+            messages.push(message);
+        }
+
+        Ok(messages)
+    }
+}
