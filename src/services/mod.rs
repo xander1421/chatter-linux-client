@@ -39,6 +39,7 @@ pub mod forward_service;
 pub mod mention_service;
 pub mod embed_service;
 pub mod gif_service;
+pub mod signal;
 
 // Re-exports for typing service
 pub use typing_service::{TypingError, TypingService};
