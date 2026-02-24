@@ -2,6 +2,7 @@
 //!
 //! Service layer orchestrating domain, storage, network, and crypto.
 
+pub mod current_user;
 pub mod auth_service;
 pub mod session_service;
 pub mod account_service;
@@ -43,6 +44,13 @@ pub mod mention_service;
 pub mod embed_service;
 pub mod gif_service;
 pub mod signal;
+pub mod channel_event_service;
+
+// Re-exports for channel event service
+pub use channel_event_service::{ChannelEventError, ChannelEventService};
+
+// Re-exports for current user provider
+pub use current_user::{CurrentUserError, CurrentUserProvider};
 
 // Re-exports for typing service
 pub use typing_service::{TypingError, TypingService};
