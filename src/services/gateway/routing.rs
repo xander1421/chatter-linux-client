@@ -1,0 +1,291 @@
+//! Message routing operations for the message gateway.
+//!
+//! Handles routing of encrypted messages to appropriate handlers
+//! based on message type (sender key, control, distribution, etc.).
+
+use prost::Message as ProstMessage;
+
+use crate::domain::ids::{ChannelId, UserId};
+use crate::error::ServiceError;
+use crate::proto::content_v1::{Content, content};
+
+use super::{DecryptResult, MessageGateway, RouteResult};
+
+impl MessageGateway {
+    /// Check if an EncryptedData is a sender key message.
+    pub fn is_sender_key_message(encrypted_data: &crate::proto::chat_v1::EncryptedData) -> bool {
+        encrypted_data.associated_data == b"sender_key"
+    }
+
+    /// Check if an EncryptedData is a sender key control message (typing, reaction, etc.).
+    pub fn is_sender_key_control(encrypted_data: &crate::proto::chat_v1::EncryptedData) -> bool {
+        encrypted_data.associated_data == b"sender_key_control"
+    }
+
+    /// Check if an EncryptedData is a sender key distribution message.
+    pub fn is_sender_key_distribution(encrypted_data: &crate::proto::chat_v1::EncryptedData) -> bool {
+        encrypted_data.associated_data == b"sender_key_distribution"
+    }
+
+    /// Check if an EncryptedData is a sender key request.
+    pub fn is_sender_key_request(encrypted_data: &crate::proto::chat_v1::EncryptedData) -> bool {
+        encrypted_data.associated_data == b"sender_key_request"
+    }
+
+    /// Process an incoming sender key distribution message.
+    ///
+    /// When a channel member sends their first encrypted message, they distribute
+    /// their SKDM so other members can decrypt future messages from them.
+    ///
+    /// # Arguments
+    ///
+    /// * `encrypted_data` - The EncryptedData containing serialized SenderKeyDistribution
+    /// * `sender_id` - The sender's user ID
+    /// * `sender_device_id` - The sender's device ID
+    pub async fn process_sender_key_distribution(
+        &self,
+        encrypted_data: &crate::proto::chat_v1::EncryptedData,
+        sender_id: &UserId,
+        sender_device_id: u32,
+    ) -> Result<(), ServiceError> {
+        use crate::proto::content_v1::SenderKeyDistribution;
+
+        tracing::info!(
+            sender_id = %sender_id,
+            sender_device_id = sender_device_id,
+            ciphertext_len = encrypted_data.ciphertext.len(),
+            "[SKDM_RECV] Received sender key distribution message"
+        );
+
+        // Check if this is a SKDM
+        if encrypted_data.associated_data != b"sender_key_distribution" {
+            tracing::warn!(
+                associated_data = ?String::from_utf8_lossy(&encrypted_data.associated_data),
+                "[SKDM_RECV] Not a sender key distribution message"
+            );
+            return Err(ServiceError::Validation(
+                "Not a sender key distribution message".into(),
+            ));
+        }
+
+        // Deserialize the SenderKeyDistribution proto
+        let skdm = SenderKeyDistribution::decode(encrypted_data.ciphertext.as_slice())
+            .map_err(|e| {
+                tracing::error!(
+                    sender_id = %sender_id,
+                    error = %e,
+                    "[SKDM_RECV] Failed to decode SenderKeyDistribution proto"
+                );
+                ServiceError::Validation(format!("Failed to decode SenderKeyDistribution: {}", e))
+            })?;
+
+        tracing::debug!(
+            sender_id = %sender_id,
+            channel_id = %skdm.channel_id,
+            distribution_message_len = skdm.distribution_message.len(),
+            timestamp = skdm.timestamp,
+            "[SKDM_RECV] Decoded SKDM, processing sender key"
+        );
+
+        // Process the SKDM so we can decrypt future messages from this sender
+        self.signal_service
+            .process_sender_key(sender_id, sender_device_id, &skdm)
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    sender_id = %sender_id,
+                    channel_id = %skdm.channel_id,
+                    error = %e,
+                    "[SKDM_RECV] Failed to process sender key"
+                );
+                e
+            })?;
+
+        tracing::info!(
+            sender_id = %sender_id,
+            sender_device_id = sender_device_id,
+            channel_id = %skdm.channel_id,
+            "[SKDM_RECV] Successfully stored sender key from channel member"
+        );
+
+        Ok(())
+    }
+
+    /// Route an incoming encrypted message to the appropriate handler.
+    ///
+    /// Checks the message type and delegates to the correct processing method.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(RouteResult::Decrypted(bytes))` - Successfully decrypted content
+    /// - `Ok(RouteResult::Processed)` - Processed control message (SKDM)
+    /// - `Ok(RouteResult::NeedsSenderKey { ... })` - Need to request SKDM from sender
+    /// - `Err(_)` - Error processing message
+    pub async fn route_encrypted_message(
+        &self,
+        encrypted_data: &crate::proto::chat_v1::EncryptedData,
+        sender_id: &UserId,
+        sender_device_id: u32,
+    ) -> Result<RouteResult, ServiceError> {
+        let associated_data_str = String::from_utf8_lossy(&encrypted_data.associated_data);
+        tracing::info!(
+            sender_id = %sender_id,
+            sender_device_id = sender_device_id,
+            associated_data = %associated_data_str,
+            ciphertext_len = encrypted_data.ciphertext.len(),
+            "[MSG_ROUTE] Routing encrypted message"
+        );
+
+        // Check message type based on associated_data marker
+        if Self::is_sender_key_distribution(encrypted_data) {
+            tracing::info!(
+                sender_id = %sender_id,
+                "[MSG_ROUTE] Detected SKDM (sender_key_distribution)"
+            );
+            // Process SKDM - no plaintext returned
+            self.process_sender_key_distribution(encrypted_data, sender_id, sender_device_id)
+                .await?;
+            Ok(RouteResult::Processed)
+        } else if Self::is_sender_key_message(encrypted_data) {
+            tracing::info!(
+                sender_id = %sender_id,
+                "[MSG_ROUTE] Detected sender key message (sender_key)"
+            );
+            // Decrypt sender key message (DataMessage)
+            match self
+                .process_group_encrypted_message(encrypted_data, sender_id, sender_device_id)
+                .await?
+            {
+                DecryptResult::Plaintext(plaintext) => {
+                    tracing::info!(
+                        sender_id = %sender_id,
+                        plaintext_len = plaintext.len(),
+                        "[MSG_ROUTE] Decrypted sender key message successfully"
+                    );
+                    Ok(RouteResult::Decrypted(plaintext))
+                }
+                DecryptResult::NeedsSenderKey { channel_id, sender_id } => {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        channel_id = %channel_id,
+                        "[MSG_ROUTE] Cannot decrypt - missing sender key"
+                    );
+                    Ok(RouteResult::NeedsSenderKey { channel_id, sender_id })
+                }
+            }
+        } else if Self::is_sender_key_control(encrypted_data) {
+            tracing::debug!(
+                sender_id = %sender_id,
+                "[MSG_ROUTE] Detected sender key control message"
+            );
+            // Decrypt sender key control message (Content proto with typing, reaction, etc.)
+            match self
+                .process_group_encrypted_message(encrypted_data, sender_id, sender_device_id)
+                .await?
+            {
+                DecryptResult::Plaintext(plaintext) => {
+                    // Check if this is a GroupMailboxAddress announcement
+                    if let Ok(content) = Content::decode(plaintext.as_slice()) {
+                        if let Some(content::Content::GroupMailboxAddress(announcement)) = content.content {
+                            // Parse channel_id from announcement
+                            if let Ok(channel_id) = announcement.channel_id.parse::<ChannelId>() {
+                                tracing::info!(
+                                    sender_id = %sender_id,
+                                    channel_id = %channel_id,
+                                    "[MSG_ROUTE] Detected GroupMailboxAddress announcement"
+                                );
+                                return Ok(RouteResult::MailboxAnnouncement {
+                                    channel_id,
+                                    announcement,
+                                });
+                            }
+                        }
+                    }
+                    // Not a mailbox announcement, return as control content
+                    tracing::debug!(
+                        sender_id = %sender_id,
+                        plaintext_len = plaintext.len(),
+                        "[MSG_ROUTE] Decrypted control content"
+                    );
+                    Ok(RouteResult::ControlContent(plaintext))
+                }
+                DecryptResult::NeedsSenderKey { channel_id, sender_id } => {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        channel_id = %channel_id,
+                        "[MSG_ROUTE] Cannot decrypt control - missing sender key"
+                    );
+                    Ok(RouteResult::NeedsSenderKey { channel_id, sender_id })
+                }
+            }
+        } else if Self::is_sender_key_request(encrypted_data) {
+            tracing::info!(
+                sender_id = %sender_id,
+                "[MSG_ROUTE] Detected sender key request"
+            );
+            // Someone is requesting our sender key
+            self.process_sender_key_request(encrypted_data, sender_id)
+                .await?;
+            Ok(RouteResult::Processed)
+        } else {
+            tracing::error!(
+                sender_id = %sender_id,
+                associated_data = %associated_data_str,
+                "[MSG_ROUTE] Unknown encrypted message type"
+            );
+            Err(ServiceError::Validation(
+                "Unknown encrypted message type".into(),
+            ))
+        }
+    }
+
+    /// Process an incoming sender key request.
+    ///
+    /// When another member requests our sender key, we respond with our SKDM
+    /// for the specified channel.
+    async fn process_sender_key_request(
+        &self,
+        encrypted_data: &crate::proto::chat_v1::EncryptedData,
+        requester_id: &UserId,
+    ) -> Result<(), ServiceError> {
+        use crate::proto::content_v1::SenderKeyRequest;
+
+        // Check if this is a sender key request
+        if encrypted_data.associated_data != b"sender_key_request" {
+            return Err(ServiceError::Validation(
+                "Not a sender key request".into(),
+            ));
+        }
+
+        // Deserialize the SenderKeyRequest proto
+        let request = SenderKeyRequest::decode(encrypted_data.ciphertext.as_slice())
+            .map_err(|e| {
+                ServiceError::Validation(format!("Failed to decode SenderKeyRequest: {}", e))
+            })?;
+
+        let channel_id: ChannelId = request.channel_id.parse().map_err(|e| {
+            ServiceError::Validation(format!("Invalid channel_id in SenderKeyRequest: {}", e))
+        })?;
+
+        tracing::info!(
+            requester_id = %requester_id,
+            channel_id = %channel_id,
+            "Received sender key request, will respond with SKDM"
+        );
+
+        // Create and store our SKDM for this channel
+        // This ensures our sender key exists and is up to date
+        let _skdm = self.signal_service.create_sender_key(&channel_id).await?;
+
+        tracing::debug!(
+            channel_id = %channel_id,
+            requester_id = %requester_id,
+            "Created/refreshed SKDM in response to request"
+        );
+
+        // Note: The SKDM will be distributed when we send our next message
+        // to the channel (via distribute_sender_key in message_service)
+
+        Ok(())
+    }
+}

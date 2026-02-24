@@ -8,6 +8,7 @@ pub mod account_service;
 pub mod device_service;
 pub mod message;
 pub mod message_service;
+pub mod gateway;
 pub mod message_gateway;
 pub mod channel;
 pub mod channel_template;
