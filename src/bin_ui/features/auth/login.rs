@@ -1,9 +1,12 @@
 //! Login callback wiring.
 
+use std::sync::Arc;
+
 use slint::ComponentHandle;
 
 use chatter_linux::app::AppContext;
 use chatter_linux::services::auth_service::AuthService;
+use chatter_linux::services::ChannelEventService;
 
 use super::channel_events::spawn_channel_events_handler;
 use super::inbox_events::handle_inbox_event;
@@ -147,12 +150,16 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                     tracing::debug!("DM bootstrap handler spawned");
 
                     // Spawn channel events handler for member join/leave notifications
+                    let channel_event_service = Arc::new(ChannelEventService::new(
+                        message_repo.clone(),
+                        channel_repo.clone(),
+                        user_repo.clone(),
+                    ));
                     let _channel_events_handle = spawn_channel_events_handler(
                         weak.clone(),
                         grpc_pool.clone(),
                         channel_repo.clone(),
-                        message_repo.clone(),
-                        user_repo.clone(),
+                        channel_event_service,
                         signal_service.clone(),
                     );
                     tracing::debug!("Channel events handler spawned");

@@ -5,19 +5,18 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
 use slint::{Model, Weak};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
 use chatter_linux::domain::channel::{MemberRole, Membership, NotificationPreference};
-use chatter_linux::domain::ids::{ChannelId, MessageId, UserId};
-use chatter_linux::domain::message::{Message, MessageContent, SystemMessage};
+use chatter_linux::domain::ids::{ChannelId, UserId};
 use chatter_linux::network::grpc::channel_client::ChannelClient;
 use chatter_linux::network::grpc::client_pool::GrpcClientPool;
 use chatter_linux::proto::chat_v1::channel_event;
 use chatter_linux::services::signal_service::SignalService;
-use chatter_linux::storage::{ChannelRepository, MessageRepository, UserRepository};
+use chatter_linux::services::ChannelEventService;
+use chatter_linux::storage::ChannelRepository;
 
 use crate::MainWindow;
 
@@ -36,8 +35,7 @@ pub fn spawn_channel_events_handler(
     weak_window: Weak<MainWindow>,
     grpc_pool: Arc<GrpcClientPool>,
     channel_repo: Arc<ChannelRepository>,
-    message_repo: Arc<MessageRepository>,
-    user_repo: Arc<UserRepository>,
+    channel_event_service: Arc<ChannelEventService>,
     signal_service: Arc<SignalService>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -49,8 +47,7 @@ pub fn spawn_channel_events_handler(
                 &weak_window,
                 &grpc_pool,
                 &channel_repo,
-                &message_repo,
-                &user_repo,
+                &channel_event_service,
                 &signal_service,
             )
             .await
@@ -73,8 +70,7 @@ async fn run_channel_events_stream(
     weak_window: &Weak<MainWindow>,
     grpc_pool: &Arc<GrpcClientPool>,
     channel_repo: &Arc<ChannelRepository>,
-    message_repo: &Arc<MessageRepository>,
-    user_repo: &Arc<UserRepository>,
+    channel_event_service: &Arc<ChannelEventService>,
     signal_service: &Arc<SignalService>,
 ) -> Result<(), String> {
     let mut channel_client = ChannelClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
@@ -97,8 +93,7 @@ async fn run_channel_events_stream(
                         event.timestamp,
                         weak_window,
                         channel_repo,
-                        message_repo,
-                        user_repo,
+                        channel_event_service,
                         signal_service,
                     )
                     .await;
@@ -122,8 +117,7 @@ async fn handle_channel_event(
     timestamp: u64,
     weak_window: &Weak<MainWindow>,
     channel_repo: &Arc<ChannelRepository>,
-    message_repo: &Arc<MessageRepository>,
-    user_repo: &Arc<UserRepository>,
+    channel_event_service: &Arc<ChannelEventService>,
     signal_service: &Arc<SignalService>,
 ) {
     match event {
@@ -140,49 +134,24 @@ async fn handle_channel_event(
                 channel_id_str.parse::<ChannelId>(),
                 user_id_str.parse::<UserId>(),
             ) {
-                // Get user display name for the message
-                let display_name = match user_repo.get(&user_id) {
-                    Ok(Some(user)) => user.username,
-                    _ => user_id_str.clone(),
-                };
+                // Build membership from proto
+                let membership = build_membership_from_proto(&channel_id, &member);
 
-                // Create system message
-                let message = Message {
-                    id: MessageId::new(),
-                    channel_id: channel_id.clone(),
-                    sender_id: None, // System messages have no sender
-                    content: MessageContent::System(SystemMessage::UserJoined(user_id.clone())),
-                    thread_id: None,
-                    reply_to: None,
-                    attachments: Vec::new(),
-                    is_pinned: false,
-                    is_edited: false,
-                    is_deleted: false,
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                    edited_at: None,
-                    reaction_counts: Vec::new(),
-                    current_user_reactions: Vec::new(),
-                    mentioned_integrations: Vec::new(),
-                    targets_ai_bot: false,
-                    sent_at: 0, // System messages don't use sender timestamp
-                };
-
-                // Save to local database
-                if let Err(e) = message_repo.insert(&message) {
-                    warn!("Failed to save system message: {}", e);
+                // Use service to handle member joined (creates system message + syncs membership)
+                match channel_event_service.handle_member_joined(&channel_id, &user_id, &membership) {
+                    Ok((_message, display_name)) => {
+                        // Update UI
+                        update_ui_with_system_message(
+                            weak_window,
+                            &channel_id,
+                            &format!("{} joined the channel", display_name),
+                            timestamp,
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Failed to handle member joined: {}", e);
+                    }
                 }
-
-                // Update UI
-                update_ui_with_system_message(
-                    weak_window,
-                    &channel_id,
-                    &format!("{} joined the channel", display_name),
-                    timestamp,
-                );
-
-                // Sync this member to local storage
-                sync_member_to_local(channel_repo, &channel_id, &member);
 
                 // Note: SKDM distribution to new members happens automatically when we send
                 // our first message - encrypt_for_group() includes SKDM if the recipient
@@ -200,60 +169,36 @@ async fn handle_channel_event(
                 channel_id_str.parse::<ChannelId>(),
                 user_id_str.parse::<UserId>(),
             ) {
-                // Get user display name
-                let display_name = match user_repo.get(&user_id) {
-                    Ok(Some(user)) => user.username,
-                    _ => user_id_str.clone(),
-                };
+                // Use service to handle member removed (creates system message + removes membership)
+                match channel_event_service.handle_member_removed(&channel_id, &user_id) {
+                    Ok((_message, display_name)) => {
+                        // Mark channel for sender key rotation (forward secrecy)
+                        // The departed member won't be able to decrypt our future messages
+                        if let Err(e) = signal_service.mark_channel_for_rotation(&channel_id) {
+                            warn!(
+                                channel_id = %channel_id,
+                                error = %e,
+                                "Failed to mark channel for sender key rotation"
+                            );
+                        } else {
+                            info!(
+                                channel_id = %channel_id,
+                                departed_user = %user_id,
+                                "Marked channel for sender key rotation after member left"
+                            );
+                        }
 
-                // Create system message
-                let message = Message {
-                    id: MessageId::new(),
-                    channel_id: channel_id.clone(),
-                    sender_id: None,
-                    content: MessageContent::System(SystemMessage::UserLeft(user_id)),
-                    thread_id: None,
-                    reply_to: None,
-                    attachments: Vec::new(),
-                    is_pinned: false,
-                    is_edited: false,
-                    is_deleted: false,
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                    edited_at: None,
-                    reaction_counts: Vec::new(),
-                    current_user_reactions: Vec::new(),
-                    mentioned_integrations: Vec::new(),
-                    targets_ai_bot: false,
-                    sent_at: 0, // System messages don't use sender timestamp
-                };
-
-                if let Err(e) = message_repo.insert(&message) {
-                    warn!("Failed to save system message: {}", e);
+                        update_ui_with_system_message(
+                            weak_window,
+                            &channel_id,
+                            &format!("{} left the channel", display_name),
+                            timestamp,
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Failed to handle member removed: {}", e);
+                    }
                 }
-
-                // Mark channel for sender key rotation (forward secrecy)
-                // The departed member won't be able to decrypt our future messages
-                if let Err(e) = signal_service.mark_channel_for_rotation(&channel_id) {
-                    warn!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Failed to mark channel for sender key rotation"
-                    );
-                } else {
-                    info!(
-                        channel_id = %channel_id,
-                        departed_user = %user_id,
-                        "Marked channel for sender key rotation after member left"
-                    );
-                }
-
-                update_ui_with_system_message(
-                    weak_window,
-                    &channel_id,
-                    &format!("{} left the channel", display_name),
-                    timestamp,
-                );
             }
         }
         channel_event::Event::ChannelUpdated(proto_channel) => {
@@ -428,12 +373,11 @@ fn update_ui_with_system_message(
     });
 }
 
-/// Sync a member to local channel storage.
-fn sync_member_to_local(
-    channel_repo: &Arc<ChannelRepository>,
+/// Build a Membership domain object from a proto ChannelMember.
+fn build_membership_from_proto(
     channel_id: &ChannelId,
     member: &chatter_linux::proto::chat_v1::channel::ChannelMember,
-) {
+) -> Membership {
     let role = match member.role {
         1 => MemberRole::Member,
         2 => MemberRole::Moderator,
@@ -442,22 +386,21 @@ fn sync_member_to_local(
         _ => MemberRole::Member,
     };
 
-    if let Ok(user_id) = member.user_id.parse::<UserId>() {
-        let membership = Membership {
-            channel_id: channel_id.clone(),
-            user_id,
-            role,
-            joined_at: chrono::DateTime::from_timestamp_millis(member.joined_at as i64)
-                .unwrap_or_else(Utc::now),
-            last_read_message_id: None,
-            is_muted: member.muted,
-            muted_until: None,
-            notification_preference: NotificationPreference::All,
-        };
+    let user_id = member.user_id.parse::<UserId>().unwrap_or_else(|_| {
+        // Fallback - this shouldn't happen if the proto is valid
+        UserId::new()
+    });
 
-        if let Err(e) = channel_repo.insert_membership(&membership) {
-            debug!("Member already exists or insert failed: {}", e);
-        }
+    Membership {
+        channel_id: channel_id.clone(),
+        user_id,
+        role,
+        joined_at: chrono::DateTime::from_timestamp_millis(member.joined_at as i64)
+            .unwrap_or_else(chrono::Utc::now),
+        last_read_message_id: None,
+        is_muted: member.muted,
+        muted_until: None,
+        notification_preference: NotificationPreference::All,
     }
 }
 
