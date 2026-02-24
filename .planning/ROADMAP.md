@@ -638,12 +638,12 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 **Goal**: Split service files over 550 lines into focused modules for maintainability
 **Depends on**: Phase 75
 **Research**: Unlikely (internal refactoring)
-**Status**: Not started
-**Plans**: 0 plans
+**Status**: In Progress
+**Plans**: 1/4 complete
 
 **Target files (>550 lines):**
-- `message_service.rs` (3143 lines) → dm/, group/, storage/ modules
-- `inbox_events.rs` (2425 lines) → by event type
+- `message_service.rs` (3143 lines) → dm/, group/, storage/ modules ✅ (76-01)
+- `inbox_events.rs` (2425 lines) → by event type ✅ (76-02)
 - `signal_service.rs` (1486 lines) → session/, encryption/ modules
 - `attachment_service.rs` (1395 lines) → upload/, download/ modules
 - `message_gateway.rs` (1365 lines) → routing/, decryption/ modules
@@ -651,7 +651,7 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 - Additional files 550-1300 lines as needed
 
 **Details:**
-[To be planned - run /gsd:plan-phase 76]
+76-02 complete: inbox_events.rs split into inbox/ module (typing, utils, dm_handlers, channel_handlers)
 
 ## Progress
 
@@ -735,4 +735,4 @@ All callbacks wired. Final plan (71-05) included major refactoring:
 | 73 | Signal Protocol Encryption Wiring | 1 | Done | 2026-02-10 |
 | 74 | LiveKit Video & Audio Calls | 5 | Done | 2026-02-23 |
 | 75 | Secure In-Memory Attachment Handling | 0 | In Progress | - |
-| 76 | Refactor Large Service Files | 0 | Not started | - |
+| 76 | Refactor Large Service Files | 1/4 | In Progress | - |
