@@ -12,8 +12,9 @@ use crate::domain::moderation::{Ban, ModerationAction, ModerationLogEntry, Mute}
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::proto::chat_v1::{channel_moderation, ChannelModeration};
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
 use crate::storage::repositories::channel_repo::ChannelRepository;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Moderation service errors.
 #[derive(Debug, thiserror::Error)]
@@ -47,6 +48,15 @@ pub enum ModerationError {
     Storage(#[from] StorageError),
 }
 
+impl From<CurrentUserError> for ModerationError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => ModerationError::Storage(e),
+            CurrentUserError::NotLoggedIn => ModerationError::NotLoggedIn,
+        }
+    }
+}
+
 /// Moderation service for channel moderation operations.
 ///
 /// Provides higher-level moderation operations with permission validation,
@@ -68,19 +78,6 @@ impl ModerationService {
         }
     }
 
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<UserId, ModerationError> {
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(ModerationError::Storage)?
-            .ok_or(ModerationError::NotLoggedIn)?;
-
-        user_id_str
-            .parse()
-            .map_err(|_| ModerationError::InvalidInput("invalid user ID in settings".to_string()))
-    }
-
     /// Kick a user from a channel.
     ///
     /// Delegates to ChannelClient::kick_user and removes local membership.
@@ -99,7 +96,7 @@ impl ModerationService {
         reason: Option<&str>,
     ) -> Result<(), ModerationError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server via ChannelClient
         let channel_id_str = channel_id.to_string();
@@ -169,7 +166,7 @@ impl ModerationService {
         reason: Option<&str>,
     ) -> Result<Ban, ModerationError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Call server via ChannelClient
         let channel_id_str = channel_id.to_string();
@@ -212,7 +209,7 @@ impl ModerationService {
         user_id: &UserId,
     ) -> Result<(), ModerationError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server via ChannelClient
         let channel_id_str = channel_id.to_string();
@@ -263,7 +260,7 @@ impl ModerationService {
         reason: Option<&str>,
     ) -> Result<Mute, ModerationError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Get existing membership
         let mut membership = self
@@ -310,7 +307,7 @@ impl ModerationService {
         user_id: &UserId,
     ) -> Result<(), ModerationError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Get existing membership
         let mut membership = self
@@ -437,7 +434,7 @@ impl ModerationService {
         action: ModerationAction,
         reason: Option<&str>,
     ) -> Result<ModerationLogEntry, ModerationError> {
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         let mut entry = ModerationLogEntry::new(
             *channel_id,

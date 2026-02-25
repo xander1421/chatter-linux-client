@@ -410,8 +410,9 @@ fn wire_reply_clicked(window: &MainWindow, ctx: &AppContext) {
                 Ok(Some(msg)) => {
                     let sender = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                     let content = msg.as_text().unwrap_or("").to_string();
-                    let preview = if content.len() > 50 {
-                        format!("{}...", &content[..47])
+                    let preview = if content.chars().count() > 50 {
+                        let truncated: String = content.chars().take(47).collect();
+                        format!("{}...", truncated)
                     } else {
                         content
                     };
@@ -560,6 +561,44 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
             let attachment_repo_for_decrypt = attachment_repo.clone();
             let att_id_for_decrypt = att_id;
 
+            // OPTIMIZATION: For audio, check if already playing BEFORE decrypting
+            // This avoids expensive decrypt for simple pause/resume toggles
+            let is_audio = mime_type.starts_with("audio/");
+            if is_audio {
+                let currently_playing = audio_state::get_current_playing_id();
+                if currently_playing.as_deref() == Some(attachment_id.as_str()) {
+                    // Already playing this audio - just toggle pause (no decrypt needed!)
+                    let player_arc = audio_state::get_audio_player();
+                    if let Ok(mut player_guard) = player_arc.lock() {
+                        if let Some(ref mut player) = *player_guard {
+                            if player.is_paused() {
+                                if let Err(e) = player.play() {
+                                    tracing::error!("Failed to resume audio: {}", e);
+                                } else {
+                                    audio_state::set_resumed();
+                                    let weak_for_resume = weak.clone();
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(w) = weak_for_resume.upgrade() {
+                                            w.set_is_media_playing(true);
+                                        }
+                                    });
+                                }
+                            } else {
+                                player.pause();
+                                audio_state::set_paused();
+                                let weak_for_pause = weak.clone();
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(w) = weak_for_pause.upgrade() {
+                                        w.set_is_media_playing(false);
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    return; // Done - no need to decrypt
+                }
+            }
+
             // Show loading state immediately for images
             let is_image_check = FileMetadata::is_image_file(&filename, &mime_type);
             if is_image_check {
@@ -606,40 +645,11 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
                 let is_video = mime_type.starts_with("video/");
 
                 if is_audio {
-                // Play audio from memory buffer (no disk access)
-                let player_arc = audio_state::get_audio_player();
-                match player_arc.lock() {
-                    Ok(mut player_guard) => {
-                        if let Some(ref mut player) = *player_guard {
-                            // Check if already playing - toggle pause
-                            let currently_playing = audio_state::get_current_playing_id();
-                            if currently_playing.as_deref() == Some(attachment_id.as_str()) {
-                                if player.is_paused() {
-                                    if let Err(e) = player.play() {
-                                        tracing::error!("Failed to resume audio: {}", e);
-                                    } else {
-                                        audio_state::set_resumed();
-                                        // Update UI state
-                                        let weak_for_resume = weak.clone();
-                                        let _ = slint::invoke_from_event_loop(move || {
-                                            if let Some(w) = weak_for_resume.upgrade() {
-                                                w.set_is_media_playing(true);
-                                            }
-                                        });
-                                    }
-                                } else {
-                                    player.pause();
-                                    audio_state::set_paused();
-                                    // Update UI state
-                                    let weak_for_pause = weak.clone();
-                                    let _ = slint::invoke_from_event_loop(move || {
-                                        if let Some(w) = weak_for_pause.upgrade() {
-                                            w.set_is_media_playing(false);
-                                        }
-                                    });
-                                }
-                            } else {
-                                // Load from memory (secure: no filesystem)
+                    // Load and play new audio from memory
+                    let player_arc = audio_state::get_audio_player();
+                    match player_arc.lock() {
+                        Ok(mut player_guard) => {
+                            if let Some(ref mut player) = *player_guard {
                                 let data = secure_buffer.as_slice().to_vec();
                                 match player.load_from_memory(data) {
                                     Ok(duration) => {
@@ -664,14 +674,13 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
                                         tracing::error!("Failed to load audio from memory: {}", e);
                                     }
                                 }
+                            } else {
+                                tracing::error!("Audio player not initialized");
                             }
-                        } else {
-                            tracing::error!("Audio player not initialized");
                         }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to lock audio player: {}", e);
-                    }
+                        Err(e) => {
+                            tracing::error!("Failed to lock audio player: {}", e);
+                        }
                     }
                 } else if is_image {
                     // Load image from memory (secure: no filesystem)
@@ -1172,27 +1181,30 @@ fn wire_audio_seek(window: &MainWindow, _ctx: &AppContext) {
 
         tracing::debug!("Seeking to {:?} (position {})", seek_duration, position);
 
-        // Get audio player and seek
-        let player_arc = audio_state::get_audio_player();
-        match player_arc.lock() {
-            Ok(mut player_guard) => {
-                if let Some(ref mut player) = *player_guard {
-                    // We need to reload and seek because rodio doesn't support native seek
-                    // The AudioPlayer.seek() method handles this internally
-                    if let Err(e) = player.seek(seek_duration) {
-                        tracing::error!("Failed to seek audio: {}", e);
+        // Run seek in background thread to avoid blocking UI
+        // rodio's skip_duration decodes linearly which is CPU-intensive
+        tokio::task::spawn_blocking(move || {
+            let player_arc = audio_state::get_audio_player();
+            match player_arc.lock() {
+                Ok(mut player_guard) => {
+                    if let Some(ref mut player) = *player_guard {
+                        // We need to reload and seek because rodio doesn't support native seek
+                        // The AudioPlayer.seek() method handles this internally
+                        if let Err(e) = player.seek(seek_duration) {
+                            tracing::error!("Failed to seek audio: {}", e);
+                        } else {
+                            // Update position tracking in audio_state
+                            audio_state::set_seek_position(seek_duration);
+                            tracing::info!("Audio seek successful to {:?}", seek_duration);
+                        }
                     } else {
-                        // Update position tracking in audio_state
-                        audio_state::set_seek_position(seek_duration);
-                        tracing::info!("Audio seek successful to {:?}", seek_duration);
+                        tracing::error!("Audio player not initialized");
                     }
-                } else {
-                    tracing::error!("Audio player not initialized");
+                }
+                Err(e) => {
+                    tracing::error!("Failed to lock audio player: {}", e);
                 }
             }
-            Err(e) => {
-                tracing::error!("Failed to lock audio player: {}", e);
-            }
-        }
+        });
     });
 }

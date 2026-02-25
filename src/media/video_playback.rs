@@ -328,7 +328,6 @@ where
     let height = info.height;
     let duration_secs = info.duration_ms as f64 / 1000.0;
     let fps = info.fps;
-    let frame_duration = Duration::from_secs_f64(1.0 / fps);
 
     tracing::debug!(
         "Video: {}x{}, {:.2} fps, duration {:.2}s, has_audio: {}",
@@ -355,13 +354,30 @@ where
     state.set_loading(false);
     state.set_playing(true);
 
-    // Explicitly seek to 0 at start - GStreamer may pre-roll to end of video for some containers
+    // Explicitly seek to 0 at start - some containers may have incorrect
+    // initial position after preroll due to index/metadata issues (e.g., MP4
+    // with moov atom at end, or containers with inaccurate duration info).
     if let Err(e) = dec.seek(0) {
         tracing::warn!("Initial seek to 0 failed: {}", e);
     }
-    state.set_position(0.0);
 
-    let mut last_frame_time = Instant::now();
+    // Verify actual position - seek may fail silently for some formats
+    let actual_pos = match dec.query_actual_position_ms() {
+        Ok(pos) => pos,
+        Err(_) => dec.position_ms(),
+    };
+    if actual_pos > 500 {
+        tracing::warn!(
+            "Decoder position after seek is {}ms, expected ~0 - video may have seek issues",
+            actual_pos
+        );
+    }
+    state.set_position(actual_pos as f64 / 1000.0);
+
+    // Playback timing: track when playback started and at what video position.
+    // This allows accurate PTS-based timing that survives seeks.
+    let mut playback_start_time = Instant::now();
+    let mut playback_start_pts_ms: u64 = actual_pos; // Video position when playback started
 
     // Main playback loop
     loop {
@@ -379,6 +395,9 @@ where
                 tracing::warn!("Seek failed: {}", e);
             } else {
                 state.set_position(seek_pos);
+                // Reset timing after seek - playback restarts from this position
+                playback_start_time = Instant::now();
+                playback_start_pts_ms = seek_ms;
                 tracing::debug!("Seek completed to {} seconds", seek_pos);
             }
         }
@@ -394,6 +413,7 @@ where
                     tracing::warn!("Seek failed: {}", e);
                 } else {
                     state.set_position(seek_pos);
+                    playback_start_pts_ms = seek_ms;
 
                     // Decode one frame to show the new position immediately
                     // This gives visual feedback when scrubbing while paused
@@ -403,6 +423,8 @@ where
                     }
                 }
             }
+            // Reset timing reference when unpausing
+            playback_start_time = Instant::now();
             std::thread::sleep(Duration::from_millis(50));
         }
 
@@ -429,12 +451,27 @@ where
                 // Send frame to callback
                 frame_callback(frame.width, frame.height, frame.data);
 
-                // Frame timing - maintain target frame rate
-                let elapsed = last_frame_time.elapsed();
-                if elapsed < frame_duration {
-                    std::thread::sleep(frame_duration - elapsed);
+                // Frame timing using PTS (presentation timestamp) for accurate sync.
+                // Calculate when this frame should be displayed relative to playback start.
+                //
+                // frame_relative_pts = how far into playback this frame should appear
+                // elapsed = how much time has actually passed since playback started
+                //
+                // If frame_relative_pts > elapsed, we're ahead and should wait.
+                // If elapsed > frame_relative_pts, we're behind and should play immediately.
+                let frame_relative_pts_ms = frame.timestamp_ms.saturating_sub(playback_start_pts_ms);
+                let frame_relative_pts = Duration::from_millis(frame_relative_pts_ms);
+                let elapsed = playback_start_time.elapsed();
+
+                if frame_relative_pts > elapsed {
+                    // Frame should be shown in the future - wait
+                    let wait_time = frame_relative_pts - elapsed;
+                    // Cap maximum wait to prevent issues with bad timestamps
+                    if wait_time < Duration::from_secs(2) {
+                        std::thread::sleep(wait_time);
+                    }
                 }
-                last_frame_time = Instant::now();
+                // If elapsed > frame_relative_pts, we're behind - play immediately to catch up
             }
             Ok(None) => {
                 // End of stream

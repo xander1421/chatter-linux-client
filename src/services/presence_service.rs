@@ -17,7 +17,8 @@ use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::user_client::UserClient;
 use crate::network::streaming::presence_stream::PresenceRouter;
 use crate::proto::chat_v1::{PresenceUpdate, UserPresence};
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Presence service errors.
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +38,15 @@ pub enum PresenceError {
     /// Invalid presence status.
     #[error("invalid status")]
     InvalidStatus,
+}
+
+impl From<CurrentUserError> for PresenceError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => PresenceError::Storage(e),
+            CurrentUserError::NotLoggedIn => PresenceError::NotLoggedIn,
+        }
+    }
 }
 
 /// Presence service for managing user presence.
@@ -74,19 +84,6 @@ impl PresenceService {
         }
     }
 
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<UserId, PresenceError> {
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(PresenceError::Storage)?
-            .ok_or(PresenceError::NotLoggedIn)?;
-
-        user_id_str
-            .parse()
-            .map_err(|_| PresenceError::InvalidStatus)
-    }
-
     // ========================================================================
     // Server Operations
     // ========================================================================
@@ -106,7 +103,7 @@ impl PresenceService {
         status: PresenceStatus,
     ) -> Result<(), PresenceError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Convert domain status to proto
         let proto_presence = domain_presence_to_proto(status);
@@ -156,7 +153,7 @@ impl PresenceService {
         >,
     ) -> Result<tokio::task::JoinHandle<()>, PresenceError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let mut boxed_stream = stream;
 

@@ -9,7 +9,8 @@ use crate::error::NetworkError;
 use crate::network::grpc::integration_client::IntegrationClient;
 use crate::proto::chat_v1::{Integration, IntegrationType, Message};
 use crate::services::ai_service::AIService;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Summarization service errors.
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +30,15 @@ pub enum SummarizeError {
     /// Summarization failed.
     #[error("summarization failed: {0}")]
     SummarizationFailed(String),
+}
+
+impl From<CurrentUserError> for SummarizeError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(_) => SummarizeError::NotLoggedIn,
+            CurrentUserError::NotLoggedIn => SummarizeError::NotLoggedIn,
+        }
+    }
 }
 
 /// AI summarization service.
@@ -68,14 +78,6 @@ impl AISummarizeService {
         Self { settings_repo }
     }
 
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<String, SummarizeError> {
-        self.settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(|_| SummarizeError::NotLoggedIn)?
-            .ok_or(SummarizeError::NotLoggedIn)
-    }
-
     /// Check if an integration type is an AI provider.
     ///
     /// AI providers are types 10-15 in the IntegrationType enum:
@@ -110,7 +112,7 @@ impl AISummarizeService {
         channel_id: &str,
     ) -> Result<Option<Integration>, SummarizeError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Get all channel integrations
         let integrations = ai_service
@@ -200,7 +202,7 @@ impl AISummarizeService {
         instruction: Option<&str>,
     ) -> Result<(), SummarizeError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Validate messages provided
         if messages.is_empty() {

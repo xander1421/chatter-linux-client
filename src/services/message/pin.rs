@@ -7,6 +7,7 @@ use chrono::Utc;
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::Message;
 use crate::network::grpc::message_client::MessageClient;
+use crate::services::current_user::CurrentUserProvider;
 
 use super::core::proto_to_domain_message_with_sender;
 use super::{MessageError, MessageService};
@@ -20,7 +21,7 @@ impl MessageService {
         message_id: &MessageId,
     ) -> Result<Message, MessageError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let proto_message = message_client
@@ -54,7 +55,7 @@ impl MessageService {
         message_id: &MessageId,
     ) -> Result<(), MessageError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         message_client
@@ -79,7 +80,7 @@ impl MessageService {
         limit: u32,
     ) -> Result<Vec<Message>, MessageError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Fetch from server
         let response = message_client

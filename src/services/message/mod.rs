@@ -30,12 +30,13 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::message_client::MessageClient;
+use crate::services::current_user::CurrentUserError;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::signal_service::SignalService;
 use crate::storage::Database;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::message_repo::MessageRepository;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 use crate::domain::channel::ChannelType;
 
@@ -81,6 +82,15 @@ pub enum MessageError {
     /// DM bootstrap was initiated - message will be sent after key exchange completes.
     #[error("DM bootstrap initiated - secure channel being established")]
     BootstrapInitiated,
+}
+
+impl From<CurrentUserError> for MessageError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => MessageError::Storage(e),
+            CurrentUserError::NotLoggedIn => MessageError::NotLoggedIn,
+        }
+    }
 }
 
 /// Parameters for sending DM content.
@@ -215,13 +225,6 @@ impl MessageService {
         Ok((is_dm, require_encryption))
     }
 
-    pub(crate) fn current_user_id(&self) -> Result<UserId, MessageError> {
-        self.settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(MessageError::Storage)?
-            .and_then(|s| s.parse().ok())
-            .ok_or(MessageError::NotLoggedIn)
-    }
 }
 
 // Re-export helper functions used by other parts of the codebase

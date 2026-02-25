@@ -17,7 +17,7 @@ use chatter_linux::app::AppContext;
 
 use crate::MainWindow;
 
-pub use helpers::{get_dm_channel_from_peer, send_dm_read_receipts};
+pub use helpers::{get_dm_channel_from_peer, send_dm_delivery_receipt, send_dm_read_receipts};
 
 /// Wire chat callbacks.
 pub fn wire(window: &MainWindow, ctx: &AppContext) {

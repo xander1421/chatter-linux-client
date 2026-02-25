@@ -15,7 +15,6 @@ use crate::MainWindow;
 /// Wire typing indicator callback for DM and channel conversations.
 pub fn wire_typing_changed(window: &MainWindow, ctx: &AppContext) {
     let auth_state = ctx.auth_state.clone();
-    let grpc_pool = ctx.grpc_pool.clone();
     let mailbox_manager = ctx.mailbox_manager.clone();
     let database = ctx.database.clone();
     let chat_state = ctx.chat_state.clone();
@@ -64,7 +63,6 @@ pub fn wire_typing_changed(window: &MainWindow, ctx: &AppContext) {
             .unwrap_or_default();
 
         let auth_state = auth_state.clone();
-        let _grpc_pool = grpc_pool.clone();
 
         // DM typing indicator via sealed sender
         if !selected_dm_id.is_empty() {

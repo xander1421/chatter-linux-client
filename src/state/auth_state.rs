@@ -75,10 +75,10 @@ impl AuthState {
 
     /// Subscribe to authentication state changes.
     ///
-    /// The receiver will receive the state each time it changes.
+    /// The receiver will receive Arc-wrapped state snapshots (zero-copy sharing).
     /// Call `get()` first if you need the current state immediately.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<AuthStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<AuthStateData>> {
         self.store.subscribe()
     }
 

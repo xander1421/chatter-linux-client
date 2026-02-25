@@ -10,6 +10,7 @@ use crate::domain::ids::{ChannelId, UserId};
 use crate::mailbox::group::GroupMailboxSetupResult;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::proto::chat_v1::{self, channel_event};
+use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::converters::{domain_role_to_proto, proto_to_domain_membership};
 use crate::services::channel::error::ChannelError;
@@ -38,7 +39,7 @@ impl ChannelService {
         password: Option<&str>,
         setup_mailbox: bool,
     ) -> Result<(crate::domain::channel::Channel, Option<GroupMailboxSetupResult>), ChannelError> {
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let mut channel_client = self.channel_client();
@@ -211,7 +212,7 @@ impl ChannelService {
 
     /// Leave a channel.
     pub async fn leave_channel(&self, channel_id: &ChannelId) -> Result<(), ChannelError> {
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let mut channel_client = self.channel_client();
@@ -275,7 +276,7 @@ impl ChannelService {
         invitee_id: &UserId,
         message: Option<&str>,
     ) -> Result<(), ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let invitee_id_str = invitee_id.to_string();
@@ -332,7 +333,7 @@ impl ChannelService {
         accept: bool,
         setup_mailbox: bool,
     ) -> Result<Option<(crate::domain::channel::Channel, Option<GroupMailboxSetupResult>)>, ChannelError> {
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let mut channel_client = self.channel_client();
@@ -424,7 +425,7 @@ impl ChannelService {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<Membership>, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let mut channel_client = self.channel_client();
@@ -457,7 +458,7 @@ impl ChannelService {
         user_id: &UserId,
         new_role: MemberRole,
     ) -> Result<Membership, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let proto_role = domain_role_to_proto(new_role);
 

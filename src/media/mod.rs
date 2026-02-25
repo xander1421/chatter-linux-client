@@ -9,6 +9,7 @@
 
 pub mod audio_player;
 pub mod audio_recorder;
+pub mod blackhole;
 pub mod code_preview;
 pub mod decoder;
 pub mod embed;

@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Avatar } from "../components/avatar.slint";
 import { CallControls } from "call_controls.slint";
 import { ActiveCallData, CallParticipantData } from "types.slint";
@@ -59,13 +60,13 @@ component ParticipantTile inherits Rectangle {
         border-radius: 12px;
         background: Colors.error.with-alpha(0.8);
 
-        Text {
-            text: "\u{1F507}\u{FE0F}";
-            font-size: Typography.xs;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            width: 100%;
-            height: 100%;
+        Image {
+            source: Icons.mic-off;
+            width: 14px;
+            height: 14px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: white;
         }
     }
 
@@ -139,9 +140,11 @@ export component ActiveCallView inherits Rectangle {
                     HorizontalLayout {
                         spacing: Spacing.sm;
 
-                        if call-data.is-encrypted: Text {
-                            text: "\u{1F512}\u{FE0F}";
-                            font-size: Typography.xs;
+                        if call-data.is-encrypted: Image {
+                            source: Icons.lock;
+                            width: 14px;
+                            height: 14px;
+                            colorize: Colors.primary;
                         }
 
                         // Verification emojis - compare with other party

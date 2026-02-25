@@ -28,6 +28,7 @@ import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint
 import { SessionsModal, SessionInfo } from "modals/sessions.slint";
 import { JoinChannelModal, SearchResultChannel } from "modals/join_channel.slint";
 import { SearchModal, SearchResult } from "modals/search_modal.slint";
+import { ChannelSettingsModal, ChannelMemberData } from "modals/channel_settings.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
@@ -39,10 +40,10 @@ import { PdfPreviewPanel } from "components/mod.slint";
 import { VideoPlayer } from "components/mod.slint";
 
 // Import call UI
-import { IncomingCallModal, KeyExchangeModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
+import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData }
+export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData }
 
 export component App inherits Rectangle {
     // ========== View routing ==========
@@ -52,6 +53,9 @@ export component App inherits Rectangle {
     // ========== Loading page properties ==========
     in property <string> loading-message: "Loading...";
     in property <string> loading-secondary-message: "";
+
+    // ========== Auth background (black hole animation) ==========
+    in property <image> auth-background-image;
 
     // ========== Auth page properties ==========
     in-out property <string> login-username: "";
@@ -88,6 +92,7 @@ export component App inherits Rectangle {
     in property <string> channel-id: "";
     in property <string> channel-name: "";
     in property <string> channel-type: "public";
+    in-out property <bool> is-dm: false;  // True for DM conversations (hides avatars/names in messages)
     in property <int> member-count: 0;
     in property <string> topic: "";
     in property <bool> is-archived: false;
@@ -295,6 +300,28 @@ export component App inherits Rectangle {
     in property <int> search-result-count: 0;
     in-out property <bool> search-all-channels: false;
 
+    // Channel settings modal properties
+    in property <string> channel-settings-id: "";
+    in property <string> channel-settings-name: "";
+    in property <string> channel-settings-description: "";
+    in property <string> channel-settings-type: "public";
+    in property <bool> channel-settings-archived: false;
+    in property <string> channel-settings-created-at: "";
+    in property <int> channel-settings-member-count: 0;
+    in property <bool> channel-settings-can-edit: false;
+    in property <bool> channel-settings-can-manage-members: false;
+    in property <bool> channel-settings-can-archive: false;
+    in property <bool> channel-settings-can-delete: false;
+    in property <bool> channel-settings-is-owner: false;
+    in-out property <bool> channel-settings-allow-reactions: true;
+    in-out property <bool> channel-settings-allow-threads: true;
+    in-out property <bool> channel-settings-allow-attachments: true;
+    in-out property <string> channel-settings-notification-pref: "all";
+    in-out property <bool> channel-settings-muted: false;
+    in property <[ChannelMemberData]> channel-settings-members: [];
+    in property <bool> channel-settings-loading: false;
+    in property <string> channel-settings-error: "";
+
     // Settings properties
     in property <string> settings-display-name: "";
     in property <string> settings-username: "";
@@ -321,11 +348,6 @@ export component App inherits Rectangle {
     in-out property <bool> call-is-screen-sharing: false;
     in property <image> call-local-video-frame;
     in property <[image]> call-remote-video-frames;
-
-    // Key exchange modal properties
-    in-out property <bool> key-exchange-visible: false;
-    in-out property <bool> key-exchange-loading: false;
-    in-out property <string> key-exchange-peer-name: "";
 
     // Device picker properties
     in-out property <bool> device-picker-visible: false;
@@ -439,6 +461,17 @@ export component App inherits Rectangle {
     callback settings-sealed-sender-changed(bool);
     callback settings-refresh-keys();
 
+    // ========== Channel settings callbacks ==========
+    callback channel-settings-save(string, string);  // name, description
+    callback channel-settings-toggle-setting(string, bool);  // setting-name, value
+    callback channel-settings-change-notification(string);   // preference
+    callback channel-settings-toggle-mute(bool);
+    callback channel-settings-change-member-role(string, string);  // user-id, new-role
+    callback channel-settings-remove-member(string);  // user-id
+    callback channel-settings-archive();
+    callback channel-settings-leave();
+    callback channel-settings-delete();
+
     // ========== Call callbacks ==========
     callback accept-incoming-call(string);  // call_id
     callback decline-incoming-call(string); // call_id
@@ -452,8 +485,6 @@ export component App inherits Rectangle {
     callback audio-device-selected(string);   // device_id
     callback audio-output-selected(string);   // device_id
     callback screen-source-selected(string);  // source_id
-    callback key-exchange-confirm();          // User confirmed key exchange
-    callback key-exchange-cancel();           // User cancelled key exchange
 
     background: Colors.background;
 
@@ -475,6 +506,7 @@ export component App inherits Rectangle {
             password <=> root.login-password;
             loading: root.login-loading;
             error: root.login-error;
+            background-image: root.auth-background-image;
 
             login(u, p) => {
                 root.login(u, p);
@@ -492,6 +524,7 @@ export component App inherits Rectangle {
             confirm-password <=> root.register-confirm-password;
             loading: root.register-loading;
             error: root.register-error;
+            background-image: root.auth-background-image;
 
             register(u, p, d) => {
                 root.register(u, p, d);
@@ -565,6 +598,7 @@ export component App inherits Rectangle {
                 channel-id: root.channel-id;
                 channel-name: root.channel-name;
                 channel-type: root.channel-type;
+                is-dm: root.is-dm;
                 member-count: root.member-count;
                 topic: root.topic;
                 is-archived: root.is-archived;
@@ -877,6 +911,62 @@ export component App inherits Rectangle {
         }
     }
 
+    // Channel Settings Modal
+    ChannelSettingsModal {
+        show-modal: root.active-modal == "channel-settings";
+        channel-id: root.channel-settings-id;
+        channel-name: root.channel-settings-name;
+        channel-description: root.channel-settings-description;
+        channel-type: root.channel-settings-type;
+        is-archived: root.channel-settings-archived;
+        created-at: root.channel-settings-created-at;
+        member-count: root.channel-settings-member-count;
+        can-edit: root.channel-settings-can-edit;
+        can-manage-members: root.channel-settings-can-manage-members;
+        can-archive: root.channel-settings-can-archive;
+        can-delete: root.channel-settings-can-delete;
+        is-owner: root.channel-settings-is-owner;
+        allow-reactions <=> root.channel-settings-allow-reactions;
+        allow-threads <=> root.channel-settings-allow-threads;
+        allow-attachments <=> root.channel-settings-allow-attachments;
+        notification-preference <=> root.channel-settings-notification-pref;
+        is-muted <=> root.channel-settings-muted;
+        members: root.channel-settings-members;
+        loading: root.channel-settings-loading;
+        error-message: root.channel-settings-error;
+
+        close => {
+            root.active-modal = "none";
+        }
+        save-settings(name, description) => {
+            root.channel-settings-save(name, description);
+        }
+        toggle-setting(setting-name, value) => {
+            root.channel-settings-toggle-setting(setting-name, value);
+        }
+        change-notification(level) => {
+            root.channel-settings-change-notification(level);
+        }
+        toggle-mute(muted) => {
+            root.channel-settings-toggle-mute(muted);
+        }
+        change-member-role(user-id, role) => {
+            root.channel-settings-change-member-role(user-id, role);
+        }
+        remove-member(user-id) => {
+            root.channel-settings-remove-member(user-id);
+        }
+        archive-channel => {
+            root.channel-settings-archive();
+        }
+        leave-channel => {
+            root.channel-settings-leave();
+        }
+        delete-channel => {
+            root.channel-settings-delete();
+        }
+    }
+
     // Settings screen (full screen overlay)
     if active-modal == "settings": SettingsScreen {
         display-name: root.settings-display-name;
@@ -931,20 +1021,6 @@ export component App inherits Rectangle {
     }
 
     // ========== Call overlays (rendered above modals) ==========
-    // Key exchange modal (shown before call when no secure channel exists)
-    KeyExchangeModal {
-        show: root.key-exchange-visible;
-        is-loading: root.key-exchange-loading;
-        peer-name: root.key-exchange-peer-name;
-
-        exchange-keys => {
-            root.key-exchange-confirm();
-        }
-        cancel => {
-            root.key-exchange-cancel();
-        }
-    }
-
     // Incoming call modal
     IncomingCallModal {
         show: root.incoming-call-visible;

@@ -6,6 +6,7 @@ use crate::domain::channel::ChannelType;
 use crate::domain::ids::ChannelId;
 use crate::mailbox::group::GroupMailboxSetupResult;
 use crate::network::grpc::mailbox_client::MailboxClient;
+use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::error::ChannelError;
 
@@ -43,7 +44,7 @@ impl ChannelService {
         channel_id: &ChannelId,
         mailbox_client: &mut MailboxClient,
     ) -> Result<Option<GroupMailboxSetupResult>, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Check if this is an encrypted channel that needs group mailbox
         let channel = self

@@ -13,9 +13,10 @@ use crate::domain::message::{Message, MessageContent, MixedContent, ReactionCoun
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
 use crate::storage::repositories::message_repo::MessageRepository;
 use crate::storage::repositories::search_index::{SearchIndex, SearchResult};
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Search service errors.
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +36,15 @@ pub enum SearchError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+}
+
+impl From<CurrentUserError> for SearchError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => SearchError::Storage(e),
+            CurrentUserError::NotLoggedIn => SearchError::NotLoggedIn,
+        }
+    }
 }
 
 /// Combined search results from local and server sources.
@@ -95,19 +105,6 @@ impl SearchService {
             search_index,
             message_repo,
         }
-    }
-
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<UserId, SearchError> {
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(SearchError::Storage)?
-            .ok_or(SearchError::NotLoggedIn)?;
-
-        user_id_str
-            .parse()
-            .map_err(|_| SearchError::InvalidQuery("invalid user ID in settings".to_string()))
     }
 
     // ==================== Local Search Methods ====================
@@ -207,7 +204,7 @@ impl SearchService {
         to: Option<u64>,
     ) -> Result<Vec<Message>, SearchError> {
         // Require authentication for server search
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Validate query
         let trimmed_query = query.trim();

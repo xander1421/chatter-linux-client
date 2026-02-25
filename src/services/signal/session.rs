@@ -24,13 +24,40 @@ use crate::error::{CryptoError, ServiceError};
 
 use super::SignalService;
 
+/// Maximum number of encrypt locks to keep in cache.
+const MAX_ENCRYPT_LOCKS: usize = 500;
+
 impl SignalService {
     /// Get or create a lock for encrypting to a specific recipient.
     ///
     /// This ensures only one encryption operation to a given recipient
     /// happens at a time, preventing Double Ratchet counter collisions.
+    /// Uses LRU eviction to bound memory usage.
     pub(crate) async fn get_encrypt_lock(&self, recipient_key: &str) -> Arc<Mutex<()>> {
         let mut locks = self.encrypt_locks.lock().await;
+        let mut lru = self.encrypt_lock_lru.lock().await;
+
+        // Touch recipient in LRU
+        lru.retain(|key| key != recipient_key);
+        lru.push_back(recipient_key.to_string());
+
+        // Evict oldest locks if over limit (only if not currently in use)
+        while lru.len() > MAX_ENCRYPT_LOCKS {
+            if let Some(oldest) = lru.pop_front() {
+                // Only remove if the lock is not currently held
+                // Arc::strong_count == 1 means only the HashMap holds it
+                if let Some(lock) = locks.get(&oldest) {
+                    if Arc::strong_count(lock) == 1 {
+                        locks.remove(&oldest);
+                    } else {
+                        // Lock is in use, put it back at front (will try again later)
+                        lru.push_front(oldest);
+                        break;
+                    }
+                }
+            }
+        }
+
         locks
             .entry(recipient_key.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))

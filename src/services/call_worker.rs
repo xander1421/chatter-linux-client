@@ -10,7 +10,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::calls::{LiveKitRoomEvent, RoomManager, RoomState, ScreenSource, VideoCaptureConfig};
+use crate::calls::{LiveKitRoomEvent, RoomManager, RoomState, ScreenSource, SharedVideoFrames, VideoCaptureConfig};
 use crate::crypto::call_key_provider::CallKeyState;
 use crate::domain::call::{Call, CallType, Participant};
 use crate::domain::ids::{CallId, ChannelId, UserId};
@@ -129,6 +129,8 @@ pub struct CallWorkerHandle {
     cmd_tx: mpsc::UnboundedSender<CallCommand>,
     /// Room events forwarded from the worker.
     room_events_rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<LiveKitRoomEvent>>>>,
+    /// Shared video frames for UI access (updated by call worker, read by UI).
+    shared_video_frames: SharedVideoFrames,
 }
 
 impl CallWorkerHandle {
@@ -137,18 +139,28 @@ impl CallWorkerHandle {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
 
+        // Create shared video frames storage (shared between worker and UI)
+        let shared_video_frames = SharedVideoFrames::new();
+        let shared_frames_for_worker = shared_video_frames.clone();
+
         // Spawn dedicated thread for call operations
         std::thread::Builder::new()
             .name("call-worker".into())
             .spawn(move || {
-                run_call_worker(cmd_rx, events_tx, call_client);
+                run_call_worker(cmd_rx, events_tx, call_client, shared_frames_for_worker);
             })
             .expect("Failed to spawn call worker thread");
 
         Self {
             cmd_tx,
             room_events_rx: Arc::new(RwLock::new(Some(events_rx))),
+            shared_video_frames,
         }
+    }
+
+    /// Get access to shared video frames for UI rendering.
+    pub fn video_frames(&self) -> &SharedVideoFrames {
+        &self.shared_video_frames
     }
 
     /// Take the room events receiver (can only be called once).
@@ -407,6 +419,7 @@ fn run_call_worker(
     mut cmd_rx: mpsc::UnboundedReceiver<CallCommand>,
     events_tx: mpsc::UnboundedSender<LiveKitRoomEvent>,
     call_client: CallClient,
+    shared_video_frames: SharedVideoFrames,
 ) {
     // Create single-threaded runtime for non-Send types
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -420,7 +433,8 @@ fn run_call_worker(
         tracing::info!("Call worker started");
 
         // Create the actual call service (LiveKit types stay on this thread)
-        let (room_manager, mut room_events_rx) = RoomManager::new();
+        // Pass shared_video_frames so UI can access video frames directly
+        let (room_manager, mut room_events_rx) = RoomManager::with_shared_frames(Some(shared_video_frames));
         let room_manager = Arc::new(room_manager);
         let call_client = Arc::new(parking_lot::RwLock::new(call_client));
         let active_call: Arc<parking_lot::RwLock<Option<ActiveCallState>>> =
@@ -433,11 +447,15 @@ fn run_call_worker(
         // Forward room events to the handle
         let events_tx_clone = events_tx.clone();
         tokio::task::spawn_local(async move {
+            tracing::info!("Room events forwarder started");
             while let Some(event) = room_events_rx.recv().await {
+                tracing::info!("Forwarding room event: {:?}", event);
                 if events_tx_clone.send(event).is_err() {
+                    tracing::warn!("Failed to forward room event - receiver dropped");
                     break;
                 }
             }
+            tracing::info!("Room events forwarder stopped");
         });
 
         // Process commands

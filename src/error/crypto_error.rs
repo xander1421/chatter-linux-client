@@ -111,4 +111,8 @@ pub enum CryptoError {
     /// Invalid key provided (RSA public key parsing, Ed25519 format, etc.).
     #[error("invalid key: {0}")]
     InvalidKey(String),
+
+    /// Validation error (e.g., invalid parameters, bounds exceeded).
+    #[error("validation error: {0}")]
+    Validation(String),
 }

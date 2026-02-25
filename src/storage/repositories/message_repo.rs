@@ -130,7 +130,7 @@ impl MessageRepository {
 
     /// Get a message by ID.
     pub fn get(&self, id: &MessageId) -> Result<Option<Message>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, sender_id, content_json,
                     thread_id, reply_to, attachments_json,
@@ -160,7 +160,7 @@ impl MessageRepository {
         sender_id: &UserId,
         sent_at: u64,
     ) -> Result<Option<Message>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, sender_id, content_json,
                     thread_id, reply_to, attachments_json,
@@ -186,7 +186,7 @@ impl MessageRepository {
         sender_id: &UserId,
         limit: u32,
     ) -> Result<Vec<Message>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, sender_id, content_json,
                     thread_id, reply_to, attachments_json,
@@ -264,6 +264,39 @@ impl MessageRepository {
         Ok(())
     }
 
+    /// Soft-delete multiple messages by ID in a single query.
+    ///
+    /// More efficient than calling update() N times for expired ephemeral cleanup.
+    /// Returns the number of messages updated.
+    pub fn soft_delete_batch(&self, ids: &[MessageId]) -> Result<usize, StorageError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+
+        let conn = self.db.connection()?;
+        let now = Utc::now().to_rfc3339();
+
+        // Build placeholders for IN clause
+        let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+        let in_clause = placeholders.join(", ");
+
+        let query = format!(
+            "UPDATE messages SET is_deleted = 1, updated_at = ?{} WHERE id IN ({})",
+            ids.len() + 1,
+            in_clause
+        );
+
+        // Build params: first all IDs, then the timestamp
+        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = ids
+            .iter()
+            .map(|id| Box::new(id.to_string()) as Box<dyn rusqlite::ToSql>)
+            .collect();
+        params_vec.push(Box::new(now));
+
+        let rows = conn.execute(&query, rusqlite::params_from_iter(params_vec.iter().map(|b| b.as_ref())))?;
+        Ok(rows)
+    }
+
     // ========================================================================
     // Message queries
     // ========================================================================
@@ -278,7 +311,7 @@ impl MessageRepository {
         before: Option<&MessageId>,
         limit: u32,
     ) -> Result<Vec<Message>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
 
         let messages = if let Some(before_id) = before {
             // Cursor-based pagination using (sent_at, id) tuple for proper ordering
@@ -327,7 +360,7 @@ impl MessageRepository {
         before: Option<&MessageId>,
         limit: u32,
     ) -> Result<Vec<Message>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
 
         let messages = if let Some(before_id) = before {
             let mut stmt = conn.prepare(
@@ -367,7 +400,7 @@ impl MessageRepository {
 
     /// List all pinned messages in a channel.
     pub fn list_pinned(&self, channel_id: &ChannelId) -> Result<Vec<Message>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, sender_id, content_json,
                     thread_id, reply_to, attachments_json,
@@ -385,7 +418,7 @@ impl MessageRepository {
 
     /// Count messages in a channel.
     pub fn count_in_channel(&self, channel_id: &ChannelId) -> Result<u64, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM messages WHERE channel_id = ?1",
             params![channel_id.to_string()],
@@ -400,7 +433,7 @@ impl MessageRepository {
 
     /// Get thread metadata.
     pub fn get_thread(&self, root_message_id: &MessageId) -> Result<Option<Thread>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT root_message_id, channel_id, reply_count, last_reply_at, participant_ids_json
              FROM threads WHERE root_message_id = ?1",

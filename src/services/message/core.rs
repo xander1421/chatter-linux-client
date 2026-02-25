@@ -10,6 +10,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
+use crate::services::current_user::CurrentUserProvider;
 
 use super::{MessageError, MessageService};
 
@@ -35,7 +36,7 @@ impl MessageService {
         targets_ai_bot: bool,
     ) -> Result<Message, MessageError> {
         // Check logged in
-        let sender_id = self.current_user_id()?;
+        let sender_id = self.settings_repo.current_user_id()?;
 
         // Validate content - must have text or attachments
         let trimmed_text = text.trim();
@@ -157,7 +158,7 @@ impl MessageService {
         use prost::Message as ProstMessage;
 
         // Check logged in
-        let sender_id = self.current_user_id()?;
+        let sender_id = self.settings_repo.current_user_id()?;
 
         // Serialize content for encryption
         let plaintext = content.encode_to_vec();
@@ -245,7 +246,7 @@ impl MessageService {
         thread_id: Option<&MessageId>,
     ) -> Result<Message, MessageError> {
         // Check logged in
-        let sender_id = self.current_user_id()?;
+        let sender_id = self.settings_repo.current_user_id()?;
 
         // Validate content - must have text or attachments
         let trimmed_text = text.trim();
@@ -300,7 +301,7 @@ impl MessageService {
         new_text: &str,
     ) -> Result<Message, MessageError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Validate new content
         let trimmed_text = new_text.trim();
@@ -353,7 +354,7 @@ impl MessageService {
         message_id: &MessageId,
     ) -> Result<(), MessageError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Get existing message to verify ownership
         let existing = self
@@ -396,7 +397,7 @@ impl MessageService {
         targets_ai_bot: bool,
     ) -> Result<Message, MessageError> {
         // Check logged in
-        let sender_id = self.current_user_id()?;
+        let sender_id = self.settings_repo.current_user_id()?;
 
         // Validate reply_to exists locally (informational - server validates)
         if self.message_repo.get(reply_to_id)?.is_none() {

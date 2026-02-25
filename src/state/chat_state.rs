@@ -127,9 +127,9 @@ impl ChatState {
         self.store.get()
     }
 
-    /// Subscribe to chat state changes.
+    /// Subscribe to chat state changes (Arc-wrapped for efficiency).
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<ChatStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<ChatStateData>> {
         self.store.subscribe()
     }
 

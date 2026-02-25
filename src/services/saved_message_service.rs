@@ -13,6 +13,7 @@ use crate::domain::ids::MessageId;
 use crate::error::{CryptoError, NetworkError};
 use crate::network::grpc::MessageClient;
 use crate::proto::chat_v1::{GetMessagesResponse, Message, MessageSortDirection};
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
 /// Saved message service errors.
@@ -37,6 +38,15 @@ pub enum SavedMessageError {
     /// Encryption/decryption error.
     #[error("encryption error: {0}")]
     Encryption(#[from] CryptoError),
+}
+
+impl From<CurrentUserError> for SavedMessageError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(_) => SavedMessageError::NotLoggedIn,
+            CurrentUserError::NotLoggedIn => SavedMessageError::NotLoggedIn,
+        }
+    }
 }
 
 /// Decrypted saved message with metadata.
@@ -82,15 +92,6 @@ impl SavedMessageService {
     /// Create a new SavedMessageService with dependencies.
     pub fn new(settings_repo: Arc<SettingsRepository>) -> Self {
         Self { settings_repo }
-    }
-
-    /// Get the currently logged-in user ID.
-    /// This is also the saved messages channel ID.
-    fn current_user_id(&self) -> Result<String, SavedMessageError> {
-        self.settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(|_| SavedMessageError::NotLoggedIn)?
-            .ok_or(SavedMessageError::NotLoggedIn)
     }
 
     /// Get the profile key for encryption/decryption.
@@ -139,7 +140,7 @@ impl SavedMessageService {
         source: Option<&SavedMessageSource>,
     ) -> Result<Message, SavedMessageError> {
         // Get user ID (which is also the channel ID)
-        let channel_id = self.current_user_id()?;
+        let channel_id = self.settings_repo.current_user_id()?.to_string();
         let profile_key = self.get_profile_key()?;
 
         // Encrypt content
@@ -179,7 +180,7 @@ impl SavedMessageService {
         limit: i32,
         page_token: Option<&str>,
     ) -> Result<GetMessagesResponse, SavedMessageError> {
-        let channel_id = self.current_user_id()?;
+        let channel_id = self.settings_repo.current_user_id()?.to_string();
 
         let response = client
             .get_messages(
@@ -277,7 +278,7 @@ impl SavedMessageService {
         client: &mut MessageClient,
         message_id: &str,
     ) -> Result<(), SavedMessageError> {
-        let channel_id = self.current_user_id()?;
+        let channel_id = self.settings_repo.current_user_id()?.to_string();
 
         client.delete_message(message_id, &channel_id).await?;
 
@@ -297,7 +298,7 @@ impl SavedMessageService {
         client: &mut MessageClient,
         message_id: &str,
     ) -> Result<Message, SavedMessageError> {
-        let channel_id = self.current_user_id()?;
+        let channel_id = self.settings_repo.current_user_id()?.to_string();
 
         let message = client.pin_message(message_id, &channel_id).await?;
 
@@ -317,7 +318,7 @@ impl SavedMessageService {
         client: &mut MessageClient,
         message_id: &str,
     ) -> Result<(), SavedMessageError> {
-        let channel_id = self.current_user_id()?;
+        let channel_id = self.settings_repo.current_user_id()?.to_string();
 
         client.unpin_message(message_id, &channel_id).await?;
 
@@ -337,7 +338,7 @@ impl SavedMessageService {
         client: &mut MessageClient,
         limit: i32,
     ) -> Result<Vec<Message>, SavedMessageError> {
-        let channel_id = self.current_user_id()?;
+        let channel_id = self.settings_repo.current_user_id()?.to_string();
 
         let response = client.list_pinned_messages(&channel_id, limit).await?;
 
@@ -361,7 +362,7 @@ impl SavedMessageService {
         query: &str,
         limit: i32,
     ) -> Result<Vec<Message>, SavedMessageError> {
-        let channel_id = self.current_user_id()?;
+        let channel_id = self.settings_repo.current_user_id()?.to_string();
 
         let response = client
             .search(Some(&channel_id), query, limit, 0, None, None)
@@ -455,24 +456,28 @@ mod tests {
 
     #[test]
     fn test_current_user_id_not_logged_in() {
+        use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+
         let (service, _temp_dir) = create_test_service();
 
         // Should return error when not logged in
-        let result = service.current_user_id();
-        assert!(matches!(result, Err(SavedMessageError::NotLoggedIn)));
+        let result = service.settings_repo.current_user_id();
+        assert!(matches!(result, Err(CurrentUserError::NotLoggedIn)));
     }
 
     #[test]
     fn test_current_user_id_logged_in() {
+        use crate::services::current_user::CurrentUserProvider;
+
         let (service, _temp_dir) = create_test_service();
 
         let user_id = "550e8400-e29b-41d4-a716-446655440000";
         set_logged_in_user(&service, user_id);
 
         // Should return the user ID (which is also the channel ID)
-        let result = service.current_user_id();
+        let result = service.settings_repo.current_user_id();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), user_id);
+        assert_eq!(result.unwrap().to_string(), user_id);
     }
 
     #[test]

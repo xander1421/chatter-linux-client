@@ -77,12 +77,11 @@ impl UserState {
         self.store.get()
     }
 
-    /// Subscribe to user state changes.
+    /// Subscribe to user state changes (Arc-wrapped for efficiency).
     ///
-    /// The receiver will receive the state each time it changes.
     /// Call `get()` first if you need the current state immediately.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<UserStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<UserStateData>> {
         self.store.subscribe()
     }
 

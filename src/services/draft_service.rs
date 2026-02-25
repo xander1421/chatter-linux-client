@@ -5,10 +5,11 @@
 use std::sync::Arc;
 
 use crate::domain::draft::{Draft, DraftKey};
-use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::error::StorageError;
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
 use crate::storage::repositories::draft_repo::DraftRepository;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Draft service errors.
 #[derive(Debug, thiserror::Error)]
@@ -24,6 +25,15 @@ pub enum DraftError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+}
+
+impl From<CurrentUserError> for DraftError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => DraftError::Storage(e),
+            CurrentUserError::NotLoggedIn => DraftError::NotLoggedIn,
+        }
+    }
 }
 
 /// Draft service for managing message drafts.
@@ -43,19 +53,6 @@ impl DraftService {
             settings_repo,
             draft_repo,
         }
-    }
-
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<UserId, DraftError> {
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(DraftError::Storage)?
-            .ok_or(DraftError::NotLoggedIn)?;
-
-        user_id_str
-            .parse()
-            .map_err(|_| DraftError::Storage(StorageError::InvalidData("invalid user ID in settings".to_string())))
     }
 
     /// Save or update a draft.
@@ -83,7 +80,7 @@ impl DraftService {
         attachments: Vec<AttachmentId>,
     ) -> Result<Draft, DraftError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Build draft key
         let key = match thread_id {
@@ -131,7 +128,7 @@ impl DraftService {
         thread_id: Option<MessageId>,
     ) -> Result<Option<Draft>, DraftError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Build draft key
         let key = match thread_id {
@@ -158,7 +155,7 @@ impl DraftService {
         thread_id: Option<MessageId>,
     ) -> Result<(), DraftError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Build draft key
         let key = match thread_id {
@@ -191,7 +188,7 @@ impl DraftService {
         channel_id: &ChannelId,
     ) -> Result<Vec<Draft>, DraftError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         Ok(self.draft_repo.list_for_channel(channel_id)?)
     }

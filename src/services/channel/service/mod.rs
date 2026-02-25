@@ -26,8 +26,9 @@ use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::mailbox_client::MailboxClient;
 use crate::proto::chat_v1::{self, channel_event};
+use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::channel_repo::ChannelRepository;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 use super::converters::{
     domain_channel_type_to_proto, domain_config_to_proto,
@@ -75,19 +76,6 @@ impl ChannelService {
         MailboxClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
     }
 
-    /// Get the currently logged-in user ID.
-    pub(crate) fn current_user_id(&self) -> Result<UserId, ChannelError> {
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(ChannelError::Storage)?
-            .ok_or(ChannelError::NotLoggedIn)?;
-
-        user_id_str
-            .parse()
-            .map_err(|_| ChannelError::InvalidInput("invalid user ID in settings".to_string()))
-    }
-
     // ==================== Create Operations ====================
 
     /// Create a new channel.
@@ -122,7 +110,7 @@ impl ChannelService {
         initial_members: Vec<UserId>,
         setup_mailbox: bool,
     ) -> Result<(Channel, Option<GroupMailboxSetupResult>), ChannelError> {
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         let trimmed_name = name.trim();
         if trimmed_name.is_empty() {
@@ -234,7 +222,7 @@ impl ChannelService {
     ///
     /// Fetches from server and upserts to local storage.
     pub async fn get_channel(&self, channel_id: &ChannelId) -> Result<Channel, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let mut channel_client = self.channel_client();
         let proto_channel = channel_client
@@ -259,7 +247,7 @@ impl ChannelService {
         &self,
         channel_id: &ChannelId,
     ) -> Result<Channel, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let mut channel_client = self.channel_client();
         let proto_channel = channel_client
@@ -330,7 +318,7 @@ impl ChannelService {
         image_url: Option<&str>,
         config: Option<ChannelConfig>,
     ) -> Result<Channel, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let existing = self
             .channel_repo
@@ -407,7 +395,7 @@ impl ChannelService {
 
     /// Delete a channel.
     pub async fn delete_channel(&self, channel_id: &ChannelId) -> Result<(), ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let mut channel_client = self.channel_client();

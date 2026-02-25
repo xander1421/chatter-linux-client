@@ -1,13 +1,54 @@
 // Message context menu component
 //
 // Shows actions for a message: reply, edit, delete, pin, forward, copy
+// Positions at the click location
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+// Menu item with icon and label
+component MenuItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> destructive: false;
+    callback clicked();
+
+    height: 36px;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+    border-radius: Spacing.radius-sm;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.md;
+        alignment: start;
+
+        Image {
+            source: icon;
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+            colorize: destructive ? Colors.error : Colors.text-secondary;
+        }
+
+        Text {
+            text: label;
+            color: destructive ? Colors.error : Colors.text-primary;
+            font-size: Typography.sm;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
 
 export component MessageContextMenu inherits Rectangle {
-    // Visibility and position
+    // Visibility and position - menu appears where clicked
     in property <bool> show: false;
     in property <length> position-x: 0;
     in property <length> position-y: 0;
@@ -28,17 +69,6 @@ export component MessageContextMenu inherits Rectangle {
     callback forward-clicked(string, string);
     callback copy-clicked(string, string);
 
-    // Menu items (emoji with variant selectors for colorful rendering)
-    property <[{icon: string, label: string, action: string, enabled: bool}]> menu-items: [
-        { icon: "\u{21A9}\u{FE0F}", label: "Reply", action: "reply", enabled: true },
-        { icon: "\u{270F}\u{FE0F}", label: "Edit", action: "edit", enabled: root.is-own-message },
-        { icon: "\u{1F4CC}\u{FE0F}", label: root.is-pinned ? "Unpin" : "Pin", action: "pin", enabled: true },
-        { icon: "\u{21AA}\u{FE0F}", label: "Forward", action: "forward", enabled: true },
-        { icon: "\u{1F4CB}\u{FE0F}", label: "Copy", action: "copy", enabled: true },
-        { icon: "\u{1F5D1}\u{FE0F}", label: "Delete for Everyone", action: "delete-everyone", enabled: root.is-own-message },
-        { icon: "\u{1F5D1}\u{FE0F}", label: "Delete for Me", action: "delete", enabled: true },
-    ];
-
     // Only render when visible
     visible: root.show;
     opacity: root.show ? 1 : 0;
@@ -48,80 +78,103 @@ export component MessageContextMenu inherits Rectangle {
     height: 100%;
     background: transparent;
 
-    // Backdrop touch area
+    // Backdrop touch area to close menu
     TouchArea {
         width: 100%;
         height: 100%;
         clicked => { root.close(); }
     }
 
-    // Menu container
-    Rectangle {
-        x: root.position-x;
-        y: root.position-y;
-        width: 160px;
+    // Menu container - positioned at click location
+    menu-container := Rectangle {
+        // Position at click, but ensure menu stays on screen
+        x: min(root.position-x, parent.width - self.width - Spacing.md);
+        y: min(root.position-y, parent.height - self.height - Spacing.md);
+        width: 180px;
         height: menu-layout.preferred-height + Spacing.sm * 2;
         background: Colors.surface;
         border-radius: Spacing.radius-md;
         border-width: 1px;
         border-color: Colors.text-muted.with-alpha(0.2);
-        drop-shadow-blur: 8px;
-        drop-shadow-color: Colors.background.with-alpha(0.5);
-        drop-shadow-offset-y: 2px;
+        drop-shadow-blur: 12px;
+        drop-shadow-color: Colors.background.with-alpha(0.6);
+        drop-shadow-offset-y: 4px;
 
-        // Block backdrop clicks
+        // Block backdrop clicks on menu
         TouchArea { }
 
         menu-layout := VerticalLayout {
             padding: Spacing.sm;
             spacing: 2px;
 
-            for item in root.menu-items: Rectangle {
-                height: item.enabled ? 32px : 0px;
-                visible: item.enabled;
-                background: item-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-
-                HorizontalLayout {
-                    padding-left: Spacing.sm;
-                    padding-right: Spacing.sm;
-                    spacing: Spacing.sm;
-                    alignment: start;
-
-                    Text {
-                        text: item.icon;
-                        font-size: Typography.sm;
-                        vertical-alignment: center;
-                        width: 20px;
-                    }
-
-                    Text {
-                        text: item.label;
-                        color: item.action == "delete" ? Colors.error : Colors.text-primary;
-                        font-size: Typography.sm;
-                        vertical-alignment: center;
-                    }
+            MenuItem {
+                icon: Icons.reply;
+                label: "Reply";
+                clicked => {
+                    root.reply-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
                 }
+            }
 
-                item-touch := TouchArea {
-                    clicked => {
-                        if item.action == "reply" {
-                            root.reply-clicked(root.sender-id, root.timestamp-ns);
-                        } else if item.action == "edit" {
-                            root.edit-clicked(root.sender-id, root.timestamp-ns);
-                        } else if item.action == "delete" {
-                            root.delete-clicked(root.sender-id, root.timestamp-ns);
-                        } else if item.action == "delete-everyone" {
-                            root.delete-everyone-clicked(root.sender-id, root.timestamp-ns);
-                        } else if item.action == "pin" {
-                            root.pin-clicked(root.sender-id, root.timestamp-ns);
-                        } else if item.action == "forward" {
-                            root.forward-clicked(root.sender-id, root.timestamp-ns);
-                        } else if item.action == "copy" {
-                            root.copy-clicked(root.sender-id, root.timestamp-ns);
-                        }
-                        root.close();
-                    }
+            if root.is-own-message: MenuItem {
+                icon: Icons.edit;
+                label: "Edit";
+                clicked => {
+                    root.edit-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
+                }
+            }
+
+            MenuItem {
+                icon: Icons.pin;
+                label: root.is-pinned ? "Unpin" : "Pin";
+                clicked => {
+                    root.pin-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
+                }
+            }
+
+            MenuItem {
+                icon: Icons.send;
+                label: "Forward";
+                clicked => {
+                    root.forward-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
+                }
+            }
+
+            MenuItem {
+                icon: Icons.copy;
+                label: "Copy";
+                clicked => {
+                    root.copy-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
+                }
+            }
+
+            // Separator before delete actions
+            Rectangle {
+                height: 1px;
+                background: Colors.surface-hover;
+            }
+
+            if root.is-own-message: MenuItem {
+                icon: Icons.trash;
+                label: "Delete for Everyone";
+                destructive: true;
+                clicked => {
+                    root.delete-everyone-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
+                }
+            }
+
+            MenuItem {
+                icon: Icons.trash;
+                label: "Delete for Me";
+                destructive: true;
+                clicked => {
+                    root.delete-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
                 }
             }
         }

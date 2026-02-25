@@ -13,7 +13,8 @@ use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::message_client::MessageClient;
 use crate::network::streaming::typing_stream::{TypingAggregator, TypingStateChange};
 use crate::proto::chat_v1::TypingIndicator;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Typing service errors.
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +30,15 @@ pub enum TypingError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+}
+
+impl From<CurrentUserError> for TypingError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => TypingError::Storage(e),
+            CurrentUserError::NotLoggedIn => TypingError::NotLoggedIn,
+        }
+    }
 }
 
 /// Typing indicator service.
@@ -64,19 +74,6 @@ impl TypingService {
         }
     }
 
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<UserId, TypingError> {
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(TypingError::Storage)?
-            .ok_or(TypingError::NotLoggedIn)?;
-
-        user_id_str
-            .parse()
-            .map_err(|_| TypingError::NotLoggedIn)
-    }
-
     // ========================================================================
     // Server Operations
     // ========================================================================
@@ -96,7 +93,7 @@ impl TypingService {
         channel_id: &str,
     ) -> Result<(), TypingError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Send typing indicator to server
         client.send_typing_indicator(channel_id, true).await?;
@@ -119,7 +116,7 @@ impl TypingService {
         channel_id: &str,
     ) -> Result<(), TypingError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Send stop typing indicator to server
         client.send_typing_indicator(channel_id, false).await?;

@@ -157,26 +157,17 @@ impl EphemeralService {
     pub fn cleanup_expired(&self) -> Result<Vec<MessageId>, EphemeralError> {
         self.check_logged_in()?;
 
-        // Get all expired message IDs
-        let expired_ids = self.ephemeral_repo.list_expired()?;
-        let mut deleted_ids = Vec::with_capacity(expired_ids.len());
+        // Use batch operations for efficiency (avoids N+1 queries)
+        // 1. Delete all expired ephemeral entries and get their IDs
+        let expired_ids = self.ephemeral_repo.delete_all_expired()?;
 
-        for message_id in expired_ids {
-            // Soft-delete the message itself
-            if let Ok(Some(mut message)) = self.message_repo.get(&message_id) {
-                message.mark_deleted();
-                // Ignore errors on update - message might already be deleted
-                let _ = self.message_repo.update(&message);
-            }
-
-            // Delete the ephemeral tracking entry
-            // Ignore errors - entry might already be deleted
-            let _ = self.ephemeral_repo.delete(&message_id);
-
-            deleted_ids.push(message_id);
+        if !expired_ids.is_empty() {
+            // 2. Batch soft-delete all the messages
+            // Ignore errors - some messages might already be deleted
+            let _ = self.message_repo.soft_delete_batch(&expired_ids);
         }
 
-        Ok(deleted_ids)
+        Ok(expired_ids)
     }
 
     /// List all pending (unread) ephemeral messages.

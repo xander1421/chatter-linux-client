@@ -5,6 +5,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 
 // Data struct for chat header (mirrors Rust ChatHeaderData)
 export struct ChatHeaderData {
@@ -15,6 +16,33 @@ export struct ChatHeaderData {
     topic: string,
     is-archived: bool,
     typing-indicator: string,
+}
+
+// Reusable icon button component
+component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <color> icon-color: Colors.text-secondary;
+    in property <color> hover-color: Colors.text-primary;
+    callback clicked();
+
+    width: 32px;
+    height: 32px;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+    border-radius: Spacing.radius-sm;
+
+    Image {
+        source: icon;
+        width: 18px;
+        height: 18px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: touch.has-hover ? hover-color : icon-color;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
 }
 
 export component ChatHeader inherits Rectangle {
@@ -33,18 +61,9 @@ export component ChatHeader inherits Rectangle {
     callback voice-call-clicked();
     callback video-call-clicked();
 
-    // Computed properties
-    property <string> channel-icon: {
-        if channel-type == "dm" {
-            "@"
-        } else if channel-type == "private" {
-            "\u{1F512}\u{FE0F}"  // Lock emoji (with emoji variant selector)
-        } else {
-            "#"
-        }
-    };
-
     property <bool> show-member-count: channel-type != "dm" && member-count > 0;
+    property <bool> is-private: channel-type == "private";
+    property <bool> is-dm: channel-type == "dm";
 
     // Layout
     height: 56px;
@@ -61,12 +80,27 @@ export component ChatHeader inherits Rectangle {
             spacing: Spacing.sm;
             alignment: start;
 
-            // Channel icon
-            Text {
-                text: channel-icon;
+            // Channel icon - text for # and @, image for lock
+            if !is-private: Text {
+                text: is-dm ? "@" : "#";
                 color: Colors.text-muted;
                 font-size: Typography.lg;
                 vertical-alignment: center;
+            }
+
+            if is-private: Rectangle {
+                width: 20px;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+
+                Image {
+                    source: Icons.lock;
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-muted;
+                }
             }
 
             // Channel name (constrained width so typing indicator has space)
@@ -98,7 +132,7 @@ export component ChatHeader inherits Rectangle {
 
             // Member count
             if root.show-member-count: HorizontalLayout {
-                spacing: 4px;
+                spacing: Spacing.xs;
                 alignment: center;
 
                 Rectangle {
@@ -135,7 +169,6 @@ export component ChatHeader inherits Rectangle {
                 spacing: Spacing.xs;
                 alignment: start;
 
-                // Animated dots would go here, using static for now
                 Text {
                     text: root.typing-indicator;
                     color: Colors.text-secondary;
@@ -151,91 +184,57 @@ export component ChatHeader inherits Rectangle {
             spacing: Spacing.xs;
             alignment: end;
 
-            // Voice call button
-            Rectangle {
-                width: 32px;
-                height: 32px;
-                background: voice-call-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
+            // Call buttons group
+            HorizontalLayout {
+                spacing: Spacing.xs;
 
-                Text {
-                    text: "\u{1F4DE}\u{FE0F}";  // Telephone receiver (with emoji variant selector)
-                    font-size: Typography.base;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                // Phone icon slightly smaller
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    background: phone-touch.has-hover ? Colors.surface-hover : transparent;
+                    border-radius: Spacing.radius-sm;
+
+                    Image {
+                        source: Icons.phone;
+                        width: 16px;
+                        height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: phone-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                    }
+
+                    phone-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.voice-call-clicked(); }
+                    }
                 }
 
-                voice-call-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.voice-call-clicked();
-                    }
+                IconButton {
+                    icon: Icons.video;
+                    clicked => { root.video-call-clicked(); }
                 }
             }
 
-            // Video call button
+            // Divider between button groups
             Rectangle {
-                width: 32px;
-                height: 32px;
-                background: video-call-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-
-                Text {
-                    text: "\u{1F4F9}\u{FE0F}";  // Video camera (with emoji variant selector)
-                    font-size: Typography.base;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                video-call-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.video-call-clicked();
-                    }
-                }
+                width: 1px;
+                height: 20px;
+                background: Colors.text-muted.with-alpha(0.3);
             }
 
-            // Search button
-            Rectangle {
-                width: 32px;
-                height: 32px;
-                background: search-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
+            // Utility buttons group
+            HorizontalLayout {
+                spacing: Spacing.xs;
 
-                Text {
-                    text: "\u{1F50D}\u{FE0F}";  // Magnifying glass (with emoji variant selector)
-                    font-size: Typography.base;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                IconButton {
+                    icon: Icons.search;
+                    clicked => { root.search-clicked(); }
                 }
 
-                search-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.search-clicked();
-                    }
-                }
-            }
-
-            // Settings button
-            Rectangle {
-                width: 32px;
-                height: 32px;
-                background: settings-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-
-                Text {
-                    text: "\u{2699}\u{FE0F}";  // Gear (with emoji variant selector)
-                    font-size: Typography.base;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                settings-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.settings-clicked();
-                    }
+                IconButton {
+                    icon: Icons.settings;
+                    clicked => { root.settings-clicked(); }
                 }
             }
         }

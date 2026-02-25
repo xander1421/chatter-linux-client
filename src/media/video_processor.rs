@@ -56,15 +56,48 @@ fn extract_thumbnail_impl(
     let src_height = info.height;
     let duration_ms = info.duration_ms;
 
-    // Seek to 1 second if video is long enough
+    // Always seek to 0 first to ensure we start at the beginning.
+    // Some containers may have incorrect initial position after preroll
+    // due to index/metadata issues (e.g., MP4 with moov atom at end).
+    dec.seek(0)?;
+
+    // For longer videos, seek to 1s to skip intro/black frames
     if duration_ms > 1000 {
         dec.seek(1000)?;
     }
 
-    // Decode a frame
-    let frame = dec.decode_video_frame()?.ok_or_else(|| {
-        MediaError::InvalidFormat("could not decode any frame".to_string())
-    })?;
+    // Decode a frame with retries - after seeking, the pipeline needs time to
+    // flush buffers and produce a new frame from the nearest keyframe.
+    let frame = {
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: u32 = 10;
+        loop {
+            match dec.decode_video_frame() {
+                Ok(Some(frame)) => break frame,
+                Ok(None) => {
+                    return Err(MediaError::InvalidFormat(
+                        "could not decode any frame (EOS)".to_string(),
+                    ));
+                }
+                Err(e) if e.to_string().contains("no_sample") && attempts < MAX_ATTEMPTS => {
+                    // Pipeline not ready yet after seek, wait and retry
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    };
+
+    // Log if frame timestamp is unexpected (helps debug issues)
+    // If we got a frame from near the end of the video, something went wrong
+    if duration_ms > 1000 && frame.timestamp_ms > duration_ms.saturating_sub(500) {
+        tracing::warn!(
+            "Thumbnail extracted from near end of video ({}ms / {}ms) - seek may have failed",
+            frame.timestamp_ms, duration_ms
+        );
+    }
 
     // Calculate thumbnail dimensions (maintain aspect ratio)
     let (thumb_width, thumb_height) = if src_width > src_height {

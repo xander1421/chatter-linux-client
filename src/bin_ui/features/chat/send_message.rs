@@ -140,9 +140,11 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                     // Use the snapshot of pending attachments (already cleared from state before spawn)
                     let mut attachment_pointers: Vec<chatter_linux::proto::content_v1::AttachmentPointer> = Vec::new();
                     let mut uploaded_attachment_ids: Vec<chatter_linux::domain::ids::AttachmentId> = Vec::new();
+                    let mut gif_attachment_ids: Vec<String> = Vec::new();
 
                     for att in &pending_attachments {
                         let file_path = PathBuf::from(&att.path);
+                        let is_gif = att.mime_type == "image/gif";
 
                         tracing::info!(
                             filename = %att.filename,
@@ -161,6 +163,9 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                                     filename = %result.file_name,
                                     "DM attachment uploaded to CDN and stored locally"
                                 );
+                                if is_gif {
+                                    gif_attachment_ids.push(result.attachment_id.to_string());
+                                }
                                 uploaded_attachment_ids.push(result.attachment_id);
                                 attachment_pointers.push(result.to_attachment_pointer());
                             }
@@ -209,6 +214,7 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
 
                     // Clone attachment IDs for use in error case (BootstrapInitiated)
                     let uploaded_ids_for_display = uploaded_attachment_ids.clone();
+                    let gif_ids_for_bootstrap = gif_attachment_ids.clone();
 
                     // Use MessageService for two-layer encryption + local storage
                     match message_service
@@ -231,6 +237,9 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                                 attachment_count = message.attachments.len(),
                                 "DM sent and stored locally via MessageService"
                             );
+
+                            // Clone weak for GIF registration after UI update
+                            let weak_for_gif = weak.clone();
 
                             // Look up the stored CDN attachments from repo (they have correct IDs and waveforms)
                             // These were stored with cdn_key-based IDs during upload_to_cdn_encrypted
@@ -255,8 +264,10 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
 
                             // Clone data needed for sidebar update
                             let sidebar_peer_id = peer_id.to_string();
-                            let sidebar_preview = if sent_text.len() > 50 {
-                                format!("You: {}...", &sent_text[..47])
+                            let sidebar_preview = if sent_text.chars().count() > 50 {
+                                // Use chars() to handle multi-byte UTF-8 characters (emojis, etc.)
+                                let truncated: String = sent_text.chars().take(47).collect();
+                                format!("You: {}...", truncated)
                             } else {
                                 format!("You: {}", sent_text)
                             };
@@ -326,6 +337,15 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                                     update_dm_sidebar_preview(&w, &sidebar_peer_id, &sidebar_preview, &sidebar_timestamp);
                                 }
                             });
+
+                            // Register GIF animations for sent attachments
+                            for gif_id in gif_attachment_ids {
+                                crate::bin_ui::gif_state::register_gif_attachment(
+                                    gif_id,
+                                    attachment_repo.clone(),
+                                    weak_for_gif.clone(),
+                                );
+                            }
                         }
                         Err(chatter_linux::services::message_service::MessageError::BootstrapInitiated) => {
                             // First DM - bootstrap was initiated, message was queued as pending
@@ -335,6 +355,9 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                                 attachment_count = sent_attachment_count,
                                 "DM bootstrap initiated - message queued"
                             );
+
+                            // Clone weak for GIF registration after UI update
+                            let weak_for_gif = weak.clone();
 
                             // Look up the stored CDN attachments from repo (they have correct IDs and waveforms)
                             let attachment_display_data: Vec<_> = uploaded_ids_for_display
@@ -362,8 +385,10 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
 
                             // Clone data needed for sidebar update
                             let sidebar_peer_id = peer_id.to_string();
-                            let sidebar_preview = if sent_text.len() > 50 {
-                                format!("You: {}...", &sent_text[..47])
+                            let sidebar_preview = if sent_text.chars().count() > 50 {
+                                // Use chars() to handle multi-byte UTF-8 characters (emojis, etc.)
+                                let truncated: String = sent_text.chars().take(47).collect();
+                                format!("You: {}...", truncated)
                             } else {
                                 format!("You: {}", sent_text)
                             };
@@ -432,6 +457,15 @@ pub fn wire_send(window: &MainWindow, ctx: &AppContext) {
                                     update_dm_sidebar_preview(&w, &sidebar_peer_id, &sidebar_preview, &sidebar_timestamp);
                                 }
                             });
+
+                            // Register GIF animations for sent attachments (bootstrap case)
+                            for gif_id in gif_ids_for_bootstrap {
+                                crate::bin_ui::gif_state::register_gif_attachment(
+                                    gif_id,
+                                    attachment_repo.clone(),
+                                    weak_for_gif.clone(),
+                                );
+                            }
                         }
                         Err(e) => {
                             tracing::error!("Failed to send DM: {}", e);

@@ -5,6 +5,7 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
 import { ChannelList, ChannelListItemData } from "channel_list.slint";
 import { DMList, DMListItemData } from "dm_list.slint";
 import { UserProfileBar } from "user_profile_bar.slint";
@@ -98,17 +99,24 @@ export component Sidebar inherits Rectangle {
             property <bool> tooltip-shown: false;
 
             HorizontalLayout {
-                padding-left: root.collapsed ? 0px : Spacing.md;
-                padding-right: root.collapsed ? 0px : Spacing.md;
+                padding-left: root.collapsed ? 0px : Spacing.sm;
+                padding-right: root.collapsed ? 0px : Spacing.sm;
                 spacing: root.collapsed ? 0px : Spacing.sm;
                 alignment: root.collapsed ? center : start;
 
-                // Floppy disk icon
-                Text {
-                    text: "\u{1F4BE}\u{FE0F}"; // Floppy disk (with emoji variant selector)
-                    font-size: 16px;
-                    vertical-alignment: center;
-                    horizontal-alignment: center;
+                // Saved messages icon - aligned with channel icons (20px wide container)
+                Rectangle {
+                    width: 20px;
+                    height: parent.height;
+
+                    Image {
+                        source: Icons.star;
+                        width: 16px;
+                        height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Colors.text-secondary;
+                    }
                 }
 
                 // Text (hidden when collapsed)
@@ -213,12 +221,11 @@ export component Sidebar inherits Rectangle {
                 alignment: root.collapsed ? center : end;
 
                 // Chevron icon
-                Text {
-                    text: root.collapsed ? "\u{276F}" : "\u{276E}"; // Right/left chevron
-                    color: Colors.text-muted;
-                    font-size: 14px;
-                    vertical-alignment: center;
-                    horizontal-alignment: center;
+                Image {
+                    source: root.collapsed ? Icons.chevron-right : Icons.chevron-left;
+                    width: 16px;
+                    height: 16px;
+                    colorize: Colors.text-muted;
                 }
             }
 

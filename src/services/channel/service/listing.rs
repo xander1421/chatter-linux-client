@@ -5,6 +5,7 @@
 use crate::domain::channel::{Channel, ChannelType};
 use crate::domain::ids::ChannelId;
 use crate::proto::chat_v1;
+use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::converters::{domain_channel_type_to_proto, proto_to_domain_channel, proto_to_domain_membership};
 use crate::services::channel::error::ChannelError;
@@ -14,7 +15,7 @@ use super::ChannelService;
 impl ChannelService {
     /// Archive a channel.
     pub async fn archive_channel(&self, channel_id: &ChannelId) -> Result<Channel, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let mut channel_client = self.channel_client();
@@ -36,7 +37,7 @@ impl ChannelService {
 
     /// Unarchive a channel.
     pub async fn unarchive_channel(&self, channel_id: &ChannelId) -> Result<Channel, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let mut channel_client = self.channel_client();
@@ -62,7 +63,7 @@ impl ChannelService {
         limit: u32,
         offset: u32,
     ) -> Result<Vec<ChannelId>, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let mut channel_client = self.channel_client();
         let response = channel_client
@@ -87,7 +88,7 @@ impl ChannelService {
         offset: u32,
         archived: Option<bool>,
     ) -> Result<Vec<Channel>, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let mut channel_client = self.channel_client();
         let response = channel_client
@@ -140,7 +141,7 @@ impl ChannelService {
         offset: u32,
         type_filter: Vec<ChannelType>,
     ) -> Result<Vec<Channel>, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let proto_type_filter: Vec<chat_v1::ChannelType> = type_filter
             .into_iter()
@@ -163,7 +164,7 @@ impl ChannelService {
 
     /// Get all channels the current user is a member of (local query).
     pub fn get_channels_for_user(&self) -> Result<Vec<Channel>, ChannelError> {
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
         let channels = self.channel_repo.list_for_user(&current_user)?;
         Ok(channels)
     }

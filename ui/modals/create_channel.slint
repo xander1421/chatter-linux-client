@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
@@ -30,6 +31,7 @@ export struct CreateChannelConfig {
     max-members: int,      // 0 = unlimited
     password: string,      // For password-protected channels
     friends-only: bool,
+    icon-url: string,      // URL for custom channel icon
 }
 
 export component CreateChannelModal inherits Rectangle {
@@ -48,6 +50,7 @@ export component CreateChannelModal inherits Rectangle {
     in-out property <int> max-members: 0;       // 0 = unlimited
     in-out property <string> password: "";
     in-out property <bool> friends-only: false;
+    in-out property <string> icon-url: "";      // Custom channel icon URL
 
     // AI configuration (for ai-assistant template)
     in-out property <string> ai-provider: "";
@@ -83,6 +86,7 @@ export component CreateChannelModal inherits Rectangle {
             root.max-members = 0;
             root.password = "";
             root.friends-only = false;
+            root.icon-url = "";
             root.ai-provider = "";
             root.ai-model = "";
         }
@@ -91,7 +95,7 @@ export component CreateChannelModal inherits Rectangle {
     Modal {
         show: root.show-modal;
         title: "Create Channel";
-        modal-width: 560px;
+        modal-width: 620px;
 
         close => {
             root.close();
@@ -286,6 +290,35 @@ export component CreateChannelModal inherits Rectangle {
                         }
                     }
 
+                    // Channel icon URL input
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+
+                            Image {
+                                source: Icons.link;
+                                width: 16px;
+                                height: 16px;
+                                colorize: Colors.text-secondary;
+                                y: 2px;
+                            }
+
+                            Text {
+                                text: "Channel Icon URL (optional)";
+                                color: Colors.text-secondary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.medium;
+                            }
+                        }
+
+                        Input {
+                            placeholder: "https://example.com/icon.png";
+                            text <=> root.icon-url;
+                        }
+                    }
+
                     // Visibility toggle (Public / Private)
                     VerticalLayout {
                         spacing: Spacing.xs;
@@ -313,10 +346,12 @@ export component CreateChannelModal inherits Rectangle {
                                     padding-left: Spacing.md;
                                     spacing: Spacing.sm;
 
-                                    Text {
-                                        text: "\u{1F310}\u{FE0F}";  // Globe (with emoji variant selector)
-                                        font-size: Typography.base;
-                                        vertical-alignment: center;
+                                    Image {
+                                        source: Icons.globe;
+                                        width: 20px;
+                                        height: 20px;
+                                        colorize: !root.is-private ? Colors.primary : Colors.text-secondary;
+                                        y: (parent.height - self.height) / 2;
                                     }
 
                                     VerticalLayout {
@@ -359,10 +394,12 @@ export component CreateChannelModal inherits Rectangle {
                                     padding-left: Spacing.md;
                                     spacing: Spacing.sm;
 
-                                    Text {
-                                        text: "\u{1F512}\u{FE0F}";  // Lock (with emoji variant selector)
-                                        font-size: Typography.base;
-                                        vertical-alignment: center;
+                                    Image {
+                                        source: Icons.lock;
+                                        width: 20px;
+                                        height: 20px;
+                                        colorize: root.is-private ? Colors.primary : Colors.text-secondary;
+                                        y: (parent.height - self.height) / 2;
                                     }
 
                                     VerticalLayout {
@@ -417,7 +454,7 @@ export component CreateChannelModal inherits Rectangle {
 
                         // Encrypted toggle
                         Rectangle {
-                            height: 32px;
+                            height: 36px;
                             horizontal-stretch: 1;
                             border-radius: Spacing.radius-md;
                             border-width: root.is-encrypted ? 2px : 1px;
@@ -425,20 +462,22 @@ export component CreateChannelModal inherits Rectangle {
                             background: encrypted-touch.has-hover ? Colors.surface-hover : Colors.surface;
 
                             HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                spacing: Spacing.xs;
+                                padding-left: Spacing.md;
+                                padding-right: Spacing.md;
+                                spacing: Spacing.sm;
 
-                                Text {
-                                    text: root.is-encrypted ? "\u{1F512}\u{FE0F}" : "\u{1F513}\u{FE0F}";  // Lock/Unlock (with emoji variant selector)
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
+                                Image {
+                                    source: root.is-encrypted ? Icons.shield : Icons.unlock;
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: root.is-encrypted ? Colors.success : Colors.text-secondary;
+                                    y: (parent.height - self.height) / 2;
                                 }
 
                                 Text {
                                     text: "Encrypted";
                                     color: root.is-encrypted ? Colors.success : Colors.text-secondary;
-                                    font-size: Typography.xs;
+                                    font-size: Typography.sm;
                                     font-weight: Typography.medium;
                                     vertical-alignment: center;
                                 }
@@ -454,7 +493,7 @@ export component CreateChannelModal inherits Rectangle {
 
                         // Friends only toggle
                         Rectangle {
-                            height: 32px;
+                            height: 36px;
                             horizontal-stretch: 1;
                             border-radius: Spacing.radius-md;
                             border-width: root.friends-only ? 2px : 1px;
@@ -462,20 +501,22 @@ export component CreateChannelModal inherits Rectangle {
                             background: friends-touch.has-hover ? Colors.surface-hover : Colors.surface;
 
                             HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                spacing: Spacing.xs;
+                                padding-left: Spacing.md;
+                                padding-right: Spacing.md;
+                                spacing: Spacing.sm;
 
-                                Text {
-                                    text: "\u{1F465}\u{FE0F}";  // People (with emoji variant selector)
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
+                                Image {
+                                    source: Icons.users;
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: root.friends-only ? Colors.info : Colors.text-secondary;
+                                    y: (parent.height - self.height) / 2;
                                 }
 
                                 Text {
                                     text: "Friends Only";
                                     color: root.friends-only ? Colors.info : Colors.text-secondary;
-                                    font-size: Typography.xs;
+                                    font-size: Typography.sm;
                                     font-weight: Typography.medium;
                                     vertical-alignment: center;
                                 }
@@ -687,6 +728,7 @@ export component CreateChannelModal inherits Rectangle {
                                     max-members: root.max-members,
                                     password: root.password,
                                     friends-only: root.friends-only,
+                                    icon-url: root.icon-url,
                                 },
                                 "",
                                 ""
@@ -716,6 +758,7 @@ export component CreateChannelModal inherits Rectangle {
                                     max-members: root.max-members,
                                     password: root.password,
                                     friends-only: root.friends-only,
+                                    icon-url: root.icon-url,
                                 },
                                 root.ai-provider,
                                 root.ai-model

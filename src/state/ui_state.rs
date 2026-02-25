@@ -114,11 +114,9 @@ impl UIState {
         self.store.get()
     }
 
-    /// Subscribe to UI state changes.
-    ///
-    /// The receiver will receive the state each time it changes.
+    /// Subscribe to UI state changes (Arc-wrapped for efficiency).
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<UIStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<UIStateData>> {
         self.store.subscribe()
     }
 

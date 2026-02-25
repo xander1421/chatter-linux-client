@@ -49,7 +49,7 @@ impl SearchIndex {
         channel_id: Option<&ChannelId>,
         limit: u32,
     ) -> Result<Vec<SearchResult>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
 
         // Escape special FTS5 characters to prevent query injection
         let escaped_query = escape_fts5_query(query);

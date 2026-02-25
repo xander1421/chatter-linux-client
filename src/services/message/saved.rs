@@ -6,6 +6,7 @@ use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use crate::domain::message::Message;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::message_client::MessageClient;
+use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::settings_repo::keys;
 use crate::util::time::TimestampNanos;
 
@@ -26,7 +27,7 @@ impl MessageService {
         attachment_ids: Vec<AttachmentId>,
     ) -> Result<Message, MessageError> {
         // Check logged in
-        let sender_id = self.current_user_id()?;
+        let sender_id = self.settings_repo.current_user_id()?;
 
         // Validate content
         let trimmed_text = text.trim();
@@ -125,7 +126,7 @@ impl MessageService {
         use crate::proto::chat_v1::MessageSortDirection;
 
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Fetch from server
         let response = message_client

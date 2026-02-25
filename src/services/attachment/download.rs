@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 use tokio_stream::StreamExt;
+use zeroize::Zeroize;
 
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
@@ -265,13 +266,16 @@ impl AttachmentService {
         digest.copy_from_slice(&pointer.digest);
 
         // Decrypt
-        let plaintext = AttachmentCrypto::decrypt(
+        let mut plaintext = AttachmentCrypto::decrypt(
             &ciphertext,
             &key,
             &digest,
             pointer.plaintext_size as usize,
         )
         .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+
+        // Also zeroize the encryption key after use
+        key.zeroize();
 
         // Determine filename
         let filename = if pointer.file_name.is_empty() {
@@ -287,14 +291,22 @@ impl AttachmentService {
 
         // Save decrypted file
         let local_path = download_dir.join(&filename);
+        let plaintext_size = plaintext.len();
         tokio::fs::write(&local_path, &plaintext)
             .await
-            .map_err(|e| AttachmentError::FileError(format!("Failed to write file: {}", e)))?;
+            .map_err(|e| {
+                // Zeroize on error path too
+                plaintext.zeroize();
+                AttachmentError::FileError(format!("Failed to write file: {}", e))
+            })?;
+
+        // Zeroize decrypted plaintext immediately after writing to disk
+        plaintext.zeroize();
 
         tracing::info!(
             cdn_key = %pointer.cdn_key,
             filename = %filename,
-            plaintext_size = plaintext.len(),
+            plaintext_size = plaintext_size,
             local_path = %local_path.display(),
             "Decrypted attachment saved"
         );
@@ -310,7 +322,7 @@ impl AttachmentService {
         Ok(DownloadResult {
             local_path,
             filename,
-            file_size: plaintext.len() as u64,
+            file_size: plaintext_size as u64,
             mime_type,
         })
     }

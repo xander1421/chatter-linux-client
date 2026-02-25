@@ -8,6 +8,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
+use crate::services::current_user::CurrentUserProvider;
 
 use super::core::proto_to_domain_message_with_sender;
 use super::{MessageError, MessageService};
@@ -31,7 +32,7 @@ impl MessageService {
         targets_ai_bot: bool,
     ) -> Result<Message, MessageError> {
         // Check logged in
-        let sender_id = self.current_user_id()?;
+        let sender_id = self.settings_repo.current_user_id()?;
 
         // Validate content - must have text or attachments
         let trimmed_text = text.trim();
@@ -107,7 +108,7 @@ impl MessageService {
         use crate::proto::chat_v1::MessageSortDirection;
 
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Fetch from server with thread_root_id filter
         let response = message_client

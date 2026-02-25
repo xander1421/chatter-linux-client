@@ -19,6 +19,7 @@ use hmac::{Hmac, Mac};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use zeroize::Zeroize;
 
 use crate::error::CryptoError;
 
@@ -122,6 +123,10 @@ impl AttachmentCrypto {
 
         // Clone padded data for in-place encryption
         let mut encrypted = padded.clone();
+
+        // Zeroize the padded plaintext buffer immediately - it contains sensitive data
+        padded.zeroize();
+
         cipher
             .encrypt_padded_mut::<block_padding::NoPadding>(&mut encrypted, padded_size)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(e.to_string()))?;

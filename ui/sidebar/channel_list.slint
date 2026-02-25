@@ -5,6 +5,7 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
 import { ChannelListItem } from "channel_list_item.slint";
 
 // Data struct for channel items (mirrors Rust ChannelListItemData)
@@ -53,20 +54,20 @@ export component ChannelList inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
-                // Join channel button
+                // Join/Search channel button (20px icons - 2px bigger)
                 Rectangle {
-                    width: 20px;
-                    height: 20px;
+                    width: 24px;
+                    height: 24px;
                     border-radius: Spacing.radius-sm;
                     background: join-touch.has-hover ? Colors.surface-hover : transparent;
 
-                    Text {
-                        text: "\u{1F50D}\u{FE0F}"; // Magnifying glass (with emoji variant selector)
-                        font-size: 11px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                    Image {
+                        source: Icons.search;
+                        width: 20px;
+                        height: 20px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: join-touch.has-hover ? Colors.text-primary : Colors.text-muted;
                     }
 
                     join-touch := TouchArea {
@@ -77,22 +78,20 @@ export component ChannelList inherits Rectangle {
                     }
                 }
 
-                // Create channel button
+                // Create channel button (20px icons - 2px bigger)
                 Rectangle {
-                    width: 20px;
-                    height: 20px;
+                    width: 24px;
+                    height: 24px;
                     border-radius: Spacing.radius-sm;
                     background: create-touch.has-hover ? Colors.surface-hover : transparent;
 
-                    Text {
-                        text: "+";
-                        color: Colors.text-muted;
-                        font-size: 14px;
-                        font-weight: 600;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                    Image {
+                        source: Icons.plus;
+                        width: 20px;
+                        height: 20px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: create-touch.has-hover ? Colors.text-primary : Colors.text-muted;
                     }
 
                     create-touch := TouchArea {
@@ -109,20 +108,18 @@ export component ChannelList inherits Rectangle {
                 alignment: center;
 
                 Rectangle {
-                    width: 24px;
-                    height: 24px;
+                    width: 28px;
+                    height: 28px;
                     border-radius: Spacing.radius-sm;
                     background: collapsed-create-touch.has-hover ? Colors.surface-hover : transparent;
 
-                    Text {
-                        text: "+";
-                        color: Colors.text-muted;
-                        font-size: 16px;
-                        font-weight: 600;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                    Image {
+                        source: Icons.plus;
+                        width: 20px;
+                        height: 20px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: collapsed-create-touch.has-hover ? Colors.text-primary : Colors.text-muted;
                     }
 
                     collapsed-create-touch := TouchArea {

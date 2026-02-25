@@ -3,9 +3,11 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 
 component ControlButton inherits Rectangle {
-    in property <string> icon-text;
+    in property <image> icon;
+    in property <image> icon-active;
     in property <bool> active: false;
     in property <bool> danger: false;
 
@@ -27,16 +29,17 @@ component ControlButton inherits Rectangle {
     border-color: Colors.text-muted.with-alpha(0.3);
 
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 
-    Text {
-        text: icon-text;
-        font-size: Typography.xl;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        width: 100%;
-        height: 100%;
+    Image {
+        source: active ? icon-active : icon;
+        width: 22px;
+        height: 22px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: (active || danger) ? white : Colors.text-primary;
     }
 }
 
@@ -65,21 +68,24 @@ export component CallControls inherits Rectangle {
 
         // Mute button
         ControlButton {
-            icon-text: is-muted ? "\u{1F507}\u{FE0F}" : "\u{1F3A4}\u{FE0F}";
+            icon: Icons.mic;
+            icon-active: Icons.mic-off;
             active: is-muted;
             clicked => { toggle-mute(); }
         }
 
         // Video toggle (only for video calls)
         if is-video-call: ControlButton {
-            icon-text: is-video-enabled ? "\u{1F4F9}\u{FE0F}" : "\u{1F4F7}\u{FE0F}";
+            icon: Icons.video;
+            icon-active: Icons.video-off;
             active: !is-video-enabled;
             clicked => { toggle-video(); }
         }
 
         // Screen share toggle
         ControlButton {
-            icon-text: "\u{1F5B5}\u{FE0F}";
+            icon: Icons.monitor;
+            icon-active: Icons.monitor;
             active: is-screen-sharing;
             clicked => { toggle-screen-share(); }
         }
@@ -98,18 +104,17 @@ export component CallControls inherits Rectangle {
             background: end-touch.has-hover ? #dc2626 : Colors.error;
 
             end-touch := TouchArea {
+                mouse-cursor: pointer;
                 clicked => { end-call(); }
             }
 
-            // Rotated phone icon to indicate hang up
-            Text {
-                text: "\u{1F4DE}\u{FE0F}";
-                font-size: Typography.xl;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                width: 100%;
-                height: 100%;
-                transform-rotation: 135deg;
+            Image {
+                source: Icons.phone-off;
+                width: 24px;
+                height: 24px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: white;
             }
         }
     }

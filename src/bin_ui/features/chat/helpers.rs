@@ -10,7 +10,7 @@ use chatter_linux::domain::ids::ChannelId;
 use chatter_linux::domain::UserId;
 use chatter_linux::mailbox::group::GroupFanout;
 use chatter_linux::proto::content_v1::Content;
-use chatter_linux::services::{build_read_receipt_content, MailboxManager, MessageService};
+use chatter_linux::services::{build_delivery_receipt_content, build_read_receipt_content, MailboxManager, MessageService};
 use chatter_linux::storage::Database;
 
 use crate::MainWindow;
@@ -128,6 +128,47 @@ pub fn send_dm_read_receipts(
                     "Sent read receipts for {} messages to peer {}",
                     message_timestamps.len(),
                     peer_id
+                );
+            }
+        });
+    });
+}
+
+/// Send delivery receipt for a received DM message.
+///
+/// Call this immediately after successfully decrypting and storing a DM message.
+/// This confirms to the sender that we received their message (Signal Protocol).
+pub fn send_dm_delivery_receipt(
+    peer_id: UserId,
+    message_timestamp: u64,
+    database: Arc<Database>,
+    message_service: Arc<MessageService>,
+    mailbox_manager: Arc<MailboxManager>,
+) {
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create runtime for delivery receipt");
+
+        rt.block_on(async {
+            let content = build_delivery_receipt_content(vec![message_timestamp]);
+
+            if let Err(e) = send_dm_content(
+                content,
+                &peer_id,
+                database,
+                message_service,
+                mailbox_manager,
+            )
+            .await
+            {
+                tracing::warn!("Failed to send delivery receipt: {}", e);
+            } else {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    message_timestamp,
+                    "DELIVERY_RECEIPT: Sent delivery receipt to peer"
                 );
             }
         });

@@ -458,6 +458,7 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                             w.set_selected_channel_id("".into());
                             w.set_channel_name(peer_name.into());
                             w.set_channel_type("dm".into());
+                            w.set_is_dm(true);
                             w.set_member_count(2);
                             w.set_topic("".into());
                             // Clear messages for new conversation

@@ -86,12 +86,11 @@ impl PresenceState {
         self.store.get()
     }
 
-    /// Subscribe to presence state changes.
+    /// Subscribe to presence state changes (Arc-wrapped for efficiency).
     ///
-    /// The receiver will receive the state each time it changes.
     /// Call `get()` first if you need the current state immediately.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<PresenceStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<PresenceStateData>> {
         self.store.subscribe()
     }
 

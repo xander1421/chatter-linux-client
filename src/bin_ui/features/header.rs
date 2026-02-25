@@ -16,8 +16,9 @@ fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> Str
     // First try to get text content
     if let Some(text) = message.as_text() {
         if !text.is_empty() {
-            return if text.len() > 80 {
-                format!("{}...", &text[..77])
+            return if text.chars().count() > 80 {
+                let truncated: String = text.chars().take(77).collect();
+                format!("{}...", truncated)
             } else {
                 text.to_string()
             };
@@ -193,8 +194,9 @@ fn wire_search_callbacks(window: &MainWindow, ctx: &AppContext) {
                 let content_preview = msg
                     .as_text()
                     .map(|t| {
-                        if t.len() > 100 {
-                            format!("{}...", &t[..97])
+                        if t.chars().count() > 100 {
+                            let truncated: String = t.chars().take(97).collect();
+                            format!("{}...", truncated)
                         } else {
                             t.to_string()
                         }
@@ -387,43 +389,30 @@ fn update_pinned_ui(
 }
 
 fn wire_chat_settings_clicked(window: &MainWindow, ctx: &AppContext) {
+    let weak_window = window.as_weak();
     let chat_state = ctx.chat_state.clone();
     let channel_repo = ctx.channel_repo.clone();
+    let user_repo = ctx.user_repo.clone();
+    let auth_state = ctx.auth_state.clone();
+    let grpc_pool = ctx.grpc_pool.clone();
 
     window.on_chat_settings_clicked(move || {
-        let chat_state = chat_state.clone();
-        let channel_repo = channel_repo.clone();
+        let channel_id = match chat_state.get().active_channel_id {
+            Some(id) => id,
+            None => {
+                tracing::warn!("Cannot open channel settings: no active channel");
+                return;
+            }
+        };
 
-        tokio::spawn(async move {
-            let channel_id = match chat_state.get().active_channel_id {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Cannot open channel settings: no active channel");
-                    return;
-                }
-            };
-
-            // Get channel info for logging
-            let channel_info = channel_repo
-                .get(&channel_id)
-                .ok()
-                .flatten()
-                .map(|c| c.name)
-                .unwrap_or_else(|| "Unknown".to_string());
-
-            // TODO: Implement channel settings modal UI in Slint
-            // Required: ui/modals/channel_settings.slint with:
-            // - channel-name, channel-description properties
-            // - member list with role management
-            // - notification settings
-            // - leave/archive channel actions
-            tracing::info!(
-                "Channel settings requested for: {} ({})",
-                channel_info,
-                channel_id
-            );
-            tracing::info!("Channel settings modal UI not yet implemented");
-        });
+        super::modals::open_channel_settings(
+            weak_window.clone(),
+            channel_repo.clone(),
+            user_repo.clone(),
+            auth_state.clone(),
+            grpc_pool.clone(),
+            channel_id,
+        );
     });
 }
 

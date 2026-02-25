@@ -169,11 +169,11 @@ impl StreamingState {
         });
     }
 
-    /// Subscribe to state changes.
+    /// Subscribe to state changes (Arc-wrapped for efficiency).
     ///
     /// Returns a receiver that will receive updates when state changes.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<StreamingStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<StreamingStateData>> {
         self.store.subscribe()
     }
 

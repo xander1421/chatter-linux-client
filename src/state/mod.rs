@@ -49,7 +49,7 @@ pub use message_state::{MessageState, MessageStateData, PaginationCursor};
 pub use pinned_state::{PinnedState, PinnedStateData};
 pub use presence_state::{PresenceState, PresenceStateData};
 pub use privacy_state::{ConversationPrivacySettings, PrivacyState, PrivacyStateData};
-pub use store::Store;
+pub use store::{StateSnapshot, Store};
 pub use ui_state::{ModalType, Theme, UIState, UIStateData};
 pub use user_state::{UserState, UserStateData};
 

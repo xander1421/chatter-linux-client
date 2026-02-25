@@ -3,7 +3,7 @@
 //! Routes presence updates and maintains a local presence cache
 //! for efficient lookups without network requests.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -55,9 +55,11 @@ pub struct CachedPresence {
     pub updated_at: u64,
 }
 
-/// LRU-like presence cache.
+/// LRU presence cache with O(1) eviction.
 struct PresenceCache {
     entries: HashMap<String, CachedPresence>,
+    /// LRU order for eviction (most recent at back).
+    lru: VecDeque<String>,
     capacity: usize,
 }
 
@@ -65,6 +67,7 @@ impl PresenceCache {
     fn new(capacity: usize) -> Self {
         Self {
             entries: HashMap::with_capacity(capacity),
+            lru: VecDeque::with_capacity(capacity),
             capacity,
         }
     }
@@ -74,20 +77,18 @@ impl PresenceCache {
     }
 
     fn insert(&mut self, user_id: String, presence: CachedPresence) {
-        // Simple eviction: if at capacity, remove oldest entry
-        if self.entries.len() >= self.capacity && !self.entries.contains_key(&user_id) {
-            if let Some(oldest_key) = self.find_oldest() {
-                self.entries.remove(&oldest_key);
+        // Update LRU order - remove existing entry if present
+        self.lru.retain(|id| id != &user_id);
+        self.lru.push_back(user_id.clone());
+
+        // Evict oldest if at capacity (O(1) with LRU tracking)
+        while self.lru.len() > self.capacity {
+            if let Some(oldest) = self.lru.pop_front() {
+                self.entries.remove(&oldest);
             }
         }
-        self.entries.insert(user_id, presence);
-    }
 
-    fn find_oldest(&self) -> Option<String> {
-        self.entries
-            .iter()
-            .min_by_key(|(_, v)| v.updated_at)
-            .map(|(k, _)| k.clone())
+        self.entries.insert(user_id, presence);
     }
 
     fn len(&self) -> usize {
@@ -107,6 +108,7 @@ impl PresenceCache {
 
     fn clear(&mut self) {
         self.entries.clear();
+        self.lru.clear();
     }
 }
 

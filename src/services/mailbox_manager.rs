@@ -6,8 +6,9 @@
 //! - Sending messages via ephemeral mailboxes
 //! - Polling mailboxes for incoming messages
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -65,6 +66,8 @@ struct MailboxToken {
     msg_randomizer: MessageRandomizer,
     /// Unblinded signature (proof of authorization)
     signature: Option<Vec<u8>>,
+    /// Timestamp when token was acquired (Unix seconds).
+    acquired_at: u64,
 }
 
 /// Represents an active ephemeral mailbox.
@@ -85,8 +88,21 @@ pub struct ActiveMailbox {
 /// Manages ephemeral mailboxes for privacy-preserving messaging.
 ///
 /// Implements the NDSS '21 mailbox system for sender anonymity.
+
 /// Settings key for cached server blind signature public key.
 const SERVER_BLIND_SIG_PUBKEY: &str = "mailbox.server_blind_sig_pubkey";
+
+/// Maximum number of tokens to keep in the pool.
+/// Prevents unbounded accumulation when tokens are acquired faster than used.
+const MAX_TOKEN_POOL_SIZE: usize = 50;
+
+/// Maximum number of active mailboxes to track.
+/// Oldest mailboxes are evicted when this limit is exceeded.
+const MAX_ACTIVE_MAILBOXES: usize = 100;
+
+/// Token expiry duration in seconds (24 hours).
+/// Tokens older than this are automatically discarded.
+const TOKEN_EXPIRY_SECS: u64 = 24 * 60 * 60;
 
 pub struct MailboxManager {
     /// gRPC client pool (for creating MailboxClient instances)
@@ -99,6 +115,8 @@ pub struct MailboxManager {
     token_pool: Arc<RwLock<Vec<MailboxToken>>>,
     /// Active mailboxes per conversation
     active_mailboxes: Arc<RwLock<HashMap<String, ActiveMailbox>>>,
+    /// LRU order for mailbox eviction (most recent at back).
+    mailbox_lru: Arc<RwLock<VecDeque<String>>>,
 }
 
 impl MailboxManager {
@@ -113,6 +131,7 @@ impl MailboxManager {
             server_pubkey: Arc::new(RwLock::new(None)),
             token_pool: Arc::new(RwLock::new(Vec::new())),
             active_mailboxes: Arc::new(RwLock::new(HashMap::new())),
+            mailbox_lru: Arc::new(RwLock::new(VecDeque::new())),
         }
     }
 
@@ -201,12 +220,18 @@ impl MailboxManager {
 
             blinded_keys.push(blinded_message);
 
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
             tokens.push(MailboxToken {
                 public_key,
                 private_key,
                 blinding_secret: secret,
                 msg_randomizer: randomizer,
                 signature: None,
+                acquired_at: now_secs,
             });
         }
 
@@ -229,8 +254,26 @@ impl MailboxManager {
             token.signature = Some(signature);
         }
 
-        // Add to token pool
-        self.token_pool.write().await.extend(tokens);
+        // Add to token pool with bounds checking
+        {
+            let mut pool = self.token_pool.write().await;
+
+            // First, remove any expired tokens
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            pool.retain(|t| now_secs.saturating_sub(t.acquired_at) < TOKEN_EXPIRY_SECS);
+
+            // Add new tokens
+            pool.extend(tokens);
+
+            // Truncate to max size (keep newest - they're at the end)
+            if pool.len() > MAX_TOKEN_POOL_SIZE {
+                let excess = pool.len() - MAX_TOKEN_POOL_SIZE;
+                pool.drain(0..excess);
+            }
+        }
 
         Ok(())
     }
@@ -268,6 +311,14 @@ impl MailboxManager {
         // Need to create a new mailbox - get a token from the pool
         let token = {
             let mut pool = self.token_pool.write().await;
+
+            // Remove expired tokens first
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            pool.retain(|t| now_secs.saturating_sub(t.acquired_at) < TOKEN_EXPIRY_SECS);
+
             pool.pop().ok_or(MailboxError::NoTokensAvailable)?
         };
 
@@ -293,7 +344,7 @@ impl MailboxManager {
             )));
         }
 
-        // Store the active mailbox
+        // Store the active mailbox with LRU tracking
         let mailbox = ActiveMailbox {
             mailbox_id: response.mailbox_id,
             public_key: token.public_key,
@@ -302,10 +353,23 @@ impl MailboxManager {
             conversation_id: conversation_id.to_string(),
         };
 
-        self.active_mailboxes
-            .write()
-            .await
-            .insert(conversation_id.to_string(), mailbox.clone());
+        {
+            let mut mailboxes = self.active_mailboxes.write().await;
+            let mut lru = self.mailbox_lru.write().await;
+
+            // Update LRU order
+            lru.retain(|id| id != conversation_id);
+            lru.push_back(conversation_id.to_string());
+
+            // Evict oldest mailboxes if over limit
+            while lru.len() > MAX_ACTIVE_MAILBOXES {
+                if let Some(oldest) = lru.pop_front() {
+                    mailboxes.remove(&oldest);
+                }
+            }
+
+            mailboxes.insert(conversation_id.to_string(), mailbox.clone());
+        }
 
         Ok(mailbox)
     }

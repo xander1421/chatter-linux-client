@@ -99,7 +99,7 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 bytes = "1"
 http = "1"
 rfd = "0.15"                              # Native file dialogs
@@ -127,7 +127,9 @@ gstreamer-pbutils = "0.23"  # For duration discovery without full decode
 # ============================================================================
 # Media Utilities
 # ============================================================================
-bytemuck = "1"                             # Safe byte casting for audio samples
+bytemuck = { version = "1", features = ["derive"] }  # Safe byte casting for audio/GPU data
+wgpu = "28"                                # GPU compute for visual effects
+pollster = "0.4"                           # Minimal async executor for wgpu init
 v4l = "0.14"                              # V4L2 webcam capture (Linux)
 once_cell = "1"                            # Lazy static initialization
 zeroize = { version = "1.8", features = ["derive"] }  # Secure memory wiping for sensitive data

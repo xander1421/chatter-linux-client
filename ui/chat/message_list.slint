@@ -17,6 +17,7 @@ export component MessageList inherits Rectangle {
     // Properties
     in property <[MessageItemData]> messages: [];
     in property <bool> loading: false;
+    in property <bool> is-dm: false;  // When true, messages show minimal UI (no avatars/names in DMs)
     in-out property <length> scroll-position: 0;
     in property <int> scroll-to-index: -1;  // Set to message index to scroll to it
     in property <string> current-playing-attachment-id: "";
@@ -188,6 +189,10 @@ export component MessageList inherits Rectangle {
                 is-deleted: item.is-deleted;
                 is-system: item.is-system;
                 is-ai: item.is-ai;
+                is-dm: root.is-dm;
+                is-call: item.is-call;
+                call-type: item.call-type;
+                call-duration: item.call-duration;
                 has-attachments: item.has-attachments;
                 attachment-count: item.attachment-count;
                 attachments: item.attachments;
@@ -201,6 +206,7 @@ export component MessageList inherits Rectangle {
                 reply-count-text: item.reply-count-text;
                 is-thread-reply: item.is-thread-reply;
                 show-sender: item.show-sender;
+                delivery-status: item.delivery-status;
 
                 message-clicked(id) => {
                     root.message-clicked(id);

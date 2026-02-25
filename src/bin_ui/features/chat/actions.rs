@@ -45,8 +45,9 @@ pub fn wire_reply_message(window: &MainWindow, ctx: &AppContext) {
                 Ok(Some(msg)) => {
                     let sender = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                     let content = msg.as_text().unwrap_or("").to_string();
-                    let preview = if content.len() > 50 {
-                        format!("{}...", &content[..47])
+                    let preview = if content.chars().count() > 50 {
+                        let truncated: String = content.chars().take(47).collect();
+                        format!("{}...", truncated)
                     } else {
                         content
                     };
@@ -106,8 +107,9 @@ pub fn wire_forward_message_action(window: &MainWindow, ctx: &AppContext) {
         let preview = match message_repo.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
             Ok(Some(msg)) => {
                 let content = msg.as_text().unwrap_or("").to_string();
-                if content.len() > 100 {
-                    format!("{}...", &content[..97])
+                if content.chars().count() > 100 {
+                    let truncated: String = content.chars().take(97).collect();
+                    format!("{}...", truncated)
                 } else {
                     content
                 }

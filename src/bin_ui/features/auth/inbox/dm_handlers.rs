@@ -455,8 +455,10 @@ pub(crate) fn handle_dm_received(
     let attachment_count = attachments.len();
     let preview = if text.is_empty() && attachment_count > 0 {
         format!("📎 {} attachment{}", attachment_count, if attachment_count == 1 { "" } else { "s" })
-    } else if text.len() > 50 {
-        format!("{}...", &text[..47])
+    } else if text.chars().count() > 50 {
+        // Use chars() to handle multi-byte UTF-8 characters (emojis, etc.)
+        let truncated: String = text.chars().take(47).collect();
+        format!("{}...", truncated)
     } else {
         text.clone()
     };
@@ -771,11 +773,12 @@ pub(crate) fn handle_dm_receipt(
     receipt_type: i32,
     timestamps: Vec<u64>,
 ) {
-    tracing::debug!(
+    tracing::info!(
         peer_id = %peer_id,
         receipt_type,
         count = timestamps.len(),
-        "Received read/delivery receipt"
+        timestamps = ?timestamps,
+        "RECEIPT_RECEIVED: Processing delivery/read receipt from peer"
     );
 
     let status = match receipt_type {
@@ -812,6 +815,11 @@ pub(crate) fn handle_dm_receipt(
                 let msg_ts_ns = msg.timestamp_ns.to_string();
                 let matching = timestamps.iter().any(|&ts| ts.to_string() == msg_ts_ns);
                 if matching {
+                    tracing::info!(
+                        msg_timestamp = msg_ts_ns,
+                        new_status = status,
+                        "RECEIPT_UPDATE: Updating message delivery_status in UI"
+                    );
                     let mut updated_msg = msg.clone();
                     updated_msg.delivery_status = status.into();
 

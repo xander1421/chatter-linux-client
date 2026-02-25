@@ -39,6 +39,9 @@ pub enum CallError {
     #[error("Track publish failed: {0}")]
     TrackPublishFailed(String),
 
+    #[error("Device error: {0}")]
+    DeviceError(String),
+
     #[error("Call worker shut down")]
     WorkerShutdown,
 }

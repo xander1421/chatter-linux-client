@@ -61,6 +61,7 @@ async fn main() {
     let auth_service = ctx.auth_service();
     if auth_service.is_logged_in() {
         window.set_current_view("main".into());
+        // No animation needed for main view
 
         // Spawn event handlers for DomainEvent processing (NDSS '21 mailboxes, etc.)
         let _event_handlers = ctx.spawn_event_handlers();
@@ -82,9 +83,10 @@ async fn main() {
         let dm_bootstrap_service_for_events = ctx.dm_bootstrap_service.clone();
         let attachment_repo_for_events = attachment_repo.clone();
         let grpc_pool_for_events = grpc_pool.clone();
-        let message_service_for_events = ctx.message_service.clone();
         let database_for_events = ctx.database.clone();
         let event_bus_for_events = ctx.event_bus.clone();
+        let message_service_for_events = ctx.message_service.clone();
+        let mailbox_manager_for_events = ctx.mailbox_manager.clone();
         let weak_for_events = weak_window.clone();
 
         tokio::spawn(async move {
@@ -100,9 +102,10 @@ async fn main() {
                     let dm_bootstrap_service_events = dm_bootstrap_service_for_events.clone();
                     let attachment_repo_events = attachment_repo_for_events.clone();
                     let grpc_pool_events = grpc_pool_for_events.clone();
-                    let message_service_events = message_service_for_events.clone();
                     let database_events = database_for_events.clone();
                     let event_bus_events = event_bus_for_events.clone();
+                    let message_service_events = message_service_for_events.clone();
+                    let mailbox_manager_events = mailbox_manager_for_events.clone();
 
                     tokio::spawn(async move {
                         while let Ok(event) = event_rx.recv().await {
@@ -113,9 +116,10 @@ async fn main() {
                                 &dm_bootstrap_service_events,
                                 &attachment_repo_events,
                                 &grpc_pool_events,
-                                &message_service_events,
                                 &database_events,
                                 &event_bus_events,
+                                &message_service_events,
+                                &mailbox_manager_events,
                             )
                             .await;
                         }
@@ -142,6 +146,8 @@ async fn main() {
         });
     } else {
         window.set_current_view("login".into());
+        // Start black hole animation for auth pages
+        bin_ui::blackhole_state::start_animation(&window.as_weak());
     }
 
     // Wire all UI callbacks

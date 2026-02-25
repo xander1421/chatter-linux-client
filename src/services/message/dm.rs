@@ -14,6 +14,7 @@ use crate::mailbox::dm::DmConversationManager;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::mailbox_v1::EnvelopeType;
+use crate::services::current_user::CurrentUserProvider;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
@@ -179,7 +180,7 @@ impl MessageService {
         .await?;
 
         // Store the message locally
-        let our_user_id = self.current_user_id()?;
+        let our_user_id = self.settings_repo.current_user_id()?;
         if let Ok(Some(dm_channel)) = self.channel_repo.get_dm_channel_by_peer(&our_user_id, peer_id) {
             let message = Message::new_text(dm_channel.id, Some(our_user_id), text.to_string(), sent_at);
             if let Err(e) = self.message_repo.insert(&message) {
@@ -256,7 +257,7 @@ impl MessageService {
         }).await?;
 
         // Store the message locally with attachments
-        let current_user_id = self.current_user_id()?;
+        let current_user_id = self.settings_repo.current_user_id()?;
         let mut message = Message::new_text(*dm_channel_id, Some(current_user_id), text.to_string(), sent_at);
         message.attachments = attachment_ids;
 

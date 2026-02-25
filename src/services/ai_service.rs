@@ -13,7 +13,8 @@ use crate::network::grpc::integration_client::IntegrationClient;
 use crate::proto::chat_v1::{
     AvailableModel, Integration, IntegrationConfig, IntegrationEvent, IntegrationType, ModelLimits,
 };
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// AI service errors.
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +34,15 @@ pub enum AIError {
     /// Invalid AI configuration.
     #[error("configuration error: {0}")]
     ConfigurationError(String),
+}
+
+impl From<CurrentUserError> for AIError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(_) => AIError::NotLoggedIn,
+            CurrentUserError::NotLoggedIn => AIError::NotLoggedIn,
+        }
+    }
 }
 
 /// AI service for cloud AI integrations.
@@ -65,14 +75,6 @@ impl AIService {
         Self { settings_repo }
     }
 
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<String, AIError> {
-        self.settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(|_| AIError::NotLoggedIn)?
-            .ok_or(AIError::NotLoggedIn)
-    }
-
     // ========================================================================
     // Model Queries
     // ========================================================================
@@ -92,7 +94,7 @@ impl AIService {
         provider: IntegrationType,
     ) -> Result<Vec<AvailableModel>, AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let response = client.list_available_models(provider, None, None).await?;
@@ -116,7 +118,7 @@ impl AIService {
         model: &str,
     ) -> Result<ModelLimits, AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let response = client.get_model_limits(provider, model).await?;
@@ -143,7 +145,7 @@ impl AIService {
         channel_id: &str,
     ) -> Result<Vec<Integration>, AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let response = client.get_channel_integrations(channel_id).await?;
@@ -168,7 +170,7 @@ impl AIService {
         channel_id: &str,
     ) -> Result<(), AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         client
@@ -195,7 +197,7 @@ impl AIService {
         channel_id: &str,
     ) -> Result<(), AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         client
@@ -227,7 +229,7 @@ impl AIService {
         config: Option<IntegrationConfig>,
     ) -> Result<Integration, AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let response = client
@@ -254,7 +256,7 @@ impl AIService {
         integration_id: &str,
     ) -> Result<Integration, AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let response = client.get_integration(integration_id).await?;
@@ -283,7 +285,7 @@ impl AIService {
         integration_id: &str,
     ) -> Result<(bool, String), AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let response = client.test_integration(integration_id).await?;
@@ -305,7 +307,7 @@ impl AIService {
         integration_id: &str,
     ) -> Result<Integration, AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let response = client.enable_integration(integration_id).await?;
@@ -330,7 +332,7 @@ impl AIService {
         integration_id: &str,
     ) -> Result<Integration, AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let response = client.disable_integration(integration_id).await?;
@@ -361,7 +363,7 @@ impl AIService {
         integration_id: Option<&str>,
     ) -> Result<impl Stream<Item = Result<IntegrationEvent, AIError>>, AIError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server
         let stream = client.stream_integration_events(integration_id).await?;

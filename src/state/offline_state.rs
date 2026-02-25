@@ -160,11 +160,11 @@ impl OfflineState {
         self.store.get().reconnect_attempt
     }
 
-    /// Subscribe to state changes.
+    /// Subscribe to state changes (Arc-wrapped for efficiency).
     ///
     /// Returns a receiver that will receive updates when state changes.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<OfflineStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<OfflineStateData>> {
         self.store.subscribe()
     }
 

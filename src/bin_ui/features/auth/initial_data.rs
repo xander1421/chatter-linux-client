@@ -102,8 +102,9 @@ pub async fn load_initial_data(
                         let msg = &messages[0];
                         let preview = msg.as_text()
                             .map(|text| {
-                                if text.len() > 50 {
-                                    format!("{}...", &text[..47])
+                                if text.chars().count() > 50 {
+                                    let truncated: String = text.chars().take(47).collect();
+                                    format!("{}...", truncated)
                                 } else {
                                     text.to_string()
                                 }

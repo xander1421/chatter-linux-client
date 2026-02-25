@@ -17,6 +17,7 @@ export component ChatLayout inherits Rectangle {
     in property <string> channel-id: "";
     in property <string> channel-name: "";
     in property <string> channel-type: "public";
+    in property <bool> is-dm: false;  // When true, show minimal message UI (no avatars/names)
     in property <int> member-count: 0;
     in property <string> topic: "";
     in property <bool> is-archived: false;
@@ -142,6 +143,7 @@ export component ChatLayout inherits Rectangle {
             vertical-stretch: 1;
             messages: root.messages;
             loading: root.loading-messages;
+            is-dm: root.is-dm;
             current-playing-attachment-id: root.current-playing-attachment-id;
             is-media-playing: root.is-media-playing;
             audio-progress: root.audio-progress;

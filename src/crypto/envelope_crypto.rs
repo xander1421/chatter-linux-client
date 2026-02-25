@@ -30,6 +30,7 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519PrivateKey};
+use zeroize::Zeroize;
 
 use crate::error::CryptoError;
 
@@ -125,6 +126,9 @@ pub fn encrypt_envelope(
     let cipher = XChaCha20Poly1305::new_from_slice(&encryption_key)
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
+    // Zeroize encryption key after creating cipher (key is copied into cipher)
+    encryption_key.zeroize();
+
     let ciphertext = cipher
         .encrypt(nonce, plaintext)
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
@@ -193,6 +197,9 @@ pub fn decrypt_envelope(
     // Decrypt with XChaCha20-Poly1305
     let cipher = XChaCha20Poly1305::new_from_slice(&decryption_key)
         .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
+
+    // Zeroize decryption key after creating cipher (key is copied into cipher)
+    decryption_key.zeroize();
 
     let plaintext = cipher
         .decrypt(nonce, ciphertext)

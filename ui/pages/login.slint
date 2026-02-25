@@ -11,6 +11,7 @@ export component LoginPage inherits Rectangle {
     in-out property <string> password: "";
     in property <bool> loading: false;
     in property <string> error: "";
+    in property <image> background-image;
 
     // Internal validation state
     property <bool> submitted: false;
@@ -23,6 +24,21 @@ export component LoginPage inherits Rectangle {
 
     background: Colors.background;
 
+    // Black hole background
+    Image {
+        width: 100%;
+        height: 100%;
+        source: root.background-image;
+        image-fit: cover;
+    }
+
+    // Light overlay - lets the black hole show through
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Colors.background.with-alpha(0.35);
+    }
+
     // Centered form container
     VerticalLayout {
         alignment: center;
@@ -30,6 +46,8 @@ export component LoginPage inherits Rectangle {
         Rectangle {
             max-width: 400px;
             horizontal-stretch: 0;
+            background: Colors.background.with-alpha(0.75);
+            border-radius: Spacing.radius-lg;
 
             VerticalLayout {
                 alignment: center;

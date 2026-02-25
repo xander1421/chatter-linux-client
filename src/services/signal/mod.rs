@@ -35,6 +35,8 @@ pub struct SignalService {
     /// Ensures only one encryption to a given recipient at a time,
     /// preventing counter collisions in the Double Ratchet.
     pub(crate) encrypt_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    /// LRU order for lock eviction (most recent at back).
+    pub(crate) encrypt_lock_lru: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
 
 impl Clone for SignalService {
@@ -44,6 +46,7 @@ impl Clone for SignalService {
             settings_repo: self.settings_repo.clone(),
             trust_root: self.trust_root,
             encrypt_locks: self.encrypt_locks.clone(),
+            encrypt_lock_lru: self.encrypt_lock_lru.clone(),
         }
     }
 }
@@ -61,6 +64,7 @@ impl SignalService {
             settings_repo,
             trust_root,
             encrypt_locks: Arc::new(Mutex::new(HashMap::new())),
+            encrypt_lock_lru: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         }
     }
 }

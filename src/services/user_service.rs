@@ -14,7 +14,8 @@ use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::user_client::UserClient;
 use crate::proto::chat_v1::{friend_requests_filter, user_event, FriendStatus, UserProfile};
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::user_repo::UserRepository;
 
 /// Filter for friend request queries.
@@ -82,6 +83,15 @@ pub enum UserError {
     Storage(#[from] StorageError),
 }
 
+impl From<CurrentUserError> for UserError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => UserError::Storage(e),
+            CurrentUserError::NotLoggedIn => UserError::NotLoggedIn,
+        }
+    }
+}
+
 /// User service for all user operations.
 ///
 /// Orchestrates profile management, friends, blocking, and presence by
@@ -111,19 +121,6 @@ impl UserService {
         UserClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
     }
 
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<UserId, UserError> {
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(UserError::Storage)?
-            .ok_or(UserError::NotLoggedIn)?;
-
-        user_id_str
-            .parse()
-            .map_err(|_| UserError::InvalidInput("invalid user ID in settings".to_string()))
-    }
-
     /// Get a user's profile by ID.
     ///
     /// Fetches from server and upserts to local storage.
@@ -133,7 +130,7 @@ impl UserService {
     /// * `user_id` - ID of user whose profile to fetch
     pub async fn get_user_profile(&self, user_id: &UserId) -> Result<Profile, UserError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server (unary, returns proto UserProfile)
         let mut user_client = self.user_client();
@@ -167,7 +164,7 @@ impl UserService {
         status_message: Option<&StatusMessage>,
     ) -> Result<Profile, UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Get current profile from local DB (needed to build proto)
         let existing = self
@@ -255,7 +252,7 @@ impl UserService {
         message: Option<&str>,
     ) -> Result<Friendship, UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Call server (streaming response)
         let mut user_client = self.user_client();
@@ -303,7 +300,7 @@ impl UserService {
         accept: bool,
     ) -> Result<FriendResponseResult, UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Determine FriendStatus for proto
         let status = if accept {
@@ -389,7 +386,7 @@ impl UserService {
     /// * `offset` - Pagination offset
     pub async fn list_friends(&self, limit: u32, offset: u32) -> Result<Vec<Friendship>, UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Call server (unary)
         let mut user_client = self.user_client();
@@ -439,7 +436,7 @@ impl UserService {
         offset: u32,
     ) -> Result<Vec<Friendship>, UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Convert filter to proto
         let proto_filter = filter.to_proto();
@@ -483,7 +480,7 @@ impl UserService {
     /// Does not make any network calls.
     pub fn get_friends_local(&self) -> Result<Vec<Friendship>, UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Return from local storage
         self.user_repo
@@ -500,7 +497,7 @@ impl UserService {
     /// * `friend_id` - ID of friend to remove
     pub async fn remove_friend(&self, friend_id: &UserId) -> Result<(), UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Call server (unary)
         let mut user_client = self.user_client();
@@ -525,7 +522,7 @@ impl UserService {
     /// * `user_id` - ID of user to block
     pub async fn block_user(&self, user_id: &UserId) -> Result<(), UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Call server (streaming response)
         let mut user_client = self.user_client();
@@ -566,7 +563,7 @@ impl UserService {
     /// * `user_id` - ID of user to unblock
     pub async fn unblock_user(&self, user_id: &UserId) -> Result<(), UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Call server (streaming response)
         let mut user_client = self.user_client();
@@ -598,7 +595,7 @@ impl UserService {
     /// * `offset` - Pagination offset
     pub async fn list_blocked_users(&self, limit: u32, offset: u32) -> Result<Vec<UserId>, UserError> {
         // Check logged in
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Call server (unary)
         let mut user_client = self.user_client();
@@ -660,7 +657,7 @@ impl UserService {
     /// Does not make any network calls.
     pub fn search_users_local(&self, query: &str) -> Result<Vec<User>, UserError> {
         // Get current user for friendship lookup
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Get all friendships for current user
         let friendships = self.user_repo.list_friends(&current_user)?;
@@ -702,7 +699,7 @@ impl UserService {
         offset: u32,
     ) -> Result<Vec<Profile>, UserError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Call server (unary)
         let mut user_client = self.user_client();

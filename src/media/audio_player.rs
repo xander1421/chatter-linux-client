@@ -1,13 +1,14 @@
 //! Audio player.
 //!
 //! Audio playback using rodio for voice messages and audio files.
+//! Uses streaming playback with native seeking support.
 
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source, source::SeekError};
 use std::fs::File;
-use std::io::{BufReader, Cursor};
+use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::error::MediaError;
 
@@ -37,8 +38,11 @@ pub enum PlaybackState {
 enum AudioSource {
     /// Audio loaded from a file path.
     File(PathBuf),
-    /// Audio loaded from memory (secure in-memory playback).
-    Memory(Arc<Vec<u8>>),
+    /// Raw audio data for streaming playback (fast start).
+    Stream {
+        data: Arc<Vec<u8>>,
+        mime_type: Option<String>,
+    },
 }
 
 /// Audio player using rodio.
@@ -54,12 +58,6 @@ pub struct AudioPlayer {
     current_source: Option<AudioSource>,
     /// Duration of the current audio file.
     current_duration: Option<Duration>,
-    /// Whether playback is paused.
-    is_paused: bool,
-    /// Timestamp when playback started (for position tracking).
-    play_start: Option<Instant>,
-    /// Accumulated offset when paused (for position tracking).
-    pause_offset: Duration,
 }
 
 impl AudioPlayer {
@@ -77,9 +75,6 @@ impl AudioPlayer {
             sink: None,
             current_source: None,
             current_duration: None,
-            is_paused: false,
-            play_start: None,
-            pause_offset: Duration::ZERO,
         })
     }
 
@@ -105,9 +100,6 @@ impl AudioPlayer {
 
         self.current_source = Some(AudioSource::File(path.to_path_buf()));
         self.current_duration = Some(duration);
-        self.is_paused = false;
-        self.play_start = None;
-        self.pause_offset = Duration::ZERO;
 
         Ok(duration)
     }
@@ -115,7 +107,7 @@ impl AudioPlayer {
     /// Loads audio from memory for secure playback.
     ///
     /// Used for playing attachments that are decrypted in memory.
-    /// The audio data never touches the filesystem.
+    /// Uses streaming playback with native seeking support.
     ///
     /// # Arguments
     ///
@@ -129,26 +121,60 @@ impl AudioPlayer {
     ///
     /// Returns an error if the audio cannot be decoded.
     pub fn load_from_memory(&mut self, data: Vec<u8>) -> Result<Duration, MediaError> {
+        self.load_from_memory_with_mime(data, None)
+    }
+
+    /// Loads audio from memory with optional MIME type hint.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - Audio data bytes
+    /// * `mime_type` - Optional MIME type hint (e.g., "audio/mpeg")
+    pub fn load_from_memory_with_mime(&mut self, data: Vec<u8>, mime_type: Option<String>) -> Result<Duration, MediaError> {
         // Stop any current playback
         self.stop();
 
-        // Wrap in Arc for sharing
-        let data = Arc::new(data);
+        let data_len = data.len();
+        let data_arc = Arc::new(data);
 
-        // Decode to get duration
-        let cursor = Cursor::new(data.as_ref().clone());
-        let source = Decoder::new(cursor)
-            .map_err(|e| MediaError::InvalidFormat(format!("failed to decode audio from memory: {}", e)))?;
+        // Build decoder with seekable hint and byte length for proper seeking
+        let cursor = Cursor::new(data_arc.as_ref().clone());
+        let decoder = self.build_seekable_decoder(cursor, data_len as u64, mime_type.as_deref())?;
 
-        let duration = source.total_duration().unwrap_or(Duration::ZERO);
+        // Get duration
+        let duration = decoder.total_duration().unwrap_or(Duration::ZERO);
 
-        self.current_source = Some(AudioSource::Memory(data));
+        tracing::info!(
+            data_size = data_len,
+            ?duration,
+            ?mime_type,
+            "Loaded audio for streaming playback"
+        );
+
+        self.current_source = Some(AudioSource::Stream { data: data_arc, mime_type });
         self.current_duration = Some(duration);
-        self.is_paused = false;
-        self.play_start = None;
-        self.pause_offset = Duration::ZERO;
 
         Ok(duration)
+    }
+
+    /// Build a decoder with seeking enabled.
+    fn build_seekable_decoder<R: Read + Seek + Send + Sync + 'static>(
+        &self,
+        data: R,
+        byte_len: u64,
+        mime_type: Option<&str>,
+    ) -> Result<Decoder<R>, MediaError> {
+        let mut builder = Decoder::builder()
+            .with_data(data)
+            .with_seekable(true)
+            .with_byte_len(byte_len);
+
+        if let Some(mime) = mime_type {
+            builder = builder.with_mime_type(mime);
+        }
+
+        builder.build()
+            .map_err(|e| MediaError::InvalidFormat(format!("failed to decode audio: {}", e)))
     }
 
     /// Get duration from in-memory audio data.
@@ -166,46 +192,44 @@ impl AudioPlayer {
     ///
     /// Returns an error if no audio is loaded or playback fails.
     pub fn play(&mut self) -> Result<(), MediaError> {
+        // If we have a sink and it's paused, just resume
+        if let Some(ref sink) = self.sink {
+            if sink.is_paused() {
+                sink.play();
+                return Ok(());
+            }
+            // If sink exists but not paused, it might be empty - recreate
+            if !sink.empty() {
+                return Ok(()); // Already playing
+            }
+        }
+
+        // Need to create new sink and start playback
         let source = self.current_source.as_ref().ok_or_else(|| {
             MediaError::PlaybackError("no audio loaded".to_string())
         })?.clone();
 
-        // If paused, just resume
-        if self.is_paused {
-            if let Some(ref sink) = self.sink {
-                sink.play();
-                self.is_paused = false;
-                // Resume position tracking from where we paused
-                self.play_start = Some(Instant::now());
-                return Ok(());
-            }
-        }
-
-        // Create new sink and start playback
         let sink = Sink::connect_new(self._stream.mixer());
 
         match source {
             AudioSource::File(ref path) => {
                 let file = File::open(path)?;
+                let metadata = file.metadata()?;
+                let byte_len = metadata.len();
                 let reader = BufReader::new(file);
-                let decoder = Decoder::new(reader)
-                    .map_err(|e| MediaError::InvalidFormat(format!("failed to decode audio: {}", e)))?;
+                let decoder = self.build_seekable_decoder(reader, byte_len, None)?;
                 sink.append(decoder);
             }
-            AudioSource::Memory(ref data) => {
+            AudioSource::Stream { ref data, ref mime_type } => {
+                tracing::info!(data_size = data.len(), "Streaming audio from memory");
+                let byte_len = data.len() as u64;
                 let cursor = Cursor::new(data.as_ref().clone());
-                let decoder = Decoder::new(cursor)
-                    .map_err(|e| MediaError::InvalidFormat(format!("failed to decode audio from memory: {}", e)))?;
+                let decoder = self.build_seekable_decoder(cursor, byte_len, mime_type.as_deref())?;
                 sink.append(decoder);
             }
         }
 
         self.sink = Some(sink);
-        self.is_paused = false;
-        // Start position tracking
-        self.play_start = Some(Instant::now());
-        self.pause_offset = Duration::ZERO;
-
         Ok(())
     }
 
@@ -213,11 +237,6 @@ impl AudioPlayer {
     pub fn pause(&mut self) {
         if let Some(ref sink) = self.sink {
             sink.pause();
-            self.is_paused = true;
-            // Accumulate elapsed time into pause_offset
-            if let Some(start) = self.play_start.take() {
-                self.pause_offset += start.elapsed();
-            }
         }
     }
 
@@ -226,67 +245,38 @@ impl AudioPlayer {
         if let Some(sink) = self.sink.take() {
             sink.stop();
         }
-        self.is_paused = false;
-        self.play_start = None;
-        self.pause_offset = Duration::ZERO;
     }
 
     /// Seeks to a specific position.
     ///
-    /// Note: Due to rodio limitations, this stops and restarts playback from the new position.
+    /// Uses rodio's native `try_seek()` for efficient seeking.
     ///
     /// # Errors
     ///
     /// Returns an error if no audio is loaded or seek fails.
     pub fn seek(&mut self, position: Duration) -> Result<(), MediaError> {
-        let source = self.current_source.as_ref().ok_or_else(|| {
-            MediaError::PlaybackError("no audio loaded".to_string())
-        })?.clone();
+        if self.current_source.is_none() {
+            return Err(MediaError::PlaybackError("no audio loaded".to_string()));
+        }
 
-        let was_playing = self.is_playing();
-
-        // Stop current playback
-        self.stop();
-
-        // Create new sink
-        let sink = Sink::connect_new(self._stream.mixer());
-
-        match source {
-            AudioSource::File(ref path) => {
-                let file = File::open(path)?;
-                let reader = BufReader::new(file);
-                let decoder = Decoder::new(reader)
-                    .map_err(|e| MediaError::InvalidFormat(format!("failed to decode audio: {}", e)))?;
-                let skipped = decoder.skip_duration(position);
-                sink.append(skipped);
-            }
-            AudioSource::Memory(ref data) => {
-                let cursor = Cursor::new(data.as_ref().clone());
-                let decoder = Decoder::new(cursor)
-                    .map_err(|e| MediaError::InvalidFormat(format!("failed to decode audio from memory: {}", e)))?;
-                let skipped = decoder.skip_duration(position);
-                sink.append(skipped);
+        // Use rodio's native try_seek
+        if let Some(ref sink) = self.sink {
+            match sink.try_seek(position) {
+                Ok(()) => {
+                    tracing::debug!(?position, "Seek successful");
+                    return Ok(());
+                }
+                Err(SeekError::NotSupported { .. }) => {
+                    tracing::warn!("Native seek not supported for this format");
+                    return Err(MediaError::PlaybackError("seek not supported".to_string()));
+                }
+                Err(e) => {
+                    return Err(MediaError::PlaybackError(format!("seek failed: {:?}", e)));
+                }
             }
         }
 
-        if !was_playing {
-            sink.pause();
-            self.is_paused = true;
-            // Track position from seek point when paused
-            self.pause_offset = position;
-            self.play_start = None;
-        } else {
-            self.is_paused = false;
-            // Track position from seek point when playing
-            self.pause_offset = position;
-            self.play_start = Some(Instant::now());
-        }
-
-        self.sink = Some(sink);
-        // Restore source since stop() cleared it
-        self.current_source = Some(source);
-
-        Ok(())
+        Err(MediaError::PlaybackError("no active playback to seek".to_string()))
     }
 
     /// Sets the playback volume.
@@ -309,12 +299,12 @@ impl AudioPlayer {
 
         match &self.sink {
             Some(sink) if sink.empty() => PlaybackState::Stopped,
-            Some(_) if self.is_paused => PlaybackState::Paused {
-                position: Duration::ZERO, // rodio doesn't expose position
+            Some(sink) if sink.is_paused() => PlaybackState::Paused {
+                position: sink.get_pos(),
                 duration,
             },
-            Some(_) => PlaybackState::Playing {
-                position: Duration::ZERO, // rodio doesn't expose position
+            Some(sink) => PlaybackState::Playing {
+                position: sink.get_pos(),
                 duration,
             },
             None => PlaybackState::Stopped,
@@ -323,20 +313,11 @@ impl AudioPlayer {
 
     /// Returns the current playback position.
     ///
-    /// This tracks position using timestamps since rodio doesn't expose it.
+    /// Uses rodio's native `get_pos()` for accurate position tracking.
     pub fn position(&self) -> Duration {
-        let current = if let Some(start) = self.play_start {
-            self.pause_offset + start.elapsed()
-        } else {
-            self.pause_offset
-        };
-
-        // Clamp to duration if available
-        if let Some(duration) = self.current_duration {
-            current.min(duration)
-        } else {
-            current
-        }
+        self.sink.as_ref()
+            .map(|s| s.get_pos())
+            .unwrap_or(Duration::ZERO)
     }
 
     /// Returns the total duration of the loaded audio.
@@ -346,12 +327,16 @@ impl AudioPlayer {
 
     /// Returns true if audio is currently playing.
     pub fn is_playing(&self) -> bool {
-        matches!(self.state(), PlaybackState::Playing { .. })
+        self.sink.as_ref()
+            .map(|s| !s.is_paused() && !s.empty())
+            .unwrap_or(false)
     }
 
     /// Returns true if audio is paused.
     pub fn is_paused(&self) -> bool {
-        matches!(self.state(), PlaybackState::Paused { .. })
+        self.sink.as_ref()
+            .map(|s| s.is_paused())
+            .unwrap_or(false)
     }
 
     /// Get the duration of an audio file without creating a full player.

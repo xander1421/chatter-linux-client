@@ -641,3 +641,85 @@ pub fn clear_inline_gifs() {
     });
     stop_inline_timer();
 }
+
+/// Register a single GIF attachment for inline animation.
+///
+/// This is called after sending a message with GIF attachments.
+/// Decrypts and registers the GIF in the background, then updates the thumbnail.
+pub fn register_gif_attachment(
+    attachment_id: String,
+    attachment_repo: std::sync::Arc<chatter_linux::storage::AttachmentRepository>,
+    window_weak: slint::Weak<crate::MainWindow>,
+) {
+    use chatter_linux::domain::attachment::ContentLocation;
+    use chatter_linux::media::gif::AnimatedGif;
+    use chatter_linux::services::AttachmentService;
+
+    tokio::spawn(async move {
+        // Parse attachment ID
+        let att_id: chatter_linux::domain::ids::AttachmentId = match attachment_id.parse() {
+            Ok(id) => id,
+            Err(_) => return,
+        };
+
+        // Check if attachment has content in database
+        let attachment = match attachment_repo.get(&att_id) {
+            Ok(Some(att)) if att.content_location == ContentLocation::InDatabase => att,
+            _ => return,
+        };
+
+        // Check if it's a GIF
+        if attachment.metadata.mime_type != "image/gif" {
+            return;
+        }
+
+        // Decrypt to memory
+        let attachment_service = AttachmentService::new(attachment_repo);
+        let data = match attachment_service.decrypt_to_memory(&att_id) {
+            Ok(buffer) => buffer.as_slice().to_vec(),
+            Err(e) => {
+                tracing::debug!("Could not decrypt GIF {}: {}", attachment_id, e);
+                return;
+            }
+        };
+
+        // Decode GIF on background thread
+        let att_id_for_decode = attachment_id.clone();
+        let raw_frames = match tokio::task::spawn_blocking(move || {
+            match AnimatedGif::decode(&data) {
+                Ok(Some(gif)) if gif.frames.len() > 1 => {
+                    let frames: Vec<(Vec<u8>, u32, u32, u64)> = gif
+                        .frames
+                        .into_iter()
+                        .map(|f| (f.data, f.width, f.height, f.delay.as_millis().max(20) as u64))
+                        .collect();
+                    Some(frames)
+                }
+                _ => None,
+            }
+        })
+        .await
+        {
+            Ok(Some(frames)) => frames,
+            Ok(None) => {
+                tracing::debug!("GIF {} is not animated", att_id_for_decode);
+                return;
+            }
+            Err(e) => {
+                tracing::debug!("GIF decode failed for {}: {}", att_id_for_decode, e);
+                return;
+            }
+        };
+
+        // Register on UI thread
+        let att_id_for_ui = attachment_id.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(first_frame) = register_inline_gif_from_raw(&att_id_for_ui, raw_frames) {
+                if let Some(w) = window_weak.upgrade() {
+                    update_message_attachment_thumbnails(&w, &[(att_id_for_ui.clone(), first_frame)]);
+                }
+                tracing::debug!("Registered sent GIF animation: {}", att_id_for_ui);
+            }
+        });
+    });
+}

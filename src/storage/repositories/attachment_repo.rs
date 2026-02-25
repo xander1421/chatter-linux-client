@@ -97,7 +97,7 @@ impl AttachmentRepository {
 
     /// Get an attachment by ID.
     pub fn get(&self, id: &AttachmentId) -> Result<Option<Attachment>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, metadata_json, status, local_path, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
@@ -118,7 +118,7 @@ impl AttachmentRepository {
     /// Returns the encrypted ciphertext blob for decryption in memory.
     /// Returns None if content is not stored in database (needs CDN download).
     pub fn get_encrypted_content(&self, id: &AttachmentId) -> Result<Option<Vec<u8>>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT encrypted_content FROM attachments WHERE id = ?1 AND content_location = 1",
         )?;
@@ -230,7 +230,7 @@ impl AttachmentRepository {
 
     /// List attachments by status.
     pub fn list_by_status(&self, status: AttachmentStatus) -> Result<Vec<Attachment>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, metadata_json, status, local_path, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
@@ -243,8 +243,10 @@ impl AttachmentRepository {
     }
 
     /// List attachments pending upload (Pending or Uploading status).
+    ///
+    /// Note: Excludes thumbnail_bytes for memory efficiency. Use get() for full data.
     pub fn list_pending_uploads(&self) -> Result<Vec<Attachment>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, metadata_json, status, local_path, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
@@ -259,8 +261,10 @@ impl AttachmentRepository {
     }
 
     /// List attachments that need content downloaded from CDN.
+    ///
+    /// Note: Uses read connection for concurrent access.
     pub fn list_pending_downloads(&self) -> Result<Vec<Attachment>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, metadata_json, status, local_path, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
@@ -283,7 +287,7 @@ impl AttachmentRepository {
 
     /// Get thumbnail for an attachment.
     pub fn get_thumbnail(&self, attachment_id: &AttachmentId) -> Result<Option<Thumbnail>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT attachment_id, local_path, width, height, created_at
              FROM thumbnails WHERE attachment_id = ?1",

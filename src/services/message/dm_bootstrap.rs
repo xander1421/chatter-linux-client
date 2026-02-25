@@ -17,6 +17,7 @@ use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::message_client::MessageClient;
 use crate::network::grpc::MailboxClient;
 use crate::proto::chat_v1::SealedSenderMessage;
+use crate::services::current_user::CurrentUserProvider;
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
 
@@ -52,7 +53,7 @@ impl MessageService {
         }
 
         // Get our user ID for Sesame deterministic initiator selection
-        let our_user_id = self.current_user_id()?;
+        let our_user_id = self.settings_repo.current_user_id()?;
 
         // Sesame algorithm: lower UUID initiates bootstrap, higher UUID waits
         let we_are_initiator = our_user_id.as_uuid() < peer_id.as_uuid();

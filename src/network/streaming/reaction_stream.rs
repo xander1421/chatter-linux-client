@@ -2,7 +2,7 @@
 //!
 //! Provides reaction events grouped by message for efficient UI updates.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -15,6 +15,10 @@ const CHANNEL_CAPACITY: usize = 128;
 
 /// Maximum messages to track reactions for.
 const CACHE_CAPACITY: usize = 500;
+
+/// Maximum reactions to track per message.
+/// Prevents unbounded growth from reaction spam.
+const MAX_REACTIONS_PER_MESSAGE: usize = 100;
 
 /// Reaction event with user context.
 ///
@@ -42,12 +46,12 @@ pub struct ReactionAggregator {
     removed: broadcast::Sender<ReactionEvent>,
 }
 
-/// Simple LRU cache for recent reactions.
+/// LRU cache for recent reactions with per-message limits.
 struct ReactionCache {
     /// Map of message_id -> list of recent reaction events.
     entries: HashMap<String, Vec<ReactionEvent>>,
-    /// Order of message IDs for LRU eviction.
-    order: Vec<String>,
+    /// LRU order of message IDs for eviction (most recent at back).
+    lru: VecDeque<String>,
     capacity: usize,
 }
 
@@ -55,28 +59,29 @@ impl ReactionCache {
     fn new(capacity: usize) -> Self {
         Self {
             entries: HashMap::new(),
-            order: Vec::new(),
+            lru: VecDeque::with_capacity(capacity),
             capacity,
         }
     }
 
     fn add(&mut self, message_id: String, reaction: ReactionEvent) {
-        // Remove from order if exists (to re-add at end)
-        self.order.retain(|id| id != &message_id);
+        // Update LRU order
+        self.lru.retain(|id| id != &message_id);
+        self.lru.push_back(message_id.clone());
 
-        // Add to entries
-        self.entries
-            .entry(message_id.clone())
-            .or_default()
-            .push(reaction);
+        // Add to entries with per-message limit
+        let reactions = self.entries.entry(message_id).or_default();
+        reactions.push(reaction);
 
-        // Add to order
-        self.order.push(message_id);
+        // Enforce per-message limit (keep newest)
+        if reactions.len() > MAX_REACTIONS_PER_MESSAGE {
+            let excess = reactions.len() - MAX_REACTIONS_PER_MESSAGE;
+            reactions.drain(0..excess);
+        }
 
-        // Evict if over capacity
-        while self.order.len() > self.capacity {
-            if let Some(old_id) = self.order.first().cloned() {
-                self.order.remove(0);
+        // Evict oldest messages if over capacity
+        while self.lru.len() > self.capacity {
+            if let Some(old_id) = self.lru.pop_front() {
                 self.entries.remove(&old_id);
             }
         }
@@ -92,7 +97,7 @@ impl ReactionCache {
 
     fn clear(&mut self) {
         self.entries.clear();
-        self.order.clear();
+        self.lru.clear();
     }
 }
 

@@ -125,12 +125,11 @@ impl PrivacyState {
         self.store.get()
     }
 
-    /// Subscribe to privacy state changes.
+    /// Subscribe to privacy state changes (Arc-wrapped for efficiency).
     ///
-    /// The receiver will receive the state each time it changes.
     /// Call `get()` first if you need the current state immediately.
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<PrivacyStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<PrivacyStateData>> {
         self.store.subscribe()
     }
 

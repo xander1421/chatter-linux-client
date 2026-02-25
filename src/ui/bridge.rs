@@ -120,18 +120,21 @@ impl UiBridge {
     /// }
     /// ```
     #[must_use]
-    pub fn subscribe_ui_state(&self) -> tokio::sync::broadcast::Receiver<UIStateData> {
+    pub fn subscribe_ui_state(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::state::StateSnapshot<UIStateData>> {
         self.ui_state.subscribe()
     }
 
     /// Subscribe to auth state changes.
     ///
-    /// Returns a receiver that emits `AuthStateData` whenever the auth state changes.
+    /// Returns a receiver that emits Arc-wrapped `AuthStateData` whenever the auth state changes.
     /// Use this to update login UI, show/hide authenticated views, etc.
     #[must_use]
     pub fn subscribe_auth_state(
         &self,
-    ) -> tokio::sync::broadcast::Receiver<crate::state::AuthStateData> {
+    ) -> tokio::sync::broadcast::Receiver<crate::state::StateSnapshot<crate::state::AuthStateData>>
+    {
         self.auth_state.subscribe()
     }
 }

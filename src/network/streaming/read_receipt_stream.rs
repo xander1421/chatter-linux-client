@@ -2,7 +2,7 @@
 //!
 //! Tracks read receipt high-water marks per user per channel.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -13,13 +13,25 @@ use crate::proto::chat_v1::ReadReceipt;
 /// Capacity for read receipt event channel.
 const CHANNEL_CAPACITY: usize = 64;
 
+/// Maximum number of channels to track read receipts for.
+/// Oldest channels are evicted when this limit is exceeded.
+const MAX_TRACKED_CHANNELS: usize = 100;
+
+/// Maximum number of users to track per channel.
+/// Oldest users are evicted when this limit is exceeded.
+const MAX_USERS_PER_CHANNEL: usize = 500;
+
 /// Read receipt aggregator with high-water mark tracking.
 ///
 /// Tracks the last read message for each user in each channel.
 /// Only the highest (most recent) read position is kept.
+/// Uses LRU eviction to bound memory usage.
 pub struct ReadReceiptAggregator {
     /// Per-channel read states (channel_id -> user_id -> last read message).
     state: Arc<RwLock<HashMap<String, HashMap<String, ReadState>>>>,
+
+    /// LRU order for channel eviction (most recent at back).
+    channel_lru: Arc<RwLock<VecDeque<String>>>,
 
     /// Broadcast for read receipt events.
     events: broadcast::Sender<ReadReceipt>,
@@ -39,6 +51,7 @@ impl ReadReceiptAggregator {
     pub fn new() -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
+            channel_lru: Arc::new(RwLock::new(VecDeque::new())),
             events: broadcast::channel(CHANNEL_CAPACITY).0,
         }
     }
@@ -53,6 +66,19 @@ impl ReadReceiptAggregator {
         // Update state (only if newer)
         {
             let mut state = self.state.write();
+            let mut lru = self.channel_lru.write();
+
+            // Touch channel in LRU
+            lru.retain(|id| id != &receipt.channel_id);
+            lru.push_back(receipt.channel_id.clone());
+
+            // Evict oldest channels if over limit
+            while lru.len() > MAX_TRACKED_CHANNELS {
+                if let Some(oldest) = lru.pop_front() {
+                    state.remove(&oldest);
+                }
+            }
+
             let channel = state.entry(receipt.channel_id.clone()).or_default();
 
             let should_update = channel
@@ -68,6 +94,18 @@ impl ReadReceiptAggregator {
                         timestamp: receipt.timestamp,
                     },
                 );
+
+                // Evict oldest users if channel is over limit
+                if channel.len() > MAX_USERS_PER_CHANNEL {
+                    // Find and remove user with oldest timestamp
+                    if let Some(oldest_user) = channel
+                        .iter()
+                        .min_by_key(|(_, s)| s.timestamp)
+                        .map(|(u, _)| u.clone())
+                    {
+                        channel.remove(&oldest_user);
+                    }
+                }
             }
         }
 
@@ -130,11 +168,13 @@ impl ReadReceiptAggregator {
     /// Clear all read states.
     pub fn clear(&self) {
         self.state.write().clear();
+        self.channel_lru.write().clear();
     }
 
     /// Clear read states for a specific channel.
     pub fn clear_channel(&self, channel_id: &str) {
         self.state.write().remove(channel_id);
+        self.channel_lru.write().retain(|id| id != channel_id);
     }
 }
 

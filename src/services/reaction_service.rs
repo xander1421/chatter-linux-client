@@ -15,8 +15,9 @@ use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::message_client::MessageClient;
 use crate::network::streaming::reaction_stream::{ReactionAggregator, ReactionEvent};
 use crate::proto::chat_v1::{Message, ReactionUpdate};
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
 use crate::storage::repositories::reaction_repo::ReactionRepository;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Reaction service errors.
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +33,15 @@ pub enum ReactionError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+}
+
+impl From<CurrentUserError> for ReactionError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => ReactionError::Storage(e),
+            CurrentUserError::NotLoggedIn => ReactionError::NotLoggedIn,
+        }
+    }
 }
 
 /// Reaction service.
@@ -73,19 +83,6 @@ impl ReactionService {
         }
     }
 
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<UserId, ReactionError> {
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(ReactionError::Storage)?
-            .ok_or(ReactionError::NotLoggedIn)?;
-
-        user_id_str
-            .parse()
-            .map_err(|_| ReactionError::NotLoggedIn)
-    }
-
     // ========================================================================
     // Server Operations
     // ========================================================================
@@ -108,7 +105,7 @@ impl ReactionService {
         emoji: &str,
     ) -> Result<Message, ReactionError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Send reaction to server
         let message = client.add_reaction(message_id, channel_id, emoji).await?;
@@ -134,7 +131,7 @@ impl ReactionService {
         emoji: &str,
     ) -> Result<Message, ReactionError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Remove reaction on server
         let message = client.remove_reaction(message_id, channel_id, emoji).await?;
@@ -164,7 +161,7 @@ impl ReactionService {
         emoji_filter: Option<&str>,
     ) -> Result<Vec<Reaction>, ReactionError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Fetch from server
         let response = client
@@ -270,7 +267,7 @@ impl ReactionService {
         emoji: &Emoji,
     ) -> Result<bool, ReactionError> {
         // Get current user for the reaction
-        let user_id = self.current_user_id()?;
+        let user_id = self.settings_repo.current_user_id()?;
 
         self.reaction_repo
             .toggle(message_id, &user_id, emoji)
@@ -339,7 +336,7 @@ fn proto_to_domain_reaction(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::Database;
+    use crate::storage::{Database, settings_keys as keys};
     use tempfile::tempdir;
 
     /// Create a test ReactionService with a proper temporary database.

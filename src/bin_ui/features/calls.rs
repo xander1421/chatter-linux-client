@@ -248,8 +248,8 @@ fn wire_room_events(window: &MainWindow, ctx: &AppContext) {
     let weak = window.as_weak();
     let call_service = ctx.call_service.clone();
 
-    // Spawn a task to consume room events when call service is available
-    slint::spawn_local(async move {
+    // Spawn a tokio task to consume room events (tokio runtime needed for channels and sleep)
+    tokio::spawn(async move {
         // Wait for call service to be initialized
         let service = loop {
             if let Some(svc) = call_service.get() {
@@ -267,67 +267,77 @@ fn wire_room_events(window: &MainWindow, ctx: &AppContext) {
         tracing::info!("Started room events listener");
 
         while let Some(event) = rx.recv().await {
+            tracing::debug!("UI received room event: {:?}", event);
             let weak = weak.clone();
 
             match event {
                 LiveKitRoomEvent::StateChanged(state) => {
                     if let chatter_linux::calls::RoomState::Connected { participant_count, .. } = state {
-                        if let Some(w) = weak.upgrade() {
-                            let mut data = w.get_active_call_data();
-                            data.participant_count = participant_count as i32;
-                            w.set_active_call_data(data);
-                        }
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                let mut data = w.get_active_call_data();
+                                data.participant_count = participant_count as i32;
+                                w.set_active_call_data(data);
+                            }
+                        });
                     }
                 }
                 LiveKitRoomEvent::ParticipantJoined { identity, display_name } => {
                     tracing::info!("Participant joined: {} ({:?})", identity, display_name);
-                    if let Some(w) = weak.upgrade() {
-                        let mut data = w.get_active_call_data();
-                        data.participant_count += 1;
+                    let display = display_name.clone().unwrap_or_else(|| identity.clone());
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            let mut data = w.get_active_call_data();
+                            data.participant_count += 1;
 
-                        // Add participant to list
-                        let new_participant = CallParticipantData {
-                            user_id: identity.clone().into(),
-                            display_name: display_name.unwrap_or(identity).into(),
-                            avatar_url: "".into(),
-                            is_muted: false,
-                            is_video_enabled: false,
-                            is_screen_sharing: false,
-                            is_speaking: false,
-                        };
+                            // Add participant to list
+                            let new_participant = CallParticipantData {
+                                user_id: identity.into(),
+                                display_name: display.into(),
+                                avatar_url: "".into(),
+                                is_muted: false,
+                                is_video_enabled: false,
+                                is_screen_sharing: false,
+                                is_speaking: false,
+                            };
 
-                        let mut participants: Vec<CallParticipantData> =
-                            (0..data.participants.row_count())
-                                .map(|i| data.participants.row_data(i).unwrap())
-                                .collect();
-                        participants.push(new_participant);
-                        data.participants = ModelRc::new(VecModel::from(participants));
+                            let mut participants: Vec<CallParticipantData> =
+                                (0..data.participants.row_count())
+                                    .map(|i| data.participants.row_data(i).unwrap())
+                                    .collect();
+                            participants.push(new_participant);
+                            data.participants = ModelRc::new(VecModel::from(participants));
 
-                        w.set_active_call_data(data);
-                    }
+                            w.set_active_call_data(data);
+                            tracing::debug!("UI updated for participant join");
+                        }
+                    });
                 }
                 LiveKitRoomEvent::ParticipantLeft { identity } => {
                     tracing::info!("Participant left: {}", identity);
-                    if let Some(w) = weak.upgrade() {
-                        let mut data = w.get_active_call_data();
-                        data.participant_count = (data.participant_count - 1).max(0);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            let mut data = w.get_active_call_data();
+                            data.participant_count = (data.participant_count - 1).max(0);
 
-                        // Remove participant from list
-                        let participants: Vec<CallParticipantData> =
-                            (0..data.participants.row_count())
-                                .filter_map(|i| {
-                                    let p = data.participants.row_data(i)?;
-                                    if p.user_id.to_string() != identity {
-                                        Some(p)
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
-                        data.participants = ModelRc::new(VecModel::from(participants));
+                            // Remove participant from list
+                            let participants: Vec<CallParticipantData> =
+                                (0..data.participants.row_count())
+                                    .filter_map(|i| {
+                                        let p = data.participants.row_data(i)?;
+                                        if p.user_id.to_string() != identity {
+                                            Some(p)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                            data.participants = ModelRc::new(VecModel::from(participants));
 
-                        w.set_active_call_data(data);
-                    }
+                            w.set_active_call_data(data);
+                            tracing::debug!("UI updated for participant leave");
+                        }
+                    });
                 }
                 LiveKitRoomEvent::TrackSubscribed { participant_identity, track_sid, is_video } => {
                     tracing::debug!(
@@ -351,7 +361,7 @@ fn wire_room_events(window: &MainWindow, ctx: &AppContext) {
         }
 
         tracing::info!("Room events listener stopped");
-    }).unwrap();
+    });
 }
 
 fn wire_start_call(window: &MainWindow, ctx: &AppContext) {

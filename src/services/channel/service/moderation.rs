@@ -7,6 +7,7 @@ use tokio_stream::StreamExt;
 use crate::domain::ids::{ChannelId, UserId};
 use crate::proto::chat_v1::channel_event;
 use crate::proto::content_v1::SenderKeyDistribution;
+use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::error::ChannelError;
 
@@ -24,7 +25,7 @@ impl ChannelService {
         user_id: &UserId,
         reason: Option<&str>,
     ) -> Result<Option<SenderKeyDistribution>, ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let user_id_str = user_id.to_string();
@@ -93,7 +94,7 @@ impl ChannelService {
         duration: Option<std::time::Duration>,
         reason: Option<&str>,
     ) -> Result<(), ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let user_id_str = user_id.to_string();
@@ -113,7 +114,7 @@ impl ChannelService {
         channel_id: &ChannelId,
         user_id: &UserId,
     ) -> Result<(), ChannelError> {
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         let channel_id_str = channel_id.to_string();
         let user_id_str = user_id.to_string();

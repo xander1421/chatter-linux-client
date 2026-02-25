@@ -5,6 +5,7 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
 
 export component ChannelListItem inherits Rectangle {
     // Properties
@@ -35,16 +36,22 @@ export component ChannelListItem inherits Rectangle {
         spacing: Spacing.sm;
         alignment: stretch;
 
-        // Channel icon (# for public, lock for private, @ for DM)
-        Text {
+        // Channel icon container (20px wide for alignment)
+        Rectangle {
             width: 20px;
-            text: root.channel-type == "public" ? "\u{1F4AC}\u{FE0F}"
-                : root.channel-type == "private" ? "\u{1F512}\u{FE0F}"
-                : "\u{1F464}\u{FE0F}";
-            color: root.selected ? Colors.primary : Colors.text-secondary;
-            font-size: 14px;
-            vertical-alignment: center;
-            horizontal-alignment: center;
+            height: parent.height;
+
+            // Public: hash, Private: lock, DM: user
+            Image {
+                source: root.channel-type == "public" ? Icons.hash
+                      : root.channel-type == "private" ? Icons.lock
+                      : Icons.users;
+                width: 16px;
+                height: 16px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: root.selected ? Colors.primary : Colors.text-secondary;
+            }
         }
 
         // Channel name
@@ -88,16 +95,15 @@ export component ChannelListItem inherits Rectangle {
         height: 100%;
 
         // Centered channel icon
-        Text {
-            text: root.channel-type == "public" ? "\u{1F4AC}\u{FE0F}"
-                : root.channel-type == "private" ? "\u{1F512}\u{FE0F}"
-                : "\u{1F464}\u{FE0F}";
-            color: root.selected ? Colors.primary : Colors.text-secondary;
-            font-size: 18px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            width: 100%;
-            height: 100%;
+        Image {
+            source: root.channel-type == "public" ? Icons.hash
+                  : root.channel-type == "private" ? Icons.lock
+                  : Icons.users;
+            width: 20px;
+            height: 20px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: root.selected ? Colors.primary : Colors.text-secondary;
         }
 
         // Badge overlay (top-right of icon)

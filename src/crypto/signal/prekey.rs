@@ -14,6 +14,11 @@ use std::time::SystemTime;
 use crate::error::CryptoError;
 use crate::storage::KeyStore;
 
+/// Maximum number of prekeys that can be generated in a single batch.
+/// Signal recommends maintaining ~100 prekeys; this limit prevents
+/// accidental unbounded memory allocation from large count values.
+const MAX_PREKEYS_PER_BATCH: u32 = 1000;
+
 /// PreKey manager for PQXDH key agreement.
 ///
 /// Handles generation, storage, and bundle creation of prekeys for
@@ -60,12 +65,25 @@ impl PreKeyManager {
     ///
     /// Generates `count` prekeys starting from `start_id`.
     /// Returns all generated records for server upload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `count` exceeds `MAX_PREKEYS_PER_BATCH` (1000)
+    /// to prevent unbounded memory allocation.
     pub fn generate_prekeys<R: CryptoRng + Rng>(
         &self,
         rng: &mut R,
         start_id: u32,
         count: u32,
     ) -> Result<Vec<PreKeyRecord>, CryptoError> {
+        // Prevent unbounded allocation - reject unreasonably large batch sizes
+        if count > MAX_PREKEYS_PER_BATCH {
+            return Err(CryptoError::Validation(format!(
+                "Prekey count {} exceeds maximum batch size {}",
+                count, MAX_PREKEYS_PER_BATCH
+            )));
+        }
+
         let mut records = Vec::with_capacity(count as usize);
 
         for i in 0..count {

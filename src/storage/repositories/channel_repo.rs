@@ -134,9 +134,30 @@ impl ChannelRepository {
     // Channel queries
     // ========================================================================
 
+    /// Maximum channels returned per query to prevent unbounded memory usage.
+    const MAX_CHANNELS_PER_QUERY: u32 = 500;
+
     /// List all channels for a user (via membership), ordered by last activity.
+    ///
+    /// Results are limited to MAX_CHANNELS_PER_QUERY (500) to prevent unbounded memory.
+    /// Use `list_for_user_paginated` for pagination if needed.
     pub fn list_for_user(&self, user_id: &UserId) -> Result<Vec<Channel>, StorageError> {
-        let conn = self.db.connection()?;
+        self.list_for_user_paginated(user_id, Self::MAX_CHANNELS_PER_QUERY, 0)
+    }
+
+    /// List channels for a user with pagination.
+    ///
+    /// # Arguments
+    /// * `user_id` - The user to list channels for
+    /// * `limit` - Maximum number of channels to return
+    /// * `offset` - Number of channels to skip
+    pub fn list_for_user_paginated(
+        &self,
+        user_id: &UserId,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Channel>, StorageError> {
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT c.id, c.channel_type, c.name, c.description, c.image_url, c.owner_id,
                     c.persistence, c.max_members, c.default_ttl_seconds,
@@ -145,10 +166,11 @@ impl ChannelRepository {
              FROM channels c
              INNER JOIN memberships m ON c.id = m.channel_id
              WHERE m.user_id = ?1
-             ORDER BY c.last_message_at DESC NULLS LAST",
+             ORDER BY c.last_message_at DESC NULLS LAST
+             LIMIT ?2 OFFSET ?3",
         )?;
 
-        let mut rows = stmt.query(params![user_id.to_string()])?;
+        let mut rows = stmt.query(params![user_id.to_string(), limit, offset])?;
         let mut channels = Vec::new();
 
         while let Some(row) = rows.next()? {

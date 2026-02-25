@@ -1,6 +1,7 @@
 //! Decryption operations for the message gateway.
 
 use prost::Message as ProstMessage;
+use zeroize::Zeroize;
 
 use crate::crypto::dm_crypto::decrypt_dm_bytes;
 use crate::crypto::signal::sesame::ConvergenceResult;
@@ -21,11 +22,27 @@ impl MessageGateway {
         envelope: crate::proto::chat_v1::SealedSenderMessage,
     ) -> Result<SealedSenderResult, ServiceError> {
         // Decrypt the sealed sender envelope
-        let (sender_address, plaintext) = self
+        let (sender_address, mut plaintext) = self
             .signal_service
             .decrypt_message(&envelope.sealed_body)
             .await?;
 
+        // Use a scope guard to ensure plaintext is always zeroized
+        let result = self.process_incoming_message_inner(&sender_address, &plaintext).await;
+
+        // Zeroize decrypted plaintext before returning (security: prevent heap residue)
+        plaintext.zeroize();
+
+        result
+    }
+
+    /// Inner implementation that processes decrypted plaintext.
+    /// Separated to ensure plaintext zeroization happens in the outer function.
+    async fn process_incoming_message_inner(
+        &self,
+        sender_address: &libsignal_protocol::ProtocolAddress,
+        plaintext: &[u8],
+    ) -> Result<SealedSenderResult, ServiceError> {
         // Extract sender ID from protocol address
         let sender_id: UserId = sender_address.name().parse().map_err(|e| {
             ServiceError::Validation(format!("Invalid sender ID in Signal address: {}", e))
@@ -38,7 +55,7 @@ impl MessageGateway {
         );
 
         // First try to parse as Content proto (preferred, contains KeyExchange)
-        if let Ok(content_proto) = Content::decode(plaintext.as_slice()) {
+        if let Ok(content_proto) = Content::decode(plaintext) {
             // Log what content type we got
             let content_type_name = match &content_proto.content {
                 Some(content::Content::DataMessage(_)) => "DataMessage",
@@ -105,7 +122,7 @@ impl MessageGateway {
         }
 
         // Fallback: Parse as raw DataMessage proto
-        let data_message = DataMessage::decode(plaintext.as_slice()).map_err(|e| {
+        let data_message = DataMessage::decode(plaintext).map_err(|e| {
             ServiceError::Validation(format!("Failed to parse DataMessage: {}", e))
         })?;
 
@@ -126,7 +143,7 @@ impl MessageGateway {
         sender_device_id: u32,
     ) -> Result<SealedSenderResult, ServiceError> {
         // Try to decrypt using session convergence if Sesame is available
-        let plaintext = if let Some(ref sesame_manager) = self.sesame_manager {
+        let mut plaintext = if let Some(ref sesame_manager) = self.sesame_manager {
             match self
                 .signal_service
                 .decrypt_with_convergence(envelope, &sender_id.to_string(), sender_device_id, sesame_manager.as_ref())
@@ -169,8 +186,24 @@ impl MessageGateway {
                 .await?
         };
 
+        // Process plaintext and ensure zeroization
+        let result = self.decrypt_identified_message_inner(sender_id, &plaintext).await;
+
+        // Zeroize decrypted plaintext before returning (security: prevent heap residue)
+        plaintext.zeroize();
+
+        result
+    }
+
+    /// Inner implementation for identified message decryption.
+    /// Separated to ensure plaintext zeroization in the outer function.
+    async fn decrypt_identified_message_inner(
+        &self,
+        sender_id: &UserId,
+        plaintext: &[u8],
+    ) -> Result<SealedSenderResult, ServiceError> {
         // First try to parse as Content proto (preferred, contains KeyExchange)
-        if let Ok(content_proto) = Content::decode(plaintext.as_slice()) {
+        if let Ok(content_proto) = Content::decode(plaintext) {
             // Check for KeyExchange
             if let Some(content::Content::KeyExchange(key_exchange)) = content_proto.content {
                 tracing::debug!(
@@ -201,7 +234,7 @@ impl MessageGateway {
         }
 
         // Fallback: Parse as raw DataMessage proto
-        let data_message = DataMessage::decode(plaintext.as_slice()).map_err(|e| {
+        let data_message = DataMessage::decode(plaintext).map_err(|e| {
             ServiceError::Validation(format!("Failed to parse DataMessage: {}", e))
         })?;
 
@@ -234,7 +267,7 @@ impl MessageGateway {
         let signal_ciphertext = decrypt_dm_bytes(mailbox_encrypted, shared_secret)?;
 
         // Layer 2: Decrypt Signal layer (sealed sender with Double Ratchet)
-        let (sender_address, plaintext) = self
+        let (sender_address, mut plaintext) = self
             .signal_service
             .decrypt_message(&signal_ciphertext)
             .await?;
@@ -248,6 +281,8 @@ impl MessageGateway {
         if let Ok(content_proto) = Content::decode(plaintext.as_slice()) {
             let dm_content = Self::parse_content(content_proto)?;
             tracing::debug!(sender_id = %sender_id, "Decrypted DM (Content proto)");
+            // Zeroize plaintext before returning
+            plaintext.zeroize();
             return Ok((sender_id, dm_content));
         }
 
@@ -258,6 +293,8 @@ impl MessageGateway {
                 text_len = data_message.body.len(),
                 "Decrypted DM (DataMessage proto fallback)"
             );
+            // Zeroize plaintext before returning
+            plaintext.zeroize();
             return Ok((sender_id, DmContent::Text {
                 body: data_message.body,
                 timestamp: data_message.timestamp,
@@ -266,9 +303,17 @@ impl MessageGateway {
         }
 
         // Last fallback: raw UTF-8 text
-        let raw_text = String::from_utf8(plaintext).map_err(|e| {
-            ServiceError::Validation(format!("DM content is not valid UTF-8: {}", e))
-        })?;
+        // Clone to String first, then zeroize the original bytes
+        let raw_text = match std::str::from_utf8(&plaintext) {
+            Ok(s) => s.to_string(),
+            Err(e) => {
+                plaintext.zeroize();
+                return Err(ServiceError::Validation(format!("DM content is not valid UTF-8: {}", e)));
+            }
+        };
+        // Zeroize plaintext after extracting the text
+        plaintext.zeroize();
+
         tracing::debug!(
             sender_id = %sender_id,
             text_len = raw_text.len(),

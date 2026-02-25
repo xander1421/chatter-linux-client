@@ -5,7 +5,35 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Avatar } from "../components/avatar.slint";
+
+// Reusable icon button for sidebar
+component SidebarIconButton inherits Rectangle {
+    in property <image> icon;
+    in property <color> icon-color: Colors.text-secondary;
+    callback clicked();
+
+    width: 32px;
+    height: 32px;
+    border-radius: Spacing.radius-sm;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+
+    Image {
+        source: icon;
+        width: 18px;
+        height: 18px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: touch.has-hover ? Colors.text-primary : icon-color;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
 
 export component UserProfileBar inherits Rectangle {
     // Properties
@@ -74,8 +102,8 @@ export component UserProfileBar inherits Rectangle {
                     Text {
                         text: root.display-name;
                         color: Colors.text-primary;
-                        font-size: 14px;
-                        font-weight: 600;
+                        font-size: Typography.sm;
+                        font-weight: Typography.semibold;
                         overflow: elide;
                     }
 
@@ -87,7 +115,7 @@ export component UserProfileBar inherits Rectangle {
                             : root.presence-status == "dnd" ? "Do Not Disturb"
                             : "Offline";
                         color: Colors.text-secondary;
-                        font-size: 12px;
+                        font-size: Typography.xs;
                         overflow: elide;
                     }
                 }
@@ -104,14 +132,13 @@ export component UserProfileBar inherits Rectangle {
                 border-radius: Spacing.radius-sm;
                 background: friends-touch.has-hover ? Colors.surface-hover : transparent;
 
-                Text {
-                    text: "\u{1F465}\u{FE0F}"; // Two people icon (with emoji variant selector)
-                    color: Colors.text-secondary;
-                    font-size: 18px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
+                Image {
+                    source: Icons.users;
+                    width: 18px;
+                    height: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: friends-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
                 }
 
                 // Notification badge for pending requests
@@ -127,7 +154,7 @@ export component UserProfileBar inherits Rectangle {
                         text: root.pending-friend-requests > 9 ? "9+" : root.pending-friend-requests;
                         color: Colors.text-primary;
                         font-size: 10px;
-                        font-weight: 700;
+                        font-weight: Typography.bold;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                         width: 100%;
@@ -136,6 +163,7 @@ export component UserProfileBar inherits Rectangle {
                 }
 
                 friends-touch := TouchArea {
+                    mouse-cursor: pointer;
                     clicked => {
                         root.friends-clicked();
                     }
@@ -147,27 +175,9 @@ export component UserProfileBar inherits Rectangle {
         VerticalLayout {
             alignment: center;
 
-            settings-button := Rectangle {
-                width: 32px;
-                height: 32px;
-                border-radius: Spacing.radius-sm;
-                background: settings-touch.has-hover ? Colors.surface-hover : transparent;
-
-                Text {
-                    text: "\u{2699}\u{FE0F}"; // Gear icon (emoji)
-                    color: Colors.text-secondary;
-                    font-size: 18px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: 100%;
-                    height: 100%;
-                }
-
-                settings-touch := TouchArea {
-                    clicked => {
-                        root.settings-clicked();
-                    }
-                }
+            SidebarIconButton {
+                icon: Icons.settings;
+                clicked => { root.settings-clicked(); }
             }
         }
     }

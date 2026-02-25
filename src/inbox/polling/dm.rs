@@ -486,10 +486,24 @@ fn dispatch_dm_content(
                 "Incoming call notification received"
             );
 
-            // Derive channel_id from the DM conversation if not set
+            // Look up the actual DM channel by peer ID (server-assigned, NOT derived)
+            // This matches how text messages resolve the channel_id
             let resolved_channel_id = if channel_id.is_empty() {
                 if let Some(current_user) = current_user_id {
-                    ChannelId::from_dm_participants(current_user, sender_id).to_string()
+                    // First try to look up the actual DM channel
+                    match channel_repo.get_dm_channel_by_peer(current_user, sender_id) {
+                        Ok(Some(channel)) => channel.id.to_string(),
+                        _ => {
+                            // Fallback to derived ID if no channel exists yet
+                            let derived = ChannelId::from_dm_participants(current_user, sender_id);
+                            tracing::debug!(
+                                peer_id = %peer_id,
+                                derived_channel_id = %derived,
+                                "No DM channel found for incoming call, using derived ID"
+                            );
+                            derived.to_string()
+                        }
+                    }
                 } else {
                     peer_id.to_string()
                 }

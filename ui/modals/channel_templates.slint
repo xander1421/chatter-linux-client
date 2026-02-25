@@ -3,25 +3,34 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 
-// Individual template card
+// Individual template card with proper icon
 component TemplateCard inherits Rectangle {
     in property <string> template-id;
     in property <string> name;
     in property <string> description;
-    in property <color> icon-color;
+    in property <image> icon;
+    in property <color> accent-color;
     in property <bool> selected: false;
 
     callback clicked();
 
     property <bool> hovered: touch.has-hover;
 
-    width: 100%;
-    height: 120px;
-    border-radius: Spacing.radius-md;
-    background: hovered ? Colors.surface-hover : Colors.surface;
+    height: 110px;
+    border-radius: Spacing.radius-lg;
+    background: Colors.surface;
     border-width: selected ? 2px : 1px;
-    border-color: selected ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+    border-color: selected ? accent-color : Colors.text-muted.with-alpha(0.2);
+
+    // Subtle gradient overlay on hover
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: Spacing.radius-lg;
+        background: hovered ? accent-color.with-alpha(0.05) : transparent;
+    }
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -30,43 +39,55 @@ component TemplateCard inherits Rectangle {
         }
     }
 
-    VerticalLayout {
+    HorizontalLayout {
         padding: Spacing.md;
-        spacing: Spacing.sm;
+        spacing: Spacing.md;
 
-        // Icon placeholder
+        // Icon container with colored background
         Rectangle {
-            width: 40px;
-            height: 40px;
+            width: 48px;
+            height: 48px;
             border-radius: Spacing.radius-md;
-            background: root.icon-color.with-alpha(0.2);
+            background: accent-color.with-alpha(0.15);
 
-            // Inner icon indicator
-            Rectangle {
-                width: 20px;
-                height: 20px;
+            Image {
+                source: icon;
+                width: 24px;
+                height: 24px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                border-radius: Spacing.radius-sm;
-                background: root.icon-color;
+                colorize: accent-color;
             }
         }
 
-        // Template name
-        Text {
-            text: root.name;
-            color: Colors.text-primary;
-            font-size: Typography.sm;
-            font-weight: Typography.semibold;
+        // Text content
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: Spacing.xs;
+
+            Text {
+                text: name;
+                color: selected ? accent-color : Colors.text-primary;
+                font-size: Typography.base;
+                font-weight: Typography.semibold;
+            }
+
+            Text {
+                text: description;
+                color: Colors.text-secondary;
+                font-size: Typography.xs;
+                wrap: word-wrap;
+            }
         }
 
-        // Template description
-        Text {
-            text: root.description;
-            color: Colors.text-secondary;
-            font-size: Typography.xs;
-            wrap: word-wrap;
-            overflow: elide;
+        // Selection indicator
+        if selected: Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: accent-color;
+            y: (parent.height - self.height) / 2;
         }
     }
 }
@@ -78,93 +99,108 @@ export component ChannelTemplates inherits Rectangle {
 
     background: transparent;
 
-    // Grid layout using nested HorizontalLayouts
-    VerticalLayout {
-        spacing: Spacing.md;
+    // Scrollable grid
+    Flickable {
+        viewport-height: grid-layout.preferred-height;
 
-        // Row 1: General and Project
-        HorizontalLayout {
+        grid-layout := VerticalLayout {
             spacing: Spacing.md;
+            padding-right: Spacing.sm;  // Space for scrollbar
 
-            TemplateCard {
-                template-id: "general";
-                name: "General";
-                description: "Open discussion for everyone";
-                icon-color: Colors.info;
-                selected: root.selected-template == "general";
+            // Row 1
+            HorizontalLayout {
+                spacing: Spacing.md;
 
-                clicked => {
-                    root.selected-template = "general";
-                    root.template-selected("general");
+                TemplateCard {
+                    horizontal-stretch: 1;
+                    template-id: "general";
+                    name: "General";
+                    description: "Open discussion for everyone";
+                    icon: Icons.message-circle;
+                    accent-color: Colors.info;
+                    selected: root.selected-template == "general";
+
+                    clicked => {
+                        root.selected-template = "general";
+                        root.template-selected("general");
+                    }
+                }
+
+                TemplateCard {
+                    horizontal-stretch: 1;
+                    template-id: "project";
+                    name: "Project";
+                    description: "Focused team collaboration";
+                    icon: Icons.folder;
+                    accent-color: Colors.success;
+                    selected: root.selected-template == "project";
+
+                    clicked => {
+                        root.selected-template = "project";
+                        root.template-selected("project");
+                    }
                 }
             }
 
-            TemplateCard {
-                template-id: "project";
-                name: "Project";
-                description: "Focused team collaboration";
-                icon-color: Colors.success;
-                selected: root.selected-template == "project";
+            // Row 2
+            HorizontalLayout {
+                spacing: Spacing.md;
 
-                clicked => {
-                    root.selected-template = "project";
-                    root.template-selected("project");
+                TemplateCard {
+                    horizontal-stretch: 1;
+                    template-id: "announcement";
+                    name: "Announcement";
+                    description: "One-way broadcast channel";
+                    icon: Icons.megaphone;
+                    accent-color: Colors.warning;
+                    selected: root.selected-template == "announcement";
+
+                    clicked => {
+                        root.selected-template = "announcement";
+                        root.template-selected("announcement");
+                    }
                 }
-            }
-        }
 
-        // Row 2: Announcement and Ephemeral
-        HorizontalLayout {
-            spacing: Spacing.md;
+                TemplateCard {
+                    horizontal-stretch: 1;
+                    template-id: "ephemeral";
+                    name: "Ephemeral";
+                    description: "Messages auto-delete after 24h";
+                    icon: Icons.clock;
+                    accent-color: Colors.error;
+                    selected: root.selected-template == "ephemeral";
 
-            TemplateCard {
-                template-id: "announcement";
-                name: "Announcement";
-                description: "One-way broadcast channel";
-                icon-color: Colors.warning;
-                selected: root.selected-template == "announcement";
-
-                clicked => {
-                    root.selected-template = "announcement";
-                    root.template-selected("announcement");
-                }
-            }
-
-            TemplateCard {
-                template-id: "ephemeral";
-                name: "Ephemeral";
-                description: "Messages auto-delete after 24h";
-                icon-color: Colors.error;
-                selected: root.selected-template == "ephemeral";
-
-                clicked => {
-                    root.selected-template = "ephemeral";
-                    root.template-selected("ephemeral");
-                }
-            }
-        }
-
-        // Row 3: AI Assistant
-        HorizontalLayout {
-            spacing: Spacing.md;
-
-            TemplateCard {
-                template-id: "ai-assistant";
-                name: "AI Assistant";
-                description: "Channel with AI bot integration";
-                icon-color: Colors.primary;
-                selected: root.selected-template == "ai-assistant";
-
-                clicked => {
-                    root.selected-template = "ai-assistant";
-                    root.template-selected("ai-assistant");
+                    clicked => {
+                        root.selected-template = "ephemeral";
+                        root.template-selected("ephemeral");
+                    }
                 }
             }
 
-            // Spacer to balance grid
-            Rectangle {
-                horizontal-stretch: 1;
-                background: transparent;
+            // Row 3
+            HorizontalLayout {
+                spacing: Spacing.md;
+
+                TemplateCard {
+                    horizontal-stretch: 1;
+                    template-id: "ai-assistant";
+                    name: "AI Assistant";
+                    description: "Channel with AI bot integration";
+                    icon: Icons.sparkles;
+                    accent-color: Colors.primary;
+                    selected: root.selected-template == "ai-assistant";
+
+                    clicked => {
+                        root.selected-template = "ai-assistant";
+                        root.template-selected("ai-assistant");
+                    }
+                }
+
+                // Empty placeholder for grid balance
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: transparent;
+                }
             }
         }
     }

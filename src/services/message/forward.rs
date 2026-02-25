@@ -8,6 +8,7 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
+use crate::services::current_user::CurrentUserProvider;
 
 use super::conversion::proto_to_domain_message;
 use super::{MessageError, MessageService};
@@ -24,7 +25,7 @@ impl MessageService {
         comment: Option<&str>,
     ) -> Result<Message, MessageError> {
         // Check logged in
-        let sender_id = self.current_user_id()?;
+        let sender_id = self.settings_repo.current_user_id()?;
 
         // Get source message from local storage
         let source = self

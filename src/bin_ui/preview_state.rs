@@ -2,8 +2,10 @@
 //!
 //! Tracks the currently previewed file content for "open in external editor" functionality.
 //! Stores decrypted content in memory - only written to disk on explicit user export.
+//! Content is zeroized when cleared for security.
 
 use std::sync::{Mutex, OnceLock};
+use zeroize::Zeroize;
 
 /// Global state tracking the current preview content.
 static PREVIEW_STATE: OnceLock<Mutex<PreviewState>> = OnceLock::new();
@@ -44,8 +46,13 @@ pub fn get_code_preview_content() -> Option<PreviewContent> {
 }
 
 /// Clear the code preview content when closing.
+///
+/// Zeroizes the decrypted content before releasing memory.
 pub fn clear_code_preview() {
     if let Ok(mut state) = get_state().lock() {
+        if let Some(ref mut content) = state.code_content {
+            content.data.zeroize();
+        }
         state.code_content = None;
     }
 }
@@ -63,8 +70,13 @@ pub fn get_pdf_preview_content() -> Option<PreviewContent> {
 }
 
 /// Clear the PDF preview content when closing.
+///
+/// Zeroizes the decrypted content before releasing memory.
 pub fn clear_pdf_preview() {
     if let Ok(mut state) = get_state().lock() {
+        if let Some(ref mut content) = state.pdf_content {
+            content.data.zeroize();
+        }
         state.pdf_content = None;
     }
 }

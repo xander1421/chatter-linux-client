@@ -28,10 +28,11 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
     let attachment_repo = ctx.attachment_repo.clone();
     let signal_service = ctx.signal_service.clone();
     let group_coordinator = ctx.group_coordinator.clone();
-    let message_service = ctx.message_service.clone();
     let dm_bootstrap_service = ctx.dm_bootstrap_service.clone();
     let database = ctx.database.clone();
     let event_bus = ctx.event_bus.clone();
+    let message_service = ctx.message_service.clone();
+    let mailbox_manager = ctx.mailbox_manager.clone();
     let db_path = ctx.database.path().to_path_buf();
     // Use cached passphrase from context (avoids multiple keyring prompts)
     let db_passphrase = Some(ctx.db_passphrase.clone());
@@ -53,10 +54,11 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
         let attachment_repo = attachment_repo.clone();
         let signal_service = signal_service.clone();
         let group_coordinator = group_coordinator.clone();
-        let message_service = message_service.clone();
         let dm_bootstrap_service = dm_bootstrap_service.clone();
         let database = database.clone();
         let event_bus = event_bus.clone();
+        let message_service = message_service.clone();
+        let mailbox_manager = mailbox_manager.clone();
         let db_path = db_path.clone();
         let db_passphrase = db_passphrase.clone();
         let weak = weak_window.clone();
@@ -109,9 +111,10 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                             let dm_bootstrap_service_for_events = dm_bootstrap_service.clone();
                             let attachment_repo_for_events = attachment_repo.clone();
                             let grpc_pool_for_events = grpc_pool.clone();
-                            let message_service_for_events = message_service.clone();
                             let database_for_events = database.clone();
                             let event_bus_for_events = event_bus.clone();
+                            let message_service_for_events = message_service.clone();
+                            let mailbox_manager_for_events = mailbox_manager.clone();
 
                             tokio::spawn(async move {
                                 while let Ok(event) = event_rx.recv().await {
@@ -122,9 +125,10 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                                         &dm_bootstrap_service_for_events,
                                         &attachment_repo_for_events,
                                         &grpc_pool_for_events,
-                                        &message_service_for_events,
                                         &database_for_events,
                                         &event_bus_for_events,
+                                        &message_service_for_events,
+                                        &mailbox_manager_for_events,
                                     )
                                     .await;
                                 }
@@ -162,12 +166,14 @@ pub fn wire_login(window: &MainWindow, ctx: &AppContext) {
                     );
                     tracing::debug!("Channel events handler spawned");
 
-                    // Switch to main view
+                    // Switch to main view and stop animation
                     let weak_for_view = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_for_view.upgrade() {
                             w.set_login_loading(false);
                             w.set_current_view("main".into());
+                            // Cleanup black hole animation (free GPU resources)
+                            crate::bin_ui::blackhole_state::cleanup();
                         }
                     });
 

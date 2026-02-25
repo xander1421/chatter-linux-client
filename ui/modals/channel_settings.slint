@@ -1,0 +1,820 @@
+// ChannelSettingsModal - Modal for viewing and editing channel settings
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { Toggle } from "../components/toggle.slint";
+import { ScrollView } from "std-widgets.slint";
+
+// Member data for the member list
+export struct ChannelMemberData {
+    user-id: string,
+    display-name: string,
+    username: string,
+    role: string,  // "owner", "admin", "moderator", "member"
+    joined-at: string,
+}
+
+export component ChannelSettingsModal inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <string> channel-id: "";
+    in property <string> channel-name: "";
+    in property <string> channel-description: "";
+    in property <string> channel-type: "public";  // "public", "private", "dm"
+    in property <bool> is-archived: false;
+    in property <string> created-at: "";
+    in property <int> member-count: 0;
+
+    // Current user's permissions
+    in property <bool> can-edit: false;
+    in property <bool> can-manage-members: false;
+    in property <bool> can-archive: false;
+    in property <bool> can-delete: false;
+    in property <bool> is-owner: false;
+
+    // Channel configuration
+    in-out property <bool> allow-reactions: true;
+    in-out property <bool> allow-threads: true;
+    in-out property <bool> allow-attachments: true;
+
+    // Notification settings (per user)
+    in-out property <string> notification-preference: "all";  // "all", "mentions", "none"
+    in-out property <bool> is-muted: false;
+
+    // Member list
+    in property <[ChannelMemberData]> members: [];
+
+    // Loading/error state
+    in property <bool> loading: false;
+    in property <string> error-message: "";
+
+    // Active section for navigation
+    in-out property <string> active-section: "general";  // "general", "notifications", "members", "danger"
+
+    callback close();
+    callback save-settings(string, string);  // name, description
+    callback toggle-setting(string, bool);  // setting-name, value
+    callback change-notification(string);  // preference
+    callback toggle-mute(bool);
+    callback change-member-role(string, string);  // user-id, new-role
+    callback remove-member(string);  // user-id
+    callback archive-channel();
+    callback leave-channel();
+    callback delete-channel();
+
+    // Helper to get role display color
+    pure function role-color(role: string) -> color {
+        if role == "owner" {
+            return Colors.warning;
+        } else if role == "admin" {
+            return Colors.error;
+        } else if role == "moderator" {
+            return Colors.info;
+        } else {
+            return Colors.text-secondary;
+        }
+    }
+
+    // Helper to get channel type icon
+    pure function type-icon(t: string) -> string {
+        if t == "private" {
+            return "\u{1F512}";  // Lock
+        } else if t == "dm" {
+            return "\u{1F4AC}";  // Speech bubble
+        } else {
+            return "#";
+        }
+    }
+
+    Modal {
+        show: root.show-modal;
+        title: "Channel Settings";
+        modal-width: 600px;
+
+        close => {
+            root.close();
+        }
+
+        HorizontalLayout {
+            spacing: 0;
+
+            // Left sidebar - section navigation
+            Rectangle {
+                width: 160px;
+                background: Colors.surface;
+                border-radius: Spacing.radius-md;
+
+                VerticalLayout {
+                    padding: Spacing.sm;
+                    spacing: Spacing.xs;
+                    alignment: start;
+
+                    // General section
+                    Rectangle {
+                        height: 36px;
+                        background: root.active-section == "general" ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        TouchArea {
+                            clicked => { root.active-section = "general"; }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                alignment: start;
+
+                                Text {
+                                    text: "\u{2699}\u{FE0F}  General";
+                                    color: root.active-section == "general" ? Colors.text-primary : Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Notifications section
+                    Rectangle {
+                        height: 36px;
+                        background: root.active-section == "notifications" ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        TouchArea {
+                            clicked => { root.active-section = "notifications"; }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                alignment: start;
+
+                                Text {
+                                    text: "\u{1F514}  Notifications";
+                                    color: root.active-section == "notifications" ? Colors.text-primary : Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Members section
+                    if root.can-manage-members: Rectangle {
+                        height: 36px;
+                        background: root.active-section == "members" ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        TouchArea {
+                            clicked => { root.active-section = "members"; }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                alignment: start;
+
+                                Text {
+                                    text: "\u{1F465}  Members";
+                                    color: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // Danger zone section (only for those with permissions)
+                    if root.can-archive || root.can-delete: Rectangle {
+                        height: 36px;
+                        background: root.active-section == "danger" ? Colors.error.with-alpha(0.1) : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        TouchArea {
+                            clicked => { root.active-section = "danger"; }
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                alignment: start;
+
+                                Text {
+                                    text: "\u{26A0}\u{FE0F}  Danger Zone";
+                                    color: root.active-section == "danger" ? Colors.error : Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Right content area
+            Rectangle {
+                background: transparent;
+
+                ScrollView {
+                    viewport-height: content-area.preferred-height;
+
+                    content-area := VerticalLayout {
+                        padding: Spacing.md;
+                        spacing: Spacing.lg;
+
+                        // ========== General Section ==========
+                        if root.active-section == "general": VerticalLayout {
+                            spacing: Spacing.md;
+
+                            // Channel header info
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+                                alignment: start;
+
+                                Text {
+                                    text: root.type-icon(root.channel-type);
+                                    font-size: Typography.xl;
+                                    vertical-alignment: center;
+                                }
+
+                                VerticalLayout {
+                                    spacing: Spacing.xs;
+
+                                    Text {
+                                        text: root.channel-name;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.lg;
+                                        font-weight: Typography.semibold;
+                                    }
+
+                                    Text {
+                                        text: root.member-count + " members • Created " + root.created-at;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+                            }
+
+                            // Divider
+                            Rectangle {
+                                height: 1px;
+                                background: Colors.surface-hover;
+                            }
+
+                            // Channel name (editable if permitted)
+                            VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                Text {
+                                    text: "Channel Name";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                }
+
+                                if root.can-edit: Input {
+                                    text: root.channel-name;
+                                    placeholder: "Channel name";
+
+                                    edited(value) => {
+                                        // Will be saved on explicit save action
+                                    }
+                                }
+
+                                if !root.can-edit: Text {
+                                    text: root.channel-name;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.base;
+                                }
+                            }
+
+                            // Channel description
+                            VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                Text {
+                                    text: "Description";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                }
+
+                                if root.can-edit: Input {
+                                    text: root.channel-description;
+                                    placeholder: "Add a description...";
+
+                                    edited(value) => {
+                                        // Will be saved on explicit save action
+                                    }
+                                }
+
+                                if !root.can-edit: Text {
+                                    text: root.channel-description != "" ? root.channel-description : "No description";
+                                    color: root.channel-description != "" ? Colors.text-primary : Colors.text-muted;
+                                    font-size: Typography.base;
+                                    font-italic: root.channel-description == "";
+                                }
+                            }
+
+                            // Channel settings toggles (if can edit)
+                            if root.can-edit: VerticalLayout {
+                                spacing: Spacing.sm;
+
+                                Rectangle {
+                                    height: 1px;
+                                    background: Colors.surface-hover;
+                                }
+
+                                Text {
+                                    text: "Channel Features";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                }
+
+                                // Allow reactions
+                                HorizontalLayout {
+                                    spacing: Spacing.sm;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+
+                                        Text {
+                                            text: "Allow Reactions";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                        }
+                                        Text {
+                                            text: "Members can react to messages with emoji";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                        }
+                                    }
+
+                                    Toggle {
+                                        checked: root.allow-reactions;
+                                        toggled(value) => {
+                                            root.toggle-setting("reactions", value);
+                                        }
+                                    }
+                                }
+
+                                // Allow threads
+                                HorizontalLayout {
+                                    spacing: Spacing.sm;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+
+                                        Text {
+                                            text: "Allow Threads";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                        }
+                                        Text {
+                                            text: "Members can reply in threads";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                        }
+                                    }
+
+                                    Toggle {
+                                        checked: root.allow-threads;
+                                        toggled(value) => {
+                                            root.toggle-setting("threads", value);
+                                        }
+                                    }
+                                }
+
+                                // Allow attachments
+                                HorizontalLayout {
+                                    spacing: Spacing.sm;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+
+                                        Text {
+                                            text: "Allow Attachments";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                        }
+                                        Text {
+                                            text: "Members can share files and images";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                        }
+                                    }
+
+                                    Toggle {
+                                        checked: root.allow-attachments;
+                                        toggled(value) => {
+                                            root.toggle-setting("attachments", value);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // ========== Notifications Section ==========
+                        if root.active-section == "notifications": VerticalLayout {
+                            spacing: Spacing.md;
+
+                            Text {
+                                text: "Notification Preferences";
+                                color: Colors.text-primary;
+                                font-size: Typography.lg;
+                                font-weight: Typography.semibold;
+                            }
+
+                            // Mute toggle
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+
+                                    Text {
+                                        text: "Mute Channel";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                    }
+                                    Text {
+                                        text: "You won't receive any notifications from this channel";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+
+                                Toggle {
+                                    checked: root.is-muted;
+                                    toggled(value) => {
+                                        root.toggle-mute(value);
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                height: 1px;
+                                background: Colors.surface-hover;
+                            }
+
+                            Text {
+                                text: "When not muted, notify me for:";
+                                color: Colors.text-secondary;
+                                font-size: Typography.sm;
+                            }
+
+                            // All messages
+                            Rectangle {
+                                height: 44px;
+                                background: root.notification-preference == "all" ? Colors.primary.with-alpha(0.1) : transparent;
+                                border-radius: Spacing.radius-sm;
+                                border-width: root.notification-preference == "all" ? 1px : 0;
+                                border-color: Colors.primary;
+
+                                TouchArea {
+                                    clicked => { root.change-notification("all"); }
+
+                                    HorizontalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.sm;
+
+                                        Rectangle {
+                                            width: 20px;
+                                            height: 20px;
+                                            border-radius: 10px;
+                                            border-width: 2px;
+                                            border-color: root.notification-preference == "all" ? Colors.primary : Colors.surface-hover;
+                                            background: root.notification-preference == "all" ? Colors.primary : transparent;
+                                        }
+
+                                        VerticalLayout {
+                                            Text {
+                                                text: "All Messages";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                            }
+                                            Text {
+                                                text: "Get notified for every message";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Mentions only
+                            Rectangle {
+                                height: 44px;
+                                background: root.notification-preference == "mentions" ? Colors.primary.with-alpha(0.1) : transparent;
+                                border-radius: Spacing.radius-sm;
+                                border-width: root.notification-preference == "mentions" ? 1px : 0;
+                                border-color: Colors.primary;
+
+                                TouchArea {
+                                    clicked => { root.change-notification("mentions"); }
+
+                                    HorizontalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.sm;
+
+                                        Rectangle {
+                                            width: 20px;
+                                            height: 20px;
+                                            border-radius: 10px;
+                                            border-width: 2px;
+                                            border-color: root.notification-preference == "mentions" ? Colors.primary : Colors.surface-hover;
+                                            background: root.notification-preference == "mentions" ? Colors.primary : transparent;
+                                        }
+
+                                        VerticalLayout {
+                                            Text {
+                                                text: "Mentions Only";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                            }
+                                            Text {
+                                                text: "Only when someone @mentions you";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // None
+                            Rectangle {
+                                height: 44px;
+                                background: root.notification-preference == "none" ? Colors.primary.with-alpha(0.1) : transparent;
+                                border-radius: Spacing.radius-sm;
+                                border-width: root.notification-preference == "none" ? 1px : 0;
+                                border-color: Colors.primary;
+
+                                TouchArea {
+                                    clicked => { root.change-notification("none"); }
+
+                                    HorizontalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.sm;
+
+                                        Rectangle {
+                                            width: 20px;
+                                            height: 20px;
+                                            border-radius: 10px;
+                                            border-width: 2px;
+                                            border-color: root.notification-preference == "none" ? Colors.primary : Colors.surface-hover;
+                                            background: root.notification-preference == "none" ? Colors.primary : transparent;
+                                        }
+
+                                        VerticalLayout {
+                                            Text {
+                                                text: "Nothing";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                            }
+                                            Text {
+                                                text: "Never notify (still shows unread badge)";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // ========== Members Section ==========
+                        if root.active-section == "members": VerticalLayout {
+                            spacing: Spacing.md;
+
+                            HorizontalLayout {
+                                Text {
+                                    text: "Members";
+                                    color: Colors.text-primary;
+                                    font-size: Typography.lg;
+                                    font-weight: Typography.semibold;
+                                    horizontal-stretch: 1;
+                                }
+
+                                Text {
+                                    text: root.member-count + " total";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.sm;
+                                }
+                            }
+
+                            // Member list
+                            for member in root.members: Rectangle {
+                                height: 52px;
+                                background: transparent;
+
+                                HorizontalLayout {
+                                    spacing: Spacing.sm;
+                                    padding: Spacing.xs;
+
+                                    // Avatar placeholder
+                                    Rectangle {
+                                        width: 36px;
+                                        height: 36px;
+                                        border-radius: 18px;
+                                        background: Colors.surface-hover;
+
+                                        Text {
+                                            text: member.display-name != "" ? member.display-name : "?";
+                                            color: Colors.text-secondary;
+                                            font-size: Typography.sm;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    // Name and role
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.xs;
+
+                                            Text {
+                                                text: member.display-name;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                            }
+
+                                            if member.role != "member": Rectangle {
+                                                width: role-text.width + Spacing.sm;
+                                                height: 18px;
+                                                background: root.role-color(member.role).with-alpha(0.15);
+                                                border-radius: Spacing.radius-sm;
+
+                                                role-text := Text {
+                                                    x: Spacing.xs;
+                                                    text: member.role;
+                                                    color: root.role-color(member.role);
+                                                    font-size: Typography.xs;
+                                                    font-weight: Typography.medium;
+                                                    vertical-alignment: center;
+                                                    height: 100%;
+                                                }
+                                            }
+                                        }
+
+                                        Text {
+                                            text: "@" + member.username;
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                        }
+                                    }
+
+                                    // Actions (only if can manage and not owner)
+                                    if root.can-manage-members && member.role != "owner": Button {
+                                        text: "Remove";
+                                        variant: "ghost";
+
+                                        clicked => {
+                                            root.remove-member(member.user-id);
+                                        }
+                                    }
+                                }
+
+                                // Bottom border
+                                Rectangle {
+                                    y: parent.height - 1px;
+                                    height: 1px;
+                                    background: Colors.surface-hover.with-alpha(0.5);
+                                }
+                            }
+                        }
+
+                        // ========== Danger Zone Section ==========
+                        if root.active-section == "danger": VerticalLayout {
+                            spacing: Spacing.md;
+
+                            Text {
+                                text: "Danger Zone";
+                                color: Colors.error;
+                                font-size: Typography.lg;
+                                font-weight: Typography.semibold;
+                            }
+
+                            Text {
+                                text: "These actions are irreversible. Please be certain.";
+                                color: Colors.text-muted;
+                                font-size: Typography.sm;
+                            }
+
+                            Rectangle {
+                                height: 1px;
+                                background: Colors.error.with-alpha(0.3);
+                            }
+
+                            // Leave channel
+                            if !root.is-owner: HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+
+                                    Text {
+                                        text: "Leave Channel";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                    }
+                                    Text {
+                                        text: "You will lose access to this channel's messages";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+
+                                Button {
+                                    text: "Leave";
+                                    variant: "secondary";
+
+                                    clicked => {
+                                        root.leave-channel();
+                                    }
+                                }
+                            }
+
+                            // Archive channel
+                            if root.can-archive: HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+
+                                    Text {
+                                        text: root.is-archived ? "Unarchive Channel" : "Archive Channel";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                    }
+                                    Text {
+                                        text: root.is-archived ? "Make channel active again" : "Archive to hide from active channels";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+
+                                Button {
+                                    text: root.is-archived ? "Unarchive" : "Archive";
+                                    variant: "secondary";
+
+                                    clicked => {
+                                        root.archive-channel();
+                                    }
+                                }
+                            }
+
+                            // Delete channel
+                            if root.can-delete: HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+
+                                    Text {
+                                        text: "Delete Channel";
+                                        color: Colors.error;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Permanently delete this channel and all messages";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+                                }
+
+                                Button {
+                                    text: "Delete";
+                                    variant: "danger";
+
+                                    clicked => {
+                                        root.delete-channel();
+                                    }
+                                }
+                            }
+                        }
+
+                        // Error message
+                        if root.error-message != "": Rectangle {
+                            height: 40px;
+                            background: Colors.error.with-alpha(0.1);
+                            border-radius: Spacing.radius-sm;
+
+                            Text {
+                                text: root.error-message;
+                                color: Colors.error;
+                                font-size: Typography.sm;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

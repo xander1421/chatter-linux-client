@@ -89,7 +89,6 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
     let attachment_repo = ctx.attachment_repo.clone();
     let auth_state = ctx.auth_state.clone();
     let database = ctx.database.clone();
-    let grpc_pool = ctx.grpc_pool.clone();
     let message_service = ctx.message_service();
     let mailbox_manager = ctx.mailbox_manager.clone();
 
@@ -105,7 +104,6 @@ fn wire_dm_selected(window: &MainWindow, ctx: &AppContext) {
         let attachment_repo = attachment_repo.clone();
         let auth_state = auth_state.clone();
         let database = database.clone();
-        let _grpc_pool = grpc_pool.clone();
         let message_service = message_service.clone();
         let mailbox_manager = mailbox_manager.clone();
 
@@ -514,6 +512,7 @@ pub async fn load_channel_into_ui(
 
             w.set_channel_name(channel_name.into());
             w.set_channel_type(channel_type.into());
+            w.set_is_dm(channel_type == "dm");
             w.set_member_count(member_count);
             w.set_topic(topic.into());
             w.set_is_archived(is_archived);

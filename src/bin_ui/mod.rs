@@ -4,6 +4,7 @@
 //! Slint-generated types from `slint::include_modules!()`.
 
 pub mod audio_state;
+pub mod blackhole_state;
 pub mod converters;
 pub mod features;
 pub mod gif_state;

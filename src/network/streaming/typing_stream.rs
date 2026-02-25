@@ -17,6 +17,10 @@ const TYPING_TIMEOUT: Duration = Duration::from_secs(10);
 /// Capacity for typing event channel.
 const CHANNEL_CAPACITY: usize = 64;
 
+/// Maximum number of channels to track typing state for.
+/// Oldest channels are evicted when this limit is exceeded.
+const MAX_TRACKED_CHANNELS: usize = 100;
+
 /// Typing stream handler with per-channel aggregation.
 ///
 /// Tracks which users are typing in each channel, with automatic
@@ -40,6 +44,9 @@ const CHANNEL_CAPACITY: usize = 64;
 pub struct TypingAggregator {
     /// Per-channel typing state (channel_id -> user_id -> expiry time).
     state: Arc<RwLock<HashMap<String, HashMap<String, Instant>>>>,
+
+    /// LRU order for channel eviction (most recent at back).
+    channel_lru: Arc<RwLock<std::collections::VecDeque<String>>>,
 
     /// Broadcast for typing state changes.
     changes: broadcast::Sender<TypingStateChange>,
@@ -67,6 +74,7 @@ impl TypingAggregator {
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
             state: Arc::new(RwLock::new(HashMap::new())),
+            channel_lru: Arc::new(RwLock::new(std::collections::VecDeque::new())),
             changes: broadcast::channel(CHANNEL_CAPACITY).0,
             timeout,
         }
@@ -94,6 +102,19 @@ impl TypingAggregator {
 
         let changed = {
             let mut state = self.state.write();
+            let mut lru = self.channel_lru.write();
+
+            // Touch channel in LRU
+            lru.retain(|id| id != channel_id);
+            lru.push_back(channel_id.to_string());
+
+            // Evict oldest channels if over limit
+            while lru.len() > MAX_TRACKED_CHANNELS {
+                if let Some(oldest) = lru.pop_front() {
+                    state.remove(&oldest);
+                }
+            }
+
             let channel = state.entry(channel_id.to_string()).or_default();
             let was_typing = channel.contains_key(user_id);
             channel.insert(user_id.to_string(), expiry);
@@ -152,6 +173,7 @@ impl TypingAggregator {
         let now = Instant::now();
         let mut removed = 0;
         let mut channels_changed = Vec::new();
+        let mut channels_removed = Vec::new();
 
         {
             let mut state = self.state.write();
@@ -165,10 +187,20 @@ impl TypingAggregator {
                     removed += before - after;
                     channels_changed.push(channel_id.clone());
                 }
+
+                if channel.is_empty() {
+                    channels_removed.push(channel_id.clone());
+                }
             }
 
             // Remove empty channels
             state.retain(|_, channel| !channel.is_empty());
+        }
+
+        // Update LRU to remove empty channels
+        if !channels_removed.is_empty() {
+            let mut lru = self.channel_lru.write();
+            lru.retain(|id| !channels_removed.contains(id));
         }
 
         // Emit changes for affected channels
@@ -182,6 +214,7 @@ impl TypingAggregator {
     /// Clear all typing state.
     pub fn clear(&self) {
         self.state.write().clear();
+        self.channel_lru.write().clear();
     }
 
     /// Emit a typing state change event.

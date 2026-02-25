@@ -47,6 +47,8 @@ pub struct VideoInfo {
     pub codec: String,
     /// Whether the video has audio.
     pub has_audio: bool,
+    /// Whether the video is seekable (false for live streams).
+    pub is_seekable: bool,
 }
 
 /// A decoded video frame.
@@ -99,6 +101,13 @@ pub trait VideoDecoder: Send {
     /// Get the current playback position in milliseconds.
     fn position_ms(&self) -> u64;
 
+    /// Query the actual position from the decoder pipeline.
+    ///
+    /// Unlike `position_ms()` which may return a cached value, this queries
+    /// the actual current position from the underlying decoder. Use this to
+    /// verify seek operations succeeded.
+    fn query_actual_position_ms(&self) -> Result<u64, MediaError>;
+
     /// Get video duration in milliseconds.
     fn duration_ms(&self) -> u64;
 
@@ -110,6 +119,10 @@ pub trait VideoDecoder: Send {
 
     /// Get frame rate.
     fn fps(&self) -> f64;
+
+    /// Check if the video is seekable.
+    /// Returns false for live streams or formats without seek support.
+    fn is_seekable(&self) -> bool;
 
     /// Close the decoder and release resources.
     fn close(&mut self);

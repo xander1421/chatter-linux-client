@@ -91,9 +91,10 @@ impl GrpcClientPool {
             .keep_alive_while_idle(true)
             .concurrency_limit(256)
             // HTTP/2 window sizes for large uploads
-            .initial_stream_window_size(1024 * 1024) // 1MB stream window
-            .initial_connection_window_size(4 * 1024 * 1024) // 4MB connection window
-            .http2_adaptive_window(true); // Enable adaptive window sizing
+            // Adaptive window is disabled to prevent unbounded growth
+            // Fixed windows provide predictable memory usage
+            .initial_stream_window_size(2 * 1024 * 1024) // 2MB per-stream window
+            .initial_connection_window_size(8 * 1024 * 1024); // 8MB connection window (bounded)
 
         if let Some(t) = timeout {
             endpoint = endpoint.timeout(t);

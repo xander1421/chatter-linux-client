@@ -14,7 +14,8 @@ use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::message_client::MessageClient;
 use crate::network::streaming::read_receipt_stream::{ReadReceiptAggregator, ReadState};
 use crate::proto::chat_v1::ReadReceipt;
-use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+use crate::storage::repositories::settings_repo::SettingsRepository;
 
 /// Read receipt service errors.
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +31,15 @@ pub enum ReadReceiptError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+}
+
+impl From<CurrentUserError> for ReadReceiptError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => ReadReceiptError::Storage(e),
+            CurrentUserError::NotLoggedIn => ReadReceiptError::NotLoggedIn,
+        }
+    }
 }
 
 /// Read receipt service.
@@ -67,19 +77,6 @@ impl ReadReceiptService {
         }
     }
 
-    /// Get the currently logged-in user ID.
-    fn current_user_id(&self) -> Result<UserId, ReadReceiptError> {
-        let user_id_str = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(ReadReceiptError::Storage)?
-            .ok_or(ReadReceiptError::NotLoggedIn)?;
-
-        user_id_str
-            .parse()
-            .map_err(|_| ReadReceiptError::NotLoggedIn)
-    }
-
     // ========================================================================
     // Server Operations
     // ========================================================================
@@ -100,7 +97,7 @@ impl ReadReceiptService {
         last_message_id: &str,
     ) -> Result<(), ReadReceiptError> {
         // Check logged in and get user ID
-        let current_user = self.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         // Send read receipt to server
         client.send_read_receipt(channel_id, last_message_id).await?;
@@ -137,7 +134,7 @@ impl ReadReceiptService {
         limit: i32,
     ) -> Result<Vec<ReadReceipt>, ReadReceiptError> {
         // Check logged in
-        let _ = self.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Fetch from server
         let response = client.get_read_receipts(channel_id, None, limit).await?;

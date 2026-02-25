@@ -1,22 +1,182 @@
 //! SQLCipher database connection.
 //!
 //! Encrypted database connection pool management using SQLCipher.
+//!
+//! Architecture:
+//! - Single writer connection protected by Mutex (serializes writes)
+//! - Pool of reader connections for concurrent reads (WAL mode enables this)
+//! - Reader pool creates connections lazily and reuses them
 
 use crate::error::StorageError;
 use crate::storage::migrations::default_migrations;
+use parking_lot::{Mutex, MutexGuard};
 use rusqlite::{Connection, OpenFlags};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+use zeroize::Zeroize;
+
+/// Number of reader connections in the pool.
+const READER_POOL_SIZE: usize = 4;
 
 /// SQLCipher database connection pool.
 ///
-/// Provides thread-safe access to an encrypted SQLite database.
-/// Uses a simplified single-connection model with mutex for v1.
+/// Provides thread-safe access to an encrypted SQLite database with
+/// separate reader and writer connections for improved concurrency.
+///
+/// # Architecture
+///
+/// - **Writer**: Single connection protected by Mutex (serializes writes)
+/// - **Readers**: Pool of read-only connections for concurrent SELECT queries
+/// - **WAL mode**: Enables multiple concurrent readers while writing
+///
+/// # Usage
+///
+/// ```ignore
+/// // For writes (INSERT, UPDATE, DELETE)
+/// let conn = db.connection()?;
+/// conn.execute("INSERT INTO ...", [])?;
+///
+/// // For reads (SELECT) - concurrent access
+/// let conn = db.read_connection()?;
+/// let mut stmt = conn.prepare("SELECT * FROM ...")?;
+/// ```
 pub struct Database {
-    /// Connection with mutex for thread-safe access.
-    conn: Arc<Mutex<Connection>>,
+    /// Writer connection with mutex for thread-safe access.
+    writer: Arc<Mutex<Connection>>,
+    /// Pool of reader connections.
+    readers: Arc<ReaderPool>,
     /// Path to database file.
     path: PathBuf,
+}
+
+/// Pool of read-only connections for concurrent database reads.
+///
+/// Connections are created lazily up to `READER_POOL_SIZE`, then reused.
+/// Each connection is initialized with the SQLCipher passphrase.
+struct ReaderPool {
+    /// Available reader connections.
+    available: Mutex<VecDeque<Connection>>,
+    /// Path for creating new connections.
+    path: PathBuf,
+    /// Passphrase for new connections (zeroized on drop).
+    passphrase: Mutex<String>,
+    /// Current number of connections (available + in-use).
+    count: Mutex<usize>,
+}
+
+impl Drop for ReaderPool {
+    fn drop(&mut self) {
+        // Zeroize passphrase on drop
+        self.passphrase.lock().zeroize();
+    }
+}
+
+impl ReaderPool {
+    fn new(path: PathBuf, passphrase: String) -> Self {
+        Self {
+            available: Mutex::new(VecDeque::with_capacity(READER_POOL_SIZE)),
+            path,
+            passphrase: Mutex::new(passphrase),
+            count: Mutex::new(0),
+        }
+    }
+
+    /// Acquire a reader connection from the pool.
+    ///
+    /// Returns an existing connection if available, otherwise creates a new one
+    /// (up to READER_POOL_SIZE). If pool is exhausted, waits for a connection.
+    fn acquire(&self) -> Result<PooledReader<'_>, StorageError> {
+        // Try to get an available connection
+        {
+            let mut available = self.available.lock();
+            if let Some(conn) = available.pop_front() {
+                return Ok(PooledReader {
+                    conn: Some(conn),
+                    pool: self,
+                });
+            }
+        }
+
+        // Check if we can create a new connection
+        let should_create = {
+            let count = self.count.lock();
+            *count < READER_POOL_SIZE
+        };
+
+        if should_create {
+            let conn = self.open_reader()?;
+            *self.count.lock() += 1;
+            return Ok(PooledReader {
+                conn: Some(conn),
+                pool: self,
+            });
+        }
+
+        // Pool exhausted - spin wait for a connection
+        // This should be rare with proper pool sizing
+        loop {
+            std::thread::yield_now();
+            let mut available = self.available.lock();
+            if let Some(conn) = available.pop_front() {
+                return Ok(PooledReader {
+                    conn: Some(conn),
+                    pool: self,
+                });
+            }
+        }
+    }
+
+    /// Return a connection to the pool.
+    fn release(&self, conn: Connection) {
+        let mut available = self.available.lock();
+        available.push_back(conn);
+    }
+
+    /// Open a new read-only SQLCipher connection.
+    fn open_reader(&self) -> Result<Connection, StorageError> {
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+
+        let conn = Connection::open_with_flags(&self.path, flags)?;
+
+        // Set SQLCipher encryption key
+        let passphrase = self.passphrase.lock();
+        conn.pragma_update(None, "key", &*passphrase)
+            .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
+
+        // Verify the key
+        conn.execute_batch("SELECT count(*) FROM sqlite_master;")
+            .map_err(|e| StorageError::Encryption(format!("Invalid reader key: {}", e)))?;
+
+        // Set WAL mode for reads
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+
+        Ok(conn)
+    }
+}
+
+/// A read-only connection borrowed from the pool.
+///
+/// Automatically returns to the pool when dropped.
+pub struct PooledReader<'a> {
+    conn: Option<Connection>,
+    pool: &'a ReaderPool,
+}
+
+impl std::ops::Deref for PooledReader<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        self.conn.as_ref().expect("connection taken")
+    }
+}
+
+impl Drop for PooledReader<'_> {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            self.pool.release(conn);
+        }
+    }
 }
 
 impl Database {
@@ -59,23 +219,46 @@ impl Database {
         // This is essential for proactive DM session establishment which opens a second connection
         conn.pragma_update(None, "journal_mode", "WAL")?;
 
+        // Create reader pool for concurrent read access
+        let readers = Arc::new(ReaderPool::new(
+            path.to_path_buf(),
+            passphrase.to_string(),
+        ));
+
         Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+            writer: Arc::new(Mutex::new(conn)),
+            readers,
             path: path.to_path_buf(),
         })
     }
 
-    /// Get a locked connection for database operations.
+    /// Get a locked writer connection for database mutations.
     ///
+    /// Use this for INSERT, UPDATE, DELETE operations.
     /// The returned guard holds the mutex lock until dropped.
     ///
-    /// # Errors
-    ///
-    /// Returns `StorageError::ConnectionPool` if the mutex is poisoned.
+    /// For read-only queries (SELECT), prefer `read_connection()` which
+    /// allows concurrent access.
     pub fn connection(&self) -> Result<MutexGuard<'_, Connection>, StorageError> {
-        self.conn
-            .lock()
-            .map_err(|e| StorageError::ConnectionPool(format!("Connection lock poisoned: {}", e)))
+        Ok(self.writer.lock())
+    }
+
+    /// Get a read-only connection for database queries.
+    ///
+    /// Use this for SELECT operations. Multiple readers can execute
+    /// concurrently thanks to SQLite WAL mode.
+    ///
+    /// The connection is automatically returned to the pool when dropped.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let conn = db.read_connection()?;
+    /// let mut stmt = conn.prepare("SELECT * FROM messages WHERE channel_id = ?")?;
+    /// let messages = stmt.query_map([channel_id], |row| { ... })?;
+    /// ```
+    pub fn read_connection(&self) -> Result<PooledReader<'_>, StorageError> {
+        self.readers.acquire()
     }
 
     /// Get the path to the database file.
@@ -93,17 +276,19 @@ impl Database {
     /// Returns `StorageError::ConnectionPool` if the mutex is poisoned or
     /// if the connection cannot be unwrapped (other references exist).
     pub fn close(self) -> Result<(), StorageError> {
-        // Try to get the inner connection
-        let conn = Arc::try_unwrap(self.conn).map_err(|_| {
-            StorageError::ConnectionPool("Cannot close: other references to connection exist".into())
+        // Try to get the inner writer connection
+        let writer = Arc::try_unwrap(self.writer).map_err(|_| {
+            StorageError::ConnectionPool(
+                "Cannot close: other references to writer connection exist".into(),
+            )
         })?;
 
-        let conn = conn.into_inner().map_err(|e| {
-            StorageError::ConnectionPool(format!("Connection lock poisoned: {}", e))
-        })?;
+        let conn = writer.into_inner();
 
-        // Close the connection explicitly
+        // Close the writer connection explicitly
         conn.close().map_err(|(_, e)| StorageError::Database(e))?;
+
+        // Reader pool connections are closed when the ReaderPool is dropped
 
         Ok(())
     }

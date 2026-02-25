@@ -2,6 +2,7 @@
 
 use crate::domain::ids::ChannelId;
 use crate::error::{NetworkError, StorageError};
+use crate::services::current_user::CurrentUserError;
 
 /// Channel service errors.
 #[derive(Debug, thiserror::Error)]
@@ -29,6 +30,15 @@ pub enum ChannelError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+}
+
+impl From<CurrentUserError> for ChannelError {
+    fn from(err: CurrentUserError) -> Self {
+        match err {
+            CurrentUserError::Storage(e) => ChannelError::Storage(e),
+            CurrentUserError::NotLoggedIn => ChannelError::NotLoggedIn,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //!
 //! Message cache, pagination, drafts.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, Utc};
 use tokio::sync::broadcast;
@@ -11,6 +11,14 @@ use crate::domain::draft::{Draft, DraftKey};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::Message;
 use crate::state::store::Store;
+
+/// Maximum number of messages to cache per channel.
+/// Older messages are evicted when this limit is exceeded.
+const MAX_MESSAGES_PER_CHANNEL: usize = 200;
+
+/// Maximum number of channels to keep in cache.
+/// Least recently used channels are evicted when this limit is exceeded.
+const MAX_CACHED_CHANNELS: usize = 20;
 
 /// Pagination cursor for loading more messages.
 #[derive(Clone, Debug, Default)]
@@ -48,6 +56,7 @@ impl PaginationCursor {
 /// Message state data.
 ///
 /// Caches messages per channel, tracks drafts and pagination state.
+/// Uses LRU eviction to bound memory usage.
 #[derive(Clone, Debug, Default)]
 pub struct MessageStateData {
     /// Cached messages per channel.
@@ -58,6 +67,41 @@ pub struct MessageStateData {
     pub cursors: HashMap<ChannelId, PaginationCursor>,
     /// Channels currently loading messages.
     pub loading_channels: HashSet<ChannelId>,
+    /// LRU order for channel eviction (most recent at back).
+    channel_lru: VecDeque<ChannelId>,
+}
+
+impl MessageStateData {
+    /// Touch a channel to mark it as recently used.
+    fn touch_channel(&mut self, channel_id: ChannelId) {
+        // Remove from current position if present
+        self.channel_lru.retain(|id| *id != channel_id);
+        // Add to back (most recent)
+        self.channel_lru.push_back(channel_id);
+    }
+
+    /// Evict least recently used channels if over limit.
+    fn evict_lru_channels(&mut self) {
+        while self.channel_lru.len() > MAX_CACHED_CHANNELS {
+            if let Some(oldest) = self.channel_lru.pop_front() {
+                self.messages.remove(&oldest);
+                self.cursors.remove(&oldest);
+                self.loading_channels.remove(&oldest);
+            }
+        }
+    }
+
+    /// Trim messages in a channel to MAX_MESSAGES_PER_CHANNEL.
+    /// Keeps the most recent messages (at the end of the Vec).
+    fn trim_channel_messages(&mut self, channel_id: &ChannelId) {
+        if let Some(messages) = self.messages.get_mut(channel_id) {
+            if messages.len() > MAX_MESSAGES_PER_CHANNEL {
+                // Keep the most recent messages (tail of Vec)
+                let excess = messages.len() - MAX_MESSAGES_PER_CHANNEL;
+                messages.drain(0..excess);
+            }
+        }
+    }
 }
 
 /// Reactive message state manager.
@@ -99,9 +143,9 @@ impl MessageState {
         self.store.get()
     }
 
-    /// Subscribe to message state changes.
+    /// Subscribe to message state changes (Arc-wrapped for efficiency).
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<MessageStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<MessageStateData>> {
         self.store.subscribe()
     }
 
@@ -124,6 +168,9 @@ impl MessageState {
     pub fn set_messages(&self, channel_id: ChannelId, messages: Vec<Message>) {
         self.store.update(|state| {
             state.messages.insert(channel_id, messages);
+            state.touch_channel(channel_id);
+            state.trim_channel_messages(&channel_id);
+            state.evict_lru_channels();
         });
     }
 
@@ -134,6 +181,10 @@ impl MessageState {
             let mut combined = messages;
             combined.append(entry);
             *entry = combined;
+            state.touch_channel(channel_id);
+            // After prepending older messages, trim to keep within limits
+            state.trim_channel_messages(&channel_id);
+            state.evict_lru_channels();
         });
     }
 
@@ -141,6 +192,9 @@ impl MessageState {
     pub fn append_message(&self, channel_id: ChannelId, message: Message) {
         self.store.update(|state| {
             state.messages.entry(channel_id).or_default().push(message);
+            state.touch_channel(channel_id);
+            state.trim_channel_messages(&channel_id);
+            state.evict_lru_channels();
         });
     }
 
@@ -191,6 +245,7 @@ impl MessageState {
             state.messages.remove(channel_id);
             state.cursors.remove(channel_id);
             state.loading_channels.remove(channel_id);
+            state.channel_lru.retain(|id| id != channel_id);
         });
     }
 

@@ -67,9 +67,9 @@ impl PinnedState {
         self.store.get()
     }
 
-    /// Subscribe to pinned state changes.
+    /// Subscribe to pinned state changes (Arc-wrapped for efficiency).
     #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<PinnedStateData> {
+    pub fn subscribe(&self) -> broadcast::Receiver<super::StateSnapshot<PinnedStateData>> {
         self.store.subscribe()
     }
 

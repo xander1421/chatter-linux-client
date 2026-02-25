@@ -36,11 +36,11 @@ use chatter_linux::events::EventBus;
 use chatter_linux::inbox::handlers::DomainEvent;
 use chatter_linux::inbox::InboxEvent;
 use chatter_linux::network::grpc::client_pool::GrpcClientPool;
-use chatter_linux::services::DmBootstrapService;
-use chatter_linux::services::message_service::MessageService;
+use chatter_linux::services::{DmBootstrapService, MailboxManager, MessageService};
 use chatter_linux::storage::{AttachmentRepository, Database, MessageRepository, UserRepository};
 
 use crate::bin_ui::features::calls::cleanup_call_ui_state;
+use crate::bin_ui::features::chat::send_dm_delivery_receipt;
 use crate::MainWindow;
 
 // Re-export public items
@@ -55,9 +55,10 @@ pub async fn handle_inbox_event(
     dm_bootstrap_service: &Arc<DmBootstrapService>,
     attachment_repo: &Arc<AttachmentRepository>,
     grpc_pool: &Arc<GrpcClientPool>,
-    _message_service: &Arc<MessageService>,
     database: &Arc<Database>,
     event_bus: &EventBus,
+    message_service: &Arc<MessageService>,
+    mailbox_manager: &Arc<MailboxManager>,
 ) {
     match event {
         InboxEvent::DmReceived {
@@ -68,7 +69,22 @@ pub async fn handle_inbox_event(
             attachments,
         } => {
             let message_repo = Arc::new(MessageRepository::new(database.clone()));
-            dm_handlers::handle_dm_received(weak_window, user_repo, attachment_repo, grpc_pool, &message_repo, peer_id, text, timestamp, message_id, attachments);
+            dm_handlers::handle_dm_received(weak_window, user_repo, attachment_repo, grpc_pool, &message_repo, peer_id, text.clone(), timestamp, message_id, attachments);
+
+            // Send delivery receipt back to sender (Signal Protocol)
+            // This confirms we received and decrypted their message
+            tracing::info!(
+                peer_id = %peer_id,
+                timestamp,
+                "DELIVERY_RECEIPT: Triggering delivery receipt for received DM"
+            );
+            send_dm_delivery_receipt(
+                peer_id,
+                timestamp,
+                database.clone(),
+                message_service.clone(),
+                mailbox_manager.clone(),
+            );
         }
         InboxEvent::DmDecryptionFailed { peer_id, error, convergence_failed } => {
             tracing::error!(

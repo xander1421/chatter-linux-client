@@ -157,31 +157,31 @@ impl ChannelId {
     /// // Same result regardless of order
     /// assert_eq!(channel_id, ChannelId::from_dm_participants(&user_b, &user_a));
     /// ```
+    /// Create a deterministic channel ID for DM conversations.
+    ///
+    /// **IMPORTANT**: This must match the server's `GenerateDMChannelID` function exactly.
+    /// Server uses: `uuid.NewSHA1(uuid.Nil, []byte("dm_channel_{user1}_{user2}"))`
+    /// where user1 < user2 lexicographically (string comparison).
     #[must_use]
     pub fn from_dm_participants(user_a: &UserId, user_b: &UserId) -> Self {
-        use sha2::{Digest, Sha256};
+        // Sort user IDs lexicographically (as strings) - must match server's Go string comparison
+        let user_a_str = user_a.0.to_string();
+        let user_b_str = user_b.0.to_string();
 
-        // Sort user IDs lexicographically for deterministic ordering
-        let (first, second) = if user_a.0 < user_b.0 {
-            (user_a.0, user_b.0)
+        let (first, second) = if user_a_str > user_b_str {
+            (&user_b_str, &user_a_str)
         } else {
-            (user_b.0, user_a.0)
+            (&user_a_str, &user_b_str)
         };
 
-        // Hash the concatenated UUIDs
-        let mut hasher = Sha256::new();
-        hasher.update(first.as_bytes());
-        hasher.update(second.as_bytes());
-        let hash = hasher.finalize();
+        // Create input string matching server: "dm_channel_{user1}_{user2}"
+        let input = format!("dm_channel_{}_{}", first, second);
 
-        // Convert first 16 bytes to UUID (version 4 format)
-        let mut uuid_bytes = [0u8; 16];
-        uuid_bytes.copy_from_slice(&hash[..16]);
-        // Set version 4 (random) and variant 1 (RFC 4122)
-        uuid_bytes[6] = (uuid_bytes[6] & 0x0f) | 0x40;
-        uuid_bytes[8] = (uuid_bytes[8] & 0x3f) | 0x80;
+        // Generate UUID v5 with NULL namespace (matches server's uuid.Nil)
+        // UUID v5 uses SHA1 internally, matching server's uuid.NewSHA1
+        let dm_uuid = Uuid::new_v5(&Uuid::nil(), input.as_bytes());
 
-        Self(Uuid::from_bytes(uuid_bytes))
+        Self(dm_uuid)
     }
 }
 
