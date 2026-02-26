@@ -10,57 +10,77 @@ use crate::media::code_preview::HighlightedLine;
 // Code Line Data
 // ============================================================================
 
+/// A single syntax-highlighted segment within a line.
+#[derive(Clone, Debug, Default)]
+pub struct CodeSegmentData {
+    /// The text content.
+    pub text: String,
+    /// RGB color as (r, g, b).
+    pub color: (u8, u8, u8),
+}
+
+impl CodeSegmentData {
+    /// Create a new segment with text and color.
+    #[must_use]
+    pub fn new(text: impl Into<String>, color: (u8, u8, u8)) -> Self {
+        Self {
+            text: text.into(),
+            color,
+        }
+    }
+}
+
 /// A single line of code for display in the code preview panel.
 ///
-/// Contains line number and content. Since Slint doesn't support rich text
-/// inline styling, we display plain text with monospace font. The html_content
-/// field is reserved for future use if we add a web view for syntax highlighting.
+/// Contains line number and syntax-highlighted segments.
 #[derive(Clone, Debug, Default)]
 pub struct CodeLineData {
     /// Line number (1-indexed).
     pub line_number: i32,
-    /// Plain text content of the line.
-    pub content: String,
-    /// HTML content for rich rendering (reserved for future use).
-    pub html_content: String,
+    /// Syntax-highlighted segments with colors.
+    pub segments: Vec<CodeSegmentData>,
 }
 
 impl CodeLineData {
     /// Create a new code line entry.
     #[must_use]
-    pub fn new(line_number: i32, content: impl Into<String>) -> Self {
+    pub fn new(line_number: i32, segments: Vec<CodeSegmentData>) -> Self {
         Self {
             line_number,
-            content: content.into(),
-            html_content: String::new(),
+            segments,
         }
     }
 
-    /// Set HTML content for rich rendering.
+    /// Create a plain text line (single segment, default color).
     #[must_use]
-    pub fn with_html(mut self, html: impl Into<String>) -> Self {
-        self.html_content = html.into();
-        self
+    pub fn plain(line_number: i32, content: impl Into<String>) -> Self {
+        Self {
+            line_number,
+            segments: vec![CodeSegmentData::new(content, (192, 197, 206))], // code-text color
+        }
     }
 }
 
-/// Flatten highlighted lines from syntect into CodeLineData for Slint.
+/// Convert highlighted lines from syntect into CodeLineData for Slint.
 ///
-/// Concatenates all segments in each line into plain text content.
+/// Preserves syntax highlighting colors and converts tabs to spaces.
 #[must_use]
 pub fn flatten_code_lines(lines: &[HighlightedLine]) -> Vec<CodeLineData> {
     lines
         .iter()
         .map(|line| {
-            let content = line
+            let segments = line
                 .segments
                 .iter()
-                .map(|seg| seg.text.as_str())
-                .collect::<String>();
+                .map(|seg| {
+                    // Convert tabs to 4 spaces and strip trailing newlines
+                    let text = seg.text.replace('\t', "    ").trim_end_matches('\n').to_string();
+                    CodeSegmentData::new(text, seg.style.foreground)
+                })
+                .collect();
             CodeLineData {
                 line_number: line.line_number as i32,
-                content,
-                html_content: String::new(),
+                segments,
             }
         })
         .collect()
@@ -481,21 +501,35 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_code_line_data_new() {
-        let line = CodeLineData::new(1, "fn main() {");
+    fn test_code_segment_data_new() {
+        let segment = CodeSegmentData::new("hello", (255, 128, 0));
 
-        assert_eq!(line.line_number, 1);
-        assert_eq!(line.content, "fn main() {");
-        assert!(line.html_content.is_empty());
+        assert_eq!(segment.text, "hello");
+        assert_eq!(segment.color, (255, 128, 0));
     }
 
     #[test]
-    fn test_code_line_data_with_html() {
-        let line = CodeLineData::new(5, "let x = 42;").with_html("<span>let x = 42;</span>");
+    fn test_code_line_data_new() {
+        let segments = vec![
+            CodeSegmentData::new("fn ", (100, 100, 100)),
+            CodeSegmentData::new("main", (200, 200, 200)),
+        ];
+        let line = CodeLineData::new(1, segments);
+
+        assert_eq!(line.line_number, 1);
+        assert_eq!(line.segments.len(), 2);
+        assert_eq!(line.segments[0].text, "fn ");
+        assert_eq!(line.segments[1].text, "main");
+    }
+
+    #[test]
+    fn test_code_line_data_plain() {
+        let line = CodeLineData::plain(5, "let x = 42;");
 
         assert_eq!(line.line_number, 5);
-        assert_eq!(line.content, "let x = 42;");
-        assert_eq!(line.html_content, "<span>let x = 42;</span>");
+        assert_eq!(line.segments.len(), 1);
+        assert_eq!(line.segments[0].text, "let x = 42;");
+        assert_eq!(line.segments[0].color, (192, 197, 206)); // default color
     }
 
     #[test]
@@ -508,14 +542,14 @@ mod tests {
                 segments: vec![
                     HighlightedSegment {
                         text: "fn ".to_string(),
-                        style: SegmentStyle::default(),
+                        style: SegmentStyle { foreground: (255, 0, 0), ..Default::default() },
                     },
                     HighlightedSegment {
                         text: "main".to_string(),
-                        style: SegmentStyle::default(),
+                        style: SegmentStyle { foreground: (0, 255, 0), ..Default::default() },
                     },
                     HighlightedSegment {
-                        text: "()".to_string(),
+                        text: "()\n".to_string(),
                         style: SegmentStyle::default(),
                     },
                 ],
@@ -523,7 +557,7 @@ mod tests {
             HighlightedLine {
                 line_number: 2,
                 segments: vec![HighlightedSegment {
-                    text: "}".to_string(),
+                    text: "}\n".to_string(),
                     style: SegmentStyle::default(),
                 }],
             },
@@ -533,9 +567,14 @@ mod tests {
 
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].line_number, 1);
-        assert_eq!(result[0].content, "fn main()");
+        assert_eq!(result[0].segments.len(), 3);
+        assert_eq!(result[0].segments[0].text, "fn ");
+        assert_eq!(result[0].segments[0].color, (255, 0, 0));
+        assert_eq!(result[0].segments[1].text, "main");
+        assert_eq!(result[0].segments[1].color, (0, 255, 0));
+        assert_eq!(result[0].segments[2].text, "()"); // newline stripped
         assert_eq!(result[1].line_number, 2);
-        assert_eq!(result[1].content, "}");
+        assert_eq!(result[1].segments[0].text, "}"); // newline stripped
     }
 
     // ========================================================================

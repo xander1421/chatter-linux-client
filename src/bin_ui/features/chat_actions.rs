@@ -5,21 +5,91 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, Model, SharedString, Timer, TimerMode, VecModel};
 
 use chatter_linux::app::AppContext;
 use chatter_linux::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
 use chatter_linux::domain::ids::{AttachmentId, MessageId};
-use chatter_linux::media::{FilePicker, FilePickerConfig, ImageProcessor};
+use chatter_linux::media::{CodePreview, FilePicker, FilePickerConfig, ImageProcessor};
 use chatter_linux::services::AttachmentService;
+use chatter_linux::media::code_preview::{to_styled_text, to_plain_text};
 use chatter_linux::system::ExternalOpener;
-use zeroize::Zeroize;
 
 use crate::bin_ui::audio_state;
 use crate::bin_ui::converters::format_file_size;
 use crate::bin_ui::preview_state;
 use crate::bin_ui::video_state;
-use crate::{CodeLine, MainWindow};
+use crate::MainWindow;
+
+/// Syntax highlighting result with StyledText for selectable display.
+struct HighlightResult {
+    /// Styled text with syntax highlighting (selectable)
+    styled_text: slint::private_unstable_api::re_exports::StyledText,
+    /// Plain text for clipboard operations
+    plain_text: String,
+    /// Detected language
+    language: String,
+    /// Number of lines
+    line_count: i32,
+}
+
+/// Convert code text to syntax-highlighted StyledText for Slint.
+fn highlight_code_for_slint(text: &str, filename: &str) -> HighlightResult {
+    let previewer = CodePreview::new();
+
+    // Detect language from filename extension
+    let extension = std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("txt");
+
+    let language = previewer.detect_language(std::path::Path::new(filename))
+        .unwrap_or_else(|| extension.to_string());
+
+    // Try to highlight with syntax
+    match previewer.highlight(text, &language) {
+        Ok(highlighted_lines) => {
+            let line_count = highlighted_lines.len() as i32;
+            let styled_text = to_styled_text(&highlighted_lines);
+            let plain_text = to_plain_text(&highlighted_lines);
+            HighlightResult {
+                styled_text,
+                plain_text,
+                language,
+                line_count,
+            }
+        }
+        Err(_) => {
+            // Fallback to plain text with line numbers
+            use slint::private_unstable_api::re_exports::{ColoredSegment, styled_text_from_colored_lines};
+
+            let line_count = text.lines().count() as i32;
+            let colored_lines: Vec<Vec<ColoredSegment>> = text
+                .lines()
+                .enumerate()
+                .map(|(i, line)| {
+                    vec![
+                        ColoredSegment {
+                            text: format!("{:>4}  ", i + 1),
+                            color: 0xFF65737E, // Line number color
+                        },
+                        ColoredSegment {
+                            text: line.replace('\t', "    "),
+                            color: 0xFFC0C5CE, // Default text color
+                        },
+                    ]
+                })
+                .collect();
+
+            HighlightResult {
+                styled_text: styled_text_from_colored_lines(&colored_lines),
+                plain_text: text.to_string(),
+                language: "text".to_string(),
+                line_count,
+            }
+        }
+    }
+}
 
 thread_local! {
     /// Thread-local audio progress timer (must be on UI thread).
@@ -232,20 +302,14 @@ fn wire_code_preview_callbacks(window: &MainWindow, _ctx: &AppContext) {
     let weak_window = window.as_weak();
     window.on_copy_code(move || {
         if let Some(w) = weak_window.upgrade() {
-            let lines = w.get_code_preview_lines();
-            let mut content = String::new();
-            for i in 0..lines.row_count() {
-                if let Some(line) = lines.row_data(i) {
-                    content.push_str(&line.content);
-                    content.push('\n');
-                }
-            }
+            let content = w.get_code_preview_plain_text().to_string();
             // Copy to clipboard using arboard
             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                 if let Err(e) = clipboard.set_text(&content) {
                     tracing::error!("Failed to copy to clipboard: {}", e);
                 } else {
-                    tracing::info!("Copied {} lines to clipboard", lines.row_count());
+                    let line_count = w.get_code_preview_line_count();
+                    tracing::info!("Copied {} lines to clipboard", line_count);
                 }
             }
         }
@@ -684,102 +748,134 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
                     }
                 } else if is_image {
                     // Load image from memory (secure: no filesystem)
-                let mut data = secure_buffer.as_slice().to_vec();
-                let filename_for_ui = filename.clone();
-                let size_display = format_file_size(file_size);
-                let att_id_for_inline = att_id.to_string();
+                    // Decode in background to avoid blocking UI thread
+                    let data = secure_buffer.as_slice().to_vec();
+                    let filename_for_ui = filename.clone();
+                    let size_display = format_file_size(file_size);
+                    let att_id_for_inline = att_id.to_string();
+                    let weak_clone = weak.clone();
 
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        // Check if it's an animated GIF - use combined function for
-                        // viewer animation AND inline animation (shared decode)
-                        let weak_for_gif = w.as_weak();
-                        if let Some(first_frame) = crate::bin_ui::gif_state::start_gif_animation_and_inline(
-                            &data,
-                            &weak_for_gif,
-                            &att_id_for_inline,
-                        ) {
-                            // Animated GIF - use the first frame and start animation
-                            w.set_image_viewer_source(first_frame);
-                            w.set_image_viewer_filename(filename_for_ui.into());
-                            w.set_image_viewer_size(size_display.into());
-                            w.set_image_viewer_visible(true);
-                            crate::bin_ui::gif_state::resume();
-                            tracing::info!("Opened animated GIF in viewer");
-                        } else {
-                            // Static image - use standard image loading
-                            match ImageProcessor::memory_to_slint_image(&data) {
-                                Ok(img) => {
-                                    w.set_image_viewer_source(img);
+                    // Check if it's a GIF first (quick header check)
+                    let is_gif = data.len() >= 6 && &data[0..6] == b"GIF89a" ||
+                                 data.len() >= 6 && &data[0..6] == b"GIF87a";
+
+                    if is_gif {
+                        // GIF: Handle on UI thread (already has progressive streaming)
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak_clone.upgrade() {
+                                let weak_for_gif = w.as_weak();
+                                if let Some(first_frame) = crate::bin_ui::gif_state::start_gif_animation_and_inline(
+                                    &data,
+                                    &weak_for_gif,
+                                    &att_id_for_inline,
+                                ) {
+                                    w.set_image_viewer_source(first_frame);
                                     w.set_image_viewer_filename(filename_for_ui.into());
                                     w.set_image_viewer_size(size_display.into());
                                     w.set_image_viewer_visible(true);
-                                    tracing::info!("Opened image from memory in viewer");
+                                    crate::bin_ui::gif_state::resume();
+                                    tracing::info!("Opened animated GIF in viewer");
+                                } else {
+                                    // Not animated, decode as static image
+                                    match ImageProcessor::memory_to_slint_image(&data) {
+                                        Ok(img) => {
+                                            w.set_image_viewer_source(img);
+                                            w.set_image_viewer_filename(filename_for_ui.into());
+                                            w.set_image_viewer_size(size_display.into());
+                                            w.set_image_viewer_visible(true);
+                                        }
+                                        Err(e) => tracing::error!("Failed to load GIF as static: {:?}", e),
+                                    }
+                                }
+                            }
+                        });
+                    } else {
+                        // Static image: Decode in background thread to avoid blocking UI
+                        tokio::task::spawn_blocking(move || {
+                            let decode_start = std::time::Instant::now();
+                            // Decode image to raw RGBA bytes (can cross thread boundary)
+                            match ImageProcessor::load_from_memory(&data) {
+                                Ok(image) => {
+                                    let rgba = image.to_rgba8();
+                                    let width = rgba.width();
+                                    let height = rgba.height();
+                                    let rgba_data = rgba.into_raw();
+                                    tracing::debug!("Image decoded in {:?}: {}x{}", decode_start.elapsed(), width, height);
+
+                                    // Create Slint image on UI thread (fast - just wrapping bytes)
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(w) = weak_clone.upgrade() {
+                                            let img = slint::Image::from_rgba8(
+                                                slint::SharedPixelBuffer::clone_from_slice(&rgba_data, width, height)
+                                            );
+                                            w.set_image_viewer_source(img);
+                                            w.set_image_viewer_filename(filename_for_ui.into());
+                                            w.set_image_viewer_size(size_display.into());
+                                            w.set_image_viewer_visible(true);
+                                            tracing::info!("Opened image from memory in viewer");
+                                        }
+                                    });
                                 }
                                 Err(e) => {
                                     tracing::error!("Failed to load image from memory: {:?}", e);
                                 }
                             }
-                        }
-                    }
-                    // SECURITY: Zeroize decrypted data after use
-                    data.zeroize();
-                    });
-                } else if is_video {
-                // Play video from memory using memfd (secure: no filesystem)
-                let data = secure_buffer.as_slice().to_vec();
-                let filename_for_video = filename.clone();
-
-                match video_state::start_video_from_memory(data, &filename_for_video) {
-                    Ok((_, duration_str)) => {
-                        let weak_for_video = weak.clone();
-                        let filename_for_ui = filename_for_video.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak_for_video.upgrade() {
-                                w.set_video_player_filename(filename_for_ui.into());
-                                w.set_video_player_duration(duration_str.into());
-                                w.set_video_player_elapsed("0:00".into());
-                                w.set_video_player_progress(0.0);
-                                w.set_video_player_is_playing(true);
-                                w.set_video_player_volume(1.0);
-                                w.set_video_player_visible(true);
-                                start_video_progress_timer(&w);
-                                tracing::info!("Started video from memory: {}", filename_for_video);
-                            }
                         });
                     }
-                    Err(e) => {
-                        tracing::error!("Failed to start video from memory: {}", e);
-                    }
-                    }
+                } else if is_video {
+                    // Play video from memory using async loading (non-blocking)
+                    let data = secure_buffer.as_slice().to_vec();
+                    let filename_for_video = filename.clone();
+                    let weak_for_video = weak.clone();
+
+                    // Use async version to avoid blocking the tokio runtime
+                    video_state::start_video_from_memory_async(
+                        data,
+                        filename_for_video.clone(),
+                        move |result| {
+                            match result {
+                                Ok((_, duration_str)) => {
+                                    let filename_for_ui = filename_for_video.clone();
+                                    let _ = slint::invoke_from_event_loop(move || {
+                                        if let Some(w) = weak_for_video.upgrade() {
+                                            w.set_video_player_filename(filename_for_ui.into());
+                                            w.set_video_player_duration(duration_str.into());
+                                            w.set_video_player_elapsed("0:00".into());
+                                            w.set_video_player_progress(0.0);
+                                            w.set_video_player_is_playing(true);
+                                            w.set_video_player_volume(1.0);
+                                            w.set_video_player_visible(true);
+                                            start_video_progress_timer(&w);
+                                            tracing::info!("Started video from memory: {}", filename_for_video);
+                                        }
+                                    });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to start video from memory: {}", e);
+                                }
+                            }
+                        },
+                    );
                 } else {
-                    // For code/text files, decode and display from memory
+                    // For code/text files, decode and display with syntax highlighting
                 if FileMetadata::is_code_file(&filename, &mime_type) {
                     let data = secure_buffer.as_slice().to_vec();
                     let text = String::from_utf8_lossy(&data).to_string();
                     let filename_for_ui = filename.clone();
                     let filename_for_state = filename.clone();
+                    let filename_for_highlight = filename.clone();
 
                     // Store content for "open external" feature
                     preview_state::set_code_preview_content(filename_for_state, data);
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            // Simple line-based display for in-memory text
-                            let lines: Vec<CodeLine> = text
-                                .lines()
-                                .enumerate()
-                                .map(|(i, line)| CodeLine {
-                                    line_number: (i + 1) as i32,
-                                    content: line.into(),
-                                })
-                                .collect();
-
-                            let line_count = lines.len() as i32;
+                            let result = highlight_code_for_slint(&text, &filename_for_highlight);
                             w.set_code_preview_filename(filename_for_ui.into());
-                            w.set_code_preview_language("text".into());
-                            w.set_code_preview_line_count(line_count);
-                            w.set_code_preview_lines(ModelRc::new(VecModel::from(lines)));
+                            w.set_code_preview_language(result.language.into());
+                            w.set_code_preview_line_count(result.line_count);
+                            w.set_code_preview_content(result.styled_text);
+                            w.set_code_preview_plain_text(result.plain_text.into());
                             w.set_code_preview_visible(true);
                         }
                     });
@@ -985,31 +1081,24 @@ fn wire_view_attachment(window: &MainWindow, ctx: &AppContext) {
                                 }
                             });
                         } else if FileMetadata::is_code_file(&file_name, &mime_type) {
-                            // Show text/code from memory
+                            // Show text/code with syntax highlighting
                             let data = secure_buffer.as_slice().to_vec();
                             let text = String::from_utf8_lossy(&data).to_string();
                             let filename_for_ui = file_name.clone();
                             let filename_for_state = file_name.clone();
+                            let filename_for_highlight = file_name.clone();
 
                             // Store content for "open external" feature
                             preview_state::set_code_preview_content(filename_for_state, data);
 
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak.upgrade() {
-                                    let lines: Vec<CodeLine> = text
-                                        .lines()
-                                        .enumerate()
-                                        .map(|(i, line)| CodeLine {
-                                            line_number: (i + 1) as i32,
-                                            content: line.into(),
-                                        })
-                                        .collect();
-
-                                    let line_count = lines.len() as i32;
+                                    let result = highlight_code_for_slint(&text, &filename_for_highlight);
                                     w.set_code_preview_filename(filename_for_ui.into());
-                                    w.set_code_preview_language("text".into());
-                                    w.set_code_preview_line_count(line_count);
-                                    w.set_code_preview_lines(ModelRc::new(VecModel::from(lines)));
+                                    w.set_code_preview_language(result.language.into());
+                                    w.set_code_preview_line_count(result.line_count);
+                                    w.set_code_preview_content(result.styled_text);
+                                    w.set_code_preview_plain_text(result.plain_text.into());
                                     w.set_code_preview_visible(true);
                                 }
                             });

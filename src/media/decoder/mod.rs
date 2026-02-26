@@ -1,10 +1,7 @@
 //! Platform-abstracted video decoder.
 //!
-//! Uses native platform APIs for video decoding:
-//! - Linux: GStreamer
-//! - Android: MediaCodec (future)
-//! - iOS/macOS: VideoToolbox (future)
-//! - Windows: Media Foundation (future)
+//! Uses GStreamer for cross-platform video decoding with hardware acceleration.
+//! Works on Desktop (Linux/Windows/macOS) and Mobile (Android/iOS).
 
 use std::path::Path;
 
@@ -123,6 +120,19 @@ pub trait VideoDecoder: Send {
     /// Check if the video is seekable.
     /// Returns false for live streams or formats without seek support.
     fn is_seekable(&self) -> bool;
+
+    /// Set pipeline to PLAYING state.
+    /// This starts the GStreamer clock and enables frame timing.
+    fn play(&mut self) -> Result<(), MediaError>;
+
+    /// Set pipeline to PAUSED state.
+    /// This stops the GStreamer clock, freezing A/V timing.
+    /// Essential for proper pause/resume without desync.
+    fn pause(&mut self) -> Result<(), MediaError>;
+
+    /// Set audio volume (0.0 - 1.0).
+    /// Volume is applied by GStreamer's audio pipeline.
+    fn set_volume(&mut self, volume: f64) -> Result<(), MediaError>;
 
     /// Close the decoder and release resources.
     fn close(&mut self);

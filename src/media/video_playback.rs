@@ -4,14 +4,11 @@
 //! within the application. Renders frames to Slint Image widget.
 //!
 //! Uses GStreamer on Linux, VideoToolbox on macOS/iOS, MediaCodec on Android.
+//! Audio is handled by GStreamer's autoaudiosink (outputs to PulseAudio/PipeWire).
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use ringbuf::traits::{Consumer, Observer, Producer, Split};
-use ringbuf::HeapRb;
+use std::time::Duration;
 
 use crate::error::MediaError;
 use crate::media::decoder::{self, VideoDecoder, VideoInfo};
@@ -337,18 +334,14 @@ where
     state.set_duration(duration_secs);
     state.set_dimensions(width, height);
 
-    // Setup audio output if video has audio
-    let audio_output = if info.has_audio {
-        match setup_audio_output(state.clone()) {
-            Ok(output) => Some(output),
-            Err(e) => {
-                tracing::warn!("Audio setup failed, playing without audio: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
+    // Audio is handled by GStreamer's autoaudiosink - outputs directly to system audio
+    // (PulseAudio/PipeWire). No manual audio handling needed.
+
+    // Set initial volume
+    let initial_volume = state.get_volume();
+    if let Err(e) = dec.set_volume(initial_volume as f64) {
+        tracing::warn!("Failed to set initial volume: {}", e);
+    }
 
     // Mark as ready
     state.set_loading(false);
@@ -374,12 +367,20 @@ where
     }
     state.set_position(actual_pos as f64 / 1000.0);
 
-    // Playback timing: track when playback started and at what video position.
-    // This allows accurate PTS-based timing that survives seeks.
-    let mut playback_start_time = Instant::now();
-    let mut playback_start_pts_ms: u64 = actual_pos; // Video position when playback started
+    // Start pipeline in PLAYING state
+    // GStreamer's clock handles all A/V timing with sync(true) on sinks
+    if let Err(e) = dec.play() {
+        tracing::warn!("Failed to start playback: {}", e);
+    }
+
+    // Track if pipeline is currently playing (to avoid redundant state changes)
+    let mut pipeline_playing = true;
+    // Track last volume to avoid redundant set_volume calls
+    let mut last_volume = initial_volume;
 
     // Main playback loop
+    // With sync(true) on appsinks, GStreamer handles all timing via its clock.
+    // We just pull frames when ready and render them.
     loop {
         // Check stop request
         if state.should_stop() {
@@ -395,83 +396,73 @@ where
                 tracing::warn!("Seek failed: {}", e);
             } else {
                 state.set_position(seek_pos);
-                // Reset timing after seek - playback restarts from this position
-                playback_start_time = Instant::now();
-                playback_start_pts_ms = seek_ms;
                 tracing::debug!("Seek completed to {} seconds", seek_pos);
             }
         }
 
-        // Handle pause - placed AFTER seek so users can seek while paused
-        while !state.is_playing() && !state.should_stop() {
-            // Check for seek requests while paused
-            if let Some(seek_pos) = state.take_seek_request() {
-                let seek_ms = (seek_pos * 1000.0) as u64;
-                tracing::debug!("Seeking while paused to {} seconds ({}ms)", seek_pos, seek_ms);
+        // Handle pause via pipeline state - this stops GStreamer's clock
+        // which is essential for proper A/V sync on resume
+        if !state.is_playing() {
+            // Pause the GStreamer pipeline (stops clock)
+            if pipeline_playing {
+                if let Err(e) = dec.pause() {
+                    tracing::warn!("Failed to pause pipeline: {}", e);
+                }
+                pipeline_playing = false;
+            }
 
-                if let Err(e) = dec.seek(seek_ms) {
-                    tracing::warn!("Seek failed: {}", e);
-                } else {
-                    state.set_position(seek_pos);
-                    playback_start_pts_ms = seek_ms;
+            // While paused, check for seek requests
+            while !state.is_playing() && !state.should_stop() {
+                if let Some(seek_pos) = state.take_seek_request() {
+                    let seek_ms = (seek_pos * 1000.0) as u64;
+                    tracing::debug!("Seeking while paused to {} seconds ({}ms)", seek_pos, seek_ms);
 
-                    // Decode one frame to show the new position immediately
-                    // This gives visual feedback when scrubbing while paused
-                    if let Ok(Some(frame)) = dec.decode_video_frame() {
-                        state.set_position(frame.timestamp_ms as f64 / 1000.0);
-                        frame_callback(frame.width, frame.height, frame.data);
+                    if let Err(e) = dec.seek(seek_ms) {
+                        tracing::warn!("Seek failed: {}", e);
+                    } else {
+                        state.set_position(seek_pos);
+
+                        // Decode one frame to show the new position immediately
+                        // Pipeline is paused, so this just pulls the seeked frame
+                        if let Ok(Some(frame)) = dec.decode_video_frame() {
+                            state.set_position(frame.timestamp_ms as f64 / 1000.0);
+                            frame_callback(frame.width, frame.height, frame.data);
+                        }
                     }
                 }
+                std::thread::sleep(Duration::from_millis(50));
             }
-            // Reset timing reference when unpausing
-            playback_start_time = Instant::now();
-            std::thread::sleep(Duration::from_millis(50));
+
+            // Resume: set pipeline back to PLAYING
+            if state.is_playing() && !state.should_stop() {
+                if let Err(e) = dec.play() {
+                    tracing::warn!("Failed to resume playback: {}", e);
+                }
+                pipeline_playing = true;
+            }
         }
 
         if state.should_stop() {
             break;
         }
 
-        // Decode and process audio if available
-        if let Some(ref audio) = audio_output {
-            // Try to decode some audio samples
-            if let Ok(Some(audio_data)) = dec.decode_audio() {
-                let volume = state.get_volume();
-                audio.send_samples(&audio_data.samples, volume);
+        // Update volume only when changed (GStreamer handles audio output via autoaudiosink)
+        let current_volume = state.get_volume();
+        if (current_volume - last_volume).abs() > 0.001 {
+            if let Err(e) = dec.set_volume(current_volume as f64) {
+                tracing::warn!("Failed to set volume: {}", e);
             }
+            last_volume = current_volume;
         }
 
-        // Decode next video frame
+        // Pull next video frame - with sync(true), this blocks until frame should display
+        // GStreamer's clock handles all timing, no manual PTS comparison needed
         match dec.decode_video_frame() {
             Ok(Some(frame)) => {
-                // Update position
+                // Update position and render frame
                 let position = frame.timestamp_ms as f64 / 1000.0;
                 state.set_position(position);
-
-                // Send frame to callback
                 frame_callback(frame.width, frame.height, frame.data);
-
-                // Frame timing using PTS (presentation timestamp) for accurate sync.
-                // Calculate when this frame should be displayed relative to playback start.
-                //
-                // frame_relative_pts = how far into playback this frame should appear
-                // elapsed = how much time has actually passed since playback started
-                //
-                // If frame_relative_pts > elapsed, we're ahead and should wait.
-                // If elapsed > frame_relative_pts, we're behind and should play immediately.
-                let frame_relative_pts_ms = frame.timestamp_ms.saturating_sub(playback_start_pts_ms);
-                let frame_relative_pts = Duration::from_millis(frame_relative_pts_ms);
-                let elapsed = playback_start_time.elapsed();
-
-                if frame_relative_pts > elapsed {
-                    // Frame should be shown in the future - wait
-                    let wait_time = frame_relative_pts - elapsed;
-                    // Cap maximum wait to prevent issues with bad timestamps
-                    if wait_time < Duration::from_secs(2) {
-                        std::thread::sleep(wait_time);
-                    }
-                }
-                // If elapsed > frame_relative_pts, we're behind - play immediately to catch up
             }
             Ok(None) => {
                 // End of stream
@@ -481,12 +472,11 @@ where
             Err(e) => {
                 // Check if this is a "no sample yet" case (pipeline warming up)
                 if e.to_string().contains("no_sample") {
-                    // Pipeline not ready yet, wait a bit and retry
-                    std::thread::sleep(Duration::from_millis(10));
+                    // Pipeline not ready yet, retry immediately - the try_pull_sample
+                    // already waited its timeout (50ms), no need to sleep more
                     continue;
                 }
                 tracing::warn!("Frame decode error: {}", e);
-                // Try to continue for other errors
                 continue;
             }
         }
@@ -495,69 +485,6 @@ where
     dec.close();
     tracing::debug!("Video playback finished");
     Ok(())
-}
-
-/// Audio output handler.
-struct AudioOutput {
-    producer: Arc<Mutex<ringbuf::HeapProd<f32>>>,
-    _stream: cpal::Stream,
-}
-
-impl AudioOutput {
-    fn send_samples(&self, samples: &[f32], volume: f32) {
-        if let Ok(mut prod) = self.producer.lock() {
-            for &sample in samples {
-                // Apply volume and push to ring buffer
-                // If buffer is full, drop samples (better than blocking)
-                if prod.vacant_len() > 0 {
-                    let _ = prod.try_push(sample * volume);
-                }
-            }
-        }
-    }
-}
-
-/// Setup audio playback.
-fn setup_audio_output(_state: SharedPlayerState) -> Result<AudioOutput, MediaError> {
-    let host = cpal::default_host();
-    let device = host
-        .default_output_device()
-        .ok_or_else(|| MediaError::PlaybackError("No audio output device".to_string()))?;
-
-    let config = device
-        .default_output_config()
-        .map_err(|e| MediaError::PlaybackError(format!("Audio config error: {}", e)))?;
-
-    let sample_rate = config.sample_rate().0;
-    let channels = config.channels() as usize;
-
-    // Audio buffer (1 second worth)
-    let buffer = HeapRb::<f32>::new(sample_rate as usize * channels * 2);
-    let (producer, mut consumer) = buffer.split();
-    let producer = Arc::new(Mutex::new(producer));
-
-    // Build output stream
-    let stream = device
-        .build_output_stream(
-            &config.into(),
-            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                for sample in data.iter_mut() {
-                    *sample = consumer.try_pop().unwrap_or(0.0);
-                }
-            },
-            |err| tracing::error!("Audio stream error: {}", err),
-            None,
-        )
-        .map_err(|e| MediaError::PlaybackError(format!("Audio stream error: {}", e)))?;
-
-    stream
-        .play()
-        .map_err(|e| MediaError::PlaybackError(format!("Audio play error: {}", e)))?;
-
-    Ok(AudioOutput {
-        producer,
-        _stream: stream,
-    })
 }
 
 /// Convert RGB data to Slint SharedPixelBuffer.

@@ -68,18 +68,7 @@ async fn auto_download_attachments(
                     "Attachment downloaded to database"
                 );
 
-                // Update attachment status
-                if let Ok(Some(mut att)) = attachment_repo.get(&att_id) {
-                    att.status = AttachmentStatus::Ready;
-                    att.content_location = ContentLocation::InDatabase;
-                    if let Err(e) = attachment_repo.update(&att) {
-                        tracing::error!(
-                            cdn_key = %cdn_key,
-                            error = %e,
-                            "Failed to update attachment status"
-                        );
-                    }
-                }
+                // Status already set to Ready atomically by store_encrypted_content
 
                 // For GIFs, decode and register for inline animation
                 if is_gif {

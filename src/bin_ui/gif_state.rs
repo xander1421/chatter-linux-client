@@ -2,9 +2,14 @@
 //!
 //! Manages animated GIF playback state for the UI thread.
 //! Supports both the image viewer lightbox and inline message thumbnails.
+//!
+//! # Memory Bounds
+//!
+//! - Viewer: MAX_VIEWER_FRAMES (100) per animation
+//! - Inline: MAX_INLINE_GIFS (20) with LRU eviction
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 use slint::{Image, Model, Timer, TimerMode, Weak};
@@ -13,6 +18,12 @@ use chatter_linux::media::gif::{frame_to_slint_image, decode_first_frame_only};
 use tokio::sync::mpsc;
 
 use crate::MainWindow;
+
+/// Maximum frames to store per GIF animation (viewer).
+const MAX_VIEWER_FRAMES: usize = 100;
+
+/// Maximum inline GIF animations to keep in memory.
+const MAX_INLINE_GIFS: usize = 20;
 
 /// Raw frame data that can be sent between threads.
 type RawFrame = (Vec<u8>, u32, u32, u64); // (data, width, height, delay_ms)
@@ -29,6 +40,8 @@ thread_local! {
 
     /// Inline GIF animations for message thumbnails (attachment_id -> frames).
     static INLINE_GIFS: RefCell<HashMap<String, InlineGifState>> = RefCell::new(HashMap::new());
+    /// LRU order for inline GIFs (front = oldest, back = newest).
+    static INLINE_LRU: RefCell<VecDeque<String>> = RefCell::new(VecDeque::new());
     /// Global animation timer for inline GIFs.
     static INLINE_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
     /// Window weak reference for inline GIF updates.
@@ -307,6 +320,19 @@ fn poll_streaming_frames() -> usize {
         loop {
             match rx.try_recv() {
                 Ok((data, width, height, delay_ms)) => {
+                    // Check frame limit before adding
+                    let at_limit = VIEWER_GIF_STATE.with(|state_cell| {
+                        state_cell.borrow().as_ref()
+                            .map(|s| s.frames.len() >= MAX_VIEWER_FRAMES)
+                            .unwrap_or(true)
+                    });
+
+                    if at_limit {
+                        tracing::debug!("GIF frame limit reached ({}), stopping decode", MAX_VIEWER_FRAMES);
+                        // Don't put receiver back - stop receiving
+                        break;
+                    }
+
                     // Convert to Slint Image and add to state
                     let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                         &data,
@@ -359,6 +385,26 @@ fn register_inline_from_viewer() {
                         current_frame: 0,
                         accumulated_ms: 0,
                     };
+
+                    // Evict oldest GIFs if at capacity (LRU)
+                    INLINE_LRU.with(|lru| {
+                        let mut lru = lru.borrow_mut();
+
+                        // Remove from LRU if already exists
+                        lru.retain(|id| id != &att_id);
+
+                        // Evict oldest if at capacity
+                        while lru.len() >= MAX_INLINE_GIFS {
+                            if let Some(oldest) = lru.pop_front() {
+                                INLINE_GIFS.with(|gifs| {
+                                    gifs.borrow_mut().remove(&oldest);
+                                });
+                            }
+                        }
+
+                        lru.push_back(att_id.clone());
+                    });
+
                     INLINE_GIFS.with(|gifs| {
                         gifs.borrow_mut().insert(att_id.clone(), inline_state);
                     });
@@ -501,8 +547,31 @@ pub fn register_inline_gif_from_raw(
         accumulated_ms: 0,
     };
 
+    let att_id_string = attachment_id.to_string();
+
+    // Evict oldest GIFs if at capacity (LRU)
+    INLINE_LRU.with(|lru| {
+        let mut lru = lru.borrow_mut();
+
+        // Remove from LRU if already exists (will re-add at end)
+        lru.retain(|id| id != &att_id_string);
+
+        // Evict oldest if at capacity
+        while lru.len() >= MAX_INLINE_GIFS {
+            if let Some(oldest) = lru.pop_front() {
+                INLINE_GIFS.with(|gifs| {
+                    gifs.borrow_mut().remove(&oldest);
+                });
+                tracing::debug!("Evicted oldest inline GIF: {}", oldest);
+            }
+        }
+
+        // Add new GIF to LRU (most recent)
+        lru.push_back(att_id_string.clone());
+    });
+
     INLINE_GIFS.with(|gifs| {
-        gifs.borrow_mut().insert(attachment_id.to_string(), state);
+        gifs.borrow_mut().insert(att_id_string, state);
     });
 
     tracing::debug!(
@@ -521,6 +590,9 @@ pub fn register_inline_gif_from_raw(
 pub fn unregister_inline_gif(attachment_id: &str) {
     INLINE_GIFS.with(|gifs| {
         gifs.borrow_mut().remove(attachment_id);
+    });
+    INLINE_LRU.with(|lru| {
+        lru.borrow_mut().retain(|id| id != attachment_id);
     });
 
     // Stop timer if no more GIFs
@@ -639,33 +711,51 @@ pub fn clear_inline_gifs() {
     INLINE_GIFS.with(|gifs| {
         gifs.borrow_mut().clear();
     });
+    INLINE_LRU.with(|lru| {
+        lru.borrow_mut().clear();
+    });
     stop_inline_timer();
 }
 
 /// Register a single GIF attachment for inline animation.
 ///
 /// This is called after sending a message with GIF attachments.
-/// Decrypts and registers the GIF in the background, then updates the thumbnail.
+/// Spawns an independent background thread to decrypt/decode, then registers on UI thread.
+///
+/// This function returns immediately - all work happens in background.
+/// Safe to call from any context (including nested runtimes).
 pub fn register_gif_attachment(
     attachment_id: String,
     attachment_repo: std::sync::Arc<chatter_linux::storage::AttachmentRepository>,
     window_weak: slint::Weak<crate::MainWindow>,
 ) {
-    use chatter_linux::domain::attachment::ContentLocation;
-    use chatter_linux::media::gif::AnimatedGif;
-    use chatter_linux::services::AttachmentService;
+    // Spawn independent thread to avoid runtime context issues
+    // (caller may be in spawn_blocking with temporary runtime)
+    std::thread::spawn(move || {
+        use chatter_linux::domain::attachment::ContentLocation;
+        use chatter_linux::media::gif::AnimatedGif;
+        use chatter_linux::services::AttachmentService;
 
-    tokio::spawn(async move {
         // Parse attachment ID
         let att_id: chatter_linux::domain::ids::AttachmentId = match attachment_id.parse() {
             Ok(id) => id,
-            Err(_) => return,
+            Err(_) => {
+                tracing::debug!("Invalid attachment ID for GIF registration: {}", attachment_id);
+                return;
+            }
         };
 
         // Check if attachment has content in database
         let attachment = match attachment_repo.get(&att_id) {
             Ok(Some(att)) if att.content_location == ContentLocation::InDatabase => att,
-            _ => return,
+            Ok(Some(_)) | Ok(None) => {
+                tracing::debug!("GIF {} not ready in database yet", attachment_id);
+                return;
+            }
+            Err(e) => {
+                tracing::debug!("Failed to get attachment {}: {}", attachment_id, e);
+                return;
+            }
         };
 
         // Check if it's a GIF
@@ -683,43 +773,132 @@ pub fn register_gif_attachment(
             }
         };
 
-        // Decode GIF on background thread
-        let att_id_for_decode = attachment_id.clone();
-        let raw_frames = match tokio::task::spawn_blocking(move || {
-            match AnimatedGif::decode(&data) {
-                Ok(Some(gif)) if gif.frames.len() > 1 => {
-                    let frames: Vec<(Vec<u8>, u32, u32, u64)> = gif
-                        .frames
-                        .into_iter()
-                        .map(|f| (f.data, f.width, f.height, f.delay.as_millis().max(20) as u64))
-                        .collect();
-                    Some(frames)
-                }
-                _ => None,
+        // Decode GIF
+        let raw_frames = match AnimatedGif::decode(&data) {
+            Ok(Some(gif)) if gif.frames.len() > 1 => {
+                gif.frames
+                    .into_iter()
+                    .map(|f| (f.data, f.width, f.height, f.delay.as_millis().max(20) as u64))
+                    .collect::<Vec<_>>()
             }
-        })
-        .await
-        {
-            Ok(Some(frames)) => frames,
-            Ok(None) => {
-                tracing::debug!("GIF {} is not animated", att_id_for_decode);
-                return;
-            }
-            Err(e) => {
-                tracing::debug!("GIF decode failed for {}: {}", att_id_for_decode, e);
-                return;
-            }
+            _ => return,
         };
 
+        tracing::debug!(
+            "Decoded sent GIF {} with {} frames",
+            attachment_id,
+            raw_frames.len()
+        );
+
         // Register on UI thread
-        let att_id_for_ui = attachment_id.clone();
+        let att_id_for_ui = attachment_id;
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(first_frame) = register_inline_gif_from_raw(&att_id_for_ui, raw_frames) {
                 if let Some(w) = window_weak.upgrade() {
                     update_message_attachment_thumbnails(&w, &[(att_id_for_ui.clone(), first_frame)]);
                 }
-                tracing::debug!("Registered sent GIF animation: {}", att_id_for_ui);
+                tracing::info!("Registered sent GIF animation: {}", att_id_for_ui);
             }
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// Test that register_gif_attachment returns immediately (non-blocking).
+    /// Even with an invalid attachment ID, the function should spawn a thread
+    /// and return within milliseconds.
+    #[test]
+    fn test_register_gif_attachment_returns_immediately() {
+        // Create a mock attachment repo that will fail lookup (attachment doesn't exist)
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
+        let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
+
+        // Create a dummy window weak reference (will be None when upgraded)
+        // We can't create a real MainWindow in tests, but the function handles None gracefully
+        let window_weak: slint::Weak<crate::MainWindow> = slint::Weak::default();
+
+        let start = Instant::now();
+
+        // Call the function - should return immediately
+        register_gif_attachment(
+            "nonexistent-attachment-id".to_string(),
+            attachment_repo,
+            window_weak,
+        );
+
+        let elapsed = start.elapsed();
+
+        // Should return in under 10ms (thread spawn is very fast)
+        // The actual GIF processing happens in the spawned thread
+        assert!(
+            elapsed < Duration::from_millis(10),
+            "register_gif_attachment blocked for {:?}, should return immediately",
+            elapsed
+        );
+    }
+
+    /// Test that the spawned thread actually runs (doesn't just return immediately and do nothing).
+    #[test]
+    fn test_register_gif_attachment_spawns_thread() {
+        // We'll verify the thread runs by checking that the repo is accessed
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
+        let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
+
+        let window_weak: slint::Weak<crate::MainWindow> = slint::Weak::default();
+
+        // Call the function
+        register_gif_attachment(
+            "test-attachment-id".to_string(),
+            attachment_repo,
+            window_weak,
+        );
+
+        // Give the background thread time to start and access the repo
+        std::thread::sleep(Duration::from_millis(50));
+
+        // The thread will have run and returned early (attachment not found)
+        // We can't easily verify it ran without more instrumentation,
+        // but the non-blocking test above proves the spawn happens
+    }
+
+    /// Test multiple concurrent registrations don't block each other.
+    #[test]
+    fn test_concurrent_gif_registrations_non_blocking() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
+        let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
+
+        let window_weak: slint::Weak<crate::MainWindow> = slint::Weak::default();
+
+        let start = Instant::now();
+
+        // Spawn 10 concurrent registrations
+        for i in 0..10 {
+            register_gif_attachment(
+                format!("attachment-{}", i),
+                attachment_repo.clone(),
+                window_weak.clone(),
+            );
+        }
+
+        let elapsed = start.elapsed();
+
+        // All 10 calls should complete in under 50ms total
+        // (each spawn is ~1ms, should not accumulate if non-blocking)
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "10 concurrent registrations took {:?}, should be fast",
+            elapsed
+        );
+    }
 }

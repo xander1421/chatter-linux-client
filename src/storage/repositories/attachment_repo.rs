@@ -5,6 +5,7 @@
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata, Thumbnail};
 use crate::domain::ids::AttachmentId;
 use crate::error::StorageError;
+use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -28,20 +29,20 @@ impl AttachmentRepository {
     /// Insert a new attachment.
     pub fn insert(&self, attachment: &Attachment) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        let metadata_json = serde_json::to_string(&attachment.metadata)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize metadata: {}", e)))?;
+        // Use bincode for efficient BLOB storage
+        let metadata_blob = db_serialize(&attachment.metadata)?;
 
-        // Extract thumbnail bytes for BLOB storage (don't store in JSON)
+        // Extract thumbnail bytes for BLOB storage (don't store in metadata)
         let thumbnail_bytes = attachment.metadata.thumbnail.as_deref();
 
         conn.execute(
             "INSERT INTO attachments (
-                id, metadata_json, status, local_path, remote_url,
+                id, metadata_blob, status, local_path, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 attachment.id.to_string(),
-                metadata_json,
+                metadata_blob,
                 status_to_int(attachment.status),
                 attachment.local_path,
                 attachment.remote_url,
@@ -66,20 +67,20 @@ impl AttachmentRepository {
         encrypted_content: &[u8],
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        let metadata_json = serde_json::to_string(&attachment.metadata)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize metadata: {}", e)))?;
+        // Use bincode for efficient BLOB storage
+        let metadata_blob = db_serialize(&attachment.metadata)?;
 
         let thumbnail_bytes = attachment.metadata.thumbnail.as_deref();
 
         conn.execute(
             "INSERT INTO attachments (
-                id, metadata_json, status, local_path, remote_url,
+                id, metadata_blob, status, local_path, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes,
                 encrypted_content, content_location, created_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 attachment.id.to_string(),
-                metadata_json,
+                metadata_blob,
                 status_to_int(attachment.status),
                 attachment.local_path,
                 attachment.remote_url,
@@ -99,7 +100,7 @@ impl AttachmentRepository {
     pub fn get(&self, id: &AttachmentId) -> Result<Option<Attachment>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, metadata_json, status, local_path, remote_url,
+            "SELECT id, metadata_blob, status, local_path, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
              FROM attachments WHERE id = ?1",
         )?;
@@ -146,14 +147,18 @@ impl AttachmentRepository {
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
 
+        // Set content_location AND status atomically to avoid race condition
+        // where user clicks attachment between content stored and status update
         let rows = conn.execute(
             "UPDATE attachments SET
                 encrypted_content = ?1,
-                content_location = ?2
-             WHERE id = ?3",
+                content_location = ?2,
+                status = ?3
+             WHERE id = ?4",
             params![
                 encrypted_content,
                 content_location_to_int(ContentLocation::InDatabase),
+                status_to_int(AttachmentStatus::Ready),
                 id.to_string(),
             ],
         )?;
@@ -171,20 +176,20 @@ impl AttachmentRepository {
     /// Update an existing attachment.
     pub fn update(&self, attachment: &Attachment) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        let metadata_json = serde_json::to_string(&attachment.metadata)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize metadata: {}", e)))?;
+        // Use bincode for efficient BLOB storage
+        let metadata_blob = db_serialize(&attachment.metadata)?;
 
         // Extract thumbnail bytes for BLOB storage
         let thumbnail_bytes = attachment.metadata.thumbnail.as_deref();
 
         let rows = conn.execute(
             "UPDATE attachments SET
-                metadata_json = ?1, status = ?2, local_path = ?3, remote_url = ?4,
+                metadata_blob = ?1, status = ?2, local_path = ?3, remote_url = ?4,
                 encryption_key = ?5, encryption_iv = ?6, thumbnail_bytes = ?7,
                 content_location = ?8
              WHERE id = ?9",
             params![
-                metadata_json,
+                metadata_blob,
                 status_to_int(attachment.status),
                 attachment.local_path,
                 attachment.remote_url,
@@ -232,7 +237,7 @@ impl AttachmentRepository {
     pub fn list_by_status(&self, status: AttachmentStatus) -> Result<Vec<Attachment>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, metadata_json, status, local_path, remote_url,
+            "SELECT id, metadata_blob, status, local_path, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
              FROM attachments WHERE status = ?1
              ORDER BY created_at DESC",
@@ -248,7 +253,7 @@ impl AttachmentRepository {
     pub fn list_pending_uploads(&self) -> Result<Vec<Attachment>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, metadata_json, status, local_path, remote_url,
+            "SELECT id, metadata_blob, status, local_path, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
              FROM attachments WHERE status IN (?1, ?2)
              ORDER BY created_at ASC",
@@ -266,7 +271,7 @@ impl AttachmentRepository {
     pub fn list_pending_downloads(&self) -> Result<Vec<Attachment>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, metadata_json, status, local_path, remote_url,
+            "SELECT id, metadata_blob, status, local_path, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
              FROM attachments
              WHERE content_location = 0
@@ -395,7 +400,8 @@ fn parse_datetime(s: &str) -> DateTime<Utc> {
 /// Convert a database row to Attachment.
 fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Attachment, StorageError>> {
     let id_str: String = row.get(0)?;
-    let metadata_json: String = row.get(1)?;
+    // Read from BLOB column (bincode serialized)
+    let metadata_blob: Vec<u8> = row.get(1)?;
     let status_int: i32 = row.get(2)?;
     let local_path: Option<String> = row.get(3)?;
     let remote_url: Option<String> = row.get(4)?;
@@ -410,12 +416,13 @@ fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Attachm
         Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid attachment ID: {}", e)))),
     };
 
-    let mut metadata: FileMetadata = match serde_json::from_str(&metadata_json) {
+    // Deserialize BLOB field from bincode
+    let mut metadata: FileMetadata = match db_deserialize(&metadata_blob) {
         Ok(m) => m,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid metadata JSON: {}", e)))),
+        Err(e) => return Ok(Err(e)),
     };
 
-    // Load thumbnail bytes from BLOB column (more efficient than JSON)
+    // Load thumbnail bytes from BLOB column (more efficient than metadata)
     metadata.thumbnail = thumbnail_bytes;
 
     Ok(Ok(Attachment {
@@ -461,4 +468,279 @@ fn collect_attachments(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<Attachment>,
         attachments.push(attachment_result?);
     }
     Ok(attachments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::serialization::{db_deserialize, db_serialize};
+
+    // ========================================================================
+    // FileMetadata bincode serialization tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_file_metadata_roundtrip() {
+        let metadata = FileMetadata {
+            name: "test_image.jpg".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            size: 1024 * 1024, // 1MB
+            sha256: vec![0u8; 32],
+            chunk_size: 0,
+            width: Some(1920),
+            height: Some(1080),
+            duration_seconds: None,
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let blob = db_serialize(&metadata).unwrap();
+        let deserialized: FileMetadata = db_deserialize(&blob).unwrap();
+
+        assert_eq!(metadata.name, deserialized.name);
+        assert_eq!(metadata.mime_type, deserialized.mime_type);
+        assert_eq!(metadata.size, deserialized.size);
+        assert_eq!(metadata.width, deserialized.width);
+        assert_eq!(metadata.height, deserialized.height);
+        assert_eq!(metadata.duration_seconds, deserialized.duration_seconds);
+    }
+
+    #[test]
+    fn test_bincode_file_metadata_video() {
+        let metadata = FileMetadata {
+            name: "video.mp4".to_string(),
+            mime_type: "video/mp4".to_string(),
+            size: 50 * 1024 * 1024, // 50MB
+            sha256: vec![0u8; 32],
+            chunk_size: 0,
+            width: Some(1920),
+            height: Some(1080),
+            duration_seconds: Some(120.0), // 2 minutes
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let blob = db_serialize(&metadata).unwrap();
+        let deserialized: FileMetadata = db_deserialize(&blob).unwrap();
+
+        assert_eq!(metadata.duration_seconds, deserialized.duration_seconds);
+    }
+
+    #[test]
+    fn test_bincode_file_metadata_audio() {
+        let metadata = FileMetadata {
+            name: "audio.mp3".to_string(),
+            mime_type: "audio/mpeg".to_string(),
+            size: 5 * 1024 * 1024, // 5MB
+            sha256: vec![0u8; 32],
+            chunk_size: 0,
+            width: None,
+            height: None,
+            duration_seconds: Some(180.0), // 3 minutes
+            waveform_samples: Some(vec![50u8; 32]),
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let blob = db_serialize(&metadata).unwrap();
+        let deserialized: FileMetadata = db_deserialize(&blob).unwrap();
+
+        assert_eq!(metadata.name, deserialized.name);
+        assert_eq!(metadata.width, deserialized.width);
+        assert_eq!(metadata.height, deserialized.height);
+    }
+
+    #[test]
+    fn test_bincode_file_metadata_document() {
+        let metadata = FileMetadata {
+            name: "document.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            size: 2 * 1024 * 1024, // 2MB
+            sha256: vec![0u8; 32],
+            chunk_size: 0,
+            width: None,
+            height: None,
+            duration_seconds: None,
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let blob = db_serialize(&metadata).unwrap();
+        let deserialized: FileMetadata = db_deserialize(&blob).unwrap();
+
+        assert_eq!(metadata.name, deserialized.name);
+        assert_eq!(metadata.mime_type, deserialized.mime_type);
+    }
+
+    // ========================================================================
+    // Size comparison tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_smaller_than_json_for_metadata() {
+        let metadata = FileMetadata {
+            name: "test_image_with_a_very_long_filename_that_is_realistic.jpg".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            size: 1024 * 1024,
+            sha256: vec![0u8; 32],
+            chunk_size: 0,
+            width: Some(1920),
+            height: Some(1080),
+            duration_seconds: None,
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let bincode_size = db_serialize(&metadata).unwrap().len();
+        let json_size = serde_json::to_vec(&metadata).unwrap().len();
+
+        assert!(bincode_size < json_size, "Bincode should be smaller than JSON");
+    }
+
+    // ========================================================================
+    // Unicode filename tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_unicode_filename() {
+        let metadata = FileMetadata {
+            name: "文档_日本語_한국어.pdf".to_string(),
+            mime_type: "application/pdf".to_string(),
+            size: 1024,
+            sha256: vec![0u8; 32],
+            chunk_size: 0,
+            width: None,
+            height: None,
+            duration_seconds: None,
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let blob = db_serialize(&metadata).unwrap();
+        let deserialized: FileMetadata = db_deserialize(&blob).unwrap();
+
+        assert_eq!(metadata.name, deserialized.name);
+    }
+
+    #[test]
+    fn test_bincode_emoji_filename() {
+        let metadata = FileMetadata {
+            name: "photo_📷_🎉.jpg".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            size: 1024,
+            sha256: vec![0u8; 32],
+            chunk_size: 0,
+            width: Some(640),
+            height: Some(480),
+            duration_seconds: None,
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let blob = db_serialize(&metadata).unwrap();
+        let deserialized: FileMetadata = db_deserialize(&blob).unwrap();
+
+        assert_eq!(metadata.name, deserialized.name);
+    }
+
+    // ========================================================================
+    // Edge case tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_large_file_size() {
+        let metadata = FileMetadata {
+            name: "large_video.mp4".to_string(),
+            mime_type: "video/mp4".to_string(),
+            size: u64::MAX, // Maximum possible file size
+            sha256: vec![0u8; 32],
+            chunk_size: 0,
+            width: Some(3840),
+            height: Some(2160),
+            duration_seconds: Some(f64::MAX),
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let blob = db_serialize(&metadata).unwrap();
+        let deserialized: FileMetadata = db_deserialize(&blob).unwrap();
+
+        assert_eq!(metadata.size, deserialized.size);
+        assert_eq!(metadata.duration_seconds, deserialized.duration_seconds);
+    }
+
+    #[test]
+    fn test_bincode_empty_filename() {
+        let metadata = FileMetadata {
+            name: "".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            size: 0,
+            sha256: vec![],
+            chunk_size: 0,
+            width: None,
+            height: None,
+            duration_seconds: None,
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let blob = db_serialize(&metadata).unwrap();
+        let deserialized: FileMetadata = db_deserialize(&blob).unwrap();
+
+        assert_eq!(metadata.name, deserialized.name);
+        assert_eq!(metadata.size, deserialized.size);
+    }
+
+    // ========================================================================
+    // Error handling tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_invalid_metadata_blob() {
+        let invalid_blob = vec![0xFF, 0x00, 0xFF, 0x00];
+
+        let result: Result<FileMetadata, _> = db_deserialize(&invalid_blob);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bincode_truncated_metadata_blob() {
+        let metadata = FileMetadata {
+            name: "test.jpg".to_string(),
+            mime_type: "image/jpeg".to_string(),
+            size: 1024,
+            sha256: vec![0u8; 32],
+            chunk_size: 0,
+            width: Some(640),
+            height: Some(480),
+            duration_seconds: None,
+            waveform_samples: None,
+            thumbnail: None,
+            thumbnail_width: None,
+            thumbnail_height: None,
+        };
+
+        let mut blob = db_serialize(&metadata).unwrap();
+        blob.truncate(blob.len() / 2);
+
+        let result: Result<FileMetadata, _> = db_deserialize(&blob);
+        assert!(result.is_err());
+    }
 }

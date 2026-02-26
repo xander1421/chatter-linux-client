@@ -503,7 +503,7 @@ impl SqliteSesameStore {
                 content BLOB NOT NULL,
                 timestamp TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
-                attachment_ids TEXT,
+                attachment_ids_blob BLOB,
                 channel_id TEXT,
                 FOREIGN KEY (user_id) REFERENCES sesame_users(user_id) ON DELETE CASCADE
             )",
@@ -631,19 +631,19 @@ impl SesameStore for SqliteSesameStore {
 
         // Load pending messages
         let mut stmt = conn.prepare(
-            "SELECT content, timestamp, attempts, attachment_ids, channel_id FROM sesame_pending_messages
+            "SELECT content, timestamp, attempts, attachment_ids_blob, channel_id FROM sesame_pending_messages
              WHERE user_id = ?1 ORDER BY id ASC",
         )?;
 
         let messages: Vec<PendingMessage> = stmt
             .query_map(params![user_id_str], |row| {
                 let timestamp_str: String = row.get(1)?;
-                let attachment_ids_json: Option<String> = row.get(3)?;
+                let attachment_ids_blob: Option<Vec<u8>> = row.get(3)?;
                 let channel_id_str: Option<String> = row.get(4)?;
 
-                // Deserialize attachment IDs from JSON
-                let attachment_ids: Vec<crate::domain::ids::AttachmentId> = attachment_ids_json
-                    .and_then(|json| serde_json::from_str(&json).ok())
+                // Deserialize attachment IDs from bincode
+                let attachment_ids: Vec<crate::domain::ids::AttachmentId> = attachment_ids_blob
+                    .and_then(|blob| bincode::deserialize(&blob).ok())
                     .unwrap_or_default();
 
                 // Parse channel ID
@@ -820,14 +820,15 @@ impl SesameStore for SqliteSesameStore {
             params![user_id_str, now],
         )?;
 
-        // Serialize attachment IDs and channel ID as JSON
-        let attachment_ids_json = serde_json::to_string(&attachment_ids).unwrap_or_default();
+        // Serialize attachment IDs using bincode
+        let attachment_ids_blob = bincode::serialize(&attachment_ids)
+            .map_err(|e| StorageError::InvalidData(format!("bincode: {}", e)))?;
         let channel_id_str = channel_id.map(|c| c.to_string());
 
         conn.execute(
-            "INSERT INTO sesame_pending_messages (user_id, content, timestamp, attempts, attachment_ids, channel_id)
+            "INSERT INTO sesame_pending_messages (user_id, content, timestamp, attempts, attachment_ids_blob, channel_id)
              VALUES (?1, ?2, ?3, 0, ?4, ?5)",
-            params![user_id_str, content, timestamp.to_rfc3339(), attachment_ids_json, channel_id_str],
+            params![user_id_str, content, timestamp.to_rfc3339(), attachment_ids_blob, channel_id_str],
         )?;
 
         Ok(())
@@ -839,21 +840,21 @@ impl SesameStore for SqliteSesameStore {
         let conn = self.db.connection()?;
         let user_id_str = user_id.to_string();
 
-        // Load messages with attachment_ids and channel_id
+        // Load messages with attachment_ids_blob and channel_id
         let mut stmt = conn.prepare(
-            "SELECT content, timestamp, attempts, attachment_ids, channel_id FROM sesame_pending_messages
+            "SELECT content, timestamp, attempts, attachment_ids_blob, channel_id FROM sesame_pending_messages
              WHERE user_id = ?1 ORDER BY id ASC",
         )?;
 
         let messages: Vec<PendingMessage> = stmt
             .query_map(params![user_id_str], |row| {
                 let timestamp_str: String = row.get(1)?;
-                let attachment_ids_json: Option<String> = row.get(3)?;
+                let attachment_ids_blob: Option<Vec<u8>> = row.get(3)?;
                 let channel_id_str: Option<String> = row.get(4)?;
 
-                // Deserialize attachment IDs from JSON
-                let attachment_ids: Vec<crate::domain::ids::AttachmentId> = attachment_ids_json
-                    .and_then(|json| serde_json::from_str(&json).ok())
+                // Deserialize attachment IDs from bincode
+                let attachment_ids: Vec<crate::domain::ids::AttachmentId> = attachment_ids_blob
+                    .and_then(|blob| bincode::deserialize(&blob).ok())
                     .unwrap_or_default();
 
                 // Parse channel ID

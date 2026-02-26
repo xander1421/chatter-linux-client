@@ -35,7 +35,7 @@ import { SettingsScreen } from "settings/settings_screen.slint";
 
 // Import components
 import { ImageViewer, EmojiData } from "components/mod.slint";
-import { CodePreviewPanel, CodeLine } from "components/mod.slint";
+import { CodePreviewPanel } from "components/mod.slint";
 import { PdfPreviewPanel } from "components/mod.slint";
 import { VideoPlayer } from "components/mod.slint";
 
@@ -53,9 +53,6 @@ export component App inherits Rectangle {
     // ========== Loading page properties ==========
     in property <string> loading-message: "Loading...";
     in property <string> loading-secondary-message: "";
-
-    // ========== Auth background (black hole animation) ==========
-    in property <image> auth-background-image;
 
     // ========== Auth page properties ==========
     in-out property <string> login-username: "";
@@ -128,7 +125,8 @@ export component App inherits Rectangle {
     in property <string> code-preview-filename: "";
     in property <string> code-preview-language: "";
     in property <int> code-preview-line-count: 0;
-    in property <[CodeLine]> code-preview-lines: [];
+    in property <styled-text> code-preview-content;
+    in property <string> code-preview-plain-text: "";
     callback close-code-preview();
     callback copy-code();
     callback open-code-external();
@@ -506,7 +504,6 @@ export component App inherits Rectangle {
             password <=> root.login-password;
             loading: root.login-loading;
             error: root.login-error;
-            background-image: root.auth-background-image;
 
             login(u, p) => {
                 root.login(u, p);
@@ -524,7 +521,6 @@ export component App inherits Rectangle {
             confirm-password <=> root.register-confirm-password;
             loading: root.register-loading;
             error: root.register-error;
-            background-image: root.auth-background-image;
 
             register(u, p, d) => {
                 root.register(u, p, d);
@@ -1063,6 +1059,9 @@ export component App inherits Rectangle {
         end-call => {
             root.call-end();
         }
+        show-audio-settings => {
+            root.show-audio-device-picker();
+        }
     }
 
     // Device picker modal (for audio devices and screen sources)
@@ -1168,7 +1167,8 @@ export component App inherits Rectangle {
                 file-name: root.code-preview-filename;
                 language: root.code-preview-language;
                 line-count: root.code-preview-line-count;
-                lines: root.code-preview-lines;
+                code-content: root.code-preview-content;
+                plain-text: root.code-preview-plain-text;
 
                 close-clicked => {
                     root.code-preview-visible = false;

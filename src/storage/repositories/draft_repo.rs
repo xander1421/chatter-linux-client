@@ -5,6 +5,7 @@
 use crate::domain::draft::{Draft, DraftKey};
 use crate::domain::ids::{AttachmentId, ChannelId, DraftId, MessageId, UserId};
 use crate::error::StorageError;
+use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -32,23 +33,21 @@ impl DraftRepository {
     pub fn upsert(&self, draft: &Draft) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
 
-        let attachments_json = serde_json::to_string(&draft.attachments)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize attachments: {}", e)))?;
-
-        let mentions_json = serde_json::to_string(&draft.mentions)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize mentions: {}", e)))?;
+        // Use bincode for efficient BLOB storage
+        let attachments_blob = db_serialize(&draft.attachments)?;
+        let mentions_blob = db_serialize(&draft.mentions)?;
 
         let thread_id_str = draft.key.thread_id.as_ref().map(|id| id.to_string());
         let reply_to_str = draft.reply_to.as_ref().map(|id| id.to_string());
 
         conn.execute(
-            "INSERT INTO drafts (id, channel_id, thread_id, content, reply_to, attachments_json, mentions_json, created_at, updated_at)
+            "INSERT INTO drafts (id, channel_id, thread_id, content, reply_to, attachments_blob, mentions_blob, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(channel_id, COALESCE(thread_id, '')) DO UPDATE SET
                  content = excluded.content,
                  reply_to = excluded.reply_to,
-                 attachments_json = excluded.attachments_json,
-                 mentions_json = excluded.mentions_json,
+                 attachments_blob = excluded.attachments_blob,
+                 mentions_blob = excluded.mentions_blob,
                  updated_at = excluded.updated_at",
             params![
                 draft.id.to_string(),
@@ -56,8 +55,8 @@ impl DraftRepository {
                 thread_id_str,
                 draft.content,
                 reply_to_str,
-                attachments_json,
-                mentions_json,
+                attachments_blob,
+                mentions_blob,
                 draft.created_at.to_rfc3339(),
                 draft.updated_at.to_rfc3339(),
             ],
@@ -70,7 +69,7 @@ impl DraftRepository {
     pub fn get(&self, id: &DraftId) -> Result<Option<Draft>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, channel_id, thread_id, content, reply_to, attachments_json, mentions_json, created_at, updated_at
+            "SELECT id, channel_id, thread_id, content, reply_to, attachments_blob, mentions_blob, created_at, updated_at
              FROM drafts WHERE id = ?1",
         )?;
 
@@ -89,7 +88,7 @@ impl DraftRepository {
         let thread_id_str = key.thread_id.as_ref().map(|id| id.to_string());
 
         let mut stmt = conn.prepare(
-            "SELECT id, channel_id, thread_id, content, reply_to, attachments_json, mentions_json, created_at, updated_at
+            "SELECT id, channel_id, thread_id, content, reply_to, attachments_blob, mentions_blob, created_at, updated_at
              FROM drafts
              WHERE channel_id = ?1 AND COALESCE(thread_id, '') = COALESCE(?2, '')",
         )?;
@@ -147,7 +146,7 @@ impl DraftRepository {
     pub fn list_for_channel(&self, channel_id: &ChannelId) -> Result<Vec<Draft>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, channel_id, thread_id, content, reply_to, attachments_json, mentions_json, created_at, updated_at
+            "SELECT id, channel_id, thread_id, content, reply_to, attachments_blob, mentions_blob, created_at, updated_at
              FROM drafts WHERE channel_id = ?1
              ORDER BY updated_at DESC",
         )?;
@@ -160,7 +159,7 @@ impl DraftRepository {
     pub fn list_all(&self) -> Result<Vec<Draft>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, channel_id, thread_id, content, reply_to, attachments_json, mentions_json, created_at, updated_at
+            "SELECT id, channel_id, thread_id, content, reply_to, attachments_blob, mentions_blob, created_at, updated_at
              FROM drafts
              ORDER BY updated_at DESC",
         )?;
@@ -185,9 +184,11 @@ impl DraftRepository {
     /// Returns the number of drafts deleted.
     pub fn delete_empty_drafts(&self) -> Result<u64, StorageError> {
         let conn = self.db.connection()?;
+        // Empty Vec<AttachmentId> serialized with bincode is 8 bytes (u64 length = 0)
+        let empty_blob = db_serialize::<Vec<AttachmentId>>(&vec![])?;
         let rows = conn.execute(
-            "DELETE FROM drafts WHERE TRIM(content) = '' AND attachments_json = '[]'",
-            [],
+            "DELETE FROM drafts WHERE TRIM(content) = '' AND attachments_blob = ?1",
+            params![empty_blob],
         )?;
         Ok(rows as u64)
     }
@@ -211,8 +212,9 @@ fn row_to_draft(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Draft, Stora
     let thread_id_str: Option<String> = row.get(2)?;
     let content: String = row.get(3)?;
     let reply_to_str: Option<String> = row.get(4)?;
-    let attachments_json: String = row.get(5)?;
-    let mentions_json: String = row.get(6)?;
+    // Read from BLOB columns (bincode serialized)
+    let attachments_blob: Vec<u8> = row.get(5)?;
+    let mentions_blob: Vec<u8> = row.get(6)?;
     let created_at_str: String = row.get(7)?;
     let updated_at_str: String = row.get(8)?;
 
@@ -266,26 +268,15 @@ fn row_to_draft(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Draft, Stora
         None => None,
     };
 
-    // Parse attachments JSON
-    let attachments: Vec<AttachmentId> = match serde_json::from_str(&attachments_json) {
+    // Deserialize BLOB fields from bincode
+    let attachments: Vec<AttachmentId> = match db_deserialize(&attachments_blob) {
         Ok(a) => a,
-        Err(e) => {
-            return Ok(Err(StorageError::InvalidData(format!(
-                "Invalid attachments JSON: {}",
-                e
-            ))))
-        }
+        Err(e) => return Ok(Err(e)),
     };
 
-    // Parse mentions JSON
-    let mentions: Vec<UserId> = match serde_json::from_str(&mentions_json) {
+    let mentions: Vec<UserId> = match db_deserialize(&mentions_blob) {
         Ok(m) => m,
-        Err(e) => {
-            return Ok(Err(StorageError::InvalidData(format!(
-                "Invalid mentions JSON: {}",
-                e
-            ))))
-        }
+        Err(e) => return Ok(Err(e)),
     };
 
     // Build DraftKey
@@ -314,4 +305,186 @@ fn collect_drafts(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<Draft>, StorageEr
         drafts.push(draft_result?);
     }
     Ok(drafts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::serialization::{db_deserialize, db_serialize};
+
+    // ========================================================================
+    // Bincode serialization tests for draft fields
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_attachments_roundtrip() {
+        let attachments: Vec<AttachmentId> = vec![
+            AttachmentId::new(),
+            AttachmentId::new(),
+            AttachmentId::new(),
+        ];
+
+        let blob = db_serialize(&attachments).unwrap();
+        let deserialized: Vec<AttachmentId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(attachments, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_empty_attachments() {
+        let attachments: Vec<AttachmentId> = vec![];
+
+        let blob = db_serialize(&attachments).unwrap();
+        let deserialized: Vec<AttachmentId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(attachments, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_mentions_roundtrip() {
+        let mentions: Vec<UserId> = vec![
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+        ];
+
+        let blob = db_serialize(&mentions).unwrap();
+        let deserialized: Vec<UserId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(mentions, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_empty_mentions() {
+        let mentions: Vec<UserId> = vec![];
+
+        let blob = db_serialize(&mentions).unwrap();
+        let deserialized: Vec<UserId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(mentions, deserialized);
+    }
+
+    // ========================================================================
+    // Size comparison tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_smaller_than_json_for_attachments() {
+        let attachments: Vec<AttachmentId> = (0..20).map(|_| AttachmentId::new()).collect();
+
+        let bincode_size = db_serialize(&attachments).unwrap().len();
+        let json_size = serde_json::to_vec(&attachments).unwrap().len();
+
+        // UUIDs are much more compact in bincode (16 bytes vs ~38 chars)
+        assert!(bincode_size < json_size);
+        assert!(bincode_size < json_size / 2, "Bincode should be at least 50% smaller for UUIDs");
+    }
+
+    #[test]
+    fn test_bincode_smaller_than_json_for_mentions() {
+        let mentions: Vec<UserId> = (0..20).map(|_| UserId::new()).collect();
+
+        let bincode_size = db_serialize(&mentions).unwrap().len();
+        let json_size = serde_json::to_vec(&mentions).unwrap().len();
+
+        assert!(bincode_size < json_size);
+        assert!(bincode_size < json_size / 2, "Bincode should be at least 50% smaller for UUIDs");
+    }
+
+    // ========================================================================
+    // Edge case tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_large_attachment_list() {
+        let attachments: Vec<AttachmentId> = (0..100).map(|_| AttachmentId::new()).collect();
+
+        let blob = db_serialize(&attachments).unwrap();
+        let deserialized: Vec<AttachmentId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(attachments.len(), deserialized.len());
+        assert_eq!(attachments, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_large_mentions_list() {
+        let mentions: Vec<UserId> = (0..100).map(|_| UserId::new()).collect();
+
+        let blob = db_serialize(&mentions).unwrap();
+        let deserialized: Vec<UserId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(mentions.len(), deserialized.len());
+        assert_eq!(mentions, deserialized);
+    }
+
+    // ========================================================================
+    // Empty draft detection (used in delete_empty_drafts)
+    // ========================================================================
+
+    #[test]
+    fn test_empty_attachments_blob_is_consistent() {
+        let empty1: Vec<AttachmentId> = vec![];
+        let empty2: Vec<AttachmentId> = vec![];
+
+        let blob1 = db_serialize(&empty1).unwrap();
+        let blob2 = db_serialize(&empty2).unwrap();
+
+        // Empty blobs should be identical
+        assert_eq!(blob1, blob2);
+    }
+
+    #[test]
+    fn test_empty_blob_size() {
+        let empty: Vec<AttachmentId> = vec![];
+        let blob = db_serialize(&empty).unwrap();
+
+        // Empty vec should be just the length prefix (8 bytes for u64)
+        assert_eq!(blob.len(), 8);
+    }
+
+    // ========================================================================
+    // Error handling tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_invalid_attachments_blob() {
+        let invalid_blob = vec![0xFF, 0x00, 0xFF, 0x00];
+
+        let result: Result<Vec<AttachmentId>, _> = db_deserialize(&invalid_blob);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bincode_truncated_mentions_blob() {
+        let mentions: Vec<UserId> = vec![UserId::new(), UserId::new()];
+        let mut blob = db_serialize(&mentions).unwrap();
+        blob.truncate(blob.len() / 2);
+
+        let result: Result<Vec<UserId>, _> = db_deserialize(&blob);
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // Determinism tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_serialization_deterministic_attachments() {
+        let attachments: Vec<AttachmentId> = vec![AttachmentId::new()];
+
+        let blob1 = db_serialize(&attachments).unwrap();
+        let blob2 = db_serialize(&attachments).unwrap();
+
+        assert_eq!(blob1, blob2);
+    }
+
+    #[test]
+    fn test_bincode_serialization_deterministic_mentions() {
+        let mentions: Vec<UserId> = vec![UserId::new()];
+
+        let blob1 = db_serialize(&mentions).unwrap();
+        let blob2 = db_serialize(&mentions).unwrap();
+
+        assert_eq!(blob1, blob2);
+    }
 }

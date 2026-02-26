@@ -5,6 +5,7 @@
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use crate::domain::message::{Message, MessageContent, ReactionCount, Thread};
 use crate::error::StorageError;
+use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
@@ -30,25 +31,23 @@ impl MessageRepository {
     /// Insert a new message.
     pub fn insert(&self, message: &Message) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
+        // content_json kept as JSON for FTS5 json_extract() compatibility
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("Failed to serialize content: {}", e)))?;
-        let attachments_json = serde_json::to_string(&message.attachments)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize attachments: {}", e)))?;
-        let reaction_counts_json = serde_json::to_string(&message.reaction_counts)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize reactions: {}", e)))?;
-        let current_user_reactions_json = serde_json::to_string(&message.current_user_reactions)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize user reactions: {}", e)))?;
-        let mentioned_integrations_json = serde_json::to_string(&message.mentioned_integrations)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize integrations: {}", e)))?;
+        // Use bincode for efficient BLOB storage
+        let attachments_blob = db_serialize(&message.attachments)?;
+        let reaction_counts_blob = db_serialize(&message.reaction_counts)?;
+        let current_user_reactions_blob = db_serialize(&message.current_user_reactions)?;
+        let mentioned_integrations_blob = db_serialize(&message.mentioned_integrations)?;
 
         conn.execute(
             "INSERT INTO messages (
                 id, channel_id, sender_id, content_type, content_json,
-                thread_id, reply_to, attachments_json,
+                thread_id, reply_to, attachments_blob,
                 is_pinned, is_edited, is_deleted,
                 sent_at, created_at, updated_at, edited_at,
-                reaction_counts_json, current_user_reactions_json,
-                mentioned_integrations_json, targets_ai_bot
+                reaction_counts_blob, current_user_reactions_blob,
+                mentioned_integrations_blob, targets_ai_bot
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 message.id.to_string(),
@@ -58,7 +57,7 @@ impl MessageRepository {
                 content_json,
                 message.thread_id.map(|id| id.to_string()),
                 message.reply_to.map(|id| id.to_string()),
-                attachments_json,
+                attachments_blob,
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
@@ -66,9 +65,9 @@ impl MessageRepository {
                 message.created_at.to_rfc3339(),
                 message.updated_at.to_rfc3339(),
                 message.edited_at.map(|dt| dt.to_rfc3339()),
-                reaction_counts_json,
-                current_user_reactions_json,
-                mentioned_integrations_json,
+                reaction_counts_blob,
+                current_user_reactions_blob,
+                mentioned_integrations_blob,
                 message.targets_ai_bot as i32,
             ],
         )?;
@@ -83,25 +82,23 @@ impl MessageRepository {
     /// - Unique index on (sender_id, sent_at) for Signal-style dedup
     pub fn insert_or_ignore(&self, message: &Message) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
+        // content_json kept as JSON for FTS5 json_extract() compatibility
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("Failed to serialize content: {}", e)))?;
-        let attachments_json = serde_json::to_string(&message.attachments)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize attachments: {}", e)))?;
-        let reaction_counts_json = serde_json::to_string(&message.reaction_counts)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize reactions: {}", e)))?;
-        let current_user_reactions_json = serde_json::to_string(&message.current_user_reactions)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize user reactions: {}", e)))?;
-        let mentioned_integrations_json = serde_json::to_string(&message.mentioned_integrations)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize integrations: {}", e)))?;
+        // Use bincode for efficient BLOB storage
+        let attachments_blob = db_serialize(&message.attachments)?;
+        let reaction_counts_blob = db_serialize(&message.reaction_counts)?;
+        let current_user_reactions_blob = db_serialize(&message.current_user_reactions)?;
+        let mentioned_integrations_blob = db_serialize(&message.mentioned_integrations)?;
 
         let rows = conn.execute(
             "INSERT OR IGNORE INTO messages (
                 id, channel_id, sender_id, content_type, content_json,
-                thread_id, reply_to, attachments_json,
+                thread_id, reply_to, attachments_blob,
                 is_pinned, is_edited, is_deleted,
                 sent_at, created_at, updated_at, edited_at,
-                reaction_counts_json, current_user_reactions_json,
-                mentioned_integrations_json, targets_ai_bot
+                reaction_counts_blob, current_user_reactions_blob,
+                mentioned_integrations_blob, targets_ai_bot
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 message.id.to_string(),
@@ -111,7 +108,7 @@ impl MessageRepository {
                 content_json,
                 message.thread_id.map(|id| id.to_string()),
                 message.reply_to.map(|id| id.to_string()),
-                attachments_json,
+                attachments_blob,
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
@@ -119,9 +116,9 @@ impl MessageRepository {
                 message.created_at.to_rfc3339(),
                 message.updated_at.to_rfc3339(),
                 message.edited_at.map(|dt| dt.to_rfc3339()),
-                reaction_counts_json,
-                current_user_reactions_json,
-                mentioned_integrations_json,
+                reaction_counts_blob,
+                current_user_reactions_blob,
+                mentioned_integrations_blob,
                 message.targets_ai_bot as i32,
             ],
         )?;
@@ -133,11 +130,11 @@ impl MessageRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, sender_id, content_json,
-                    thread_id, reply_to, attachments_json,
+                    thread_id, reply_to, attachments_blob,
                     is_pinned, is_edited, is_deleted,
                     sent_at, created_at, updated_at, edited_at,
-                    reaction_counts_json, current_user_reactions_json,
-                    mentioned_integrations_json, targets_ai_bot
+                    reaction_counts_blob, current_user_reactions_blob,
+                    mentioned_integrations_blob, targets_ai_bot
              FROM messages WHERE id = ?1",
         )?;
 
@@ -163,11 +160,11 @@ impl MessageRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, sender_id, content_json,
-                    thread_id, reply_to, attachments_json,
+                    thread_id, reply_to, attachments_blob,
                     is_pinned, is_edited, is_deleted,
                     sent_at, created_at, updated_at, edited_at,
-                    reaction_counts_json, current_user_reactions_json,
-                    mentioned_integrations_json, targets_ai_bot
+                    reaction_counts_blob, current_user_reactions_blob,
+                    mentioned_integrations_blob, targets_ai_bot
              FROM messages WHERE sender_id = ?1 AND sent_at = ?2",
         )?;
 
@@ -189,11 +186,11 @@ impl MessageRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, sender_id, content_json,
-                    thread_id, reply_to, attachments_json,
+                    thread_id, reply_to, attachments_blob,
                     is_pinned, is_edited, is_deleted,
                     sent_at, created_at, updated_at, edited_at,
-                    reaction_counts_json, current_user_reactions_json,
-                    mentioned_integrations_json, targets_ai_bot
+                    reaction_counts_blob, current_user_reactions_blob,
+                    mentioned_integrations_blob, targets_ai_bot
              FROM messages WHERE sender_id = ?1
              ORDER BY sent_at DESC LIMIT ?2",
         )?;
@@ -210,40 +207,38 @@ impl MessageRepository {
     /// Update an existing message.
     pub fn update(&self, message: &Message) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
+        // content_json kept as JSON for FTS5 json_extract() compatibility
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("Failed to serialize content: {}", e)))?;
-        let attachments_json = serde_json::to_string(&message.attachments)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize attachments: {}", e)))?;
-        let reaction_counts_json = serde_json::to_string(&message.reaction_counts)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize reactions: {}", e)))?;
-        let current_user_reactions_json = serde_json::to_string(&message.current_user_reactions)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize user reactions: {}", e)))?;
-        let mentioned_integrations_json = serde_json::to_string(&message.mentioned_integrations)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize integrations: {}", e)))?;
+        // Use bincode for efficient BLOB storage
+        let attachments_blob = db_serialize(&message.attachments)?;
+        let reaction_counts_blob = db_serialize(&message.reaction_counts)?;
+        let current_user_reactions_blob = db_serialize(&message.current_user_reactions)?;
+        let mentioned_integrations_blob = db_serialize(&message.mentioned_integrations)?;
 
         let rows = conn.execute(
             "UPDATE messages SET
                 content_type = ?1, content_json = ?2,
-                thread_id = ?3, reply_to = ?4, attachments_json = ?5,
+                thread_id = ?3, reply_to = ?4, attachments_blob = ?5,
                 is_pinned = ?6, is_edited = ?7, is_deleted = ?8,
                 updated_at = ?9, edited_at = ?10,
-                reaction_counts_json = ?11, current_user_reactions_json = ?12,
-                mentioned_integrations_json = ?13, targets_ai_bot = ?14
+                reaction_counts_blob = ?11, current_user_reactions_blob = ?12,
+                mentioned_integrations_blob = ?13, targets_ai_bot = ?14
              WHERE id = ?15",
             params![
                 content_type_discriminant(&message.content),
                 content_json,
                 message.thread_id.map(|id| id.to_string()),
                 message.reply_to.map(|id| id.to_string()),
-                attachments_json,
+                attachments_blob,
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
                 message.updated_at.to_rfc3339(),
                 message.edited_at.map(|dt| dt.to_rfc3339()),
-                reaction_counts_json,
-                current_user_reactions_json,
-                mentioned_integrations_json,
+                reaction_counts_blob,
+                current_user_reactions_blob,
+                mentioned_integrations_blob,
                 message.targets_ai_bot as i32,
                 message.id.to_string(),
             ],
@@ -318,11 +313,11 @@ impl MessageRepository {
             // sent_at is nanosecond timestamp, ensuring correct order for rapid messages
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.channel_id, m.sender_id, m.content_json,
-                        m.thread_id, m.reply_to, m.attachments_json,
+                        m.thread_id, m.reply_to, m.attachments_blob,
                         m.is_pinned, m.is_edited, m.is_deleted,
                         m.sent_at, m.created_at, m.updated_at, m.edited_at,
-                        m.reaction_counts_json, m.current_user_reactions_json,
-                        m.mentioned_integrations_json, m.targets_ai_bot
+                        m.reaction_counts_blob, m.current_user_reactions_blob,
+                        m.mentioned_integrations_blob, m.targets_ai_bot
                  FROM messages m
                  WHERE m.channel_id = ?1
                    AND (m.sent_at, m.id) < (SELECT sent_at, id FROM messages WHERE id = ?2)
@@ -336,11 +331,11 @@ impl MessageRepository {
             // Use sent_at (nanosecond timestamp) for ordering to handle rapid messages
             let mut stmt = conn.prepare(
                 "SELECT id, channel_id, sender_id, content_json,
-                        thread_id, reply_to, attachments_json,
+                        thread_id, reply_to, attachments_blob,
                         is_pinned, is_edited, is_deleted,
                         sent_at, created_at, updated_at, edited_at,
-                        reaction_counts_json, current_user_reactions_json,
-                        mentioned_integrations_json, targets_ai_bot
+                        reaction_counts_blob, current_user_reactions_blob,
+                        mentioned_integrations_blob, targets_ai_bot
                  FROM messages
                  WHERE channel_id = ?1
                  ORDER BY sent_at DESC, id DESC
@@ -365,11 +360,11 @@ impl MessageRepository {
         let messages = if let Some(before_id) = before {
             let mut stmt = conn.prepare(
                 "SELECT m.id, m.channel_id, m.sender_id, m.content_json,
-                        m.thread_id, m.reply_to, m.attachments_json,
+                        m.thread_id, m.reply_to, m.attachments_blob,
                         m.is_pinned, m.is_edited, m.is_deleted,
                         m.sent_at, m.created_at, m.updated_at, m.edited_at,
-                        m.reaction_counts_json, m.current_user_reactions_json,
-                        m.mentioned_integrations_json, m.targets_ai_bot
+                        m.reaction_counts_blob, m.current_user_reactions_blob,
+                        m.mentioned_integrations_blob, m.targets_ai_bot
                  FROM messages m
                  WHERE m.thread_id = ?1
                    AND (m.sent_at, m.id) < (SELECT sent_at, id FROM messages WHERE id = ?2)
@@ -381,11 +376,11 @@ impl MessageRepository {
         } else {
             let mut stmt = conn.prepare(
                 "SELECT id, channel_id, sender_id, content_json,
-                        thread_id, reply_to, attachments_json,
+                        thread_id, reply_to, attachments_blob,
                         is_pinned, is_edited, is_deleted,
                         sent_at, created_at, updated_at, edited_at,
-                        reaction_counts_json, current_user_reactions_json,
-                        mentioned_integrations_json, targets_ai_bot
+                        reaction_counts_blob, current_user_reactions_blob,
+                        mentioned_integrations_blob, targets_ai_bot
                  FROM messages
                  WHERE thread_id = ?1
                  ORDER BY sent_at DESC, id DESC
@@ -403,11 +398,11 @@ impl MessageRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, channel_id, sender_id, content_json,
-                    thread_id, reply_to, attachments_json,
+                    thread_id, reply_to, attachments_blob,
                     is_pinned, is_edited, is_deleted,
                     sent_at, created_at, updated_at, edited_at,
-                    reaction_counts_json, current_user_reactions_json,
-                    mentioned_integrations_json, targets_ai_bot
+                    reaction_counts_blob, current_user_reactions_blob,
+                    mentioned_integrations_blob, targets_ai_bot
              FROM messages
              WHERE channel_id = ?1 AND is_pinned = 1
              ORDER BY sent_at DESC",
@@ -435,7 +430,7 @@ impl MessageRepository {
     pub fn get_thread(&self, root_message_id: &MessageId) -> Result<Option<Thread>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT root_message_id, channel_id, reply_count, last_reply_at, participant_ids_json
+            "SELECT root_message_id, channel_id, reply_count, last_reply_at, participant_ids_blob
              FROM threads WHERE root_message_id = ?1",
         )?;
 
@@ -453,22 +448,22 @@ impl MessageRepository {
     /// Insert or update thread metadata.
     pub fn upsert_thread(&self, thread: &Thread) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-        let participant_ids_json = serde_json::to_string(&thread.participant_ids)
-            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize participants: {}", e)))?;
+        // Use bincode for efficient BLOB storage
+        let participant_ids_blob = db_serialize(&thread.participant_ids)?;
 
         conn.execute(
-            "INSERT INTO threads (root_message_id, channel_id, reply_count, last_reply_at, participant_ids_json)
+            "INSERT INTO threads (root_message_id, channel_id, reply_count, last_reply_at, participant_ids_blob)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(root_message_id) DO UPDATE SET
                 reply_count = excluded.reply_count,
                 last_reply_at = excluded.last_reply_at,
-                participant_ids_json = excluded.participant_ids_json",
+                participant_ids_blob = excluded.participant_ids_blob",
             params![
                 thread.root_message_id.to_string(),
                 thread.channel_id.to_string(),
                 thread.reply_count,
                 thread.last_reply_at.map(|dt| dt.to_rfc3339()),
-                participant_ids_json,
+                participant_ids_blob,
             ],
         )?;
         Ok(())
@@ -501,47 +496,49 @@ fn content_type_discriminant(content: &MessageContent) -> i32 {
 
 /// Convert a row to a Message.
 /// Column order: id(0), channel_id(1), sender_id(2), content_json(3),
-///               thread_id(4), reply_to(5), attachments_json(6),
+///               thread_id(4), reply_to(5), attachments_blob(6),
 ///               is_pinned(7), is_edited(8), is_deleted(9),
 ///               sent_at(10), created_at(11), updated_at(12), edited_at(13),
-///               reaction_counts_json(14), current_user_reactions_json(15),
-///               mentioned_integrations_json(16), targets_ai_bot(17)
+///               reaction_counts_blob(14), current_user_reactions_blob(15),
+///               mentioned_integrations_blob(16), targets_ai_bot(17)
 fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, StorageError>> {
     let content_json: String = row.get(3)?;
-    let attachments_json: String = row.get(6)?;
-    let reaction_counts_json: String = row.get(14)?;
-    let current_user_reactions_json: String = row.get(15)?;
-    let mentioned_integrations_json: String = row.get(16)?;
+    // Read from BLOB columns (bincode serialized)
+    let attachments_blob: Vec<u8> = row.get(6)?;
+    let reaction_counts_blob: Vec<u8> = row.get(14)?;
+    let current_user_reactions_blob: Vec<u8> = row.get(15)?;
+    let mentioned_integrations_blob: Vec<u8> = row.get(16)?;
 
     let thread_id: Option<String> = row.get(4)?;
     let reply_to: Option<String> = row.get(5)?;
     let sender_id: Option<String> = row.get(2)?;
     let edited_at: Option<String> = row.get(13)?;
 
-    // Deserialize JSON fields
+    // Deserialize content from JSON (kept for FTS5 compatibility)
     let content: MessageContent = match serde_json::from_str(&content_json) {
         Ok(c) => c,
         Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid content JSON: {}", e)))),
     };
 
-    let attachments: Vec<AttachmentId> = match serde_json::from_str(&attachments_json) {
+    // Deserialize BLOB fields from bincode
+    let attachments: Vec<AttachmentId> = match db_deserialize(&attachments_blob) {
         Ok(a) => a,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid attachments JSON: {}", e)))),
+        Err(e) => return Ok(Err(e)),
     };
 
-    let reaction_counts: Vec<ReactionCount> = match serde_json::from_str(&reaction_counts_json) {
+    let reaction_counts: Vec<ReactionCount> = match db_deserialize(&reaction_counts_blob) {
         Ok(r) => r,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid reaction counts JSON: {}", e)))),
+        Err(e) => return Ok(Err(e)),
     };
 
-    let current_user_reactions: Vec<String> = match serde_json::from_str(&current_user_reactions_json) {
+    let current_user_reactions: Vec<String> = match db_deserialize(&current_user_reactions_blob) {
         Ok(r) => r,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid user reactions JSON: {}", e)))),
+        Err(e) => return Ok(Err(e)),
     };
 
-    let mentioned_integrations: Vec<IntegrationId> = match serde_json::from_str(&mentioned_integrations_json) {
+    let mentioned_integrations: Vec<IntegrationId> = match db_deserialize(&mentioned_integrations_blob) {
         Ok(m) => m,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid integrations JSON: {}", e)))),
+        Err(e) => return Ok(Err(e)),
     };
 
     Ok(Ok(Message {
@@ -583,12 +580,14 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
 
 /// Convert a row to a Thread.
 fn row_to_thread(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Thread, StorageError>> {
-    let participant_ids_json: String = row.get(4)?;
+    // Read from BLOB column (bincode serialized)
+    let participant_ids_blob: Vec<u8> = row.get(4)?;
     let last_reply_at: Option<String> = row.get(3)?;
 
-    let participant_ids: Vec<UserId> = match serde_json::from_str(&participant_ids_json) {
+    // Deserialize BLOB field from bincode
+    let participant_ids: Vec<UserId> = match db_deserialize(&participant_ids_blob) {
         Ok(p) => p,
-        Err(e) => return Ok(Err(StorageError::InvalidData(format!("Invalid participants JSON: {}", e)))),
+        Err(e) => return Ok(Err(e)),
     };
 
     Ok(Ok(Thread {
@@ -614,4 +613,208 @@ fn collect_messages(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<Message>, Stora
         messages.push(msg_result?);
     }
     Ok(messages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::serialization::{db_deserialize, db_serialize};
+
+    // ========================================================================
+    // Bincode serialization unit tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_attachments_roundtrip() {
+        let attachments: Vec<AttachmentId> = vec![
+            AttachmentId::new(),
+            AttachmentId::new(),
+            AttachmentId::new(),
+        ];
+
+        let blob = db_serialize(&attachments).unwrap();
+        let deserialized: Vec<AttachmentId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(attachments, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_empty_attachments() {
+        let attachments: Vec<AttachmentId> = vec![];
+
+        let blob = db_serialize(&attachments).unwrap();
+        let deserialized: Vec<AttachmentId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(attachments, deserialized);
+        // Empty vec should be small (just length prefix)
+        assert!(blob.len() <= 8);
+    }
+
+    #[test]
+    fn test_bincode_reaction_counts_roundtrip() {
+        let reaction_counts: Vec<ReactionCount> = vec![
+            ReactionCount { emoji: "👍".to_string(), count: 10 },
+            ReactionCount { emoji: "❤️".to_string(), count: 5 },
+            ReactionCount { emoji: "🎉".to_string(), count: 3 },
+        ];
+
+        let blob = db_serialize(&reaction_counts).unwrap();
+        let deserialized: Vec<ReactionCount> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(reaction_counts, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_current_user_reactions_roundtrip() {
+        let reactions: Vec<String> = vec!["👍".to_string(), "❤️".to_string()];
+
+        let blob = db_serialize(&reactions).unwrap();
+        let deserialized: Vec<String> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(reactions, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_mentioned_integrations_roundtrip() {
+        let integrations: Vec<IntegrationId> = vec![
+            IntegrationId::new(),
+            IntegrationId::new(),
+        ];
+
+        let blob = db_serialize(&integrations).unwrap();
+        let deserialized: Vec<IntegrationId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(integrations, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_participant_ids_roundtrip() {
+        let participants: Vec<UserId> = vec![
+            UserId::new(),
+            UserId::new(),
+            UserId::new(),
+        ];
+
+        let blob = db_serialize(&participants).unwrap();
+        let deserialized: Vec<UserId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(participants, deserialized);
+    }
+
+    // ========================================================================
+    // Size comparison tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_smaller_than_json_for_attachments() {
+        let attachments: Vec<AttachmentId> = (0..50).map(|_| AttachmentId::new()).collect();
+
+        let bincode_size = db_serialize(&attachments).unwrap().len();
+        let json_size = serde_json::to_vec(&attachments).unwrap().len();
+
+        // Bincode should be significantly smaller for UUIDs
+        // JSON: 36 chars per UUID + quotes + commas = ~40 bytes per UUID
+        // Bincode: 16 bytes per UUID (raw bytes)
+        assert!(bincode_size < json_size);
+        assert!(bincode_size < json_size / 2, "Bincode should be at least 50% smaller");
+    }
+
+    #[test]
+    fn test_bincode_smaller_than_json_for_reactions() {
+        let reaction_counts: Vec<ReactionCount> = vec![
+            ReactionCount { emoji: "👍".to_string(), count: 100 },
+            ReactionCount { emoji: "❤️".to_string(), count: 50 },
+            ReactionCount { emoji: "😂".to_string(), count: 25 },
+            ReactionCount { emoji: "🎉".to_string(), count: 10 },
+            ReactionCount { emoji: "🔥".to_string(), count: 5 },
+        ];
+
+        let bincode_size = db_serialize(&reaction_counts).unwrap().len();
+        let json_size = serde_json::to_vec(&reaction_counts).unwrap().len();
+
+        assert!(bincode_size < json_size, "Bincode should be smaller than JSON");
+    }
+
+    // ========================================================================
+    // Edge case tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_unicode_emoji_reactions() {
+        let reaction_counts: Vec<ReactionCount> = vec![
+            ReactionCount { emoji: "🇺🇸".to_string(), count: 1 },  // Flag emoji
+            ReactionCount { emoji: "👨‍👩‍👧‍👦".to_string(), count: 2 },  // Family emoji (ZWJ sequence)
+            ReactionCount { emoji: "👍🏽".to_string(), count: 3 },  // Skin tone modifier
+        ];
+
+        let blob = db_serialize(&reaction_counts).unwrap();
+        let deserialized: Vec<ReactionCount> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(reaction_counts, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_large_attachment_list() {
+        let attachments: Vec<AttachmentId> = (0..1000).map(|_| AttachmentId::new()).collect();
+
+        let blob = db_serialize(&attachments).unwrap();
+        let deserialized: Vec<AttachmentId> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(attachments.len(), deserialized.len());
+        assert_eq!(attachments, deserialized);
+    }
+
+    #[test]
+    fn test_bincode_high_reaction_counts() {
+        let reaction_counts: Vec<ReactionCount> = vec![
+            ReactionCount { emoji: "👍".to_string(), count: u32::MAX },
+            ReactionCount { emoji: "❤️".to_string(), count: 1_000_000 },
+        ];
+
+        let blob = db_serialize(&reaction_counts).unwrap();
+        let deserialized: Vec<ReactionCount> = db_deserialize(&blob).unwrap();
+
+        assert_eq!(reaction_counts, deserialized);
+    }
+
+    // ========================================================================
+    // Error handling tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_invalid_data_error() {
+        let invalid_blob = vec![0xFF, 0xFF, 0xFF, 0xFF];
+
+        let result: Result<Vec<AttachmentId>, _> = db_deserialize(&invalid_blob);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_bincode_truncated_data_error() {
+        let attachments: Vec<AttachmentId> = vec![AttachmentId::new(), AttachmentId::new()];
+        let mut blob = db_serialize(&attachments).unwrap();
+
+        // Truncate the blob
+        blob.truncate(blob.len() / 2);
+
+        let result: Result<Vec<AttachmentId>, _> = db_deserialize(&blob);
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // Determinism tests
+    // ========================================================================
+
+    #[test]
+    fn test_bincode_serialization_deterministic() {
+        let attachments: Vec<AttachmentId> = vec![
+            AttachmentId::new(),
+            AttachmentId::new(),
+        ];
+
+        let blob1 = db_serialize(&attachments).unwrap();
+        let blob2 = db_serialize(&attachments).unwrap();
+
+        assert_eq!(blob1, blob2);
+    }
 }

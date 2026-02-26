@@ -1,22 +1,31 @@
 //! Global video playback state.
 //!
 //! Tracks video playback state for the in-app video player.
-//! Uses a shared frame buffer that the UI timer reads from.
+//! Supports two rendering modes:
+//! - GL mode: Hardware-accelerated zero-copy rendering via EGL texture sharing
+//! - Software mode: Frame buffer passing with RGB conversion (fallback)
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use chatter_linux::media::InAppVideoPlayer as VideoPlayer;
 
-/// Global video player instance.
+#[cfg(target_os = "linux")]
+use super::gl_video;
+
+/// Global video player instance (software mode).
 static VIDEO_PLAYER: OnceLock<Arc<Mutex<Option<VideoPlayer>>>> = OnceLock::new();
 
 /// Global state tracking video playback.
 static VIDEO_STATE: OnceLock<Arc<Mutex<VideoState>>> = OnceLock::new();
 
-/// Shared frame buffer for cross-thread frame passing.
+/// Shared frame buffer for cross-thread frame passing (software mode).
 static FRAME_BUFFER: OnceLock<Arc<Mutex<Option<FrameData>>>> = OnceLock::new();
+
+/// Whether GL video is being used for current playback.
+static USING_GL_VIDEO: AtomicBool = AtomicBool::new(false);
 
 /// Raw frame data from the video decoder.
 #[derive(Clone)]
@@ -73,82 +82,192 @@ pub fn take_frame() -> Option<FrameData> {
     }
 }
 
-/// Start video playback from memory (secure: no filesystem access).
+/// Check if GL video is currently being used for playback.
+#[cfg(target_os = "linux")]
+pub fn is_using_gl_video() -> bool {
+    USING_GL_VIDEO.load(Ordering::SeqCst)
+}
+
+/// Start video playback from memory (non-blocking).
 ///
-/// Used for playing decrypted video attachments directly from memory.
-pub fn start_video_from_memory(data: Vec<u8>, filename: &str) -> Result<(f64, String), String> {
+/// Tries GL video first for hardware-accelerated rendering,
+/// falls back to software rendering if GL is not available.
+///
+/// # Arguments
+/// * `data` - Video data bytes
+/// * `filename` - Display filename
+/// * `on_ready` - Callback invoked when video is ready (duration, duration_str) or error
+pub fn start_video_from_memory_async<F>(
+    data: Vec<u8>,
+    filename: String,
+    on_ready: F,
+) where
+    F: FnOnce(Result<(f64, String), String>) + Send + 'static,
+{
     // Stop any existing playback
     stop_video();
 
-    let frame_buffer = get_frame_buffer();
+    // Try GL video first (hardware-accelerated)
+    #[cfg(target_os = "linux")]
+    {
+        // Check if GL is connected (rendering notifier has set up the context)
+        if gl_video::is_gl_connected() {
+            tracing::info!("Starting GL video (hardware-accelerated)");
 
-    // Start the video player from memory
-    let player = VideoPlayer::start_from_memory(data, move |width, height, rgb_data| {
-        if let Ok(mut buffer) = frame_buffer.lock() {
-            *buffer = Some(FrameData {
-                width,
-                height,
-                rgb_data,
+            // GL video must be started from UI thread (thread_local state)
+            // We handle everything in the UI thread closure, including fallback
+            let _ = slint::invoke_from_event_loop(move || {
+                match gl_video::start_gl_video(data.clone()) {
+                    Some(duration) => {
+                        USING_GL_VIDEO.store(true, Ordering::SeqCst);
+
+                        // Update global state
+                        if let Ok(mut video_state) = get_video_state().lock() {
+                            video_state.current_path = None;
+                            video_state.filename = filename;
+                            video_state.is_playing = true;
+                            video_state.duration = duration;
+                            video_state.position = 0.0;
+                            video_state.volume = 1.0;
+                        }
+
+                        let duration_str = chatter_linux::media::format_duration(duration);
+                        tracing::info!("GL video started: {}s ({})", duration, duration_str);
+                        on_ready(Ok((duration, duration_str)));
+                    }
+                    None => {
+                        tracing::warn!("GL video start failed, falling back to software");
+                        USING_GL_VIDEO.store(false, Ordering::SeqCst);
+
+                        // Fall back to software rendering
+                        // Note: This runs software loading on UI thread, but it spawns its own worker
+                        start_video_software(data, filename, on_ready);
+                    }
+                }
             });
+            return;
+        } else if gl_video::is_gl_available() {
+            tracing::debug!("GL available but not connected yet, using software rendering");
         }
-    }).map_err(|e| e.to_string())?;
-
-    // Wait for the player to finish loading (up to 15 seconds)
-    // The background thread sets loading=false and duration after open_memory completes
-    let max_wait = Duration::from_secs(15);
-    let start = Instant::now();
-    let poll_interval = Duration::from_millis(50);
-
-    loop {
-        let state = player.state().get_state();
-
-        // Check if loading completed
-        if !state.loading {
-            tracing::debug!("Video player finished loading: duration={}s", state.duration);
-            break;
-        }
-
-        // Check for error
-        if let Some(ref err) = state.error {
-            return Err(err.clone());
-        }
-
-        // Check timeout
-        if start.elapsed() > max_wait {
-            tracing::warn!("Timeout waiting for video player to load");
-            break;
-        }
-
-        std::thread::sleep(poll_interval);
     }
 
-    // Now get the state with actual duration
-    let state = player.state().get_state();
-    let duration = state.duration;
-    let duration_str = chatter_linux::media::format_duration(duration);
-    tracing::info!("Video loaded: {}s ({})", duration, duration_str);
+    // Software rendering path (fallback)
+    start_video_software(data, filename, on_ready);
+}
 
-    // Update global state
-    if let Ok(mut video_state) = get_video_state().lock() {
-        video_state.current_path = None; // No filesystem path for memory playback
-        video_state.filename = filename.to_string();
-        video_state.is_playing = true;
-        video_state.duration = duration;
-        video_state.position = 0.0;
-        video_state.volume = 1.0;
-    }
+/// Start video playback using software rendering.
+fn start_video_software<F>(
+    data: Vec<u8>,
+    filename: String,
+    on_ready: F,
+) where
+    F: FnOnce(Result<(f64, String), String>) + Send + 'static,
+{
+    USING_GL_VIDEO.store(false, Ordering::SeqCst);
 
-    // Store player
-    if let Ok(mut player_guard) = get_video_player().lock() {
-        *player_guard = Some(player);
-    }
+    let frame_buffer = get_frame_buffer();
+    let filename_clone = filename.clone();
 
-    Ok((duration, duration_str))
+    // Spawn loading in background thread to avoid blocking
+    std::thread::Builder::new()
+        .name("video-loader".into())
+        .spawn(move || {
+            // Start the video player from memory
+            let player = match VideoPlayer::start_from_memory(data, move |width, height, rgb_data| {
+                if let Ok(mut buffer) = frame_buffer.lock() {
+                    *buffer = Some(FrameData {
+                        width,
+                        height,
+                        rgb_data,
+                    });
+                }
+            }) {
+                Ok(p) => p,
+                Err(e) => {
+                    on_ready(Err(e.to_string()));
+                    return;
+                }
+            };
+
+            // Poll for loading completion (in background thread, doesn't block UI)
+            let max_wait = Duration::from_secs(15);
+            let start = Instant::now();
+            let poll_interval = Duration::from_millis(50);
+
+            loop {
+                let state = player.state().get_state();
+
+                if !state.loading {
+                    tracing::debug!("Video player finished loading: duration={}s", state.duration);
+                    break;
+                }
+
+                if let Some(ref err) = state.error {
+                    on_ready(Err(err.clone()));
+                    return;
+                }
+
+                if start.elapsed() > max_wait {
+                    tracing::warn!("Timeout waiting for video player to load");
+                    break;
+                }
+
+                std::thread::sleep(poll_interval);
+            }
+
+            // Get final state
+            let state = player.state().get_state();
+            let duration = state.duration;
+            let duration_str = chatter_linux::media::format_duration(duration);
+            tracing::info!("Video loaded (software): {}s ({})", duration, duration_str);
+
+            // Update global state
+            if let Ok(mut video_state) = get_video_state().lock() {
+                video_state.current_path = None;
+                video_state.filename = filename_clone;
+                video_state.is_playing = true;
+                video_state.duration = duration;
+                video_state.position = 0.0;
+                video_state.volume = 1.0;
+            }
+
+            // Store player
+            if let Ok(mut player_guard) = get_video_player().lock() {
+                *player_guard = Some(player);
+            }
+
+            on_ready(Ok((duration, duration_str)));
+        })
+        .expect("Failed to spawn video loader thread");
+}
+
+/// Start video playback from memory (blocking - prefer async version).
+///
+/// Used for playing decrypted video attachments directly from memory.
+/// NOTE: This blocks the calling thread. Use `start_video_from_memory_async` instead.
+pub fn start_video_from_memory(data: Vec<u8>, filename: &str) -> Result<(f64, String), String> {
+    use std::sync::mpsc;
+
+    let (tx, rx) = mpsc::channel();
+
+    start_video_from_memory_async(data, filename.to_string(), move |result| {
+        let _ = tx.send(result);
+    });
+
+    // Block waiting for result (still blocking, but at least isolated)
+    rx.recv().map_err(|e| format!("Channel error: {}", e))?
 }
 
 /// Stop video playback.
 pub fn stop_video() {
-    // Stop the player
+    // Stop GL video if active
+    #[cfg(target_os = "linux")]
+    if USING_GL_VIDEO.load(Ordering::SeqCst) {
+        gl_video::stop_gl_video();
+        USING_GL_VIDEO.store(false, Ordering::SeqCst);
+    }
+
+    // Stop the software player
     if let Ok(mut player_guard) = get_video_player().lock() {
         if let Some(ref mut player) = *player_guard {
             player.stop();
@@ -173,6 +292,17 @@ pub fn stop_video() {
 
 /// Toggle play/pause.
 pub fn toggle_play_pause() -> bool {
+    #[cfg(target_os = "linux")]
+    if USING_GL_VIDEO.load(Ordering::SeqCst) {
+        let is_playing = gl_video::is_gl_video_active();
+        gl_video::set_gl_video_playing(!is_playing);
+        let new_playing = !is_playing;
+        if let Ok(mut state) = get_video_state().lock() {
+            state.is_playing = new_playing;
+        }
+        return new_playing;
+    }
+
     if let Ok(player_guard) = get_video_player().lock() {
         if let Some(ref player) = *player_guard {
             player.toggle_play_pause();
@@ -190,6 +320,15 @@ pub fn toggle_play_pause() -> bool {
 
 /// Seek to position (0.0 - 1.0).
 pub fn seek(position: f32) {
+    #[cfg(target_os = "linux")]
+    if USING_GL_VIDEO.load(Ordering::SeqCst) {
+        if let Some(duration) = gl_video::get_gl_video_duration() {
+            let seek_pos = position as f64 * duration;
+            gl_video::seek_gl_video(seek_pos);
+        }
+        return;
+    }
+
     if let Ok(player_guard) = get_video_player().lock() {
         if let Some(ref player) = *player_guard {
             let state = player.state().get_state();
@@ -201,6 +340,11 @@ pub fn seek(position: f32) {
 
 /// Set volume (0.0 - 1.0).
 pub fn set_volume(volume: f32) {
+    #[cfg(target_os = "linux")]
+    if USING_GL_VIDEO.load(Ordering::SeqCst) {
+        gl_video::set_gl_video_volume(volume as f64);
+    }
+
     if let Ok(player_guard) = get_video_player().lock() {
         if let Some(ref player) = *player_guard {
             player.set_volume(volume);
@@ -214,6 +358,14 @@ pub fn set_volume(volume: f32) {
 
 /// Get current playback state for UI updates.
 pub fn get_playback_state() -> Option<(f64, f64, bool)> {
+    #[cfg(target_os = "linux")]
+    if USING_GL_VIDEO.load(Ordering::SeqCst) {
+        let position = gl_video::get_gl_video_position().unwrap_or(0.0);
+        let duration = gl_video::get_gl_video_duration().unwrap_or(0.0);
+        let is_playing = gl_video::is_gl_video_active();
+        return Some((position, duration, is_playing));
+    }
+
     if let Ok(player_guard) = get_video_player().lock() {
         if let Some(ref player) = *player_guard {
             let state = player.state().get_state();

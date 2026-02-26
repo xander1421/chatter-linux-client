@@ -1,7 +1,7 @@
 //! V017: Add encrypted content storage to attachments.
 //!
-//! Adds columns for storing encrypted attachment content directly in the database,
-//! enabling secure in-memory-only decryption without touching the filesystem.
+//! NOTE: These columns are now included in v005_attachments. This migration
+//! is kept as a no-op for version number continuity.
 
 use super::Migration;
 
@@ -18,25 +18,11 @@ impl Migration for V017EncryptedAttachmentContent {
     }
 
     fn up(&self) -> &'static str {
-        r#"
-        -- Add encrypted content BLOB column for storing ciphertext
-        -- This holds the full encrypted attachment for in-memory decryption
-        ALTER TABLE attachments ADD COLUMN encrypted_content BLOB;
-
-        -- Track where content is stored
-        -- 0 = NotDownloaded (needs CDN fetch)
-        -- 1 = InDatabase (encrypted_content populated)
-        ALTER TABLE attachments ADD COLUMN content_location INTEGER NOT NULL DEFAULT 0;
-
-        -- Index for finding attachments that need download
-        CREATE INDEX IF NOT EXISTS idx_attachments_content_location
-            ON attachments(content_location);
-        "#
+        // No-op: encrypted_content and content_location are now in v005_attachments base schema
+        "SELECT 1;"
     }
 
     fn down(&self) -> Option<&'static str> {
-        // SQLite doesn't support DROP COLUMN directly in older versions
-        // We would need to recreate the table, which is destructive
         None
     }
 }

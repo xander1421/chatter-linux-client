@@ -20,8 +20,8 @@ impl Migration for V005Attachments {
         r#"
         CREATE TABLE attachments (
             id TEXT PRIMARY KEY,
-            -- File metadata (stored as JSON for nested structure)
-            metadata_json TEXT NOT NULL,
+            -- File metadata (stored as bincode BLOB)
+            metadata_blob BLOB NOT NULL,
             -- Status enum as integer: 0=Pending, 1=Uploading, 2=Processing, 3=Ready, 4=Failed, 5=Expired
             status INTEGER NOT NULL DEFAULT 0,
             -- File paths
@@ -32,6 +32,10 @@ impl Migration for V005Attachments {
             encryption_iv BLOB,
             -- Thumbnail bytes (BLOB for efficient binary storage)
             thumbnail_bytes BLOB,
+            -- Encrypted content for inline storage
+            encrypted_content BLOB,
+            -- Content location: 0=NotStored, 1=Inline, 2=File
+            content_location INTEGER NOT NULL DEFAULT 0,
             -- Timestamps
             created_at TEXT NOT NULL
         );

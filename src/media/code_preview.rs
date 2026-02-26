@@ -219,3 +219,53 @@ impl Default for CodePreview {
         Self::new()
     }
 }
+
+/// Convert highlighted lines to Slint StyledText for selectable syntax-highlighted display.
+///
+/// This converts the syntect output to Slint's StyledText format with Color styles,
+/// enabling both syntax highlighting colors AND text selection in the UI.
+pub fn to_styled_text(lines: &[HighlightedLine]) -> slint::private_unstable_api::re_exports::StyledText {
+    use slint::private_unstable_api::re_exports::{ColoredSegment, styled_text_from_colored_lines};
+
+    let colored_lines: Vec<Vec<ColoredSegment>> = lines
+        .iter()
+        .map(|line| {
+            // Add line number prefix
+            let mut segments: Vec<ColoredSegment> = vec![
+                ColoredSegment {
+                    text: format!("{:>4}  ", line.line_number),
+                    color: 0xFF65737E, // Line number color (gray)
+                },
+            ];
+
+            // Add code segments with their colors
+            for seg in &line.segments {
+                let (r, g, b) = seg.style.foreground;
+                // Convert RGB to ARGB (fully opaque)
+                let argb = 0xFF000000 | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
+                segments.push(ColoredSegment {
+                    text: seg.text.clone(),
+                    color: argb,
+                });
+            }
+
+            segments
+        })
+        .collect();
+
+    styled_text_from_colored_lines(&colored_lines)
+}
+
+/// Get plain text from highlighted lines (for clipboard operations).
+pub fn to_plain_text(lines: &[HighlightedLine]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            line.segments
+                .iter()
+                .map(|seg| seg.text.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}

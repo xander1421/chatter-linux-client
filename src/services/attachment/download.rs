@@ -394,16 +394,9 @@ impl AttachmentService {
         );
 
         // Store encrypted content in database (NOT decrypted)
+        // This atomically sets status=Ready and content_location=InDatabase
         self.attachment_repo
             .store_encrypted_content(attachment_id, &ciphertext)
-            .map_err(|e| AttachmentError::StorageError(e.to_string()))?;
-
-        // Update attachment status
-        let mut updated = attachment;
-        updated.status = AttachmentStatus::Ready;
-        updated.content_location = ContentLocation::InDatabase;
-        self.attachment_repo
-            .update(&updated)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?;
 
         tracing::info!(

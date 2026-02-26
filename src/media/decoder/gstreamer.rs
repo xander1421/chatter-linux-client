@@ -44,10 +44,15 @@ fn ensure_gst_init() -> Result<(), MediaError> {
 ///
 /// Decoder initialization is lazy - GStreamer is only initialized when
 /// `open()` or `open_memory()` is called, not when the decoder is created.
+///
+/// Audio is handled by GStreamer's autoaudiosink, which outputs to the
+/// system's default audio device (PulseAudio/PipeWire). This is simpler
+/// and more reliable than pulling audio via AppSink and outputting via cpal.
 pub struct GStreamerDecoder {
     pipeline: Option<gst::Pipeline>,
     video_sink: Option<gst_app::AppSink>,
-    audio_sink: Option<gst_app::AppSink>,
+    /// Playbin element (if using playbin3) for volume control
+    playbin: Option<gst::Element>,
     info: Option<VideoInfo>,
     position_ms: Arc<Mutex<u64>>,
     /// AppSrc for memory-based playback (kept alive for the pipeline lifetime)
@@ -64,7 +69,7 @@ impl GStreamerDecoder {
         Ok(Self {
             pipeline: None,
             video_sink: None,
-            audio_sink: None,
+            playbin: None,
             info: None,
             position_ms: Arc::new(Mutex::new(0)),
             _appsrc: None,
@@ -91,16 +96,13 @@ impl GStreamerDecoder {
         // Create video appsink with RGB conversion
         let video_sink = Self::create_video_sink()?;
 
-        // Create audio appsink
-        let audio_sink = Self::create_audio_sink()?;
-
-        // Create bins to wrap the sinks with converters
+        // Create bin to wrap video sink with converters
         let video_bin = Self::create_video_bin(&video_sink)?;
-        let audio_bin = Self::create_audio_bin(&audio_sink)?;
 
-        // Set sinks on playbin
+        // Set video sink on playbin - audio uses default autoaudiosink
+        // which outputs to PulseAudio/PipeWire (simpler and more reliable)
         playbin.set_property("video-sink", &video_bin);
-        playbin.set_property("audio-sink", &audio_bin);
+        // Note: We don't set audio-sink, so playbin3 uses autoaudiosink
 
         pipeline.add(&playbin).map_err(|e| {
             MediaError::PlaybackError(format!("Failed to add playbin to pipeline: {}", e))
@@ -154,7 +156,7 @@ impl GStreamerDecoder {
 
         self.pipeline = Some(pipeline);
         self.video_sink = Some(video_sink);
-        self.audio_sink = Some(audio_sink);
+        self.playbin = Some(playbin);
         self.info = Some(info.clone());
         self._appsrc = None; // Not used for URI-based playback
 
@@ -263,14 +265,20 @@ impl GStreamerDecoder {
 
         tracing::info!("Created memory pipeline with {} bytes of data", data_len);
 
-        // Create decodebin for automatic demuxing and decoding (includes typefind)
-        let decodebin = gst::ElementFactory::make("decodebin")
+        // Create decodebin3 for automatic demuxing and decoding with hardware acceleration
+        // decodebin3 is newer and better handles hardware decoders (VA-API, NVDEC, etc.)
+        let decodebin = gst::ElementFactory::make("decodebin3")
             .build()
+            .or_else(|_| {
+                // Fall back to decodebin if decodebin3 not available
+                tracing::warn!("decodebin3 not available, falling back to decodebin");
+                gst::ElementFactory::make("decodebin").build()
+            })
             .map_err(|e| MediaError::PlaybackError(format!("Failed to create decodebin: {}", e)))?;
 
-        // Create sinks upfront - we need to store them for later frame pulling
+        // Create video sink upfront - we need to store it for frame pulling
+        // Audio uses autoaudiosink which GStreamer creates dynamically
         let video_sink = Self::create_video_sink()?;
-        let audio_sink = Self::create_audio_sink()?;
 
         // IMPORTANT: Only add appsrc + decodebin upfront
         // Sink elements are added dynamically in pad-added to avoid preroll blocking
@@ -281,10 +289,13 @@ impl GStreamerDecoder {
         appsrc.link(&decodebin)
             .map_err(|e| MediaError::PlaybackError(format!("Failed to link appsrc to decodebin: {}", e)))?;
 
-        // Clone sinks for use in pad-added callback
+        // Clone sink for use in pad-added callback
         let video_sink_clone = video_sink.clone();
-        let audio_sink_clone = audio_sink.clone();
         let pipeline_weak = pipeline.downgrade();
+
+        // Track if video stream was found (for detecting audio-only files)
+        let video_linked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let video_linked_clone = video_linked.clone();
 
         // Connect decodebin pad-added for DYNAMIC element creation (per Context7 best practice)
         decodebin.connect_pad_added(move |_decodebin, src_pad| {
@@ -305,8 +316,11 @@ impl GStreamerDecoder {
             let insert_elements = || -> Result<(), String> {
                 if name.starts_with("video/") {
                     // Create video processing elements dynamically
+                    // Use larger queue (10 frames) to buffer decoded frames and absorb
+                    // decode time variations, preventing stuttering
                     let queue = gst::ElementFactory::make("queue")
-                        .property("max-size-buffers", 3u32)
+                        .property("max-size-buffers", 10u32)
+                        .property("max-size-time", 500_000_000u64) // 500ms of video
                         .build()
                         .map_err(|e| format!("Failed to create video queue: {}", e))?;
                     let convert = gst::ElementFactory::make("videoconvert")
@@ -337,11 +351,15 @@ impl GStreamerDecoder {
                     src_pad.link(&sink_pad)
                         .map_err(|e| format!("Failed to link video pad: {:?}", e))?;
 
+                    // Mark that video track was found and linked
+                    video_linked_clone.store(true, std::sync::atomic::Ordering::SeqCst);
                     tracing::info!("Video pipeline linked successfully");
                 } else if name.starts_with("audio/") {
                     // Create audio processing elements dynamically
+                    // Use autoaudiosink - GStreamer handles audio output to system default
                     let queue = gst::ElementFactory::make("queue")
-                        .property("max-size-buffers", 100u32)
+                        .property("max-size-buffers", 200u32)
+                        .property("max-size-time", 1_000_000_000u64) // 1 second of audio
                         .build()
                         .map_err(|e| format!("Failed to create audio queue: {}", e))?;
                     let convert = gst::ElementFactory::make("audioconvert")
@@ -350,9 +368,13 @@ impl GStreamerDecoder {
                     let resample = gst::ElementFactory::make("audioresample")
                         .build()
                         .map_err(|e| format!("Failed to create audioresample: {}", e))?;
+                    // Use autoaudiosink - outputs to PulseAudio/PipeWire automatically
+                    let audiosink = gst::ElementFactory::make("autoaudiosink")
+                        .build()
+                        .map_err(|e| format!("Failed to create autoaudiosink: {}", e))?;
 
                     // Add all elements to pipeline
-                    let elements: &[&gst::Element] = &[&queue, &convert, &resample, audio_sink_clone.upcast_ref()];
+                    let elements: &[&gst::Element] = &[&queue, &convert, &resample, &audiosink];
                     pipeline.add_many(elements)
                         .map_err(|e| format!("Failed to add audio elements: {}", e))?;
 
@@ -372,7 +394,7 @@ impl GStreamerDecoder {
                     src_pad.link(&sink_pad)
                         .map_err(|e| format!("Failed to link audio pad: {:?}", e))?;
 
-                    tracing::info!("Audio pipeline linked successfully");
+                    tracing::info!("Audio pipeline linked successfully (autoaudiosink)");
                 }
                 Ok(())
             };
@@ -452,6 +474,59 @@ impl GStreamerDecoder {
             return Err(MediaError::PlaybackError("Pipeline failed to preroll".to_string()));
         }
 
+        // Wait for video sink to receive caps - this indicates the video pipeline is connected.
+        // The pad-added callback runs asynchronously, so we need to poll for caps.
+        // This handles the race between state change completing and decodebin demuxing.
+        let video_caps_timeout = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut has_video_caps = false;
+
+        while std::time::Instant::now() < video_caps_timeout {
+            if let Some(pad) = video_sink.static_pad("sink") {
+                if pad.current_caps().is_some() {
+                    has_video_caps = true;
+                    tracing::info!("Video sink received caps - pipeline fully connected");
+                    break;
+                }
+            }
+
+            // Also check atomic flag in case pad-added already ran
+            if video_linked.load(std::sync::atomic::Ordering::SeqCst) {
+                // Pad-added ran, give it a moment for caps to propagate
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if let Some(pad) = video_sink.static_pad("sink") {
+                    if pad.current_caps().is_some() {
+                        has_video_caps = true;
+                        break;
+                    }
+                }
+            }
+
+            // Check for pipeline errors while waiting
+            if let Some(bus) = pipeline.bus() {
+                while let Some(msg) = bus.pop() {
+                    if let gst::MessageView::Error(err) = msg.view() {
+                        let err_msg = format!(
+                            "Pipeline error waiting for video: {} (debug: {:?})",
+                            err.error(),
+                            err.debug()
+                        );
+                        tracing::error!("{}", err_msg);
+                        pipeline.set_state(gst::State::Null).ok();
+                        return Err(MediaError::PlaybackError(err_msg));
+                    }
+                }
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        if !has_video_caps {
+            pipeline.set_state(gst::State::Null).ok();
+            return Err(MediaError::InvalidFormat(
+                "No video track found - file may be audio-only or codec not supported".to_string()
+            ));
+        }
+
         // Get video info from the sink caps
         tracing::debug!("Extracting video info from sink caps...");
         let info = Self::extract_video_info(&pipeline, &video_sink)?;
@@ -492,7 +567,7 @@ impl GStreamerDecoder {
 
         self.pipeline = Some(pipeline);
         self.video_sink = Some(video_sink);
-        self.audio_sink = Some(audio_sink);
+        self.playbin = None; // Memory pipeline uses decodebin, not playbin
         self.info = Some(info.clone());
         self._appsrc = Some(appsrc); // Keep appsrc alive
 
@@ -505,36 +580,20 @@ impl GStreamerDecoder {
             .field("format", "RGB")
             .build();
 
-        // Use sync(false) - we handle frame timing manually in video_playback.rs
-        // This allows immediate frame delivery for:
-        // - Thumbnail extraction (pipeline in PAUSED state, clock not running)
-        // - Seek preview frames
-        // - Initial frame display
-        // Manual PTS-based timing in the playback loop provides accurate sync.
+        // sync(true) - Let GStreamer handle frame timing via its internal clock.
+        // This is the proper approach used by real video players like Glide.
+        // With sync(true):
+        // - try_pull_sample() blocks until the frame should be displayed
+        // - No manual PTS timing or sleep needed in playback loop
+        // - Audio and video stay synchronized automatically
+        //
+        // max_buffers(3) - small buffer, frames are pulled at display time
+        // drop(false) - don't drop frames, GStreamer handles timing
         let sink = gst_app::AppSink::builder()
             .caps(&caps)
-            .max_buffers(1)
+            .max_buffers(3)
             .drop(false)
-            .sync(false)
-            .build();
-
-        Ok(sink)
-    }
-
-    /// Create audio appsink configured for f32 output.
-    fn create_audio_sink() -> Result<gst_app::AppSink, MediaError> {
-        let caps = gst::Caps::builder("audio/x-raw")
-            .field("format", "F32LE")
-            .field("layout", "interleaved")
-            .build();
-
-        // Use sync(false) - audio timing is driven by video frame timing
-        // and the audio output device's sample rate.
-        let sink = gst_app::AppSink::builder()
-            .caps(&caps)
-            .max_buffers(4)
-            .drop(false)
-            .sync(false)
+            .sync(true)
             .build();
 
         Ok(sink)
@@ -561,36 +620,6 @@ impl GStreamerDecoder {
         // Create ghost pad for the bin
         let pad = convert.static_pad("sink")
             .ok_or_else(|| MediaError::PlaybackError("No sink pad on videoconvert".to_string()))?;
-        let ghost_pad = gst::GhostPad::with_target(&pad)
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to create ghost pad: {}", e)))?;
-        ghost_pad.set_active(true).ok();
-        bin.add_pad(&ghost_pad)
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to add ghost pad: {}", e)))?;
-
-        Ok(bin)
-    }
-
-    /// Create a bin with audioconvert -> audioresample -> appsink.
-    fn create_audio_bin(sink: &gst_app::AppSink) -> Result<gst::Bin, MediaError> {
-        let bin = gst::Bin::new();
-
-        let convert = gst::ElementFactory::make("audioconvert")
-            .build()
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to create audioconvert: {}", e)))?;
-
-        let resample = gst::ElementFactory::make("audioresample")
-            .build()
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to create audioresample: {}", e)))?;
-
-        bin.add_many([&convert, &resample, sink.upcast_ref()])
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to add elements to audio bin: {}", e)))?;
-
-        gst::Element::link_many([&convert, &resample, sink.upcast_ref()])
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to link audio elements: {}", e)))?;
-
-        // Create ghost pad for the bin
-        let pad = convert.static_pad("sink")
-            .ok_or_else(|| MediaError::PlaybackError("No sink pad on audioconvert".to_string()))?;
         let ghost_pad = gst::GhostPad::with_target(&pad)
             .map_err(|e| MediaError::PlaybackError(format!("Failed to create ghost pad: {}", e)))?;
         ghost_pad.set_active(true).ok();
@@ -669,8 +698,14 @@ impl GStreamerDecoder {
 
         let caps = pad.current_caps()
             .ok_or_else(|| {
-                tracing::error!("No negotiated caps on video sink pad - preroll may not have completed");
-                MediaError::PlaybackError("No caps on video sink".to_string())
+                // No caps means no video data reached the sink - likely audio-only file
+                if pad.is_linked() {
+                    tracing::error!("Video sink linked but no caps - codec may not be supported");
+                    MediaError::InvalidFormat("Video codec not supported or file is corrupted".to_string())
+                } else {
+                    tracing::error!("Video sink not linked - file may be audio-only");
+                    MediaError::InvalidFormat("No video track found - file may be audio-only".to_string())
+                }
             })?;
 
         tracing::info!("Got caps: {}", caps);
@@ -739,33 +774,41 @@ impl VideoDecoder for GStreamerDecoder {
         let pipeline = self.pipeline.as_ref()
             .ok_or_else(|| MediaError::PlaybackError("No pipeline".to_string()))?;
 
-        // Ensure pipeline is playing and wait for state change
-        if pipeline.current_state() != gst::State::Playing {
-            pipeline.set_state(gst::State::Playing).map_err(|e| {
-                MediaError::PlaybackError(format!("Failed to set pipeline to playing: {}", e))
-            })?;
+        // Check pipeline state to determine how to get frames:
+        // - PAUSED: Use try_pull_preroll_sample() - gets the prerolled frame without clock
+        // - PLAYING: Use try_pull_sample() - waits for clock timing (sync=true)
+        let current_state = pipeline.current_state();
 
-            // Wait for state change to complete
-            let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(5));
-            if result.is_err() {
-                tracing::warn!("Pipeline state change to PLAYING timed out");
-            }
-        }
-
-        // Try to pull a sample with timeout - use longer timeout for first frame
-        // after seek, the pipeline needs time to produce a frame
-        let sample = match video_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
-            Some(s) => s,
-            None => {
-                // Check if we're at EOS
-                if video_sink.is_eos() {
-                    tracing::debug!("Video sink at EOS");
-                    return Ok(None);
+        let sample = if current_state == gst::State::Paused {
+            // In PAUSED state, use preroll sample (for thumbnail extraction, seeking preview, etc.)
+            // The preroll sample is the first frame decoded when entering PAUSED state.
+            match video_sink.try_pull_preroll(gst::ClockTime::from_mseconds(500)) {
+                Some(s) => s,
+                None => {
+                    if video_sink.is_eos() {
+                        tracing::debug!("Video sink at EOS (paused)");
+                        return Ok(None);
+                    }
+                    tracing::trace!("No preroll sample yet, will retry");
+                    return Err(MediaError::PlaybackError("no_sample".to_string()));
                 }
-                // No sample yet - return empty frame to signal "try again"
-                // Don't return Ok(None) as that signals end of stream!
-                tracing::trace!("No video sample yet, will retry");
-                return Err(MediaError::PlaybackError("no_sample".to_string()));
+            }
+        } else {
+            // In PLAYING state, use try_pull_sample with sync(true) timing.
+            // GStreamer's clock controls when frames are delivered.
+            match video_sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
+                Some(s) => s,
+                None => {
+                    // Check if we're at EOS
+                    if video_sink.is_eos() {
+                        tracing::debug!("Video sink at EOS");
+                        return Ok(None);
+                    }
+                    // No sample yet - return empty frame to signal "try again"
+                    // Don't return Ok(None) as that signals end of stream!
+                    tracing::trace!("No video sample yet, will retry");
+                    return Err(MediaError::PlaybackError("no_sample".to_string()));
+                }
             }
         };
 
@@ -813,58 +856,9 @@ impl VideoDecoder for GStreamerDecoder {
     }
 
     fn decode_audio(&mut self) -> Result<Option<DecodedAudio>, MediaError> {
-        let audio_sink = match self.audio_sink.as_ref() {
-            Some(s) => s,
-            None => return Ok(None),
-        };
-
-        // Try to pull a sample with short timeout
-        let sample = match audio_sink.try_pull_sample(gst::ClockTime::from_mseconds(10)) {
-            Some(s) => s,
-            None => {
-                if audio_sink.is_eos() {
-                    return Ok(None);
-                }
-                return Ok(None);
-            }
-        };
-
-        let buffer = sample.buffer()
-            .ok_or_else(|| MediaError::PlaybackError("No buffer in audio sample".to_string()))?;
-
-        let caps = sample.caps()
-            .ok_or_else(|| MediaError::PlaybackError("No caps in audio sample".to_string()))?;
-
-        let structure = caps.structure(0)
-            .ok_or_else(|| MediaError::PlaybackError("No structure in audio caps".to_string()))?;
-
-        let sample_rate = structure.get::<i32>("rate")
-            .map_err(|_| MediaError::PlaybackError("No rate in audio caps".to_string()))? as u32;
-
-        let channels = structure.get::<i32>("channels")
-            .map_err(|_| MediaError::PlaybackError("No channels in audio caps".to_string()))? as u32;
-
-        // Map buffer
-        let map = buffer.map_readable()
-            .map_err(|e| MediaError::PlaybackError(format!("Failed to map audio buffer: {}", e)))?;
-
-        // Convert bytes to f32 samples
-        let bytes = map.as_slice();
-        let samples: Vec<f32> = bytes
-            .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-            .collect();
-
-        let timestamp_ms = buffer.pts()
-            .map(|pts| pts.mseconds())
-            .unwrap_or(0);
-
-        Ok(Some(DecodedAudio {
-            samples,
-            sample_rate,
-            channels,
-            timestamp_ms,
-        }))
+        // Audio is handled by GStreamer's autoaudiosink directly.
+        // We don't need to pull audio samples - GStreamer outputs to system audio.
+        Ok(None)
     }
 
     fn seek(&mut self, timestamp_ms: u64) -> Result<(), MediaError> {
@@ -971,12 +965,62 @@ impl VideoDecoder for GStreamerDecoder {
         self.info.as_ref().map(|i| i.is_seekable).unwrap_or(false)
     }
 
+    fn play(&mut self) -> Result<(), MediaError> {
+        let pipeline = self.pipeline.as_ref()
+            .ok_or_else(|| MediaError::PlaybackError("No pipeline".to_string()))?;
+
+        pipeline.set_state(gst::State::Playing).map_err(|e| {
+            MediaError::PlaybackError(format!("Failed to set pipeline to playing: {}", e))
+        })?;
+
+        // Wait for state change
+        let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(2));
+        if result.is_err() {
+            tracing::warn!("Pipeline state change to PLAYING timed out");
+        }
+
+        Ok(())
+    }
+
+    fn pause(&mut self) -> Result<(), MediaError> {
+        let pipeline = self.pipeline.as_ref()
+            .ok_or_else(|| MediaError::PlaybackError("No pipeline".to_string()))?;
+
+        pipeline.set_state(gst::State::Paused).map_err(|e| {
+            MediaError::PlaybackError(format!("Failed to set pipeline to paused: {}", e))
+        })?;
+
+        // Wait for state change
+        let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(2));
+        if result.is_err() {
+            tracing::warn!("Pipeline state change to PAUSED timed out");
+        }
+
+        Ok(())
+    }
+
+    fn set_volume(&mut self, volume: f64) -> Result<(), MediaError> {
+        // For playbin3, volume is a property on the playbin element
+        if let Some(ref playbin) = self.playbin {
+            let clamped = volume.clamp(0.0, 1.0);
+            playbin.set_property("volume", clamped);
+            tracing::debug!("Set volume to {:.2}", clamped);
+            return Ok(());
+        }
+
+        // For decodebin3 pipeline (memory playback), volume control would require
+        // adding a volume element to the audio pipeline. For now, log a warning.
+        // TODO: Add volume element to memory pipeline for proper volume control
+        tracing::debug!("Volume control not available for memory pipeline");
+        Ok(())
+    }
+
     fn close(&mut self) {
         if let Some(pipeline) = self.pipeline.take() {
             pipeline.set_state(gst::State::Null).ok();
         }
         self.video_sink = None;
-        self.audio_sink = None;
+        self.playbin = None;
         self.info = None;
         self._appsrc = None;
     }

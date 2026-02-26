@@ -55,6 +55,7 @@ pub enum RoomEvent {
         participant_identity: String,
         track_sid: String,
         is_video: bool,
+        is_screen_share: bool,
     },
     /// Track unsubscribed.
     TrackUnsubscribed {
@@ -430,6 +431,7 @@ impl RoomManager {
                                 participant_identity: identity.clone(),
                                 track_sid: track_sid.to_string(),
                                 is_video: false,
+                                is_screen_share: false,
                             });
                         }
                         RemoteTrack::Video(video_track) => {
@@ -451,6 +453,7 @@ impl RoomManager {
                                 participant_identity: identity.clone(),
                                 track_sid: track_sid.to_string(),
                                 is_video: true,
+                                is_screen_share,
                             });
                         }
                     }
@@ -716,6 +719,14 @@ impl RoomManager {
                 let participant_id = participant.identity().to_string();
                 let is_video = matches!(track, RemoteTrack::Video(_));
 
+                // Determine if this is a screen share track
+                let is_screen_share = match &track {
+                    RemoteTrack::Video(video_track) => {
+                        matches!(video_track.source(), TrackSource::Screenshare | TrackSource::ScreenshareAudio)
+                    }
+                    _ => false,
+                };
+
                 // Handle audio/video track playback
                 match &track {
                     RemoteTrack::Audio(audio_track) => {
@@ -733,7 +744,6 @@ impl RoomManager {
                     }
                     RemoteTrack::Video(video_track) => {
                         let source = video_track.source();
-                        let is_screen_share = matches!(source, TrackSource::Screenshare | TrackSource::ScreenshareAudio);
                         tracing::info!(
                             "RoomManager: Video track subscribed from {} (sid: {}, source: {:?}, screen_share: {})",
                             participant_id,
@@ -754,6 +764,7 @@ impl RoomManager {
                     participant_identity: participant_id,
                     track_sid: track.sid().to_string(),
                     is_video,
+                    is_screen_share,
                 });
             }
             livekit::RoomEvent::TrackUnsubscribed { track, participant, .. } => {

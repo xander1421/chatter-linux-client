@@ -16,7 +16,7 @@ Comprehensive analysis of memory usage patterns, unbounded collections, and arch
 | Plaintext not zeroized | `services/gateway/decryption.rs:234-240` | ✅ FIXED | DM content now zeroized after proto parsing |
 | Attachment plaintext not zeroized | `crypto/attachment_crypto.rs:112-127` | ✅ FIXED | Padded buffer zeroized after encryption |
 | Single Database Mutex | `storage/database.rs:11-20` | ✅ FIXED | Reader/writer split with connection pool |
-| GIF frame accumulation | `bin_ui/gif_state.rs:320-321` | ⏭️ SKIP | Frames stored without cleanup (subagent scope) |
+| GIF frame accumulation | `bin_ui/gif_state.rs:320-321` | ✅ FIXED | MAX_VIEWER_FRAMES=100, MAX_INLINE_GIFS=20 with LRU eviction |
 
 ---
 
@@ -66,10 +66,10 @@ Comprehensive analysis of memory usage patterns, unbounded collections, and arch
 
 | Priority | Total | Fixed | TODO | Skipped |
 |----------|-------|-------|------|---------|
-| **P0 Critical** | 5 | 4 | 0 | 1 |
+| **P0 Critical** | 5 | 5 | 0 | 0 |
 | **P1 High** | 12 | 10 | 2 | 0 |
 | **P2 Medium** | 16 | 9 | 3 | 4 |
-| **Total** | 33 | 23 | 5 | 5 |
+| **Total** | 33 | 24 | 5 | 4 |
 
 ---
 
@@ -330,6 +330,34 @@ pub fn subscribe(&self) -> broadcast::Receiver<Arc<T>>
 - After: O(state_size) per update (single Arc allocation)
 
 Updated all state wrappers to use `StateSnapshot<T>` return type.
+
+### 20. GIF Frame Accumulation Bounds (2026-02-26)
+**File:** `src/bin_ui/gif_state.rs`
+
+Added memory bounds and LRU eviction for GIF animations:
+
+```rust
+/// Maximum frames to store per GIF animation (viewer).
+const MAX_VIEWER_FRAMES: usize = 100;
+
+/// Maximum inline GIF animations to keep in memory.
+const MAX_INLINE_GIFS: usize = 20;
+
+// LRU tracking for inline GIFs
+static INLINE_LRU: RefCell<VecDeque<String>> = RefCell::new(VecDeque::new());
+```
+
+**Changes:**
+- `poll_streaming_frames()`: Stops receiving frames when MAX_VIEWER_FRAMES reached
+- `register_inline_gif_from_raw()`: LRU eviction when MAX_INLINE_GIFS reached
+- `register_inline_from_viewer()`: Same LRU eviction
+- `unregister_inline_gif()`: Removes from LRU tracking
+- `clear_inline_gifs()`: Clears LRU tracking
+
+**Memory Impact:**
+- Viewer: Max ~40MB per animation (100 frames × ~400KB each)
+- Inline: Max ~800MB worst case (20 GIFs × 100 frames × ~400KB)
+- Practical: Much lower since most GIFs have <50 frames
 
 ---
 

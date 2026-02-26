@@ -250,8 +250,8 @@ impl OfflineQueue {
 
     /// Add a fully configured operation to the queue.
     pub fn enqueue_operation(&self, op: QueuedOperation) -> Result<Uuid, QueueError> {
-        // Check serialized size
-        let serialized = serde_json::to_vec(&op).unwrap_or_default();
+        // Check serialized size using bincode
+        let serialized = bincode::serialize(&op).unwrap_or_default();
         if serialized.len() > self.max_operation_size {
             return Err(QueueError::OperationTooLarge {
                 size: serialized.len(),
@@ -355,7 +355,7 @@ impl OfflineQueue {
 
     /// Save queue to persistent storage.
     ///
-    /// Serializes queue to JSON and writes to the given path.
+    /// Serializes queue to bincode and writes to the given path.
     /// Uses atomic rename pattern (write to .tmp, then rename) for safety.
     /// Called periodically and on app shutdown.
     ///
@@ -370,13 +370,13 @@ impl OfflineQueue {
         // Clone operations while holding lock briefly
         let ops: Vec<QueuedOperation> = self.operations.read().clone();
 
-        // Serialize to JSON
-        let json = serde_json::to_string_pretty(&ops)
+        // Serialize to bincode (faster and smaller than JSON)
+        let data = bincode::serialize(&ops)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         // Write to temporary file first
         let tmp_path = path.with_extension("tmp");
-        tokio::fs::write(&tmp_path, json).await?;
+        tokio::fs::write(&tmp_path, data).await?;
 
         // Atomic rename
         tokio::fs::rename(&tmp_path, path).await?;
@@ -407,9 +407,9 @@ impl OfflineQueue {
             return Ok(0);
         }
 
-        let json = tokio::fs::read_to_string(path).await?;
+        let data = tokio::fs::read(path).await?;
 
-        let loaded_ops: Vec<QueuedOperation> = serde_json::from_str(&json)
+        let loaded_ops: Vec<QueuedOperation> = bincode::deserialize(&data)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let count = loaded_ops.len();
@@ -679,12 +679,12 @@ mod tests {
         assert_eq!(peeked_again.id, id);
     }
 
-    // ==================== Persistence Tests ====================
+    // ==================== Persistence Tests (Bincode) ====================
 
     #[tokio::test]
-    async fn test_save_load_roundtrip() {
+    async fn test_bincode_save_load_roundtrip() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("queue.json");
+        let path = dir.path().join("queue.bin");
 
         let queue = OfflineQueue::new(100);
 
@@ -705,7 +705,7 @@ mod tests {
             )
             .unwrap();
 
-        // Save to file
+        // Save to file (bincode format)
         queue.save(&path).await.unwrap();
 
         // Create new queue and load
@@ -729,9 +729,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_missing_file() {
+    async fn test_bincode_load_missing_file() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("nonexistent.json");
+        let path = dir.path().join("nonexistent.bin");
 
         let queue = OfflineQueue::new(100);
         let count = queue.load(&path).await.unwrap();
@@ -741,9 +741,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_save_atomic() {
+    async fn test_bincode_save_atomic() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("queue.json");
+        let path = dir.path().join("queue.bin");
         let tmp_path = path.with_extension("tmp");
 
         let queue = OfflineQueue::new(100);
@@ -757,6 +757,99 @@ mod tests {
 
         // Temp file should NOT exist (was renamed)
         assert!(!tmp_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_bincode_file_is_smaller_than_json_would_be() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("queue.bin");
+
+        let queue = OfflineQueue::new(100);
+
+        // Add several operations
+        for i in 0..10 {
+            queue
+                .enqueue(msg_op(&format!("channel-{}", i), &format!("Message content {}", i)))
+                .unwrap();
+        }
+
+        queue.save(&path).await.unwrap();
+
+        // Read the file and compare sizes
+        let bincode_data = tokio::fs::read(&path).await.unwrap();
+        let ops = queue.pending_operations();
+        let json_data = serde_json::to_vec(&ops).unwrap();
+
+        // Bincode should be smaller
+        assert!(
+            bincode_data.len() < json_data.len(),
+            "Bincode ({} bytes) should be smaller than JSON ({} bytes)",
+            bincode_data.len(),
+            json_data.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bincode_all_operation_types() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("queue.bin");
+
+        let queue = OfflineQueue::new(100);
+
+        // Add one of each operation type
+        queue.enqueue(msg_op("ch", "content")).unwrap();
+        queue.enqueue(reaction_op("msg", "thumbsup")).unwrap();
+        queue.enqueue(OperationType::MarkRead {
+            channel_id: "ch".to_string(),
+            up_to_message_id: "msg".to_string(),
+        }).unwrap();
+        queue.enqueue(OperationType::SendTyping {
+            channel_id: "ch".to_string(),
+        }).unwrap();
+        queue.enqueue(OperationType::EditMessage {
+            message_id: "msg".to_string(),
+            content: vec![1, 2, 3],
+        }).unwrap();
+        queue.enqueue(OperationType::DeleteMessage {
+            message_id: "msg".to_string(),
+        }).unwrap();
+
+        // Save and reload
+        queue.save(&path).await.unwrap();
+
+        let new_queue = OfflineQueue::new(100);
+        let loaded = new_queue.load(&path).await.unwrap();
+
+        assert_eq!(loaded, 6);
+        assert_eq!(new_queue.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn test_bincode_preserves_binary_content() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("queue.bin");
+
+        let queue = OfflineQueue::new(100);
+
+        // Add operation with binary content (including null bytes)
+        let binary_content = vec![0x00, 0x01, 0x02, 0xFF, 0xFE, 0x00, 0x03];
+        queue.enqueue(OperationType::SendMessage {
+            channel_id: "ch".to_string(),
+            content: binary_content.clone(),
+        }).unwrap();
+
+        queue.save(&path).await.unwrap();
+
+        let new_queue = OfflineQueue::new(100);
+        new_queue.load(&path).await.unwrap();
+
+        let op = new_queue.dequeue().unwrap();
+        match op.operation {
+            OperationType::SendMessage { content, .. } => {
+                assert_eq!(content, binary_content);
+            }
+            _ => panic!("Expected SendMessage operation"),
+        }
     }
 
     // ==================== Replay Support Tests ====================

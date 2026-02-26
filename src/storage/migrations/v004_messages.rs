@@ -21,6 +21,7 @@ impl Migration for V004Messages {
     }
 
     fn up(&self) -> &'static str {
+        // Empty vec serialized with bincode is 8 bytes (u64 length = 0)
         r#"
         -- Messages
         CREATE TABLE messages (
@@ -29,22 +30,23 @@ impl Migration for V004Messages {
             sender_id TEXT,  -- NULL for sealed sender
             -- Content stored as JSON (MessageContent is complex enum)
             content_type INTEGER NOT NULL,  -- Discriminant for quick filtering
-            content_json TEXT NOT NULL,     -- Full serialized MessageContent
+            content_json TEXT NOT NULL,     -- Full serialized MessageContent (kept for FTS5)
             thread_id TEXT,
             reply_to TEXT,
-            -- Attachments stored as JSON array of UUIDs
-            attachments_json TEXT NOT NULL DEFAULT '[]',
+            -- Attachments stored as bincode BLOB
+            attachments_blob BLOB NOT NULL DEFAULT X'0800000000000000',
             is_pinned INTEGER NOT NULL DEFAULT 0,
             is_edited INTEGER NOT NULL DEFAULT 0,
             is_deleted INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             edited_at TEXT,
-            -- Reaction data as JSON (for local caching)
-            reaction_counts_json TEXT NOT NULL DEFAULT '[]',
-            current_user_reactions_json TEXT NOT NULL DEFAULT '[]',
+            sent_at INTEGER NOT NULL DEFAULT 0,
+            -- Reaction data as bincode BLOB (for local caching)
+            reaction_counts_blob BLOB NOT NULL DEFAULT X'0800000000000000',
+            current_user_reactions_blob BLOB NOT NULL DEFAULT X'0800000000000000',
             -- AI-related fields
-            mentioned_integrations_json TEXT NOT NULL DEFAULT '[]',
+            mentioned_integrations_blob BLOB NOT NULL DEFAULT X'0800000000000000',
             targets_ai_bot INTEGER NOT NULL DEFAULT 0
         );
 
@@ -54,13 +56,18 @@ impl Migration for V004Messages {
         CREATE INDEX idx_messages_sender ON messages(sender_id) WHERE sender_id IS NOT NULL;
         CREATE INDEX idx_messages_pinned ON messages(channel_id) WHERE is_pinned = 1;
 
+        -- Signal-style deduplication: unique on (sender_id, sent_at)
+        CREATE UNIQUE INDEX idx_messages_sender_sent_at
+            ON messages(sender_id, sent_at)
+            WHERE sender_id IS NOT NULL AND sent_at > 0;
+
         -- Threads metadata (derived/cached)
         CREATE TABLE threads (
             root_message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
             channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
             reply_count INTEGER NOT NULL DEFAULT 0,
             last_reply_at TEXT,
-            participant_ids_json TEXT NOT NULL DEFAULT '[]'
+            participant_ids_blob BLOB NOT NULL DEFAULT X'0800000000000000'
         );
         CREATE INDEX idx_threads_channel ON threads(channel_id);
         "#

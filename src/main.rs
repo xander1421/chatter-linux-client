@@ -29,6 +29,19 @@ async fn main() {
         tracing::info!("GStreamer initialized: {}", gstreamer::version_string());
     }
 
+    // Select OpenGL ES backend for hardware-accelerated video rendering
+    // This enables zero-copy GL texture import from GStreamer
+    if let Err(e) = slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .require_opengl_es()
+        .select()
+    {
+        tracing::warn!("OpenGL ES backend not available: {} (falling back to default)", e);
+        // Continue with default backend - software video rendering will be used
+    } else {
+        tracing::info!("Slint OpenGL ES backend selected for hardware-accelerated video");
+    }
+
     // Initialize application context (all subsystems)
     let ctx = match AppContext::new() {
         Ok(ctx) => ctx,
@@ -56,6 +69,16 @@ async fn main() {
 
     // Create main window
     let window = MainWindow::new().expect("Failed to create window");
+
+    // Initialize GL video rendering (hardware-accelerated zero-copy video)
+    #[cfg(target_os = "linux")]
+    {
+        if bin_ui::gl_video::init_gl_video(&window) {
+            tracing::info!("Hardware-accelerated GL video enabled");
+        } else {
+            tracing::info!("Using software video rendering (GL not available)");
+        }
+    }
 
     // Set initial view based on login state
     let auth_service = ctx.auth_service();
@@ -146,8 +169,6 @@ async fn main() {
         });
     } else {
         window.set_current_view("login".into());
-        // Start black hole animation for auth pages
-        bin_ui::blackhole_state::start_animation(&window.as_weak());
     }
 
     // Wire all UI callbacks

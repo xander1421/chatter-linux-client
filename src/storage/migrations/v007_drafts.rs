@@ -17,6 +17,7 @@ impl Migration for V007Drafts {
     }
 
     fn up(&self) -> &'static str {
+        // Empty vec serialized with bincode is 8 bytes (u64 length = 0)
         r#"
         CREATE TABLE drafts (
             id TEXT PRIMARY KEY,
@@ -24,11 +25,11 @@ impl Migration for V007Drafts {
             channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
             thread_id TEXT,  -- NULL for main channel drafts
             -- Content
-            content TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
             reply_to TEXT,  -- MessageId being replied to
-            -- Arrays stored as JSON
-            attachments_json TEXT NOT NULL DEFAULT '[]',
-            mentions_json TEXT NOT NULL DEFAULT '[]',
+            -- Arrays stored as bincode BLOB
+            attachments_blob BLOB NOT NULL DEFAULT X'0800000000000000',
+            mentions_blob BLOB NOT NULL DEFAULT X'0800000000000000',
             -- Timestamps
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL

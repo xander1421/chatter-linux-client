@@ -356,13 +356,13 @@ impl LocalQueue {
             .map(PersistedQueueEntry::from_queued)
             .collect();
 
-        // Serialize to JSON
-        let json = serde_json::to_string_pretty(&entries)
+        // Serialize to bincode (faster and smaller than JSON)
+        let data = bincode::serialize(&entries)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         // Write to temporary file first
         let tmp_path = path.with_extension("tmp");
-        tokio::fs::write(&tmp_path, json).await?;
+        tokio::fs::write(&tmp_path, data).await?;
 
         // Atomic rename
         tokio::fs::rename(&tmp_path, path).await?;
@@ -390,9 +390,9 @@ impl LocalQueue {
             return Ok(0);
         }
 
-        let json = tokio::fs::read_to_string(path).await?;
+        let data = tokio::fs::read(path).await?;
 
-        let entries: Vec<PersistedQueueEntry> = serde_json::from_str(&json)
+        let entries: Vec<PersistedQueueEntry> = bincode::deserialize(&data)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let count = entries.len();
@@ -415,9 +415,9 @@ impl LocalQueue {
             return Ok(0);
         }
 
-        let json = tokio::fs::read_to_string(path).await?;
+        let data = tokio::fs::read(path).await?;
 
-        let entries: Vec<PersistedQueueEntry> = serde_json::from_str(&json)
+        let entries: Vec<PersistedQueueEntry> = bincode::deserialize(&data)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let count = entries.len();
@@ -434,11 +434,11 @@ impl LocalQueue {
             .map(PersistedQueueEntry::from_queued)
             .collect();
 
-        let json = serde_json::to_string_pretty(&entries)
+        let data = bincode::serialize(&entries)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         let tmp_path = path.with_extension("tmp");
-        tokio::fs::write(&tmp_path, json).await?;
+        tokio::fs::write(&tmp_path, data).await?;
         tokio::fs::rename(&tmp_path, path).await?;
 
         Ok(())
@@ -625,17 +625,19 @@ mod tests {
         assert_eq!(queue.len(), 0);
     }
 
+    // ==================== Bincode Persistence Tests ====================
+
     #[tokio::test]
-    async fn test_queue_persistence_save_load() {
+    async fn test_bincode_persistence_save_load() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("queue.json");
+        let path = dir.path().join("queue.bin");
 
         let mut queue = LocalQueue::new(100, 3, Duration::from_secs(5), Some(path.clone()));
 
         queue.enqueue(make_message("msg-1"), None);
         queue.enqueue(make_message("msg-2"), Some("error".to_string()));
 
-        // Save
+        // Save (bincode format)
         queue.save().await.unwrap();
         assert!(path.exists());
 
@@ -656,9 +658,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_queue_load_missing_file() {
+    async fn test_bincode_load_missing_file() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("nonexistent.json");
+        let path = dir.path().join("nonexistent.bin");
 
         let mut queue = LocalQueue::new(100, 3, Duration::from_secs(5), Some(path));
         let loaded = queue.load().await.unwrap();
@@ -668,9 +670,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_queue_atomic_save() {
+    async fn test_bincode_atomic_save() {
         let dir = tempdir().unwrap();
-        let path = dir.path().join("queue.json");
+        let path = dir.path().join("queue.bin");
         let tmp_path = path.with_extension("tmp");
 
         let mut queue = LocalQueue::with_defaults();
@@ -683,5 +685,90 @@ mod tests {
 
         // Temp file should NOT exist (was renamed)
         assert!(!tmp_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_bincode_smaller_than_json() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("queue.bin");
+
+        let mut queue = LocalQueue::with_defaults();
+
+        // Add several messages
+        for i in 0..10 {
+            queue.enqueue(make_message(&format!("msg-{}", i)), None);
+        }
+
+        queue.save_to(&path).await.unwrap();
+
+        // Read the bincode file
+        let bincode_data = tokio::fs::read(&path).await.unwrap();
+
+        // Convert to JSON for comparison
+        let entries: Vec<PersistedQueueEntry> = queue.messages
+            .iter()
+            .map(PersistedQueueEntry::from_queued)
+            .collect();
+        let json_data = serde_json::to_vec(&entries).unwrap();
+
+        // Bincode should be smaller
+        assert!(
+            bincode_data.len() < json_data.len(),
+            "Bincode ({} bytes) should be smaller than JSON ({} bytes)",
+            bincode_data.len(),
+            json_data.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bincode_preserves_binary_envelope() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("queue.bin");
+
+        let mut queue = LocalQueue::with_defaults();
+
+        // Create message with binary envelope (including null bytes)
+        let binary_envelope = vec![0x00, 0xFF, 0x01, 0xFE, 0x00, 0x00];
+        let msg = EphemeralMessage {
+            id: "binary-msg".to_string(),
+            encrypted_envelope: binary_envelope.clone(),
+            envelope_type: 2,
+            timestamp: 1234567890,
+        };
+        queue.enqueue(msg, None);
+
+        queue.save_to(&path).await.unwrap();
+
+        // Load and verify
+        let mut queue2 = LocalQueue::with_defaults();
+        queue2.load_from(&path).await.unwrap();
+
+        let loaded = queue2.dequeue_ready().unwrap();
+        assert_eq!(loaded.message.encrypted_envelope, binary_envelope);
+    }
+
+    #[tokio::test]
+    async fn test_bincode_preserves_error_messages() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("queue.bin");
+
+        let mut queue = LocalQueue::with_defaults();
+
+        // Add message with error containing special characters
+        queue.enqueue(
+            make_message("msg-1"),
+            Some("Error: \"null\\0byte\" and newline\nhere".to_string()),
+        );
+
+        queue.save_to(&path).await.unwrap();
+
+        let mut queue2 = LocalQueue::with_defaults();
+        queue2.load_from(&path).await.unwrap();
+
+        let loaded = queue2.dequeue_ready().unwrap();
+        assert_eq!(
+            loaded.error,
+            Some("Error: \"null\\0byte\" and newline\nhere".to_string())
+        );
     }
 }

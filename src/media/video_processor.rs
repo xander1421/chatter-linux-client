@@ -56,36 +56,54 @@ fn extract_thumbnail_impl(
     let src_height = info.height;
     let duration_ms = info.duration_ms;
 
-    // Always seek to 0 first to ensure we start at the beginning.
-    // Some containers may have incorrect initial position after preroll
-    // due to index/metadata issues (e.g., MP4 with moov atom at end).
-    dec.seek(0)?;
+    // For thumbnail extraction, we need a single frame from the video.
+    // The pipeline is in PAUSED state after open(), so we use the preroll sample.
+    // For longer videos, seek to 1s to skip intro/black frames.
+    let seek_pos = if duration_ms > 1000 { 1000 } else { 0 };
 
-    // For longer videos, seek to 1s to skip intro/black frames
-    if duration_ms > 1000 {
-        dec.seek(1000)?;
+    if seek_pos > 0 {
+        dec.seek(seek_pos)?;
     }
 
-    // Decode a frame with retries - after seeking, the pipeline needs time to
-    // flush buffers and produce a new frame from the nearest keyframe.
+    // Briefly start the pipeline to PLAYING to allow frame delivery with sync(true),
+    // then immediately pause to get the frame. This is more reliable than trying to
+    // use preroll samples after seeking, since the preroll mechanism can be tricky.
+    dec.play()?;
+
+    // Give the pipeline time to start producing frames after state change
+    // Some codecs need extra time to decode their first frame
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Decode a frame with retries - after play(), frames should arrive quickly.
     let frame = {
         let mut attempts = 0;
-        const MAX_ATTEMPTS: u32 = 10;
+        const MAX_ATTEMPTS: u32 = 40; // 40 * 50ms = 2 seconds max wait
         loop {
             match dec.decode_video_frame() {
-                Ok(Some(frame)) => break frame,
+                Ok(Some(frame)) => {
+                    // Got a frame, pause the pipeline and return
+                    let _ = dec.pause();
+                    break frame;
+                }
                 Ok(None) => {
+                    let _ = dec.pause();
                     return Err(MediaError::InvalidFormat(
                         "could not decode any frame (EOS)".to_string(),
                     ));
                 }
                 Err(e) if e.to_string().contains("no_sample") && attempts < MAX_ATTEMPTS => {
-                    // Pipeline not ready yet after seek, wait and retry
+                    // Pipeline warming up, wait and retry (shorter delay since clock is running)
                     attempts += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    if attempts % 10 == 0 {
+                        tracing::trace!("Thumbnail extraction: {} attempts, still waiting for frame", attempts);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                     continue;
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    let _ = dec.pause();
+                    return Err(e);
+                }
             }
         }
     };

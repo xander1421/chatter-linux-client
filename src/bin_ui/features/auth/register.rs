@@ -174,8 +174,6 @@ pub fn wire_register(window: &MainWindow, ctx: &AppContext) {
                             if let Some(w) = weak_for_view.upgrade() {
                                 w.set_register_loading(false);
                                 w.set_current_view("main".into());
-                                // Cleanup black hole animation (free GPU resources)
-                                crate::bin_ui::blackhole_state::cleanup();
                             }
                         });
 

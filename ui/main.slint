@@ -2,10 +2,9 @@
 // Root component for the application
 
 import { App, ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData } from "app.slint";
-import { CodeLine } from "components/mod.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, CodeLine, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData }
+export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -33,9 +32,6 @@ export component MainWindow inherits Window {
     in-out property <string> register-confirm-password <=> app.register-confirm-password;
     in property <bool> register-loading <=> app.register-loading;
     in property <string> register-error <=> app.register-error;
-
-    // ========== Auth background (black hole animation) ==========
-    in property <image> auth-background-image <=> app.auth-background-image;
 
     // ========== Sidebar properties ==========
     in property <[ChannelListItemData]> channels <=> app.channels;
@@ -89,7 +85,8 @@ export component MainWindow inherits Window {
     in property <string> code-preview-filename <=> app.code-preview-filename;
     in property <string> code-preview-language <=> app.code-preview-language;
     in property <int> code-preview-line-count <=> app.code-preview-line-count;
-    in property <[CodeLine]> code-preview-lines <=> app.code-preview-lines;
+    in property <styled-text> code-preview-content <=> app.code-preview-content;
+    in property <string> code-preview-plain-text <=> app.code-preview-plain-text;
     callback close-code-preview <=> app.close-code-preview;
     callback copy-code <=> app.copy-code;
     callback open-code-external <=> app.open-code-external;

@@ -480,93 +480,73 @@ export component MessageItem inherits Rectangle {
                                     }
                                 }
 
-                                // Audio attachments
-                                if attachment.category == "audio": Rectangle {
+                                // Audio attachments - minimal design
+                                if attachment.category == "audio": HorizontalLayout {
                                     property <bool> is-this-playing: attachment.id == root.current-playing-attachment-id;
+                                    spacing: Spacing.sm;
 
-                                    width: 260px;
-                                    height: 64px;
-                                    background: Colors.surface;
-                                    border-radius: Spacing.radius-sm;
-                                    border-width: 1px;
-                                    border-color: is-this-playing ? Colors.primary : Colors.surface-hover;
+                                    Rectangle {
+                                        width: 40px;
+                                        height: 40px;
+                                        border-radius: 20px;
+                                        background: audio-play-touch.has-hover ? Colors.primary.darker(0.1) : Colors.primary;
 
-                                    HorizontalLayout {
-                                        padding: Spacing.sm;
-                                        spacing: Spacing.sm;
+                                        Image {
+                                            width: 16px;
+                                            height: 16px;
+                                            source: (is-this-playing && root.is-media-playing) ? Icons.pause : Icons.play;
+                                            colorize: Colors.text-primary;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
 
-                                        Rectangle {
-                                            width: 40px;
-                                            height: 40px;
-                                            border-radius: 20px;
-                                            background: audio-play-touch.has-hover ? Colors.primary.darker(0.1) : Colors.primary;
+                                        audio-play-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.attachment-clicked(attachment.id); }
+                                        }
+                                    }
 
-                                            Image {
-                                                width: 16px;
-                                                height: 16px;
-                                                source: (is-this-playing && root.is-media-playing) ? Icons.pause : Icons.play;
-                                                colorize: Colors.text-primary;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: 4px;
+                                        // Fixed width for consistent layout
+                                        width: 180px;
+
+                                        Text {
+                                            text: attachment.filename;
+                                            color: Colors.text-primary;
+                                            font-size: Typography.xs;
+                                            overflow: elide;
+                                        }
+
+                                        waveform := Rectangle {
+                                            height: 16px;
+
+                                            HorizontalLayout {
+                                                spacing: 3px;
+
+                                                for bar[idx] in attachment.waveform: Rectangle {
+                                                    property <float> bar-position: (idx + 1) / 32.0;
+                                                    property <bool> is-played: is-this-playing && bar-position <= root.audio-progress;
+
+                                                    horizontal-stretch: 1;
+                                                    height: max(3px, bar * 0.12px + 3px);
+                                                    background: is-played ? Colors.primary : Colors.text-muted;
+                                                    border-radius: 1px;
+                                                }
                                             }
 
-                                            audio-play-touch := TouchArea {
+                                            waveform-touch := TouchArea {
+                                                property <float> seek-pos: clamp(self.mouse-x / parent.width, 0.0, 1.0);
                                                 mouse-cursor: pointer;
-                                                clicked => { root.attachment-clicked(attachment.id); }
+                                                clicked => { root.audio-seek(attachment.id, self.seek-pos); }
                                             }
                                         }
 
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 4px;
-
-                                            Text {
-                                                text: attachment.filename;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.xs;
-                                                overflow: elide;
-                                            }
-
-                                            waveform := Rectangle {
-                                                height: 20px;
-                                                background: Colors.surface-hover;
-                                                border-radius: 2px;
-                                                clip: true;
-
-                                                HorizontalLayout {
-                                                    padding: 3px;
-                                                    spacing: 2px;
-                                                    alignment: center;
-
-                                                    for bar[idx] in attachment.waveform: VerticalLayout {
-                                                        alignment: end;
-                                                        width: 2px;
-
-                                                        Rectangle {
-                                                            property <float> bar-position: (idx + 1) / 32.0;
-                                                            property <bool> is-played: is-this-playing && bar-position <= root.audio-progress;
-
-                                                            width: 2px;
-                                                            height: max(3px, bar * 0.1px + 3px);
-                                                            background: is-played ? Colors.primary : Colors.text-muted;
-                                                            border-radius: 1px;
-                                                        }
-                                                    }
-                                                }
-
-                                                waveform-touch := TouchArea {
-                                                    property <float> seek-pos: clamp((self.mouse-x - 3px) / (parent.width - 6px), 0.0, 1.0);
-                                                    mouse-cursor: pointer;
-                                                    clicked => { root.audio-seek(attachment.id, self.seek-pos); }
-                                                }
-                                            }
-
-                                            Text {
-                                                text: is-this-playing ? root.audio-elapsed + " / " + attachment.duration-display : attachment.duration-display;
-                                                color: Colors.text-muted;
-                                                font-size: 10px;
-                                            }
+                                        Text {
+                                            text: is-this-playing ? root.audio-elapsed + " / " + attachment.duration-display : attachment.duration-display;
+                                            color: Colors.text-muted;
+                                            font-size: 10px;
                                         }
                                     }
                                 }

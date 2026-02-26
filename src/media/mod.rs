@@ -1,15 +1,13 @@
 //! Media handling layer.
 //!
 //! Image, audio, video processing and playback.
-//! Uses platform-native APIs for video decoding:
-//! - Linux: GStreamer
-//! - Android: MediaCodec (future)
-//! - iOS/macOS: VideoToolbox (future)
-//! - Windows: Media Foundation (future)
+//! Uses GStreamer for cross-platform video:
+//! - Desktop: Linux, Windows, macOS
+//! - Mobile: Android, iOS (via GStreamer SDK)
+//! - Hardware acceleration on all platforms
 
 pub mod audio_player;
 pub mod audio_recorder;
-pub mod blackhole;
 pub mod code_preview;
 pub mod decoder;
 pub mod embed;

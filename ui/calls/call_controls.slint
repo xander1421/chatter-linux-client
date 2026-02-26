@@ -53,6 +53,7 @@ export component CallControls inherits Rectangle {
     callback toggle-video();
     callback toggle-screen-share();
     callback end-call();
+    callback show-audio-settings();
 
     height: 72px;
     background: Colors.surface;
@@ -65,6 +66,14 @@ export component CallControls inherits Rectangle {
         spacing: Spacing.lg;
         padding-left: Spacing.xl;
         padding-right: Spacing.xl;
+
+        // Audio settings button (device picker)
+        ControlButton {
+            icon: Icons.settings;
+            icon-active: Icons.settings;
+            active: false;
+            clicked => { show-audio-settings(); }
+        }
 
         // Mute button
         ControlButton {
