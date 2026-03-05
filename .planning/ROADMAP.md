@@ -823,4 +823,4 @@ Based on comprehensive separation of concerns analysis identifying layer violati
 | 76 | Refactor Large Service Files | 3/4 | In Progress | - |
 | 77 | Rename public_key to svr_public_key | 0 | Not started | - |
 | 78 | Service Separation of Concerns | 2/5 | In Progress | - |
-| 79 | Registration Privacy Hardening | 0/3 | Not started | - |
+| 79 | Registration Privacy Hardening | 1/3 | In Progress | - |

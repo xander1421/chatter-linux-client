@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 78 of 78 (Service Separation of Concerns)
-Plan: 4 of 5 in current phase (78-04-PLAN completed)
+Phase: 79 of 79 (Registration Privacy Hardening)
+Plan: 1 of 3 in current phase (79-01-PLAN completed)
 Status: In progress
-Last activity: 2026-02-24 — Completed 78-04-PLAN.md (Repository Access Audit)
+Last activity: 2026-03-05 — Completed 79-01-PLAN.md (Stop sending profile_key)
 
 Progress: ██████████████████████████████████████████████████████████████████████████ 100%
 
@@ -307,7 +307,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-02-24
-Stopped at: Completed 78-04-PLAN.md (Repository Access Audit)
+Last session: 2026-03-05
+Stopped at: Completed 79-01-PLAN.md (Stop sending profile_key)
 Resume file: None
-Next action: Execute 78-05-PLAN.md
+Next action: Execute 79-02-PLAN.md
