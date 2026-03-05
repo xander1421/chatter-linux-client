@@ -61,6 +61,13 @@ impl SettingsRepository {
         Self { db }
     }
 
+    /// Get a reference to the underlying database.
+    ///
+    /// Used for operations that need direct database access (e.g., TokenManager).
+    pub fn database(&self) -> &Arc<Database> {
+        &self.db
+    }
+
     // ========================================================================
     // Generic Typed Accessors
     // ========================================================================
@@ -169,6 +176,38 @@ impl SettingsRepository {
     /// Set an f64 setting.
     pub fn set_f64(&self, key: &str, value: f64) -> Result<(), StorageError> {
         self.set(key, &value)
+    }
+
+    // ========================================================================
+    // Convenience Bytes Methods (for cryptographic keys)
+    // ========================================================================
+
+    /// Get a raw bytes setting (stored as base64).
+    ///
+    /// Used for cryptographic keys like profile_key that should be stored as raw bytes.
+    pub fn get_bytes(&self, key: &str) -> Result<Option<Vec<u8>>, StorageError> {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+
+        let b64: Option<String> = self.get(key)?;
+        match b64 {
+            Some(encoded) => {
+                let bytes = BASE64.decode(&encoded).map_err(|e| {
+                    StorageError::InvalidData(format!("Failed to decode bytes for '{}': {}", key, e))
+                })?;
+                Ok(Some(bytes))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Set a raw bytes setting (stored as base64).
+    ///
+    /// Used for cryptographic keys like profile_key that should be stored as raw bytes.
+    pub fn set_bytes(&self, key: &str, value: &[u8]) -> Result<(), StorageError> {
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+
+        let encoded = BASE64.encode(value);
+        self.set(key, &encoded)
     }
 
     // ========================================================================
