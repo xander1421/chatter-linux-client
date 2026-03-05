@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 78 — Service Separation of Concerns
+**Current focus:** Phase 79 — Registration Privacy Hardening
 
 ## Current Position
 
 Phase: 79 of 79 (Registration Privacy Hardening)
-Plan: 1 of 3 in current phase (79-01-PLAN completed)
+Plan: 2 of 3 in current phase (79-02-PLAN completed)
 Status: In progress
-Last activity: 2026-03-05 — Completed 79-01-PLAN.md (Stop sending profile_key)
+Last activity: 2026-03-05 — Completed 79-02-PLAN.md (Encrypt display_name)
 
 Progress: ██████████████████████████████████████████████████████████████████████████ 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 81
-- Average duration: ~4.8 min
-- Total execution time: ~392 min
+- Total plans completed: 82
+- Average duration: ~4.9 min
+- Total execution time: ~400 min
 
 **By Phase:**
 
@@ -308,6 +308,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-05
-Stopped at: Completed 79-01-PLAN.md (Stop sending profile_key)
+Stopped at: Completed 79-02-PLAN.md (Encrypt display_name)
 Resume file: None
-Next action: Execute 79-02-PLAN.md
+Next action: Execute 79-03-PLAN.md
