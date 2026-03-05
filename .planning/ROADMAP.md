@@ -708,6 +708,36 @@ Priority 4 (Low - Refactoring):
 **Details:**
 Based on comprehensive separation of concerns analysis identifying layer violations between UI, handlers, services, and storage.
 
+### Phase 79: Registration Privacy Hardening
+**Goal**: Fix critical privacy leaks in registration, login, and friend request flows based on Signal Protocol audit
+**Depends on**: Phase 78
+**Research**: Complete (see 79-DISCOVERY.md - Signal-Desktop and Signal-Server comparison)
+**Status**: Not started
+**Plans**: 3
+
+**Critical fixes:**
+- Stop sending profile_key to server (only send derived UAK)
+- Encrypt display_name with profile key before sending
+- Encrypt friend request messages with Signal Protocol
+
+**Scope (~10 files):**
+- `src/services/auth_service.rs` - Registration/login flow
+- `src/network/grpc/auth_client.rs` - RegisterRequest construction
+- `src/crypto/profile_crypto.rs` - New module for profile encryption
+- `src/services/user/mod.rs` - Friend request encryption
+- `src/services/friend_request_crypto.rs` - New friend request crypto service
+- `src/storage/repositories/settings_repo.rs` - Store profile_key locally
+
+**Deferred (requires server changes):**
+- Username hashing (server stores plaintext)
+- Social graph privacy (server sees friend/block lists)
+- ACI/PNI dual identity model (server architecture)
+- Phone number discoverability toggle (server feature)
+
+**Reference:**
+- Signal-Desktop: `/home/alex/Documents/Signal-Desktop/ts/textsecure/AccountManager.preload.ts`
+- Signal-Server: `/home/alex/Documents/Signal-server/service/src/main/java/org/whispersystems/textsecuregcm/controllers/RegistrationController.java`
+
 ## Progress
 
 **Execution Order:** Phases execute in numeric order (1 → 2 → ... → 70)
@@ -793,3 +823,4 @@ Based on comprehensive separation of concerns analysis identifying layer violati
 | 76 | Refactor Large Service Files | 3/4 | In Progress | - |
 | 77 | Rename public_key to svr_public_key | 0 | Not started | - |
 | 78 | Service Separation of Concerns | 2/5 | In Progress | - |
+| 79 | Registration Privacy Hardening | 0/3 | Not started | - |
