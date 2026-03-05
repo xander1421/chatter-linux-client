@@ -289,12 +289,18 @@ impl AuthService {
         let mut profile_key = [0u8; 32];
         rand::rng().fill_bytes(&mut profile_key);
 
-        // Store profile key locally (needed for profile encryption in next phase)
+        // Store profile key locally (needed for profile encryption)
         // Stored in SQLCipher encrypted database
         self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
 
         // Derive UAK from profile key (16 bytes) - this is what we send to server
         let uak = crate::crypto::device_credentials::derive_uak(&profile_key);
+
+        // SECURITY: Encrypt display_name with profile key before sending
+        // Server never sees plaintext profile data - only the encrypted blob
+        // Uses AES-256-GCM with padding to 128 bytes (Signal spec)
+        let encrypted_display_name =
+            crate::crypto::profile_crypto::encrypt_display_name(&profile_key, display_name)?;
 
         // Device ID is 1 for primary device during registration
         let device_id = 1u32;
@@ -374,11 +380,12 @@ impl AuthService {
         // Call server registration (wait for completion)
         // SECURITY: Send UAK (16 bytes), NOT profile_key (32 bytes)
         // Profile key stays client-side for profile encryption
+        // SECURITY: display_name is encrypted with profile key (server sees only ciphertext)
         let result = auth_client
             .register_and_wait(
                 username,
                 password_hash.as_slice(),
-                display_name,
+                &encrypted_display_name,
                 identity_public_key.as_ref(),
                 device_info,
                 credentials.auth_token().as_bytes(),

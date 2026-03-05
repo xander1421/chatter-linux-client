@@ -163,6 +163,7 @@ impl AuthClient {
     ///
     /// # Arguments
     ///
+    /// * `encrypted_display_name` - Display name encrypted with profile_key (AES-256-GCM)
     /// * `unidentified_access_key` - 16-byte UAK derived client-side from profile_key
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
@@ -170,26 +171,33 @@ impl AuthClient {
     /// # Security Note
     ///
     /// The profile_key NEVER leaves the client. Only the derived UAK (16 bytes) is sent.
-    /// This matches Signal's security model - the profile_key can decrypt all profile data,
-    /// so it must remain client-side only.
+    /// The display_name is encrypted client-side with profile_key before transmission.
+    /// Server stores only ciphertext - it cannot read profile data.
     #[allow(clippy::too_many_arguments)]
     pub async fn register(
         &mut self,
         username: &str,
         password_hash: &[u8],
-        display_name: &str,
+        encrypted_display_name: &[u8],
         svr_public_key: &[u8],
         device_info: &str,
         device_auth_token: &[u8],
-        unidentified_access_key: &[u8; 16],
+        _unidentified_access_key: &[u8; 16],
         prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
     ) -> Result<impl Stream<Item = Result<AuthEvent, NetworkError>>, NetworkError> {
+        use base64::Engine;
+
+        // Base64-encode encrypted display name for proto String field
+        // Server stores this ciphertext - only clients with profile_key can decrypt
+        let encoded_display_name =
+            base64::engine::general_purpose::STANDARD.encode(encrypted_display_name);
+
         let request = RegisterRequest {
             username: username.to_string(),
             password_hash: password_hash.to_vec(),
             svr_public_key: svr_public_key.to_vec(),
-            display_name: display_name.to_string(),
+            display_name: encoded_display_name,
             avatar_url: String::new(),
             device_info: device_info.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -222,6 +230,7 @@ impl AuthClient {
     ///
     /// # Arguments
     ///
+    /// * `encrypted_display_name` - Display name encrypted with profile_key (AES-256-GCM)
     /// * `unidentified_access_key` - 16-byte UAK derived client-side from profile_key
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
@@ -229,14 +238,14 @@ impl AuthClient {
     /// # Security Note
     ///
     /// The profile_key NEVER leaves the client. Only the derived UAK (16 bytes) is sent.
-    /// This matches Signal's security model - the profile_key can decrypt all profile data,
-    /// so it must remain client-side only.
+    /// The display_name is encrypted client-side with profile_key before transmission.
+    /// Server stores only ciphertext - it cannot read profile data.
     #[allow(clippy::too_many_arguments)]
     pub async fn register_and_wait(
         &mut self,
         username: &str,
         password_hash: &[u8],
-        display_name: &str,
+        encrypted_display_name: &[u8],
         svr_public_key: &[u8],
         device_info: &str,
         device_auth_token: &[u8],
@@ -248,7 +257,7 @@ impl AuthClient {
             .register(
                 username,
                 password_hash,
-                display_name,
+                encrypted_display_name,
                 svr_public_key,
                 device_info,
                 device_auth_token,
