@@ -163,9 +163,15 @@ impl AuthClient {
     ///
     /// # Arguments
     ///
-    /// * `profile_key` - 32-byte profile key; server derives UAK from this
+    /// * `unidentified_access_key` - 16-byte UAK derived client-side from profile_key
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
+    ///
+    /// # Security Note
+    ///
+    /// The profile_key NEVER leaves the client. Only the derived UAK (16 bytes) is sent.
+    /// This matches Signal's security model - the profile_key can decrypt all profile data,
+    /// so it must remain client-side only.
     #[allow(clippy::too_many_arguments)]
     pub async fn register(
         &mut self,
@@ -175,7 +181,7 @@ impl AuthClient {
         svr_public_key: &[u8],
         device_info: &str,
         device_auth_token: &[u8],
-        profile_key: &[u8; 32],
+        unidentified_access_key: &[u8; 16],
         prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
     ) -> Result<impl Stream<Item = Result<AuthEvent, NetworkError>>, NetworkError> {
@@ -188,7 +194,9 @@ impl AuthClient {
             device_info: device_info.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
             device_auth_token: device_auth_token.to_vec(),
-            profile_key: profile_key.to_vec(),
+            // profile_key field is deprecated - send empty instead
+            // UAK is sent via prekey_bundle.unidentified_access_key
+            profile_key: Vec::new(),
             prekey_bundle,
             initial_one_time_prekeys,
             challenge_response: Vec::new(),
@@ -210,13 +218,19 @@ impl AuthClient {
     ///
     /// Convenience method that consumes the event stream and returns
     /// the registration result with user_id and device_id on success.
-    /// Note: Client already has device_auth_token and derives UAK from profile_key.
+    /// Note: Client already has device_auth_token and derives UAK from profile_key locally.
     ///
     /// # Arguments
     ///
-    /// * `profile_key` - 32-byte profile key; server derives UAK from this
+    /// * `unidentified_access_key` - 16-byte UAK derived client-side from profile_key
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
+    ///
+    /// # Security Note
+    ///
+    /// The profile_key NEVER leaves the client. Only the derived UAK (16 bytes) is sent.
+    /// This matches Signal's security model - the profile_key can decrypt all profile data,
+    /// so it must remain client-side only.
     #[allow(clippy::too_many_arguments)]
     pub async fn register_and_wait(
         &mut self,
@@ -226,7 +240,7 @@ impl AuthClient {
         svr_public_key: &[u8],
         device_info: &str,
         device_auth_token: &[u8],
-        profile_key: &[u8; 32],
+        unidentified_access_key: &[u8; 16],
         prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
     ) -> Result<RegistrationResult, NetworkError> {
@@ -238,7 +252,7 @@ impl AuthClient {
                 svr_public_key,
                 device_info,
                 device_auth_token,
-                profile_key,
+                unidentified_access_key,
                 prekey_bundle,
                 initial_one_time_prekeys,
             )
