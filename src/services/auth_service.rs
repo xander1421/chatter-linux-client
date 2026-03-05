@@ -285,8 +285,16 @@ impl AuthService {
         let one_time_prekeys = self.prekey_manager.generate_prekeys(&mut rand::rng(), 1, 100)?;
 
         // Generate profile key for UAK derivation
+        // SECURITY: Profile key stays client-side only - never sent to server
         let mut profile_key = [0u8; 32];
         rand::rng().fill_bytes(&mut profile_key);
+
+        // Store profile key locally (needed for profile encryption in next phase)
+        // Stored in SQLCipher encrypted database
+        self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
+
+        // Derive UAK from profile key (16 bytes) - this is what we send to server
+        let uak = crate::crypto::device_credentials::derive_uak(&profile_key);
 
         // Device ID is 1 for primary device during registration
         let device_id = 1u32;
@@ -345,7 +353,7 @@ impl AuthService {
                     .expect("Time should move forward")
                     .as_millis() as u64,
             }),
-            unidentified_access_key: None, // Server derives from profile_key
+            unidentified_access_key: Some(uak.to_vec()), // Client-derived UAK (16 bytes)
             // Per NDSS '21: Do NOT enable unrestricted access by default.
             // Initial contact uses anonymous credentials (blind-signed tokens) instead.
             // This prevents spam while preserving sender anonymity.
@@ -364,7 +372,8 @@ impl AuthService {
         }
 
         // Call server registration (wait for completion)
-        // Send profile_key - server derives UAK from it
+        // SECURITY: Send UAK (16 bytes), NOT profile_key (32 bytes)
+        // Profile key stays client-side for profile encryption
         let result = auth_client
             .register_and_wait(
                 username,
@@ -373,7 +382,7 @@ impl AuthService {
                 identity_public_key.as_ref(),
                 device_info,
                 credentials.auth_token().as_bytes(),
-                &profile_key,
+                &uak,
                 Some(prekey_bundle),
                 initial_prekeys,
             )
@@ -499,5 +508,30 @@ impl AuthService {
     pub async fn do_logout(&self) -> Result<(), AuthError> {
         let mut auth_client = self.auth_client();
         self.logout(&mut auth_client).await
+    }
+
+    /// Change the user's password.
+    ///
+    /// Requires the current password for verification and a new password.
+    /// Both passwords are hashed with SHA256 before sending to the server.
+    pub async fn change_password(
+        &self,
+        current_password: &str,
+        new_password: &str,
+    ) -> Result<(), AuthError> {
+        if !self.is_logged_in() {
+            return Err(AuthError::NotLoggedIn);
+        }
+
+        // Hash passwords with SHA256
+        let current_hash = Sha256::digest(current_password.as_bytes());
+        let new_hash = Sha256::digest(new_password.as_bytes());
+
+        let mut auth_client = self.auth_client();
+        auth_client
+            .change_password(&current_hash, &new_hash)
+            .await?;
+
+        Ok(())
     }
 }
