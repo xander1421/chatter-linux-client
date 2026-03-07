@@ -11,7 +11,7 @@ import { Icons } from "../theme/icons.slint";
 export struct ChatHeaderData {
     channel-id: string,
     channel-name: string,
-    channel-type: string,  // "public", "private", "dm"
+    channel-type: string,  // "public", "private", "dm", "anon-dm", "private-group"
     member-count: int,
     topic: string,
     is-archived: bool,
@@ -49,11 +49,14 @@ export component ChatHeader inherits Rectangle {
     // Properties from ChatHeaderData
     in property <string> channel-id: "";
     in property <string> channel-name: "";
-    in property <string> channel-type: "public";  // "public", "private", "dm"
+    in property <string> channel-type: "public";  // "public", "private", "dm", "anon-dm", "private-group"
     in property <int> member-count: 0;
     in property <string> topic: "";
     in property <bool> is-archived: false;
     in property <string> typing-indicator: "";
+
+    // Jarvis AI thinking state
+    in-out property <bool> jarvis-thinking: false;
 
     // Callbacks
     callback search-clicked();
@@ -61,9 +64,20 @@ export component ChatHeader inherits Rectangle {
     callback voice-call-clicked();
     callback video-call-clicked();
 
-    property <bool> show-member-count: channel-type != "dm" && member-count > 0;
+    // Type detection properties
     property <bool> is-private: channel-type == "private";
     property <bool> is-dm: channel-type == "dm";
+    property <bool> is-anon-dm: channel-type == "anon-dm";
+    property <bool> is-private-group: channel-type == "private-group";
+
+    // Show member count for channels and private groups (not DMs)
+    property <bool> show-member-count: (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
+
+    // Show settings for regular channels and private groups, not for anon DMs
+    property <bool> show-settings: !is-anon-dm;
+
+    // Show privacy indicator for anon types
+    property <bool> show-privacy-indicator: is-anon-dm || is-private-group;
 
     // Layout
     height: 56px;
@@ -80,14 +94,16 @@ export component ChatHeader inherits Rectangle {
             spacing: Spacing.sm;
             alignment: start;
 
-            // Channel icon - text for # and @, image for lock
-            if !is-private: Text {
-                text: is-dm ? "@" : "#";
+            // Channel icon - varies by type
+            // Public channel: #
+            if channel-type == "public": Text {
+                text: "#";
                 color: Colors.text-muted;
                 font-size: Typography.lg;
                 vertical-alignment: center;
             }
 
+            // Private channel: lock icon
             if is-private: Rectangle {
                 width: 20px;
                 height: 20px;
@@ -103,7 +119,47 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            // Channel name (constrained width so typing indicator has space)
+            // Regular DM: @
+            if is-dm: Text {
+                text: "@";
+                color: Colors.text-muted;
+                font-size: Typography.lg;
+                vertical-alignment: center;
+            }
+
+            // Anonymous DM: shield/lock icon to indicate privacy
+            if is-anon-dm: Rectangle {
+                width: 20px;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+
+                Image {
+                    source: Icons.lock;
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.primary;
+                }
+            }
+
+            // Private group: users icon
+            if is-private-group: Rectangle {
+                width: 20px;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+
+                Image {
+                    source: Icons.users;
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.primary;
+                }
+            }
+
+            // Channel/conversation name (constrained width so typing indicator has space)
             Text {
                 text: root.channel-name;
                 color: Colors.text-primary;
@@ -130,7 +186,34 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            // Member count
+            // Privacy indicator badge for anonymous types
+            if root.show-privacy-indicator: HorizontalLayout {
+                spacing: Spacing.xs;
+                alignment: center;
+
+                Rectangle {
+                    width: 1px;
+                    height: 16px;
+                    background: Colors.text-muted;
+                }
+
+                Rectangle {
+                    height: 18px;
+                    width: privacy-text.preferred-width + 10px;
+                    background: Colors.primary.with-alpha(0.15);
+                    border-radius: 4px;
+
+                    privacy-text := Text {
+                        x: 5px;
+                        text: is-anon-dm ? "Anonymous" : "Private";
+                        color: Colors.primary;
+                        font-size: Typography.xs;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Member count (for channels and private groups)
             if root.show-member-count: HorizontalLayout {
                 spacing: Spacing.xs;
                 alignment: center;
@@ -154,8 +237,8 @@ export component ChatHeader inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
 
-            // Topic text (truncated)
-            if root.topic != "" && root.typing-indicator == "": Text {
+            // Topic text (truncated) - only show when no typing or Jarvis thinking
+            if root.topic != "" && root.typing-indicator == "" && !root.jarvis-thinking: Text {
                 width: 100%;
                 text: root.topic;
                 color: Colors.text-muted;
@@ -165,7 +248,7 @@ export component ChatHeader inherits Rectangle {
             }
 
             // Typing indicator (takes precedence over topic)
-            if root.typing-indicator != "": HorizontalLayout {
+            if root.typing-indicator != "" && !root.jarvis-thinking: HorizontalLayout {
                 spacing: Spacing.xs;
                 alignment: start;
 
@@ -177,64 +260,93 @@ export component ChatHeader inherits Rectangle {
                     vertical-alignment: center;
                 }
             }
+
+            // Jarvis thinking indicator (takes precedence over both)
+            if root.jarvis-thinking: HorizontalLayout {
+                spacing: 6px;
+                padding-left: 12px;
+                alignment: start;
+
+                // Animated dots
+                for i in [0, 1, 2]: Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: Colors.primary;
+                    y: 2px * Math.sin((animation-tick() / 250ms + i * 0.3) * 2 * 3.14159);
+                }
+
+                Text {
+                    text: "Jarvis is thinking...";
+                    font-size: Typography.sm;
+                    font-italic: true;
+                    color: Colors.primary;
+                    vertical-alignment: center;
+                }
+            }
         }
 
-        // Right section: Action buttons
-        HorizontalLayout {
-            spacing: Spacing.xs;
-            alignment: end;
+        // Right section: Action buttons (wrapped in VerticalLayout for vertical centering)
+        VerticalLayout {
+            alignment: center;
 
-            // Call buttons group
             HorizontalLayout {
                 spacing: Spacing.xs;
+                alignment: end;
 
-                // Phone icon slightly smaller
+                // Call buttons group
+                HorizontalLayout {
+                    spacing: Spacing.xs;
+
+                    // Phone icon slightly smaller
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        background: phone-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        Image {
+                            source: Icons.phone;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: phone-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                        }
+
+                        phone-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.voice-call-clicked(); }
+                        }
+                    }
+
+                    IconButton {
+                        icon: Icons.video;
+                        clicked => { root.video-call-clicked(); }
+                    }
+                }
+
+                // Divider between button groups
                 Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    background: phone-touch.has-hover ? Colors.surface-hover : transparent;
-                    border-radius: Spacing.radius-sm;
+                    width: 1px;
+                    height: 20px;
+                    background: Colors.text-muted.with-alpha(0.3);
+                }
 
-                    Image {
-                        source: Icons.phone;
-                        width: 16px;
-                        height: 16px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: phone-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                // Utility buttons group
+                HorizontalLayout {
+                    spacing: Spacing.xs;
+
+                    IconButton {
+                        icon: Icons.search;
+                        clicked => { root.search-clicked(); }
                     }
 
-                    phone-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.voice-call-clicked(); }
+                    // Settings button (hidden for anon DMs - no channel settings)
+                    if root.show-settings: IconButton {
+                        icon: Icons.settings;
+                        clicked => { root.settings-clicked(); }
                     }
-                }
-
-                IconButton {
-                    icon: Icons.video;
-                    clicked => { root.video-call-clicked(); }
-                }
-            }
-
-            // Divider between button groups
-            Rectangle {
-                width: 1px;
-                height: 20px;
-                background: Colors.text-muted.with-alpha(0.3);
-            }
-
-            // Utility buttons group
-            HorizontalLayout {
-                spacing: Spacing.xs;
-
-                IconButton {
-                    icon: Icons.search;
-                    clicked => { root.search-clicked(); }
-                }
-
-                IconButton {
-                    icon: Icons.settings;
-                    clicked => { root.settings-clicked(); }
                 }
             }
         }

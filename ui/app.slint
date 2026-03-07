@@ -10,7 +10,7 @@ import { RegisterPage } from "pages/register.slint";
 import { LoadingPage } from "pages/loading.slint";
 
 // Import main layout components
-import { Sidebar, ChannelListItemData, DMListItemData } from "sidebar/sidebar.slint";
+import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData } from "chat/chat_layout.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
@@ -20,7 +20,7 @@ import { GifPicker, GifData } from "components/gif_picker.slint";
 import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
 
 // Import modals
-import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfig } from "modals/create_channel.slint";
+import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
 import { UserProfileModal } from "modals/user_profile.slint";
 import { FriendRequestsModal, FriendRequest } from "modals/friend_requests.slint";
 import { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "modals/friends.slint";
@@ -42,8 +42,11 @@ import { VideoPlayer } from "components/mod.slint";
 // Import call UI
 import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
 
+// Import Jarvis AI assistant
+import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
+
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData }
 
 export component App inherits Rectangle {
     // ========== View routing ==========
@@ -72,6 +75,8 @@ export component App inherits Rectangle {
     in property <string> selected-channel-id: "";
     in property <[DMListItemData]> dm-conversations: [];
     in property <string> selected-dm-id: "";
+    in property <[PrivateGroupListItemData]> private-groups: [];
+    in property <string> selected-private-group-id: "";
     in property <string> user-display-name: "User";
     in property <image> user-avatar-source;
     in property <string> user-initials: "";
@@ -125,11 +130,17 @@ export component App inherits Rectangle {
     in property <string> code-preview-filename: "";
     in property <string> code-preview-language: "";
     in property <int> code-preview-line-count: 0;
-    in property <styled-text> code-preview-content;
+    in property <image> code-preview-image;
     in property <string> code-preview-plain-text: "";
+    in property <bool> code-preview-has-selection: false;
+    in property <string> code-preview-selected-text: "";
     callback close-code-preview();
     callback copy-code();
+    callback copy-code-selection();
     callback open-code-external();
+    callback code-preview-pointer-down(/* x */ length, /* y */ length, /* shift */ bool, /* ctrl */ bool);
+    callback code-preview-pointer-move(/* x */ length, /* y */ length);
+    callback code-preview-pointer-up(/* x */ length, /* y */ length);
 
     // ========== PDF preview state ==========
     in-out property <bool> pdf-preview-visible: false;
@@ -241,6 +252,10 @@ export component App inherits Rectangle {
     in-out property <string> create-channel-ai-model: "";
     in property <[AIModelOption]> create-channel-ai-models: [];
 
+    // Create channel private group properties
+    in-out property <[PrivateGroupFriend]> create-channel-available-friends: [];
+    in-out property <int> create-channel-selected-friend-count: 0;
+
     // Join channel modal properties
     in-out property <string> join-channel-search-query: "";
     in property <[SearchResultChannel]> join-channel-results: [];
@@ -277,8 +292,17 @@ export component App inherits Rectangle {
     in-out property <string> friends-requests-sub-tab: "received";
     in property <[FriendRequestData]> friends-received-requests: [];
     in property <[FriendRequestData]> friends-sent-requests: [];
+    in property <[FriendRequestData]> friends-private-requests: [];
     in property <[BlockedUserData]> friends-blocked-users: [];
     in property <bool> friends-loading: false;
+    // Pending message requests count (for sidebar badge)
+    in property <int> pending-message-requests: 0;
+    // Friend code (privacy-first discovery)
+    in-out property <string> friends-my-code: "";
+    in-out property <string> friends-code-input: "";
+    in-out property <string> friends-code-status: "";
+    in-out property <image> friends-qr-code-image;
+    in-out property <bool> friends-show-qr: false;
 
     // Forward message modal properties
     in property <string> forward-message-preview: "";
@@ -357,6 +381,12 @@ export component App inherits Rectangle {
     in property <[ScreenSourceData]> screen-sources: [];
     in-out property <string> selected-screen-source-id: "";
 
+    // ========== Jarvis AI Assistant properties ==========
+    in-out property <bool> jarvis-panel-visible: false;
+    in-out property <bool> jarvis-thinking: false;
+    in property <string> jarvis-response: "";
+    in property <[JarvisMessageData]> jarvis-messages: [];
+
     // ========== Auth callbacks ==========
     callback login(string, string);
     callback register(string, string, string);
@@ -366,6 +396,7 @@ export component App inherits Rectangle {
     // ========== Sidebar callbacks ==========
     callback channel-selected(string);
     callback dm-selected(string);
+    callback private-group-selected(string);
     callback saved-messages-clicked();
     callback settings-clicked();
     callback profile-clicked();
@@ -404,6 +435,10 @@ export component App inherits Rectangle {
     // Create channel (name, description, template, ai_provider, ai_model)
     callback create-channel(string, string, string, CreateChannelConfig, string, string);
     callback create-channel-provider-selected(string);
+    // Private group creation
+    callback create-private-group(string, [PrivateGroupFriend]);
+    callback toggle-friend-selection(int);
+    callback create-channel-template-selected(string);
 
     // Join channel
     callback search-channels(string);
@@ -434,6 +469,16 @@ export component App inherits Rectangle {
     callback friends-decline-request(string);
     callback friends-cancel-request(string);
     callback friends-unblock-user(string);
+    // Friend code callbacks (privacy-first discovery)
+    callback friends-generate-code(bool);   // bool = private mode
+    callback friends-generate-qr(bool);     // bool = private mode
+    callback friends-copy-code();
+    callback friends-connect-via-code(string);
+    callback friends-connect-private(string);  // Private anon DM (no server)
+    callback friends-accept-private-request(string);   // Accept anon DM request
+    callback friends-decline-private-request(string);  // Decline anon DM request
+    // Message requests (anon DM)
+    callback message-requests-clicked();
 
     // Forward message
     callback forward-message(string);
@@ -483,6 +528,12 @@ export component App inherits Rectangle {
     callback audio-device-selected(string);   // device_id
     callback audio-output-selected(string);   // device_id
     callback screen-source-selected(string);  // source_id
+
+    // ========== Jarvis callbacks ==========
+    callback jarvis-panel-close();
+    callback jarvis-send(string);
+    callback jarvis-clear();
+    callback toggle-jarvis-panel();
 
     background: Colors.background;
 
@@ -538,6 +589,8 @@ export component App inherits Rectangle {
                 selected-channel-id: root.selected-channel-id;
                 dm-conversations: root.dm-conversations;
                 selected-dm-id: root.selected-dm-id;
+                private-groups: root.private-groups;
+                selected-private-group-id: root.selected-private-group-id;
                 user-display-name: root.user-display-name;
                 user-avatar-source: root.user-avatar-source;
                 user-initials: root.user-initials;
@@ -545,12 +598,17 @@ export component App inherits Rectangle {
                 user-custom-status: root.user-custom-status;
                 collapsed <=> root.sidebar-collapsed;
                 pending-friend-requests: root.friends-received-requests.length;
+                pending-message-requests: root.pending-message-requests;
+                jarvis-active: root.jarvis-panel-visible;
 
                 channel-selected(id) => {
                     root.channel-selected(id);
                 }
                 dm-selected(id) => {
                     root.dm-selected(id);
+                }
+                private-group-selected(id) => {
+                    root.private-group-selected(id);
                 }
                 saved-messages-clicked => {
                     root.saved-messages-clicked();
@@ -561,6 +619,13 @@ export component App inherits Rectangle {
                 }
                 friends-clicked => {
                     root.active-modal = "friends";
+                }
+                message-requests-clicked => {
+                    // Open friends modal with requests tab and private sub-tab selected
+                    root.friends-modal-tab = "requests";
+                    root.friends-requests-sub-tab = "private";
+                    root.active-modal = "friends";
+                    root.message-requests-clicked();
                 }
                 profile-clicked => {
                     root.profile-clicked();
@@ -575,6 +640,10 @@ export component App inherits Rectangle {
                 }
                 toggle-collapsed => {
                     root.toggle-sidebar();
+                }
+                toggle-jarvis => {
+                    root.jarvis-panel-visible = !root.jarvis-panel-visible;
+                    root.toggle-jarvis-panel();
                 }
                 show-tooltip(text, x, y) => {
                     root.tooltip-text = text;
@@ -599,6 +668,7 @@ export component App inherits Rectangle {
                 topic: root.topic;
                 is-archived: root.is-archived;
                 typing-indicator: root.typing-indicator;
+                jarvis-thinking: root.jarvis-thinking;
                 messages: root.messages;
                 loading-messages: root.loading-messages;
                 scroll-to-message-index: root.scroll-to-message-index;
@@ -705,6 +775,8 @@ export component App inherits Rectangle {
         ai-provider <=> root.create-channel-ai-provider;
         ai-model <=> root.create-channel-ai-model;
         ai-models: root.create-channel-ai-models;
+        available-friends <=> root.create-channel-available-friends;
+        selected-friend-count <=> root.create-channel-selected-friend-count;
 
         close => {
             root.active-modal = "none";
@@ -714,6 +786,15 @@ export component App inherits Rectangle {
         }
         provider-selected(provider) => {
             root.create-channel-provider-selected(provider);
+        }
+        create-private-group(name, friends) => {
+            root.create-private-group(name, friends);
+        }
+        toggle-friend-selection(idx) => {
+            root.toggle-friend-selection(idx);
+        }
+        template-selected(template) => {
+            root.create-channel-template-selected(template);
         }
     }
 
@@ -809,8 +890,15 @@ export component App inherits Rectangle {
         requests-sub-tab <=> root.friends-requests-sub-tab;
         received-requests: root.friends-received-requests;
         sent-requests: root.friends-sent-requests;
+        private-requests: root.friends-private-requests;
         blocked-users: root.friends-blocked-users;
         loading: root.friends-loading;
+        // Friend code (privacy-first discovery)
+        my-code <=> root.friends-my-code;
+        code-input <=> root.friends-code-input;
+        code-status <=> root.friends-code-status;
+        qr-code-image <=> root.friends-qr-code-image;
+        show-qr <=> root.friends-show-qr;
 
         close => {
             root.active-modal = "none";
@@ -847,6 +935,27 @@ export component App inherits Rectangle {
         }
         unblock-user(user-id) => {
             root.friends-unblock-user(user-id);
+        }
+        generate-code(private-mode) => {
+            root.friends-generate-code(private-mode);
+        }
+        generate-qr(private-mode) => {
+            root.friends-generate-qr(private-mode);
+        }
+        copy-code => {
+            root.friends-copy-code();
+        }
+        connect-via-code(code) => {
+            root.friends-connect-via-code(code);
+        }
+        connect-private(code) => {
+            root.friends-connect-private(code);
+        }
+        accept-private-request(conversation-id) => {
+            root.friends-accept-private-request(conversation-id);
+        }
+        decline-private-request(conversation-id) => {
+            root.friends-decline-private-request(conversation-id);
         }
     }
 
@@ -1167,8 +1276,10 @@ export component App inherits Rectangle {
                 file-name: root.code-preview-filename;
                 language: root.code-preview-language;
                 line-count: root.code-preview-line-count;
-                code-content: root.code-preview-content;
+                code-image: root.code-preview-image;
                 plain-text: root.code-preview-plain-text;
+                has-selection: root.code-preview-has-selection;
+                selected-text: root.code-preview-selected-text;
 
                 close-clicked => {
                     root.code-preview-visible = false;
@@ -1179,9 +1290,25 @@ export component App inherits Rectangle {
                     root.copy-code();
                 }
 
+                copy-selection-clicked => {
+                    root.copy-code-selection();
+                }
+
                 open-external-clicked => {
                     root.code-preview-visible = false;
                     root.open-code-external();
+                }
+
+                pointer-down(x, y, shift, ctrl) => {
+                    root.code-preview-pointer-down(x, y, shift, ctrl);
+                }
+
+                pointer-move(x, y) => {
+                    root.code-preview-pointer-move(x, y);
+                }
+
+                pointer-up(x, y) => {
+                    root.code-preview-pointer-up(x, y);
                 }
             }
         }
@@ -1387,6 +1514,21 @@ export component App inherits Rectangle {
             horizontal-alignment: center;
             vertical-alignment: center;
         }
+    }
+
+    // Jarvis AI Assistant Panel (slides in from right)
+    if root.jarvis-panel-visible: JarvisPanel {
+        x: parent.width - self.width;
+        y: 0;
+        height: parent.height;
+        panel-visible: root.jarvis-panel-visible;
+        thinking: root.jarvis-thinking;
+        messages: root.jarvis-messages;
+        current-response: root.jarvis-response;
+
+        close => { root.jarvis-panel-close(); }
+        send(text) => { root.jarvis-send(text); }
+        clear => { root.jarvis-clear(); }
     }
 
     // Wire tooltip callbacks

@@ -23,6 +23,9 @@ export component ChatLayout inherits Rectangle {
     in property <bool> is-archived: false;
     in property <string> typing-indicator: "";
 
+    // Jarvis AI thinking state
+    in-out property <bool> jarvis-thinking: false;
+
     // Message list properties
     in property <[MessageItemData]> messages: [];
     in property <bool> loading-messages: false;
@@ -100,6 +103,7 @@ export component ChatLayout inherits Rectangle {
             topic: root.topic;
             is-archived: root.is-archived;
             typing-indicator: root.typing-indicator;
+            jarvis-thinking: root.jarvis-thinking;
 
             search-clicked => {
                 root.search-clicked();
