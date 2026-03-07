@@ -41,6 +41,7 @@ pub mod store;
 pub mod streaming_state;
 pub mod ui_state;
 pub mod user_state;
+pub mod jarvis_state;
 
 // Re-export core state types
 pub use auth_state::{AuthState, AuthStateData};
@@ -56,3 +57,6 @@ pub use user_state::{UserState, UserStateData};
 // Streaming and offline state re-exports
 pub use offline_state::{OfflineState, OfflineStateData};
 pub use streaming_state::{ReactionSummary, StreamingState, StreamingStateData};
+
+// Jarvis AI assistant state re-exports
+pub use jarvis_state::{JarvisMessage, JarvisRole, JarvisState};
