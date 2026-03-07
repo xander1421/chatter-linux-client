@@ -709,16 +709,18 @@ Priority 4 (Low - Refactoring):
 Based on comprehensive separation of concerns analysis identifying layer violations between UI, handlers, services, and storage.
 
 ### Phase 79: Registration Privacy Hardening
-**Goal**: Fix critical privacy leaks in registration, login, and friend request flows based on Signal Protocol audit
+**Goal**: Fix critical privacy leaks in registration and login flows based on Signal Protocol audit
 **Depends on**: Phase 78
 **Research**: Complete (see 79-DISCOVERY.md - Signal-Desktop and Signal-Server comparison)
-**Status**: Not started
-**Plans**: 3
+**Status**: Done
+**Plans**: 2/2 complete
 
-**Critical fixes:**
+**Fixes implemented:**
 - Stop sending profile_key to server (only send derived UAK)
 - Encrypt display_name with profile key before sending
-- Encrypt friend request messages with Signal Protocol
+
+**Not implemented (redundant):**
+- Friend request message encryption - Server necessarily knows sender→recipient relationship from RPC metadata, so encrypting message content provides negligible privacy benefit
 
 **Scope (~10 files):**
 - `src/services/auth_service.rs` - Registration/login flow
@@ -737,6 +739,38 @@ Based on comprehensive separation of concerns analysis identifying layer violati
 **Reference:**
 - Signal-Desktop: `/home/alex/Documents/Signal-Desktop/ts/textsecure/AccountManager.preload.ts`
 - Signal-Server: `/home/alex/Documents/Signal-server/service/src/main/java/org/whispersystems/textsecuregcm/controllers/RegistrationController.java`
+
+### Phase 80: Local AI Integration
+**Goal:** Add local LLM inference using mistral.rs with actor pattern (like SignalActorHandle) for GPU-accelerated AI features
+**Depends on:** Phase 42 (Services AI Integration)
+**Research:** Complete (benchmarked mistral.rs v0.7 with CUDA + FlashAttention on RTX 4070 Ti Super: 72.7 t/s decode for 7B Q4)
+**Status:** Not started
+**Plans:** 0 plans
+
+**Architecture:**
+- Actor pattern isolates GPU inference in dedicated thread (same as crypto actor)
+- `LocalAIActorHandle` with command enum for load/complete/stream operations
+- Optional feature flag `local-ai` to avoid mandatory CUDA dependency
+- Support for GGUF quantized models (Q4_K_M optimal for 16GB VRAM)
+
+**Benchmarks (RTX 4070 Ti Super):**
+| Model | Format | Decode | TTFT |
+|-------|--------|--------|------|
+| Qwen2.5-3B | BF16 | 62.5 t/s | 27ms |
+| Qwen2.5-7B | Q4_K_M GGUF | 72.7 t/s | 71ms |
+
+**Scope (~8 files):**
+- `Cargo.toml` - Add mistralrs dependency with cuda/flash-attn features
+- `src/services/ai/mod.rs` - LocalAIService orchestrator
+- `src/services/ai/local_actor.rs` - LocalAIActorHandle (actor pattern)
+- `src/services/ai/provider.rs` - AIProvider trait for local/remote abstraction
+- `src/services/ai/models.rs` - Model config, sample params
+- `src/app/services.rs` - Wire LocalAIActorHandle into ServiceContainer
+- `src/bin_ui/features/modals/ai_settings.rs` - Model selection UI
+- `src/storage/repositories/ai_repo.rs` - Store model preferences
+
+**Details:**
+Local AI enables offline summarization, smart replies, and content analysis without cloud dependency. Uses same actor pattern as SignalActorHandle for thread isolation.
 
 ## Progress
 
@@ -823,4 +857,289 @@ Based on comprehensive separation of concerns analysis identifying layer violati
 | 76 | Refactor Large Service Files | 3/4 | In Progress | - |
 | 77 | Rename public_key to svr_public_key | 0 | Not started | - |
 | 78 | Service Separation of Concerns | 2/5 | In Progress | - |
-| 79 | Registration Privacy Hardening | 2/3 | In Progress | - |
+| 79 | Registration Privacy Hardening | 2 | Done | 2026-03-05 |
+| 80 | Local AI Integration | 0 | Not started | - |
+
+---
+
+## 🚧 Milestone: Jarvis AI Assistant (Phases 81-90)
+
+**Milestone Goal:** Transform Jarvis from basic Q&A into an intelligent, proactive AI assistant with memory, relationship intelligence, commitment tracking, and cross-conversation insights.
+
+**Foundation (Already Complete):**
+- JarvisService with `ask()`, `observe_message()`, `summarize_conversation()` ✅
+- JarvisMemoryRepository (conversations, facts, summaries) ✅
+- JarvisGraphRepository (entities, relationships, recursive CTE traversal) ✅
+- EntityExtractor (LLM-based entity extraction) ✅
+- ContextBuilder (RAG-style context retrieval) ✅
+- MemoryManager (compression, decay) ✅
+- JarvisBackground (event bus observer, maintenance) ✅
+
+### Jarvis Phases
+
+- [ ] **Phase 81: Jarvis UI Integration** - @Jarvis mentions, slash commands, Jarvis panel
+- [ ] **Phase 82: Proactive Intelligence** - Notification system for insights, reminders, connections
+- [ ] **Phase 83: Commitment Tracking** - Extract promises/action items, deadlines, follow-up nudges
+- [ ] **Phase 84: Relationship Intelligence** - Contact profiles, communication patterns, open threads
+- [ ] **Phase 85: Smart Compose** - Context-aware drafting, quick replies, conversation continuity
+- [ ] **Phase 86: Semantic Search** - Natural language search across all conversations
+- [ ] **Phase 87: Cross-Conversation Insights** - Connect dots across channels, pattern detection
+- [ ] **Phase 88: Knowledge Graph Visualization** - Interactive entity/relationship graph UI
+- [ ] **Phase 89: Communication Analytics** - Personal insights dashboard (local only)
+- [ ] **Phase 90: Jarvis Automation** - User-defined triggers, scheduled messages, workflows
+
+## Phase Details: Jarvis Milestone
+
+### Phase 81: Jarvis UI Integration
+**Goal**: Make Jarvis accessible from the UI via @mentions, slash commands, and dedicated panel
+**Depends on**: Phase 80 (Local AI), existing Jarvis foundation
+**Research**: Unlikely (internal UI wiring)
+**Plans**: 3 plans
+
+**Scope:**
+- `@Jarvis` mention detection in message composer → route to JarvisService
+- Slash commands: `/ask`, `/summarize`, `/knowledge`, `/remember`
+- Jarvis panel in sidebar (conversation with Jarvis)
+- "Jarvis is thinking..." typing indicator during inference
+- Local-only "Jarvis" messages (not sent to server)
+- JarvisState for UI state management
+
+**Files (~12):**
+- `src/bin_ui/features/jarvis/mod.rs` - Module
+- `src/bin_ui/features/jarvis/mention_handler.rs` - @Jarvis detection
+- `src/bin_ui/features/jarvis/slash_commands.rs` - Command parsing
+- `src/bin_ui/features/jarvis/panel.rs` - Sidebar panel
+- `src/state/jarvis_state.rs` - UI state
+- `ui/jarvis/jarvis_panel.slint` - Panel UI
+- `ui/jarvis/jarvis_message.slint` - Message bubble
+- Modify: `src/bin_ui/features/chat/send_message.rs` - Intercept @Jarvis
+- Modify: `ui/sidebar/sidebar.slint` - Add Jarvis entry
+
+### Phase 82: Proactive Intelligence
+**Goal**: Jarvis reaches out with insights, reminders, and connection suggestions
+**Depends on**: Phase 81
+**Research**: Likely (notification patterns, insight generation)
+**Research topics**: Notification UX, insight relevance scoring, quiet hours
+**Plans**: 3 plans
+
+**Scope:**
+- `JarvisInsightEngine` - Background analysis of messages for insights
+- Insight types: topic connections, deadline reminders, relationship gaps, unresolved threads
+- `JarvisNotification` - Dismissible notification cards
+- Relevance scoring to avoid noise
+- Quiet hours and notification settings
+- "Jarvis noticed..." toast notifications
+
+**Files (~10):**
+- `src/services/jarvis/insight_engine.rs` - Insight generation
+- `src/services/jarvis/insight_types.rs` - InsightType enum
+- `src/services/jarvis/notification_manager.rs` - Notification queue
+- `src/domain/jarvis_notification.rs` - Notification types
+- `ui/jarvis/insight_card.slint` - Notification UI
+- `ui/jarvis/insight_toast.slint` - Toast notification
+- Modify: `src/services/jarvis/background.rs` - Add insight generation
+
+### Phase 83: Commitment Tracking
+**Goal**: Extract promises, action items, and deadlines from conversations
+**Depends on**: Phase 82
+**Research**: Likely (NLP for commitment extraction)
+**Research topics**: LLM prompts for action item extraction, deadline parsing
+**Plans**: 2 plans
+
+**Scope:**
+- `CommitmentExtractor` - LLM-based extraction of promises/action items
+- Commitment types: promised_to_do, waiting_for, decision_made
+- Deadline extraction and tracking
+- Commitment dashboard UI
+- "Nudge" suggestions for overdue items
+- Integration with proactive notifications
+
+**Files (~8):**
+- `src/services/jarvis/commitment_extractor.rs` - Extraction logic
+- `src/domain/jarvis_commitment.rs` - Commitment types
+- `src/storage/repositories/jarvis_commitment_repo.rs` - Storage
+- `src/storage/migrations/v033_jarvis_commitments.rs` - Migration
+- `ui/jarvis/commitment_dashboard.slint` - Dashboard UI
+- `ui/jarvis/commitment_item.slint` - Item UI
+- Modify: `src/services/jarvis/service.rs` - Add commitment tracking
+
+### Phase 84: Relationship Intelligence
+**Goal**: Build rich profiles of contacts with communication patterns and context
+**Depends on**: Phase 83
+**Research**: Likely (relationship modeling)
+**Research topics**: Contact profile structure, communication pattern analysis
+**Plans**: 3 plans
+
+**Scope:**
+- `RelationshipAnalyzer` - Analyze communication patterns per contact
+- Contact profile: last talked, response time, topics, open threads, expertise
+- "Briefing" before calls (context about the person)
+- Communication health indicators
+- "Best time to reach" suggestions
+- Relationship graph queries
+
+**Files (~10):**
+- `src/services/jarvis/relationship_analyzer.rs` - Analysis logic
+- `src/domain/jarvis_contact_profile.rs` - Profile types
+- `src/storage/repositories/jarvis_profile_repo.rs` - Storage
+- `src/storage/migrations/v034_jarvis_profiles.rs` - Migration
+- `ui/jarvis/contact_profile.slint` - Profile panel
+- `ui/jarvis/call_briefing.slint` - Pre-call briefing
+- Modify: `ui/calls/incoming_call_modal.slint` - Add briefing
+
+### Phase 85: Smart Compose
+**Goal**: AI-assisted message drafting with context awareness
+**Depends on**: Phase 84
+**Research**: Likely (contextual suggestion generation)
+**Research topics**: Draft suggestion UX, completion triggers
+**Plans**: 2 plans
+
+**Scope:**
+- `SmartComposer` - Generate contextual message suggestions
+- Suggestion types: continue thread, follow up, respond to question
+- Quick reply chips (1-tap responses)
+- Draft enhancement (improve what user typed)
+- Tone adjustment (formal, casual, etc.)
+- Context from relationship profile
+
+**Files (~8):**
+- `src/services/jarvis/smart_composer.rs` - Suggestion generation
+- `src/domain/jarvis_suggestion.rs` - Suggestion types
+- `ui/jarvis/suggestion_bar.slint` - Suggestion chips
+- `ui/jarvis/quick_replies.slint` - Quick reply UI
+- Modify: `ui/chat/message_composer.slint` - Add suggestion bar
+- Modify: `src/bin_ui/features/composer/mod.rs` - Wire suggestions
+
+### Phase 86: Semantic Search
+**Goal**: Natural language search across all conversations
+**Depends on**: Phase 85
+**Research**: Likely (semantic search implementation)
+**Research topics**: Embedding models, vector search in SQLite, query expansion
+**Plans**: 2 plans
+
+**Scope:**
+- `SemanticSearchService` - Natural language to search results
+- Embedding generation for messages (using LocalAI)
+- Vector similarity search (cosine distance in SQLite)
+- Query expansion and rewriting
+- Search result ranking (recency, relevance, relationship)
+- "Find that discussion about..." UI
+
+**Files (~8):**
+- `src/services/jarvis/semantic_search.rs` - Search logic
+- `src/services/jarvis/embedding_manager.rs` - Embedding generation
+- `src/storage/repositories/jarvis_embedding_repo.rs` - Vector storage
+- `src/storage/migrations/v035_jarvis_embeddings.rs` - Migration
+- `ui/jarvis/semantic_search.slint` - Search UI
+- `ui/jarvis/search_result.slint` - Result display
+- Modify: `src/bin_ui/features/header.rs` - Wire search
+
+### Phase 87: Cross-Conversation Insights
+**Goal**: Connect information across different channels and DMs
+**Depends on**: Phase 86
+**Research**: Likely (cross-context correlation)
+**Research topics**: Topic clustering, information flow detection
+**Plans**: 2 plans
+
+**Scope:**
+- `CrossConversationAnalyzer` - Find connections across contexts
+- Topic threading across channels
+- "Related discussion in #channel" suggestions
+- Information flow visualization
+- Duplicate question detection
+- "Others are discussing this" alerts
+
+**Files (~6):**
+- `src/services/jarvis/cross_analyzer.rs` - Analysis logic
+- `src/domain/jarvis_connection.rs` - Connection types
+- `ui/jarvis/related_discussions.slint` - Related panel
+- `ui/jarvis/cross_insight.slint` - Insight card
+- Modify: `src/services/jarvis/insight_engine.rs` - Add cross insights
+
+### Phase 88: Knowledge Graph Visualization
+**Goal**: Interactive visualization of entities and relationships
+**Depends on**: Phase 87
+**Research**: Likely (graph visualization in Slint)
+**Research topics**: Force-directed layout, Slint canvas rendering
+**Plans**: 2 plans
+
+**Scope:**
+- `GraphLayoutEngine` - Force-directed graph layout
+- Interactive graph canvas in Slint
+- Entity nodes with type colors
+- Relationship edges with labels
+- Zoom, pan, select interactions
+- Entity detail panel on click
+- Filter by entity type
+
+**Files (~8):**
+- `src/services/jarvis/graph_layout.rs` - Layout algorithm
+- `src/bin_ui/features/jarvis/graph_view.rs` - Graph rendering
+- `ui/jarvis/graph_canvas.slint` - Canvas component
+- `ui/jarvis/graph_node.slint` - Node rendering
+- `ui/jarvis/entity_detail.slint` - Detail panel
+- Modify: `ui/jarvis/jarvis_panel.slint` - Add graph tab
+
+### Phase 89: Communication Analytics
+**Goal**: Personal insights dashboard for communication patterns
+**Depends on**: Phase 88
+**Research**: Unlikely (data aggregation)
+**Plans**: 2 plans
+
+**Scope:**
+- `AnalyticsService` - Aggregate communication data
+- Metrics: messages sent, response times, active hours, top collaborators
+- Topic trends (rising/falling)
+- Communication health indicators
+- All data local-only (never sent to server)
+- Export to JSON
+
+**Files (~8):**
+- `src/services/jarvis/analytics_service.rs` - Aggregation logic
+- `src/domain/jarvis_analytics.rs` - Analytics types
+- `ui/jarvis/analytics_dashboard.slint` - Dashboard UI
+- `ui/jarvis/chart_component.slint` - Simple charts
+- `ui/jarvis/trend_indicator.slint` - Trend badges
+- Modify: `ui/modals/settings.slint` - Add analytics section
+
+### Phase 90: Jarvis Automation
+**Goal**: User-defined triggers and automated workflows
+**Depends on**: Phase 89
+**Research**: Likely (rule engine design)
+**Research topics**: Trigger DSL, action types, rate limiting
+**Plans**: 3 plans
+
+**Scope:**
+- `JarvisAutomation` - Rule engine for triggers
+- Trigger types: keyword, person mention, time-based, pattern
+- Action types: notify, auto-reply, generate briefing, log
+- Rule builder UI
+- Scheduled messages
+- "When X happens, do Y" configuration
+
+**Files (~10):**
+- `src/services/jarvis/automation.rs` - Automation engine
+- `src/services/jarvis/trigger_parser.rs` - Trigger DSL
+- `src/domain/jarvis_rule.rs` - Rule types
+- `src/storage/repositories/jarvis_rule_repo.rs` - Storage
+- `src/storage/migrations/v036_jarvis_rules.rs` - Migration
+- `ui/jarvis/rule_builder.slint` - Rule UI
+- `ui/jarvis/trigger_selector.slint` - Trigger picker
+- `ui/jarvis/action_selector.slint` - Action picker
+
+---
+
+## Jarvis Progress
+
+| Phase | Name | Plans | Status | Completed |
+|-------|------|-------|--------|-----------|
+| 81 | Jarvis UI Integration | 3 | Not started | - |
+| 82 | Proactive Intelligence | 3 | Not started | - |
+| 83 | Commitment Tracking | 2 | Not started | - |
+| 84 | Relationship Intelligence | 3 | Not started | - |
+| 85 | Smart Compose | 2 | Not started | - |
+| 86 | Semantic Search | 2 | Not started | - |
+| 87 | Cross-Conversation Insights | 2 | Not started | - |
+| 88 | Knowledge Graph Visualization | 2 | Not started | - |
+| 89 | Communication Analytics | 2 | Not started | - |
+| 90 | Jarvis Automation | 3 | Not started | - |
