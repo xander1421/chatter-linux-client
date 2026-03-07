@@ -3,64 +3,10 @@
 //! These messages appear in the chat view but are only stored locally.
 //! Used for displaying Jarvis AI responses inline with regular messages.
 
-use slint::{ModelRc, VecModel};
+use slint::{Model, ModelRc, VecModel};
 
 use crate::MainWindow;
 use crate::MessageItemData;
-
-/// Add a local Jarvis response message to the chat view.
-///
-/// This message is display-only and not sent to the server.
-pub fn add_jarvis_response_to_chat(window: &MainWindow, query: &str, response: &str) {
-    let timestamp = chrono::Local::now().format("%H:%M").to_string();
-    let timestamp_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0) as u64;
-
-    // Create Jarvis response message (local only)
-    let msg_item = MessageItemData {
-        message_id: format!("jarvis-{}", uuid::Uuid::new_v4()).into(),
-        sender_id: "jarvis".into(),
-        sender_name: "Jarvis".into(),
-        sender_initials: "J".into(),
-        sender_avatar_url: "".into(),
-        content: format!("**Q:** {}\n\n{}", query, response).into(),
-        timestamp: timestamp.into(),
-        timestamp_ns: timestamp_ns.to_string().into(),
-        is_own: false,
-        is_edited: false,
-        is_deleted: false,
-        is_system: false,
-        is_ai: true, // Mark as AI message
-        has_attachments: false,
-        attachment_count: 0,
-        attachments: ModelRc::default(),
-        has_reactions: false,
-        reaction_summary: "".into(),
-        reply_count: 0,
-        reply_count_text: "".into(),
-        is_thread_reply: false,
-        show_sender: true,
-        delivery_status: "local".into(), // Mark as local-only
-        is_pinned: false,
-        is_call: false,
-        call_type: "".into(),
-        call_duration: "".into(),
-    };
-
-    // Add to existing messages
-    let model = window.get_messages();
-    let mut messages: Vec<_> = (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
-        .collect();
-    messages.push(msg_item);
-    messages.sort_by(|a, b| {
-        let ts_a = a.timestamp_ns.parse::<u64>().unwrap_or(0);
-        let ts_b = b.timestamp_ns.parse::<u64>().unwrap_or(0);
-        ts_a.cmp(&ts_b)
-    });
-    window.set_messages(ModelRc::new(VecModel::from(messages)));
-    window.set_message_scroll_position(-99999.0);
-    window.set_is_at_bottom(true);
-}
 
 /// Add a "Jarvis is thinking..." placeholder message.
 ///

@@ -36,6 +36,17 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
         if text.trim().is_empty() && !has_attachments { return; }
 
+        // Check for Jarvis slash commands first (/ask, /summarize, /knowledge, /remember)
+        if let Some(cmd) = crate::bin_ui::features::jarvis::parse_slash_command(&text) {
+            let ui_ctx = ui_ctx_jarvis.clone();
+            let channel_id = chat_state.get().active_channel_id;
+            let weak = weak_window.clone();
+            tokio::spawn(async move {
+                handle_jarvis_slash_command(&ui_ctx, cmd, channel_id.as_ref(), weak).await;
+            });
+            return;
+        }
+
         // Check for @Jarvis mention - intercept before sending to channel
         if crate::bin_ui::features::jarvis::contains_jarvis_mention(&text) {
             if let Some(query) = crate::bin_ui::features::jarvis::extract_jarvis_query(&text) {
@@ -135,6 +146,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             .map(|a| attachment_to_display_data(a))
                             .collect();
 
+                        let attachment_service_for_gifs = attachment_service.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 // Convert to Slint types inside the event loop
@@ -185,6 +197,12 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 w.set_composer_text("".into());
                                 w.set_message_scroll_position(-99999.0);
                                 w.set_is_at_bottom(true);
+
+                                // Auto-register GIF animations for sender's attachments
+                                crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                                    w.as_weak(),
+                                    attachment_service_for_gifs,
+                                );
                             }
                         });
 
@@ -488,6 +506,110 @@ fn update_private_group_sidebar_preview(window: &MainWindow, group_id_str: &str,
                 if let Some(model) = groups.as_any().downcast_ref::<VecModel<PrivateGroupListItemData>>() { model.set_row_data(i, updated); }
                 return;
             }
+        }
+    }
+}
+
+/// Handle Jarvis slash commands (/ask, /summarize, /knowledge, /remember).
+async fn handle_jarvis_slash_command(
+    ui_ctx: &Arc<UIContext>,
+    cmd: crate::bin_ui::features::jarvis::JarvisCommand,
+    channel_id: Option<&chatter_linux::domain::ids::ChannelId>,
+    weak_window: slint::Weak<MainWindow>,
+) {
+    use crate::bin_ui::features::jarvis::JarvisCommand;
+    use chatter_linux::domain::jarvis::JarvisContext;
+
+    // Build context
+    let context = match channel_id {
+        Some(id) => JarvisContext::channel(id.clone()),
+        None => {
+            let placeholder_id: chatter_linux::domain::ids::ChannelId = uuid::Uuid::nil().into();
+            JarvisContext::dm(placeholder_id)
+        }
+    };
+
+    let author_id = ui_ctx.auth_state.get().current_user_id;
+
+    // Set thinking state and add placeholder
+    ui_ctx.jarvis_state.set_thinking(true);
+    let thinking_id = {
+        let weak = weak_window.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_jarvis_thinking(true);
+                let id = crate::bin_ui::features::jarvis::add_jarvis_thinking_placeholder(&w);
+                let _ = tx.send(id);
+            }
+        });
+        rx.recv().ok()
+    };
+
+    // Execute command
+    let (query_display, result) = match cmd {
+        JarvisCommand::Ask(query) => {
+            ui_ctx.jarvis_state.add_user_message(&query, channel_id.map(|id| id.to_string()).as_deref());
+            let r = ui_ctx.jarvis_service.ask(&context, &query, author_id.as_ref()).await;
+            (format!("/ask {}", query), r)
+        }
+        JarvisCommand::Summarize => {
+            ui_ctx.jarvis_state.add_user_message("/summarize", channel_id.map(|id| id.to_string()).as_deref());
+            let r = ui_ctx.jarvis_service.summarize_conversation(&context).await;
+            ("/summarize".to_string(), r)
+        }
+        JarvisCommand::Knowledge(entity) => {
+            ui_ctx.jarvis_state.add_user_message(&format!("/knowledge {}", entity), channel_id.map(|id| id.to_string()).as_deref());
+            // Use ask with a knowledge-focused query
+            let query = format!("What do you know about {}?", entity);
+            let r = ui_ctx.jarvis_service.ask(&context, &query, author_id.as_ref()).await;
+            (format!("/knowledge {}", entity), r)
+        }
+        JarvisCommand::Remember(fact) => {
+            ui_ctx.jarvis_state.add_user_message(&format!("/remember {}", fact), channel_id.map(|id| id.to_string()).as_deref());
+            // Store the fact via observe (treated as important message)
+            let r = ui_ctx.jarvis_service.ask(&context, &format!("Please remember this fact: {}", fact), author_id.as_ref()).await;
+            (format!("/remember {}", fact), r)
+        }
+    };
+
+    // Handle result
+    match result {
+        Ok(response) => {
+            ui_ctx.jarvis_state.add_assistant_message(&response);
+            let response_clone = response.clone();
+            let query_clone = query_display.clone();
+            let thinking_id_clone = thinking_id.clone();
+            let jarvis_state = ui_ctx.jarvis_state.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                jarvis_state.set_thinking(false);
+                if let Some(w) = weak_window.upgrade() {
+                    w.set_jarvis_thinking(false);
+                    if let Some(tid) = thinking_id_clone {
+                        crate::bin_ui::features::jarvis::replace_thinking_with_response(
+                            &w, &tid, &query_clone, &response_clone,
+                        );
+                    }
+                }
+            });
+        }
+        Err(e) => {
+            let error_msg = format!("Error: {}", e);
+            ui_ctx.jarvis_state.add_assistant_message(&error_msg);
+            let query_clone = query_display.clone();
+            let thinking_id_clone = thinking_id.clone();
+            let jarvis_state = ui_ctx.jarvis_state.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                jarvis_state.set_thinking(false);
+                if let Some(w) = weak_window.upgrade() {
+                    w.set_jarvis_thinking(false);
+                    if let Some(tid) = thinking_id_clone {
+                        crate::bin_ui::features::jarvis::replace_thinking_with_response(
+                            &w, &tid, &query_clone, &error_msg,
+                        );
+                    }
+                }
+            });
         }
     }
 }
