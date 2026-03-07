@@ -329,16 +329,32 @@ export component MessageItem inherits Rectangle {
                 bubble := Rectangle {
                     property <bool> bubble-hovered: bubble-touch.has-hover;
 
-                    background: bubble-hovered
-                        ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
-                        : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
+                    // AI messages get distinct styling with primary color tint
+                    background: root.is-ai
+                        ? (bubble-hovered ? Colors.primary.with-alpha(0.12) : Colors.primary.with-alpha(0.08))
+                        : (bubble-hovered
+                            ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
+                            : (root.is-own ? Colors.bubble-own : Colors.bubble-other));
                     // Asymmetric border radius for chat bubble style
                     // Own: rounded except bottom-right, Others: rounded except bottom-left
                     border-radius: Spacing.radius-md;
+                    // AI messages get a subtle left border accent
+                    border-width: root.is-ai ? 0 : 0;
+                    // Note: Slint doesn't support per-side borders, so we use a left indicator instead
 
                     // Calculate height based on content
                     height: bubble-content.preferred-height;
-                    width: bubble-content.preferred-width;
+                    width: bubble-content.preferred-width + (root.is-ai ? 4px : 0);
+
+                    // AI message left accent bar
+                    if root.is-ai: Rectangle {
+                        x: 0;
+                        y: 4px;
+                        width: 3px;
+                        height: parent.height - 8px;
+                        border-radius: 1.5px;
+                        background: Colors.primary;
+                    }
 
                     bubble-touch := TouchArea {
                         mouse-cursor: pointer;
@@ -346,6 +362,7 @@ export component MessageItem inherits Rectangle {
 
                     bubble-content := VerticalLayout {
                         padding: Spacing.sm + 2px;
+                        padding-left: root.is-ai ? Spacing.sm + 6px : Spacing.sm + 2px;
                         spacing: Spacing.xs;
 
                         // Sender name + timestamp (only in channels for others)
