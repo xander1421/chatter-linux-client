@@ -537,6 +537,23 @@ export component App inherits Rectangle {
 
     background: Colors.background;
 
+    // ========== Global keyboard shortcuts ==========
+    FocusScope {
+        width: 0;
+        height: 0;
+        enabled: root.current-view == "main";
+
+        key-pressed(event) => {
+            // Ctrl+J: Toggle Jarvis panel
+            if (event.modifiers.control && event.text == "j") {
+                root.jarvis-panel-visible = !root.jarvis-panel-visible;
+                root.toggle-jarvis-panel();
+                return accept;
+            }
+            reject
+        }
+    }
+
     // ========== Main content layer ==========
     // Explicit sizing ensures width flows to all child components for text wrapping
     Rectangle {
