@@ -46,6 +46,16 @@ pub async fn handle_jarvis_mention(
     // Set thinking state
     ui_ctx.jarvis_state.set_thinking(true);
 
+    // Update chat header thinking indicator
+    {
+        let weak = weak_window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_jarvis_thinking(true);
+            }
+        });
+    }
+
     // Build context - use channel context if available, otherwise use a DM-style context
     // with a nil UUID (Jarvis conversations are stored separately anyway)
     let context = match channel_id {
@@ -82,11 +92,10 @@ pub async fn handle_jarvis_mention(
             let jarvis_state = ui_ctx.jarvis_state.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
-                if let Some(_window) = weak_window.upgrade() {
-                    // TODO: Show Jarvis panel with response (wired in 81-02)
-                    // window.set_jarvis_panel_visible(true);
-                    // window.set_jarvis_response(response_clone.into());
-                    // window.set_jarvis_thinking(false);
+                if let Some(w) = weak_window.upgrade() {
+                    // Clear thinking indicator
+                    w.set_jarvis_thinking(false);
+                    // Show Jarvis response (local message will be added by Task 4)
                     tracing::info!("Jarvis response ready: {} chars", response_clone.len());
                 }
             });
@@ -99,8 +108,9 @@ pub async fn handle_jarvis_mention(
             let jarvis_state = ui_ctx.jarvis_state.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
-                if let Some(_window) = weak_window.upgrade() {
-                    // TODO: Show error in Jarvis panel (wired in 81-02)
+                if let Some(w) = weak_window.upgrade() {
+                    // Clear thinking indicator
+                    w.set_jarvis_thinking(false);
                     tracing::warn!("Jarvis error shown: {}", error_msg);
                 }
             });
