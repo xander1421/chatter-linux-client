@@ -1,0 +1,234 @@
+// Jarvis AI assistant panel component
+//
+// Slide-in panel from the right side containing conversation UI
+// with message list, input field, and quick action buttons.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button, Input } from "../components/mod.slint";
+import { JarvisMessage, JarvisMessageData } from "jarvis_message.slint";
+
+export component JarvisPanel inherits Rectangle {
+    in property <bool> panel-visible: false;
+    in property <bool> thinking: false;
+    in property <[JarvisMessageData]> messages: [];
+    in property <string> current-response: "";
+
+    callback close();
+    callback send(string);
+    callback clear();
+
+    width: 360px;
+    background: Colors.surface;
+    border-radius: Spacing.radius-md;
+    clip: true;
+
+    // Shadow/border on left edge
+    Rectangle {
+        x: 0;
+        width: 1px;
+        height: 100%;
+        background: Colors.text-muted.with-alpha(0.2);
+    }
+
+    VerticalLayout {
+        padding: Spacing.md;
+        spacing: Spacing.sm;
+
+        // Header
+        HorizontalLayout {
+            spacing: Spacing.sm;
+            alignment: space-between;
+
+            HorizontalLayout {
+                spacing: Spacing.sm;
+
+                // Jarvis icon (AI indicator)
+                Rectangle {
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 16px;
+                    background: Colors.primary;
+
+                    Text {
+                        text: "J";
+                        font-size: Typography.base;
+                        font-weight: Typography.bold;
+                        color: Colors.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 2px;
+
+                    Text {
+                        text: "Jarvis";
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        color: Colors.text-primary;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: thinking ? "Thinking..." : "AI Assistant";
+                        font-size: Typography.xs;
+                        color: thinking ? Colors.primary : Colors.text-muted;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Close button
+            close-touch := TouchArea {
+                width: 32px;
+                height: 32px;
+
+                Rectangle {
+                    width: 100%;
+                    height: 100%;
+                    border-radius: Spacing.radius-sm;
+                    background: close-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "\u{2715}"; // X symbol
+                        font-size: Typography.base;
+                        color: Colors.text-muted;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                clicked => { close(); }
+            }
+        }
+
+        // Divider
+        Rectangle {
+            height: 1px;
+            background: Colors.text-muted.with-alpha(0.2);
+        }
+
+        // Messages area
+        Flickable {
+            vertical-stretch: 1;
+            viewport-height: messages-layout.preferred-height;
+            viewport-width: self.width;
+
+            messages-layout := VerticalLayout {
+                spacing: Spacing.sm;
+                width: parent.viewport-width;
+
+                for msg in messages: JarvisMessage {
+                    message: msg;
+                }
+
+                // Thinking indicator
+                if thinking: Rectangle {
+                    height: 40px;
+                    background: Colors.primary.with-alpha(0.1);
+                    border-radius: Spacing.radius-md;
+
+                    HorizontalLayout {
+                        padding: Spacing.sm;
+                        spacing: 4px;
+                        alignment: center;
+
+                        // Animated dots with staggered opacity (matching Button loading pattern)
+                        property <float> anim-progress;
+
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Colors.primary;
+                            opacity: 0.4 + 0.6 * Math.cos(anim-progress * 360deg);
+                        }
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Colors.primary;
+                            opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.33) * 360deg);
+                        }
+                        Rectangle {
+                            width: 6px;
+                            height: 6px;
+                            border-radius: 3px;
+                            background: Colors.primary;
+                            opacity: 0.4 + 0.6 * Math.cos((anim-progress - 0.66) * 360deg);
+                        }
+
+                        anim-progress: 0;
+                        animate anim-progress {
+                            duration: 1000ms;
+                            iteration-count: -1;
+                        }
+
+                        init => {
+                            self.anim-progress = 1.0;
+                        }
+
+                        Text {
+                            text: "Jarvis is thinking...";
+                            font-size: Typography.sm;
+                            color: Colors.primary;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Input area
+        HorizontalLayout {
+            spacing: Spacing.sm;
+
+            input := Input {
+                horizontal-stretch: 1;
+                placeholder: "Ask Jarvis...";
+                disabled: thinking;
+
+                accepted(text) => {
+                    if text != "" {
+                        send(text);
+                        self.text = "";
+                    }
+                }
+            }
+
+            Button {
+                text: "Send";
+                variant: "primary";
+                disabled: thinking || input.text == "";
+
+                clicked => {
+                    if input.text != "" {
+                        send(input.text);
+                        input.text = "";
+                    }
+                }
+            }
+        }
+
+        // Quick actions
+        HorizontalLayout {
+            spacing: Spacing.sm;
+
+            Button {
+                text: "Summarize";
+                variant: "secondary";
+                disabled: thinking;
+                clicked => { send("/summarize"); }
+            }
+
+            Button {
+                text: "Clear";
+                variant: "ghost";
+                clicked => { clear(); }
+            }
+        }
+    }
+}

@@ -1,0 +1,55 @@
+// Jarvis message bubble component
+//
+// Displays a message in the Jarvis AI conversation panel.
+// Supports user and assistant messages with different styling.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export struct JarvisMessageData {
+    id: string,
+    role: string,  // "user" or "assistant"
+    content: string,
+    timestamp: string,
+}
+
+export component JarvisMessage inherits Rectangle {
+    in property <JarvisMessageData> message;
+
+    private property <bool> is-user: message.role == "user";
+
+    height: content-layout.preferred-height + 16px;
+    background: is-user ? Colors.surface-hover : Colors.primary.with-alpha(0.1);
+    border-radius: Spacing.radius-md;
+
+    content-layout := VerticalLayout {
+        padding: Spacing.sm;
+        spacing: 4px;
+
+        HorizontalLayout {
+            spacing: Spacing.sm;
+
+            Text {
+                text: is-user ? "You" : "Jarvis";
+                font-weight: Typography.semibold;
+                font-size: Typography.xs;
+                color: is-user ? Colors.text-secondary : Colors.primary;
+            }
+
+            Text {
+                text: message.timestamp;
+                font-size: 11px;
+                color: Colors.text-muted;
+            }
+        }
+
+        Text {
+            text: message.content;
+            font-size: Typography.base;
+            color: Colors.text-primary;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+    }
+}
