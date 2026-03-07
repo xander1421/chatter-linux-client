@@ -36,7 +36,8 @@ pub fn extract_jarvis_query(text: &str) -> Option<String> {
 
 /// Handle a @Jarvis mention asynchronously.
 ///
-/// Sets thinking state, calls JarvisService, and updates UI with response.
+/// Sets thinking state, adds thinking placeholder to chat, calls JarvisService,
+/// and replaces placeholder with actual response.
 pub async fn handle_jarvis_mention(
     ui_ctx: &Arc<UIContext>,
     query: &str,
@@ -46,15 +47,19 @@ pub async fn handle_jarvis_mention(
     // Set thinking state
     ui_ctx.jarvis_state.set_thinking(true);
 
-    // Update chat header thinking indicator
-    {
+    // Add thinking placeholder to chat and update header indicator
+    let thinking_id = {
         let weak = weak_window.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 w.set_jarvis_thinking(true);
+                let id = super::local_messages::add_jarvis_thinking_placeholder(&w);
+                let _ = tx.send(id);
             }
         });
-    }
+        rx.recv().ok()
+    };
 
     // Build context - use channel context if available, otherwise use a DM-style context
     // with a nil UUID (Jarvis conversations are stored separately anyway)
@@ -87,16 +92,24 @@ pub async fn handle_jarvis_mention(
             // Add assistant response to state
             ui_ctx.jarvis_state.add_assistant_message(&response);
 
-            // Update UI via invoke_from_event_loop
+            // Update UI - replace thinking placeholder with actual response
             let response_clone = response.clone();
+            let query_clone = query.to_string();
+            let thinking_id_clone = thinking_id.clone();
             let jarvis_state = ui_ctx.jarvis_state.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
                 if let Some(w) = weak_window.upgrade() {
-                    // Clear thinking indicator
                     w.set_jarvis_thinking(false);
-                    // Show Jarvis response (local message will be added by Task 4)
-                    tracing::info!("Jarvis response ready: {} chars", response_clone.len());
+                    if let Some(tid) = thinking_id_clone {
+                        super::local_messages::replace_thinking_with_response(
+                            &w,
+                            &tid,
+                            &query_clone,
+                            &response_clone,
+                        );
+                    }
+                    tracing::info!("Jarvis response displayed: {} chars", response_clone.len());
                 }
             });
         }
@@ -105,13 +118,22 @@ pub async fn handle_jarvis_mention(
             let error_msg = format!("I encountered an error: {}", e);
             ui_ctx.jarvis_state.add_assistant_message(&error_msg);
 
+            let query_clone = query.to_string();
+            let thinking_id_clone = thinking_id.clone();
             let jarvis_state = ui_ctx.jarvis_state.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
                 if let Some(w) = weak_window.upgrade() {
-                    // Clear thinking indicator
                     w.set_jarvis_thinking(false);
-                    tracing::warn!("Jarvis error shown: {}", error_msg);
+                    if let Some(tid) = thinking_id_clone {
+                        super::local_messages::replace_thinking_with_response(
+                            &w,
+                            &tid,
+                            &query_clone,
+                            &error_msg,
+                        );
+                    }
+                    tracing::warn!("Jarvis error displayed: {}", error_msg);
                 }
             });
         }
