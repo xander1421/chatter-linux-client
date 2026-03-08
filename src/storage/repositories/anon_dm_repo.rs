@@ -417,6 +417,7 @@ impl AnonDmRepository {
     /// Get mailbox keys for all active conversations (for polling).
     ///
     /// Returns (conversation_id, public_key, private_key) tuples.
+    #[allow(clippy::type_complexity)]
     pub fn get_active_mailbox_keys(&self) -> Result<Vec<(AnonDmId, [u8; 32], [u8; 64])>, StorageError> {
         let mailboxes = self.get_active_mailboxes()?;
         Ok(mailboxes

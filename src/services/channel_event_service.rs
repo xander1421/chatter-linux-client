@@ -58,7 +58,7 @@ impl ChannelEventService {
         // Create system message
         let message = self.create_system_message(
             channel_id,
-            SystemMessage::UserJoined(user_id.clone()),
+            SystemMessage::UserJoined(*user_id),
         );
 
         // Persist message
@@ -83,7 +83,7 @@ impl ChannelEventService {
 
         let message = self.create_system_message(
             channel_id,
-            SystemMessage::UserLeft(user_id.clone()),
+            SystemMessage::UserLeft(*user_id),
         );
 
         self.message_repo.insert(&message)?;
@@ -115,7 +115,7 @@ impl ChannelEventService {
         let now = Utc::now();
         Message {
             id: MessageId::new(),
-            channel_id: channel_id.clone(),
+            channel_id: *channel_id,
             sender_id: None, // System messages have no sender
             content: MessageContent::System(content),
             thread_id: None,

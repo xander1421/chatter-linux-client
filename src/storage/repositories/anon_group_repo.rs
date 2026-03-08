@@ -226,6 +226,37 @@ impl AnonGroupRepository {
         Ok(())
     }
 
+    /// Update a member's profile (display name, avatar) without touching mailbox key.
+    pub fn update_member_profile(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+        profile_key: Option<[u8; 32]>,
+        display_name: Option<String>,
+        avatar: Option<Vec<u8>>,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE anon_group_members
+             SET profile_key = ?1, display_name = ?2, avatar = ?3
+             WHERE group_id = ?4 AND user_id = ?5",
+            params![
+                profile_key.as_ref().map(|pk| pk.as_slice()),
+                display_name,
+                avatar,
+                group_id.as_bytes().as_slice(),
+                user_id.as_bytes().as_slice(),
+            ],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!(
+                "Member {} in group {}",
+                user_id, group_id
+            )));
+        }
+        Ok(())
+    }
+
     /// Update a member's mailbox public key without touching the profile.
     pub fn update_member_mailbox(
         &self,
@@ -1072,7 +1103,7 @@ fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupPending>
         .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid user ID".into()))?;
 
     let action_str: String = row.get(3)?;
-    let action = PendingActionType::from_str(&action_str)
+    let action = PendingActionType::parse(&action_str)
         .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid action type".into()))?;
 
     Ok(AnonGroupPending {

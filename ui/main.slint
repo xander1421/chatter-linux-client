@@ -219,6 +219,12 @@ export component MainWindow inherits Window {
     in-out property <[PrivateGroupFriend]> create-channel-available-friends <=> app.create-channel-available-friends;
     in-out property <int> create-channel-selected-friend-count <=> app.create-channel-selected-friend-count;
 
+    // Invite to private group modal properties
+    in-out property <string> invite-private-group-id <=> app.invite-private-group-id;
+    in-out property <[PrivateGroupFriend]> invite-private-group-friends <=> app.invite-private-group-friends;
+    in-out property <int> invite-private-group-selected-count <=> app.invite-private-group-selected-count;
+    in property <bool> invite-private-group-loading <=> app.invite-private-group-loading;
+
     // Join channel modal properties
     in-out property <string> join-channel-search-query <=> app.join-channel-search-query;
     in property <[SearchResultChannel]> join-channel-results <=> app.join-channel-results;
@@ -404,7 +410,11 @@ export component MainWindow inherits Window {
     callback create-channel-provider-selected <=> app.create-channel-provider-selected;
     callback create-private-group <=> app.create-private-group;
     callback toggle-friend-selection <=> app.toggle-friend-selection;
+    callback toggle-friend-role <=> app.toggle-friend-role;
     callback create-channel-template-selected <=> app.create-channel-template-selected;
+    callback invite-to-private-group <=> app.invite-to-private-group;
+    callback toggle-invite-friend-selection <=> app.toggle-invite-friend-selection;
+    callback toggle-invite-friend-role <=> app.toggle-invite-friend-role;
     callback search-channels <=> app.search-channels;
     callback join-channel <=> app.join-channel;
     callback profile-send-message <=> app.profile-send-message;
@@ -469,6 +479,7 @@ export component MainWindow inherits Window {
     callback channel-settings-toggle-mute <=> app.channel-settings-toggle-mute;
     callback channel-settings-change-member-role <=> app.channel-settings-change-member-role;
     callback channel-settings-remove-member <=> app.channel-settings-remove-member;
+    callback channel-settings-invite-members <=> app.channel-settings-invite-members;
     callback channel-settings-archive <=> app.channel-settings-archive;
     callback channel-settings-leave <=> app.channel-settings-leave;
     callback channel-settings-delete <=> app.channel-settings-delete;

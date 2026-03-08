@@ -276,6 +276,7 @@ impl AnonDmHandler {
     }
 
     /// Handle an incoming message in an active conversation.
+    #[allow(clippy::boxed_local)] // Box comes from proto definition for large nested messages
     fn handle_message(
         &self,
         msg: Box<content_v1::AnonDmMessage>,
@@ -408,7 +409,7 @@ impl AnonDmHandler {
         // The message ID is derived from the target_sent_timestamp
         let message_id = crate::domain::MessageId::from_timestamp(reaction.target_sent_timestamp);
         let author_id = UserId::from_str(&reaction.target_author_aci)
-            .unwrap_or_else(|_| sender_id);
+            .unwrap_or(sender_id);
 
         let event = if reaction.remove {
             DomainEvent::ReactionRemoved {

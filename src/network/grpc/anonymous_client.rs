@@ -87,6 +87,7 @@ impl AnonymousMessageClient {
     /// Send with anonymous credential and explicit envelope type.
     ///
     /// Use envelope_type=4 for ECIES_INIT (HPKE-encrypted initial contact).
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_with_anonymous_credential_typed(
         &mut self,
         destination_user_id: &str,

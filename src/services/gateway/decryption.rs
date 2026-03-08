@@ -84,6 +84,7 @@ impl MessageGateway {
                 Some(content::Content::AnonDmRequest(_)) => "AnonDmRequest",
                 Some(content::Content::AnonDmAccept(_)) => "AnonDmAccept",
                 Some(content::Content::AnonDmMessage(_)) => "AnonDmMessage",
+                Some(content::Content::AnonGroupProfileShare(_)) => "AnonGroupProfileShare",
                 None => "None",
             };
 
@@ -259,7 +260,7 @@ impl MessageGateway {
             // Get all sessions for convergence from Sesame store
             let sessions = sesame_manager
                 .get_all_sessions_for_convergence(sender_id, sender_device_id)
-                .map_err(|e| ServiceError::Storage(e))?;
+                .map_err(ServiceError::Storage)?;
 
             // If Sesame has no sessions, check KeyStore directly (session may have been
             // created via sealed sender decryption which doesn't go through Sesame)

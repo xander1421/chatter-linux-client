@@ -37,7 +37,7 @@ use crate::network::grpc::mailbox_client::MailboxClient;
 use crate::proto::content_v1::{
     self, anon_group_update, AnonDmMessage as AnonDmMessageProto, AnonGroupInvite, AnonGroupJoinAck,
     AnonGroupKick, AnonGroupLeave, AnonGroupMemberInfo, AnonGroupMemberList, AnonGroupMessage,
-    AnonGroupUpdate, Content,
+    AnonGroupProfileShare, AnonGroupUpdate, Content,
 };
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::mailbox_manager::MailboxManager;
@@ -138,6 +138,7 @@ pub struct AnonGroupService {
 
 impl AnonGroupService {
     /// Create a new AnonGroupService.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         settings_repo: Arc<SettingsRepository>,
         anon_group_repo: Arc<AnonGroupRepository>,
@@ -273,6 +274,74 @@ impl AnonGroupService {
 
         tracing::info!(
             "Created anonymous group {} with {} invites",
+            group.id,
+            invitee_count
+        );
+
+        Ok(group)
+    }
+
+    /// Create a new anonymous group with specified roles for invitees.
+    ///
+    /// The caller becomes the owner. Each invitee is assigned the specified role
+    /// (Admin or Member). Invites are sent with staggered delivery.
+    pub async fn create_group_with_roles(
+        &self,
+        name: String,
+        invitees: Vec<(UserId, AnonGroupRole)>,
+    ) -> Result<AnonGroup, AnonGroupError> {
+        let current_user = self.current_user_id()?;
+
+        // 1. Create group locally
+        let group = AnonGroup::new_as_owner(name);
+        self.anon_group_repo.insert_group(&group)?;
+
+        // 2. Create our mailbox for this group
+        let mailbox = self.create_group_mailbox(&group.id).await?;
+        self.anon_group_repo.insert_mailbox(&mailbox)?;
+
+        // 3. Add ourselves as owner member with our mailbox key
+        let my_member = AnonGroupMember::with_mailbox(
+            group.id,
+            current_user,
+            AnonGroupRole::Owner,
+            mailbox.public_key,
+        );
+        self.anon_group_repo.add_member(&my_member)?;
+
+        // 4. Send invites with staggered delivery
+        let invitee_count = invitees.len();
+        for (invitee, role) in invitees {
+            // Add as pending member with specified role
+            let member = AnonGroupMember::new(group.id, invitee, role);
+            self.anon_group_repo.add_member(&member)?;
+
+            // Track pending invite
+            let pending = AnonGroupPending::new_invite(group.id, invitee);
+            self.anon_group_repo.insert_pending(&pending)?;
+
+            // Send invite with small random delay to reduce traffic correlation
+            let delay_ms = 100 + (rand::rng().next_u32() % 400);
+            sleep(Duration::from_millis(delay_ms as u64)).await;
+
+            // Check if invitee has an active anon DM conversation with us
+            let send_result = if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(&invitee) {
+                if anon_dm.is_ready() {
+                    self.send_invite_via_anon_dm(&anon_dm, group.id, &group.name, &mailbox.public_key).await
+                } else {
+                    self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key).await
+                }
+            } else {
+                self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key).await
+            };
+
+            if let Err(e) = send_result {
+                tracing::error!("Failed to send invite to {}: {}", invitee, e);
+            }
+        }
+
+        tracing::info!(
+            "Created anonymous group {} with {} invites (with roles)",
             group.id,
             invitee_count
         );
@@ -648,6 +717,106 @@ impl AnonGroupService {
         Ok(())
     }
 
+    /// Send our profile to a specific group member.
+    ///
+    /// Used to share our display name/avatar directly with group members.
+    async fn send_profile_share(
+        &self,
+        group_id: &AnonGroupId,
+        member_id: &UserId,
+        member_mailbox_pk: &[u8; 32],
+    ) -> Result<(), AnonGroupError> {
+        let profile_key = self.get_my_profile_key();
+        let mut encrypted_display_name = None;
+        let mut encrypted_avatar = None;
+
+        if let Some(pk) = profile_key {
+            if let Some(name) = self.get_my_display_name() {
+                if !name.is_empty() {
+                    encrypted_display_name =
+                        crate::crypto::profile_crypto::encrypt_display_name(&pk, &name).ok();
+                }
+            }
+            if let Some(av) = self.get_my_avatar() {
+                encrypted_avatar = crate::crypto::profile_crypto::encrypt_avatar(&pk, &av).ok();
+            }
+        }
+
+        let profile_share = AnonGroupProfileShare {
+            group_id: group_id.to_vec(),
+            profile_key: profile_key.map(|k| k.to_vec()),
+            encrypted_display_name,
+            encrypted_avatar,
+            timestamp: TimestampNanos::now().as_u64(),
+        };
+
+        let content = Content {
+            content: Some(content_v1::content::Content::AnonGroupProfileShare(
+                profile_share,
+            )),
+            ephemeral_reply_to: None,
+            timestamp: TimestampNanos::now().as_u64(),
+            padding: Self::generate_padding(160),
+        };
+
+        self.send_to_anon_mailbox(member_id, member_mailbox_pk, content)
+            .await?;
+
+        tracing::debug!(
+            "Sent profile share for group {} to {}",
+            group_id,
+            member_id
+        );
+        Ok(())
+    }
+
+    /// Share our profile with all group members.
+    ///
+    /// Called after receiving a member list to introduce ourselves to other members
+    /// we didn't know about before. This ensures all members learn our display name
+    /// directly rather than relying on the group owner to relay it.
+    pub async fn share_profile_with_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        let current_user = self.current_user_id()?;
+        let members = self.anon_group_repo.get_members_with_mailbox(group_id)?;
+
+        let mut share_count = 0;
+        for member in members {
+            // Skip ourselves
+            if member.user_id == current_user {
+                continue;
+            }
+
+            let mailbox_pk = member
+                .mailbox_pk
+                .expect("get_members_with_mailbox guarantees mailbox_pk");
+
+            // Small random delay to avoid timing correlation
+            let delay_ms = rand::rng().next_u32() % 2_000;
+            sleep(Duration::from_millis(delay_ms as u64)).await;
+
+            if let Err(e) = self
+                .send_profile_share(group_id, &member.user_id, &mailbox_pk)
+                .await
+            {
+                tracing::warn!(
+                    "Failed to send profile share to {} in group {}: {}",
+                    member.user_id,
+                    group_id,
+                    e
+                );
+            } else {
+                share_count += 1;
+            }
+        }
+
+        tracing::info!(
+            "Shared profile with {} members in group {}",
+            share_count,
+            group_id
+        );
+        Ok(())
+    }
+
     // ========================================================================
     // Join Flow (Initiator Side)
     // ========================================================================
@@ -834,10 +1003,7 @@ impl AnonGroupService {
 
             let avatar: Option<Vec<u8>> = match (&profile_key, &member_info.encrypted_avatar) {
                 (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    match decrypt_avatar(pk, encrypted) {
-                        Ok(av) => Some(av),
-                        _ => None,
-                    }
+                    decrypt_avatar(pk, encrypted).ok()
                 }
                 _ => None,
             };
@@ -1124,6 +1290,95 @@ impl AnonGroupService {
 
         // Update message locally
         self.anon_group_repo.update_message_text(group_id, target_sent_timestamp, new_text)?;
+
+        Ok(())
+    }
+
+    // ========================================================================
+    // Invite Members (post-creation)
+    // ========================================================================
+
+    /// Invite additional members to an existing group with specified roles.
+    ///
+    /// Only admins/owners can invite new members. Invites are sent via the same
+    /// mechanism as during group creation (DM or anon DM tunnel).
+    pub async fn invite_members(
+        &self,
+        group_id: &AnonGroupId,
+        invitees: Vec<(UserId, AnonGroupRole)>,
+    ) -> Result<(), AnonGroupError> {
+        let _current_user = self.current_user_id()?;
+
+        // Verify group exists and we have permission to invite
+        let group = self
+            .anon_group_repo
+            .get_group(group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+
+        if !group.my_role.can_invite() {
+            return Err(AnonGroupError::InsufficientPermissions(
+                "Only admins can invite members".to_string(),
+            ));
+        }
+
+        // Get our mailbox for this group
+        let mailbox = self
+            .anon_group_repo
+            .get_mailbox(group_id)?
+            .ok_or_else(|| AnonGroupError::InvalidData("No mailbox for group".to_string()))?;
+
+        let existing_members: std::collections::HashSet<UserId> = self
+            .anon_group_repo
+            .get_members(group_id)?
+            .into_iter()
+            .map(|m| m.user_id)
+            .collect();
+
+        let mut invited_count = 0;
+        for (invitee, role) in invitees {
+            // Skip if already a member
+            if existing_members.contains(&invitee) {
+                tracing::debug!("User {} is already a member of group {}", invitee, group_id);
+                continue;
+            }
+
+            // Add as pending member with specified role
+            let member = AnonGroupMember::new(*group_id, invitee, role);
+            self.anon_group_repo.add_member(&member)?;
+
+            // Track pending invite
+            let pending = AnonGroupPending::new_invite(*group_id, invitee);
+            self.anon_group_repo.insert_pending(&pending)?;
+
+            // Send invite with small random delay to reduce traffic correlation
+            let delay_ms = 100 + (rand::rng().next_u32() % 400);
+            sleep(Duration::from_millis(delay_ms as u64)).await;
+
+            // Check if invitee has an active anon DM conversation with us
+            let send_result = if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(&invitee) {
+                if anon_dm.is_ready() {
+                    // Send via anon DM tunnel
+                    self.send_invite_via_anon_dm(&anon_dm, *group_id, &group.name, &mailbox.public_key).await
+                } else {
+                    // Anon DM not ready, try regular DM
+                    self.send_invite_impl(invitee, *group_id, &group.name, &mailbox.public_key).await
+                }
+            } else {
+                // No anon DM, use regular DM (friend)
+                self.send_invite_impl(invitee, *group_id, &group.name, &mailbox.public_key).await
+            };
+
+            match send_result {
+                Ok(_) => invited_count += 1,
+                Err(e) => tracing::error!("Failed to send invite to {}: {}", invitee, e),
+            }
+        }
+
+        tracing::info!(
+            "Invited {} members to group {}",
+            invited_count,
+            group_id
+        );
 
         Ok(())
     }
@@ -1549,6 +1804,21 @@ impl AnonGroupService {
         self.anon_group_repo.update_member_mailbox_and_profile(group_id, user_id, &mailbox_pk, profile_key, display_name, avatar)?;
         // Also remove pending invite
         let _ = self.anon_group_repo.delete_pending(group_id, user_id, PendingActionType::Invite);
+        Ok(())
+    }
+
+    /// Update a member's profile (sync, no encryption).
+    ///
+    /// Called by the handler when a ProfileShare is received.
+    pub fn update_member_profile(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+        profile_key: Option<[u8; 32]>,
+        display_name: Option<String>,
+        avatar: Option<Vec<u8>>,
+    ) -> Result<(), AnonGroupError> {
+        self.anon_group_repo.update_member_profile(group_id, user_id, profile_key, display_name, avatar)?;
         Ok(())
     }
 

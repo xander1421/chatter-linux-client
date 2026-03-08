@@ -24,6 +24,7 @@ use super::{MessageError, MessageService};
 
 impl MessageService {
     /// Handle DM bootstrap when conversation is not ready.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_dm_bootstrap(
         &self,
         auth_client: &mut AuthClient,
@@ -136,6 +137,7 @@ impl MessageService {
     }
 
     /// Handle DM bootstrap as the responder (higher UUID).
+    #[allow(clippy::too_many_arguments)]
     async fn handle_dm_bootstrap_responder(
         &self,
         auth_client: &mut AuthClient,

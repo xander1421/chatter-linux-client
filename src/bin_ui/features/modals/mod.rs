@@ -27,6 +27,7 @@ pub use channel_settings::open_channel_settings;
 /// Wire modal callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     create_channel::wire_create_channel(window, ui_ctx);
+    create_channel::wire_invite_to_private_group(window, ui_ctx);
     join_channel::wire_join_channel(window, ui_ctx);
     profile::wire_profile_actions(window, ui_ctx);
     friend_requests::wire_friend_requests(window, ui_ctx);

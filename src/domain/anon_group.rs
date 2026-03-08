@@ -181,8 +181,7 @@ impl AnonGroupRole {
 
     /// Check if this role can invite new members.
     pub fn can_invite(&self) -> bool {
-        // All members can invite by default (can be changed)
-        true
+        matches!(self, Self::Admin | Self::Owner)
     }
 }
 
@@ -390,7 +389,7 @@ impl PendingActionType {
     }
 
     /// Parse from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "invite" => Some(Self::Invite),
             "kick" => Some(Self::Kick),
@@ -692,7 +691,10 @@ mod tests {
         assert!(!AnonGroupRole::Member.can_kick());
         assert!(AnonGroupRole::Admin.can_kick());
         assert!(AnonGroupRole::Owner.can_kick());
-        assert!(AnonGroupRole::Member.can_invite());
+        // Only admins and owners can invite
+        assert!(!AnonGroupRole::Member.can_invite());
+        assert!(AnonGroupRole::Admin.can_invite());
+        assert!(AnonGroupRole::Owner.can_invite());
     }
 
     #[test]
@@ -744,9 +746,9 @@ mod tests {
     fn test_pending_action_type() {
         assert_eq!(PendingActionType::Invite.as_str(), "invite");
         assert_eq!(PendingActionType::Kick.as_str(), "kick");
-        assert_eq!(PendingActionType::from_str("invite"), Some(PendingActionType::Invite));
-        assert_eq!(PendingActionType::from_str("kick"), Some(PendingActionType::Kick));
-        assert_eq!(PendingActionType::from_str("unknown"), None);
+        assert_eq!(PendingActionType::parse("invite"), Some(PendingActionType::Invite));
+        assert_eq!(PendingActionType::parse("kick"), Some(PendingActionType::Kick));
+        assert_eq!(PendingActionType::parse("unknown"), None);
     }
 
     #[test]

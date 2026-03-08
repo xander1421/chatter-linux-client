@@ -35,10 +35,13 @@ pub struct PendingAttachment {
     pub size: u64,
     /// MIME type.
     pub mime_type: String,
+    /// Pre-uploaded attachment pointer (for GIFs from picker).
+    /// If set, the attachment is already uploaded and this pointer should be used directly.
+    pub pointer: Option<crate::proto::content_v1::AttachmentPointer>,
 }
 
 impl PendingAttachment {
-    /// Create a new pending attachment.
+    /// Create a new pending attachment (will be uploaded when sent).
     #[must_use]
     pub fn new(id: AttachmentId, filename: String, path: PathBuf, size: u64, mime_type: String) -> Self {
         Self {
@@ -47,6 +50,28 @@ impl PendingAttachment {
             path,
             size,
             mime_type,
+            pointer: None,
+        }
+    }
+
+    /// Create a pending attachment with a pre-uploaded pointer.
+    /// Used for GIFs from the picker that are already uploaded to CDN.
+    #[must_use]
+    pub fn with_pointer(
+        id: AttachmentId,
+        path: PathBuf,
+        filename: String,
+        size: u64,
+        mime_type: String,
+        pointer: crate::proto::content_v1::AttachmentPointer,
+    ) -> Self {
+        Self {
+            id,
+            filename,
+            path,
+            size,
+            mime_type,
+            pointer: Some(pointer),
         }
     }
 }

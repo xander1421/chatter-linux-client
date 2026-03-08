@@ -1311,116 +1311,63 @@ pub async fn handle_inbox_event(
                 }
             };
 
-            let profile_key_arr: Option<[u8; 32]> = profile_key.clone().and_then(|pk| {
-                if pk.len() == 32 {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&pk);
-                    Some(arr)
-                } else {
-                    None
-                }
-            });
-
-            // Decrypt display name - required for anon DM requests
-            // If missing or decryption fails, reject the request (sender should retry)
-            let decrypted_display_name: Option<String> = match (&profile_key_arr, &encrypted_display_name) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    match chatter_linux::crypto::profile_crypto::decrypt_display_name(pk, encrypted) {
-                        Ok(name) if !name.is_empty() => Some(name),
-                        Ok(_) => {
-                            tracing::debug!(peer_id = %peer_id, "Empty display name after decryption");
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::debug!(peer_id = %peer_id, error = %e, "Failed to decrypt sender display name");
-                            return;
-                        }
-                    }
-                }
-                _ => {
-                    tracing::debug!(peer_id = %peer_id, "Missing profile_key or encrypted_display_name");
-                    return;
-                }
-            };
-
-            // Decrypt avatar if present (optional - avatar is not required)
-            let decrypted_avatar: Option<Vec<u8>> = match (&profile_key_arr, &encrypted_avatar) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    match chatter_linux::crypto::profile_crypto::decrypt_avatar(pk, encrypted) {
-                        Ok(avatar) => Some(avatar),
-                        Err(e) => {
-                            tracing::debug!(peer_id = %peer_id, error = %e, "Failed to decrypt sender avatar");
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            };
-
-            tracing::info!(
-                peer_id = %peer_id,
-                display_name = ?decrypted_display_name,
-                has_avatar = decrypted_avatar.is_some(),
-                "Decrypted sender profile from AnonDmRequest"
-            );
-
-            // Store the request in the database
+            // Delegate decryption + storage to service layer (crypto isolated from UI)
             let anon_dm_service = ui_ctx.anon_dm_service.clone();
-            let peer_id_clone = peer_id;
+            let event_bus = ui_ctx.event_bus.clone();
             let intro_msg = intro_message.clone();
-            let display_name_for_storage = decrypted_display_name.clone();
-            let avatar_for_storage = decrypted_avatar.clone();
+            let weak = weak_window.clone();
 
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Err(e) = anon_dm_service.handle_request(
-                    anon_dm_id,
-                    peer_id_clone,
-                    mailbox_pk,
-                    intro_msg.as_deref(),
-                    profile_key_arr,
-                    display_name_for_storage,
-                    avatar_for_storage,
-                ) {
-                    tracing::warn!(
-                        error = %e,
-                        "Failed to store anonymous DM request"
-                    );
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    anon_dm_service.handle_request_encrypted(
+                        anon_dm_id,
+                        peer_id,
+                        mailbox_pk,
+                        intro_msg.as_deref(),
+                        profile_key,
+                        encrypted_display_name,
+                        encrypted_avatar,
+                    )
+                }).await;
+
+                match result {
+                    Ok(Ok((_dm, profile))) => {
+                        // Emit domain event for UI to show request modal
+                        event_bus.emit_domain(DomainEvent::AnonDmRequestReceived {
+                            conversation_id: anon_dm_id,
+                            sender_id: peer_id,
+                            sender_mailbox_pk: mailbox_pk,
+                            intro_message,
+                            profile_key: profile.profile_key,
+                            sender_display_name: Some(profile.display_name.clone()),
+                            sender_avatar: profile.avatar.clone(),
+                        });
+
+                        // Add to sidebar as pending DM (upgrade weak ref inside event loop)
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                crate::bin_ui::features::sidebar::dm::add_anon_dm_to_sidebar(
+                                    &w,
+                                    &anon_dm_id.to_string(),
+                                    &peer_id.to_string(),
+                                    &profile.display_name,
+                                    "New message request",
+                                    "Just now",
+                                    true, // is_pending
+                                    profile.avatar,
+                                );
+                                w.set_pending_message_requests(w.get_pending_message_requests() + 1);
+                            }
+                        });
+                    }
+                    Ok(Err(e)) => {
+                        tracing::debug!(peer_id = %peer_id, error = %e, "Failed to handle AnonDmRequest");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "spawn_blocking panicked in AnonDmRequest handler");
+                    }
                 }
             });
-
-            // Clone avatar for sidebar before moving to event
-            let avatar_for_sidebar = decrypted_avatar.clone();
-
-            // Emit domain event for UI to show request modal
-            ui_ctx.event_bus.emit_domain(DomainEvent::AnonDmRequestReceived {
-                conversation_id: anon_dm_id,
-                sender_id: peer_id,
-                sender_mailbox_pk: mailbox_pk,
-                intro_message,
-                profile_key: profile_key_arr,
-                sender_display_name: decrypted_display_name.clone(),
-                sender_avatar: decrypted_avatar,
-            });
-
-            // Add to sidebar as pending DM
-            if let Some(w) = weak_window.upgrade() {
-                let peer_name = decrypted_display_name
-                    .unwrap_or_else(|| format!("User {}", &peer_id.to_string()[..8]));
-
-                crate::bin_ui::features::sidebar::dm::add_anon_dm_to_sidebar(
-                    &w,
-                    &anon_dm_id.to_string(),
-                    &peer_id.to_string(),
-                    &peer_name,
-                    "New message request",
-                    "Just now",
-                    true, // is_pending
-                    avatar_for_sidebar,
-                );
-
-                // Increment message requests badge
-                w.set_pending_message_requests(w.get_pending_message_requests() + 1);
-            }
         }
         InboxEvent::AnonDmAccept {
             peer_id,
@@ -1460,103 +1407,58 @@ pub async fn handle_inbox_event(
                 }
             };
 
-            let profile_key_arr: Option<[u8; 32]> = profile_key.and_then(|pk| {
-                if pk.len() == 32 {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&pk);
-                    Some(arr)
-                } else {
-                    None
-                }
-            });
-
-            // Decrypt display name - required for acceptance (same as request handling)
-            let responder_display_name: String = match (&profile_key_arr, &encrypted_display_name) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    match chatter_linux::crypto::profile_crypto::decrypt_display_name(pk, encrypted) {
-                        Ok(name) if !name.is_empty() => name,
-                        Ok(_) => {
-                            tracing::debug!(peer_id = %peer_id, "Empty display name after decryption in acceptance, ignoring");
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::debug!(peer_id = %peer_id, error = %e, "Failed to decrypt display name in acceptance, ignoring");
-                            return;
-                        }
-                    }
-                }
-                _ => {
-                    tracing::debug!(peer_id = %peer_id, "Acceptance missing profile_key or encrypted_display_name, ignoring");
-                    return;
-                }
-            };
-
-            // Decrypt avatar if present (optional - avatar is not required)
-            let decrypted_avatar: Option<Vec<u8>> = match (&profile_key_arr, &encrypted_avatar) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    match chatter_linux::crypto::profile_crypto::decrypt_avatar(pk, encrypted) {
-                        Ok(avatar) => Some(avatar),
-                        Err(e) => {
-                            tracing::debug!(peer_id = %peer_id, error = %e, "Failed to decrypt responder avatar");
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            };
-
-            tracing::info!(
-                peer_id = %peer_id,
-                display_name = %responder_display_name,
-                has_avatar = decrypted_avatar.is_some(),
-                "Decrypted responder profile from AnonDmAccept"
-            );
-
+            // Delegate decryption + storage to service layer (crypto isolated from UI)
             let anon_dm_service = ui_ctx.anon_dm_service.clone();
-            let peer_id_clone = peer_id;
-            let display_name_for_storage = Some(responder_display_name.clone());
-            let avatar_for_storage = decrypted_avatar.clone();
-            let avatar_for_sidebar = decrypted_avatar.clone();
-            let avatar_for_event = decrypted_avatar;
+            let event_bus = ui_ctx.event_bus.clone();
+            let weak = weak_window.clone();
 
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Err(e) = anon_dm_service.handle_acceptance(
-                    anon_dm_id,
-                    peer_id_clone,
-                    mailbox_pk,
-                    profile_key_arr,
-                    display_name_for_storage,
-                    avatar_for_storage,
-                ) {
-                    tracing::warn!(
-                        error = %e,
-                        "Failed to handle anonymous DM acceptance"
-                    );
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    anon_dm_service.handle_acceptance_encrypted(
+                        anon_dm_id,
+                        peer_id,
+                        mailbox_pk,
+                        profile_key,
+                        encrypted_display_name,
+                        encrypted_avatar,
+                    )
+                }).await;
+
+                match result {
+                    Ok(Ok(profile)) => {
+                        // Emit domain event for UI notification
+                        event_bus.emit_domain(DomainEvent::AnonDmRequestAccepted {
+                            conversation_id: anon_dm_id,
+                            peer_id,
+                            peer_mailbox_pk: mailbox_pk,
+                            profile_key: profile.profile_key,
+                            peer_display_name: profile.display_name.clone(),
+                            peer_avatar: profile.avatar.clone(),
+                        });
+
+                        // Update sidebar entry from "pending" to active (upgrade weak ref inside event loop)
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                crate::bin_ui::features::sidebar::dm::add_anon_dm_to_sidebar(
+                                    &w,
+                                    &anon_dm_id.to_string(),
+                                    &peer_id.to_string(),
+                                    &profile.display_name,
+                                    "Request accepted!",
+                                    "Just now",
+                                    false, // Not pending anymore
+                                    profile.avatar,
+                                );
+                            }
+                        });
+                    }
+                    Ok(Err(e)) => {
+                        tracing::debug!(peer_id = %peer_id, error = %e, "Failed to handle AnonDmAccept");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "spawn_blocking panicked in AnonDmAccept handler");
+                    }
                 }
-            });
-
-            // Update sidebar entry from "pending" to active
-            if let Some(w) = weak_window.upgrade() {
-                crate::bin_ui::features::sidebar::dm::add_anon_dm_to_sidebar(
-                    &w,
-                    &anon_dm_id.to_string(),
-                    &peer_id.to_string(),
-                    &responder_display_name,
-                    "Request accepted!",
-                    "Just now",
-                    false, // Not pending anymore
-                    avatar_for_sidebar,
-                );
-            }
-
-            // Emit domain event for UI notification
-            ui_ctx.event_bus.emit_domain(DomainEvent::AnonDmRequestAccepted {
-                conversation_id: anon_dm_id,
-                peer_id,
-                peer_mailbox_pk: mailbox_pk,
-                profile_key: profile_key_arr,
-                peer_display_name: responder_display_name,
-                peer_avatar: avatar_for_event,
             });
         }
         InboxEvent::AnonDmMessage {

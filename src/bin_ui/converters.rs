@@ -26,54 +26,6 @@ use crate::{ChannelListItemData, DMListItemData, MessageAttachmentData, MessageI
 /// to allow long strings without spaces to wrap.
 const MAX_WORD_LENGTH: usize = 50;
 
-/// Parse [GIF:url] markers from message content.
-/// Returns (cleaned_content, virtual_gif_attachments).
-pub fn parse_gif_markers(content: &str) -> (String, Vec<MessageAttachmentData>) {
-    let mut display_content = content.to_string();
-    let mut gif_attachments = Vec::new();
-
-    while let Some(start_pos) = display_content.find("[GIF:") {
-        if let Some(end_pos) = display_content[start_pos..].find(']') {
-            let actual_end = start_pos + end_pos;
-            let marker_content = &display_content[start_pos + 5..actual_end];
-            let url = marker_content.trim().replace('\n', "").replace('\r', "");
-
-            if !url.is_empty() {
-                let virtual_att = MessageAttachmentData {
-                    id: format!("virtual-gif-{}", url).into(),
-                    filename: "gif".into(),
-                    size_display: "".into(),
-                    mime_type: "image/gif".into(),
-                    category: "image".into(),
-                    thumbnail_url: url.clone().into(),
-                    download_url: url.clone().into(),
-                    is_image: true,
-                    is_video: false,
-                    width: 0,
-                    height: 0,
-                    has_thumbnail: true,
-                    thumbnail: slint::Image::default(),
-                    is_playing: false,
-                    icon: "".into(),
-                    icon_color: slint::Color::from_argb_u8(0, 0, 0, 0),
-                    waveform: ModelRc::default(),
-                    duration_display: "".into(),
-                    is_uploading: false,
-                    is_downloading: false,
-                    progress: 1.0,
-                };
-                gif_attachments.push(virtual_att);
-            }
-
-            display_content.replace_range(start_pos..actual_end + 1, "");
-        } else {
-            break;
-        }
-    }
-
-    (display_content.trim().to_string(), gif_attachments)
-}
-
 /// Insert zero-width spaces (U+200B) into long sequences without whitespace.
 /// This allows Slint's word-wrap to break long strings that have no natural break points.
 fn insert_word_breaks(text: &str) -> String {
@@ -580,7 +532,7 @@ impl MessageDisplayData {
     ///
     /// The `current_user_id` is used to determine call direction (outgoing vs incoming).
     pub fn to_slint_with_user(&self, current_user_id: &str) -> MessageItemData {
-        let mut slint_attachments: Vec<MessageAttachmentData> = self
+        let slint_attachments: Vec<MessageAttachmentData> = self
             .attachments
             .iter()
             .map(|a| a.to_slint())
@@ -619,17 +571,13 @@ impl MessageDisplayData {
             matches
         };
 
-    // Parse [GIF:url] markers and add virtual attachments
-    let (display_content, gif_attachments) = parse_gif_markers(&self.content);
-    slint_attachments.extend(gif_attachments);
-
     MessageItemData {
         message_id: self.message_id.clone().into(),
         sender_id: self.sender_id.clone().into(),
         sender_name: self.sender_name.clone().into(),
         sender_initials: self.sender_initials.clone().into(),
         sender_avatar_url: SharedString::default(),
-        content: insert_word_breaks(display_content.trim()).into(),
+        content: insert_word_breaks(self.content.trim()).into(),
         timestamp: self.timestamp.clone().into(),
         timestamp_ns: self.timestamp_ns.clone().into(),
         is_own,

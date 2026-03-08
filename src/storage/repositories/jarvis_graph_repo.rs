@@ -502,7 +502,7 @@ impl JarvisGraphRepository {
     pub fn prune_old_data(&self, days_old: u32) -> Result<(u32, u32), StorageError> {
         let conn = self.db.connection()?;
         let cutoff = Utc::now() - chrono::Duration::days(days_old as i64);
-        let cutoff_ns = cutoff.timestamp_nanos_opt().unwrap_or(0) as i64;
+        let cutoff_ns = cutoff.timestamp_nanos_opt().unwrap_or(0);
 
         // Delete old mentions
         let mentions_deleted = conn.execute(

@@ -72,6 +72,7 @@ pub fn extract_video_thumbnail_from_memory(
 /// Pipeline: uridecodebin ! videoconvert ! appsink
 /// - uridecodebin auto-plugs VA-API/NVDEC decoders when available
 /// - videoconvert handles GPU→CPU memory transfer automatically
+#[allow(clippy::type_complexity)]
 fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, u32, u32, u64), MediaError> {
     // Build pipeline string - uridecodebin handles HW decoder selection
     // videoconvert will use VA-API postproc or gldownload automatically when needed
@@ -240,6 +241,7 @@ fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, 
 }
 
 /// Extract thumbnail from memory using appsrc + decodebin.
+#[allow(clippy::type_complexity)]
 fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<(Vec<u8>, u32, u32, u64), MediaError> {
     let pipeline = gst::Pipeline::new();
 
@@ -363,8 +365,8 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
 
                         if let Some(convert) = convert {
                             let elements: &[&gst::Element] = &[&convert, appsink_clone.upcast_ref()];
-                            if pipeline.add_many(elements).is_ok() {
-                                if gst::Element::link_many(elements).is_ok() {
+                            if pipeline.add_many(elements).is_ok()
+                                && gst::Element::link_many(elements).is_ok() {
                                     for e in elements {
                                         let _ = e.sync_state_with_parent();
                                     }
@@ -374,7 +376,6 @@ fn extract_thumbnail_from_memory_impl(data: &[u8], seek_seconds: u64) -> Result<
                                         }
                                     }
                                 }
-                            }
                         }
                     }
                 }

@@ -39,40 +39,96 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-pub(crate) fn wire_gif_selected(window: &MainWindow) {
+pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_composer_gif_selected(move |gif_id: SharedString, gif_url: SharedString| {
         let weak = weak_window.clone();
         let id = gif_id.to_string();
         let url = gif_url.to_string();
+        let ui_ctx = ui_ctx.clone();
         tracing::debug!("GIF selected: id={}, url={}", id, url);
 
-        // Before invoking the send callback, promote the picker GIF to an inline GIF.
-        // We know it will become a virtual attachment with id format: virtual-gif-{url}
-        let virtual_id = format!("virtual-gif-{}", url);
-        crate::bin_ui::gif_state::promote_picker_gif_to_inline(&id, &virtual_id);
+        // Hide picker immediately for responsiveness
+        if let Some(w) = weak.upgrade() {
+            w.set_composer_gif_picker_visible(false);
+        }
+        crate::bin_ui::gif_state::clear_picker_gifs();
 
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                // Get current text and add GIF marker for instant send
-                let current_text = w.get_composer_text().to_string();
-                let gif_marker = format!("[GIF:{}]", url);
-                let new_text = if current_text.trim().is_empty() {
-                    gif_marker
-                } else {
-                    format!("{} {}", current_text.trim(), gif_marker)
-                };
-                
-                // Instant send: Invoke the send callback registered in send_message.rs
-                w.invoke_send(new_text.into());
-                
-                // Hide picker and clear animations
-                w.set_composer_gif_picker_visible(false);
-                crate::bin_ui::gif_state::clear_picker_gifs();
+        // Download GIF, upload to our CDN, and send as real attachment
+        tokio::spawn(async move {
+            match download_and_send_gif(&url, &id, ui_ctx, weak).await {
+                Ok(()) => tracing::info!("GIF sent successfully: {}", id),
+                Err(e) => tracing::error!("Failed to send GIF {}: {}", id, e),
             }
         });
     });
+}
+
+/// Download GIF from external CDN, encrypt, upload to our CDN, and send.
+///
+/// Flow:
+/// 1. Download GIF bytes from Klipy/Tenor CDN
+/// 2. Encrypt and upload to our CDN (stored encrypted on filesystem)
+/// 3. Add as pending attachment with pointer
+/// 4. Trigger send
+async fn download_and_send_gif(
+    url: &str,
+    gif_id: &str,
+    ui_ctx: Arc<UIContext>,
+    weak: slint::Weak<MainWindow>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Download GIF bytes from Klipy/Tenor CDN
+    let client = reqwest::Client::new();
+    let response = client.get(url).send().await?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()).into());
+    }
+    let bytes = response.bytes().await?;
+    tracing::debug!("Downloaded GIF: {} bytes from {}", bytes.len(), url);
+
+    // Generate filename from GIF ID
+    let filename = format!("{}.gif", gif_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
+
+    // Upload directly to our CDN (encrypts and stores encrypted on filesystem)
+    let upload_result = ui_ctx.attachment_service
+        .upload_bytes_to_cdn_encrypted(
+            &ui_ctx.grpc_pool,
+            &bytes,
+            &filename,
+            "image/gif",
+        )
+        .await?;
+
+    tracing::info!(
+        "GIF uploaded to CDN: {} -> {} (encrypted on filesystem)",
+        gif_id,
+        upload_result.attachment_id
+    );
+
+    // Create pending attachment with pre-uploaded pointer
+    let pending = chatter_linux::state::PendingAttachment::with_pointer(
+        upload_result.attachment_id,
+        std::path::PathBuf::new(), // No temp file - already uploaded
+        filename,
+        upload_result.plaintext_size,
+        "image/gif".to_string(),
+        upload_result.to_attachment_pointer(),
+    );
+
+    // Add to chat state and trigger send
+    ui_ctx.chat_state.add_pending_attachment(pending);
+
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            // Get current text and invoke send
+            let current_text = w.get_composer_text().to_string();
+            w.invoke_send(current_text.into());
+        }
+    });
+
+    Ok(())
 }
 
 pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<UIContext>) {

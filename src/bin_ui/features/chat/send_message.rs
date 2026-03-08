@@ -8,7 +8,7 @@ use chatter_linux::app::UIContext;
 use chatter_linux::domain::anon_dm::AnonDmId;
 use chatter_linux::domain::channel::ChannelType;
 
-use crate::bin_ui::converters::{get_initials, message_to_display_data, attachment_to_display_data, parse_gif_markers};
+use crate::bin_ui::converters::{get_initials, message_to_display_data, attachment_to_display_data};
 use crate::bin_ui::features::auth::inbox::update_channel_sidebar_preview;
 use crate::bin_ui::features::chat::helpers::get_peer_id_from_dm_channel;
 use super::typing::clear_outgoing_typing;
@@ -114,10 +114,21 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
                 let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
 
-                // Upload attachments first if any
+                // Upload attachments first if any (skip if already uploaded with pointer)
                 let mut attachment_pointers = Vec::new();
                 let mut uploaded_attachments = Vec::new();
                 for att in &pending_attachments {
+                    // Check if attachment was pre-uploaded (e.g., GIF from picker)
+                    if let Some(pointer) = &att.pointer {
+                        attachment_pointers.push(pointer.clone());
+                        // Get the full attachment for UI display
+                        if let Ok(Some(full_att)) = attachment_service.get(&att.id) {
+                            uploaded_attachments.push(full_att);
+                        }
+                        continue;
+                    }
+
+                    // Upload attachment to CDN
                     match attachment_service.upload_to_cdn_encrypted(&grpc_pool, &att.path).await {
                         Ok(res) => {
                             // Use to_attachment_pointer() to include all metadata (thumbnail, dimensions, etc.)
@@ -153,14 +164,10 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 // Convert to Slint types inside the event loop
-                                let mut slint_attachments: Vec<_> = attachment_display_data
+                                let slint_attachments: Vec<_> = attachment_display_data
                                     .iter()
                                     .map(|a| a.to_slint())
                                     .collect();
-
-                                // Parse [GIF:url] markers and add virtual attachments
-                                let (display_content, gif_attachments) = parse_gif_markers(&sent_text);
-                                slint_attachments.extend(gif_attachments);
 
                                 let msg_item = MessageItemData {
                                     message_id: message_id_str.into(),
@@ -168,7 +175,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     sender_name: sender_name.into(),
                                     sender_initials: sender_initials.into(),
                                     sender_avatar_url: "".into(),
-                                    content: display_content.into(),
+                                    content: sent_text.into(),
                                     timestamp: timestamp_str.into(),
                                     timestamp_ns: sent_at.to_string().into(),
                                     is_own: true,
@@ -254,17 +261,14 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 let weak_copy = weak.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak_copy.upgrade() {
-                                        let mut slint_attachments: Vec<_> = attachments.iter().map(|a| a.to_slint()).collect();
-                                        // Parse [GIF:url] markers and add virtual attachments
-                                        let (display_content, gif_attachments) = parse_gif_markers(&sent_text);
-                                        slint_attachments.extend(gif_attachments);
+                                        let slint_attachments: Vec<_> = attachments.iter().map(|a| a.to_slint()).collect();
                                         let msg_item = MessageItemData {
                                             message_id: message_id_str.into(),
                                             sender_id: current_user_id.into(),
                                             sender_name: sender_name.into(),
                                             sender_initials: sender_initials.into(),
                                             sender_avatar_url: "".into(),
-                                            content: display_content.into(),
+                                            content: sent_text.into(),
                                             timestamp: timestamp_str.clone().into(),
                                             timestamp_ns: msg_sent_at.to_string().into(),
                                             is_own: true,
@@ -312,8 +316,6 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 let weak_copy = weak.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak_copy.upgrade() {
-                                        // Parse [GIF:url] markers and add virtual attachments
-                                        let (display_content, gif_attachments) = parse_gif_markers(&sent_text);
                                         // Add message to UI with "sending" status
                                         let msg_item = MessageItemData {
                                             message_id: format!("pending-{}", sent_at).into(),
@@ -321,7 +323,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                             sender_name: sender_name.into(),
                                             sender_initials: sender_initials.into(),
                                             sender_avatar_url: "".into(),
-                                            content: display_content.into(),
+                                            content: sent_text.into(),
                                             timestamp: timestamp_str.clone().into(),
                                             timestamp_ns: sent_at.to_string().into(),
                                             is_own: true,
@@ -329,9 +331,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                             is_deleted: false,
                                             is_system: false,
                                             is_ai: false,
-                                            has_attachments: !gif_attachments.is_empty(),
-                                            attachment_count: gif_attachments.len() as i32,
-                                            attachments: ModelRc::new(VecModel::from(gif_attachments)),
+                                            has_attachments: false,
+                                            attachment_count: 0,
+                                            attachments: ModelRc::default(),
                                             has_reactions: false,
                                             reaction_summary: "".into(),
                                             reply_count: 0,
@@ -379,10 +381,19 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
                 let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
 
-                // Upload attachments first if any
+                // Upload attachments first if any (skip if already uploaded with pointer)
                 let mut attachment_pointers = Vec::new();
                 let mut uploaded_attachments = Vec::new();
                 for att in &pending_attachments {
+                    // Check if attachment was pre-uploaded (e.g., GIF from picker)
+                    if let Some(pointer) = &att.pointer {
+                        attachment_pointers.push(pointer.clone());
+                        if let Ok(Some(full_att)) = attachment_service.get(&att.id) {
+                            uploaded_attachments.push(full_att);
+                        }
+                        continue;
+                    }
+
                     match attachment_service.upload_to_cdn_encrypted(&grpc_pool, &att.path).await {
                         Ok(res) => {
                             attachment_pointers.push(res.to_attachment_pointer());
@@ -419,14 +430,10 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     let attachment_service_for_gifs = attachment_service.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let mut slint_attachments: Vec<_> = attachment_display_data
+                            let slint_attachments: Vec<_> = attachment_display_data
                                 .iter()
                                 .map(|a| a.to_slint())
                                 .collect();
-
-                            // Parse [GIF:url] markers and add virtual attachments
-                            let (display_content, gif_attachments) = parse_gif_markers(&sent_text);
-                            slint_attachments.extend(gif_attachments);
 
                             let msg_item = MessageItemData {
                                 message_id: message_id.to_string().into(),
@@ -434,7 +441,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 sender_name: current_user_name.into(),
                                 sender_initials: sender_initials.into(),
                                 sender_avatar_url: "".into(),
-                                content: display_content.into(),
+                                content: sent_text.into(),
                                 timestamp: timestamp_str.clone().into(),
                                 timestamp_ns: sent_at.to_string().into(),
                                 is_own: true,
@@ -491,7 +498,15 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                 if is_saved {
                     let mut uploaded = Vec::new();
-                    for att in &pending_attachments { if let Ok(res) = attachment_service.upload_to_cdn_encrypted(&grpc_pool, &att.path).await { uploaded.push(res.attachment_id); } }
+                    for att in &pending_attachments {
+                        if let Some(pointer) = &att.pointer {
+                            // Pre-uploaded attachment (e.g., GIF from picker)
+                            let _ = pointer; // pointer already used in att.id
+                            uploaded.push(att.id);
+                        } else if let Ok(res) = attachment_service.upload_to_cdn_encrypted(&grpc_pool, &att.path).await {
+                            uploaded.push(res.attachment_id);
+                        }
+                    }
                     if let Ok(message) = message_service.save_message(&text, uploaded).await {
                         let resolved: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
                         let display = message_to_display_data(&message, "Me", &resolved);

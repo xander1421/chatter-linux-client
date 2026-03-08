@@ -115,6 +115,7 @@ pub struct AvatarTooLargeError(pub usize, pub usize);
 
 impl AnonDmInitMessage {
     /// Create a new init message.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         conversation_id: AnonDmId,
         sender_id: UserId,

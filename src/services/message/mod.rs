@@ -187,6 +187,7 @@ pub struct MessageService {
 
 impl MessageService {
     /// Create a new MessageService with dependencies.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         grpc_pool: Arc<GrpcClientPool>,
         database: Arc<Database>,

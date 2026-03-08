@@ -158,9 +158,38 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             if let Some(w) = weak.upgrade() {
                 let friends = w.get_create_channel_available_friends();
                 let mut friends_vec: Vec<PrivateGroupFriend> = (0..friends.row_count()).filter_map(|i| friends.row_data(i)).collect();
-                if let Some(friend) = friends_vec.get_mut(idx as usize) { friend.selected = !friend.selected; }
+                if let Some(friend) = friends_vec.get_mut(idx as usize) {
+                    friend.selected = !friend.selected;
+                    // Default to member role when selecting
+                    if friend.selected && friend.role.is_empty() {
+                        friend.role = "member".into();
+                    }
+                }
                 let selected_count = friends_vec.iter().filter(|f| f.selected).count() as i32;
                 w.set_create_channel_selected_friend_count(selected_count);
+                w.set_create_channel_available_friends(ModelRc::new(VecModel::from(friends_vec)));
+            }
+        });
+    });
+
+    // Toggle friend role between member and admin
+    let weak_window = window.as_weak();
+    window.on_toggle_friend_role(move |idx: i32| {
+        let weak = weak_window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                let friends = w.get_create_channel_available_friends();
+                let mut friends_vec: Vec<PrivateGroupFriend> = (0..friends.row_count()).filter_map(|i| friends.row_data(i)).collect();
+                if let Some(friend) = friends_vec.get_mut(idx as usize) {
+                    if friend.selected {
+                        // Toggle between member and admin
+                        friend.role = if friend.role == "admin" {
+                            "member".into()
+                        } else {
+                            "admin".into()
+                        };
+                    }
+                }
                 w.set_create_channel_available_friends(ModelRc::new(VecModel::from(friends_vec)));
             }
         });
@@ -172,7 +201,22 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let weak = weak_window.clone();
         let anon_group_service = anon_group_service.clone();
         let name = name.to_string();
-        let selected_friends: Vec<UserId> = (0..friends.row_count()).filter_map(|i| friends.row_data(i)).filter(|f| f.selected).filter_map(|f| f.user_id.to_string().parse::<UserId>().ok()).collect();
+
+        // Extract selected friends with their roles
+        let selected_friends: Vec<(UserId, chatter_linux::domain::anon_group::AnonGroupRole)> = (0..friends.row_count())
+            .filter_map(|i| friends.row_data(i))
+            .filter(|f| f.selected)
+            .filter_map(|f| {
+                let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
+                let role = if f.role == "admin" {
+                    chatter_linux::domain::anon_group::AnonGroupRole::Admin
+                } else {
+                    chatter_linux::domain::anon_group::AnonGroupRole::Member
+                };
+                Some((user_id, role))
+            })
+            .collect();
+
         let member_count = selected_friends.len() as i32 + 1; // +1 for self
 
         if selected_friends.is_empty() { return; }
@@ -186,7 +230,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         });
 
         tokio::spawn(async move {
-            match anon_group_service.create_group(name.clone(), selected_friends).await {
+            match anon_group_service.create_group_with_roles(name.clone(), selected_friends).await {
                 Ok(group) => {
                     let weak_success = weak.clone();
                     let group_id = group.id.to_string();
@@ -236,6 +280,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     username: "".into(),
                     avatar_url: "".into(),
                     selected: false,
+                    role: "member".into(),
                 });
             }
 
@@ -258,6 +303,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         username: "(anonymous)".into(), // Indicate this is an anon DM peer
                         avatar_url: "".into(),
                         selected: false,
+                        role: "member".into(),
                     });
                 }
             }
@@ -265,6 +311,132 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() { w.set_create_channel_available_friends(ModelRc::new(VecModel::from(friend_data))); }
             });
+        });
+    });
+}
+
+/// Wire the invite to private group modal callbacks.
+pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    // Toggle selection for invite modal
+    let weak_window = window.as_weak();
+    window.on_toggle_invite_friend_selection(move |idx: i32| {
+        let weak = weak_window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                let friends = w.get_invite_private_group_friends();
+                let mut friends_vec: Vec<PrivateGroupFriend> = (0..friends.row_count())
+                    .filter_map(|i| friends.row_data(i))
+                    .collect();
+                if let Some(friend) = friends_vec.get_mut(idx as usize) {
+                    friend.selected = !friend.selected;
+                    // Default to member role when selecting
+                    if friend.selected && friend.role.is_empty() {
+                        friend.role = "member".into();
+                    }
+                }
+                let selected_count = friends_vec.iter().filter(|f| f.selected).count() as i32;
+                w.set_invite_private_group_selected_count(selected_count);
+                w.set_invite_private_group_friends(ModelRc::new(VecModel::from(friends_vec)));
+            }
+        });
+    });
+
+    // Toggle role for invite modal (member/admin)
+    let weak_window = window.as_weak();
+    window.on_toggle_invite_friend_role(move |idx: i32| {
+        let weak = weak_window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                let friends = w.get_invite_private_group_friends();
+                let mut friends_vec: Vec<PrivateGroupFriend> = (0..friends.row_count())
+                    .filter_map(|i| friends.row_data(i))
+                    .collect();
+                if let Some(friend) = friends_vec.get_mut(idx as usize) {
+                    if friend.selected {
+                        friend.role = if friend.role == "admin" {
+                            "member".into()
+                        } else {
+                            "admin".into()
+                        };
+                    }
+                }
+                w.set_invite_private_group_friends(ModelRc::new(VecModel::from(friends_vec)));
+            }
+        });
+    });
+
+    // Submit invite
+    let weak_window = window.as_weak();
+    let anon_group_service = ui_ctx.anon_group_service.clone();
+    window.on_invite_to_private_group(move |friends: ModelRc<PrivateGroupFriend>| {
+        let weak = weak_window.clone();
+        let anon_group_service = anon_group_service.clone();
+
+        let group_id_str = weak
+            .upgrade()
+            .map(|w| w.get_invite_private_group_id().to_string())
+            .unwrap_or_default();
+
+        // Extract selected friends with their roles
+        let selected_friends: Vec<(UserId, chatter_linux::domain::anon_group::AnonGroupRole)> = (0..friends.row_count())
+            .filter_map(|i| friends.row_data(i))
+            .filter(|f| f.selected)
+            .filter_map(|f| {
+                let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
+                let role = if f.role == "admin" {
+                    chatter_linux::domain::anon_group::AnonGroupRole::Admin
+                } else {
+                    chatter_linux::domain::anon_group::AnonGroupRole::Member
+                };
+                Some((user_id, role))
+            })
+            .collect();
+
+        if selected_friends.is_empty() || group_id_str.is_empty() {
+            return;
+        }
+
+        // Set loading state
+        let weak_loading = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak_loading.upgrade() {
+                w.set_invite_private_group_loading(true);
+            }
+        });
+
+        tokio::spawn(async move {
+            let group_id: chatter_linux::domain::anon_group::AnonGroupId = match group_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid group ID for invite: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_invite_private_group_loading(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            match anon_group_service.invite_members(&group_id, selected_friends).await {
+                Ok(_) => {
+                    tracing::info!("Successfully invited members to group {}", group_id);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_invite_private_group_loading(false);
+                            w.set_active_modal("none".into());
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to invite members: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_invite_private_group_loading(false);
+                        }
+                    });
+                }
+            }
         });
     });
 }

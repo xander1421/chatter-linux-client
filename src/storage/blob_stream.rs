@@ -66,7 +66,7 @@ impl<'conn> BlobStream<'conn> {
                 rowid,
                 true, // read-only
             )
-            .map_err(|e| StorageError::Database(e))?;
+            .map_err(StorageError::Database)?;
 
         let size = blob.len();
 
@@ -102,7 +102,7 @@ impl<'conn> BlobStream<'conn> {
 
         self.blob
             .read_at_exact(&mut buf[..to_read], offset)
-            .map_err(|e| StorageError::Database(e))?;
+            .map_err(StorageError::Database)?;
 
         Ok(to_read)
     }
@@ -131,7 +131,7 @@ impl Read for BlobStream<'_> {
 
         self.blob
             .read_at_exact(&mut buf[..to_read], self.position)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         self.position += to_read;
         Ok(to_read)
@@ -295,7 +295,7 @@ impl Read for OwnedBlobStream {
         let to_read = buf.len().min(available);
 
         blob.read_at_exact(&mut buf[..to_read], self.position)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
 
         self.position += to_read;
         Ok(to_read)

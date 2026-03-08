@@ -78,8 +78,10 @@ impl LocalAIService {
             context, last_message
         );
 
-        let mut params = SampleParams::default();
-        params.max_tokens = 100; // Keep replies concise
+        let params = SampleParams {
+            max_tokens: 100, // Keep replies concise
+            ..Default::default()
+        };
 
         self.actor.complete(prompt, params).await
     }

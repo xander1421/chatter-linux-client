@@ -97,10 +97,7 @@ impl AnonGroupHandler {
 
         let inviter_avatar: Option<Vec<u8>> = match (&profile_key, &invite.encrypted_avatar) {
             (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                match decrypt_avatar(pk, encrypted) {
-                    Ok(avatar) => Some(avatar),
-                    _ => None,
-                }
+                decrypt_avatar(pk, encrypted).ok()
             }
             _ => None,
         };
@@ -174,10 +171,7 @@ impl AnonGroupHandler {
 
         let avatar: Option<Vec<u8>> = match (&profile_key, &ack.encrypted_avatar) {
             (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                match decrypt_avatar(pk, encrypted) {
-                    Ok(av) => Some(av),
-                    _ => None,
-                }
+                decrypt_avatar(pk, encrypted).ok()
             }
             _ => None,
         };
@@ -206,19 +200,28 @@ impl AnonGroupHandler {
     }
 
     /// Handle an incoming member list update.
+    ///
+    /// Updates local member state and emits event. The UI layer should trigger
+    /// profile sharing with the new members we learned about.
     fn handle_member_list(
         &self,
         list: content_v1::AnonGroupMemberList,
         _sender_id: UserId,
-        _ctx: &HandlerContext,
+        ctx: &HandlerContext,
     ) -> HandlerResult {
         let group_id = AnonGroupId::try_from_slice(&list.group_id)
             .ok_or_else(|| HandlerError::parse_failed("Invalid group ID in member list"))?;
 
         // Process the member list
-        if let Err(e) = self.service.handle_member_list(group_id, list.members) {
+        if let Err(e) = self.service.handle_member_list(group_id, list.members.clone()) {
             tracing::warn!("Failed to handle member list for group {}: {}", group_id, e);
         }
+
+        // Emit event for UI - the UI layer should trigger profile sharing
+        ctx.emit(DomainEvent::AnonGroupMemberListReceived {
+            group_id,
+            members: list.members,
+        });
 
         tracing::debug!("Updated member list for group {}", group_id);
 
@@ -292,7 +295,91 @@ impl AnonGroupHandler {
         Ok(HandlerOutcome::Processed)
     }
 
+    /// Handle an incoming profile share.
+    ///
+    /// Updates the sender's profile in the local member list.
+    fn handle_profile_share(
+        &self,
+        profile: content_v1::AnonGroupProfileShare,
+        sender_id: UserId,
+        _ctx: &HandlerContext,
+    ) -> HandlerResult {
+        let group_id = AnonGroupId::try_from_slice(&profile.group_id)
+            .ok_or_else(|| HandlerError::parse_failed("Invalid group ID in profile share"))?;
+
+        // Verify sender is a member
+        match self.service.is_member(&group_id, &sender_id) {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!(
+                    "Dropped profile share from non-member {} in group {}",
+                    sender_id,
+                    group_id
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to check membership: {}", e);
+                return Ok(HandlerOutcome::Ignored);
+            }
+        }
+
+        let profile_key = if let Some(ref pk) = profile.profile_key {
+            if pk.len() == 32 {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(pk);
+                Some(key)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
+
+        let display_name: Option<String> = match (&profile_key, &profile.encrypted_display_name) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                match decrypt_display_name(pk, encrypted) {
+                    Ok(name) if !name.is_empty() => Some(name),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+
+        let avatar: Option<Vec<u8>> = match (&profile_key, &profile.encrypted_avatar) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                decrypt_avatar(pk, encrypted).ok()
+            }
+            _ => None,
+        };
+
+        // Update member's profile
+        if let Err(e) = self
+            .service
+            .update_member_profile(&group_id, &sender_id, profile_key, display_name.clone(), avatar)
+        {
+            tracing::warn!(
+                "Failed to update profile for {} in group {}: {}",
+                sender_id,
+                group_id,
+                e
+            );
+        }
+
+        tracing::debug!(
+            "Received profile share from {} in group {} (name: {:?})",
+            sender_id,
+            group_id,
+            display_name
+        );
+
+        Ok(HandlerOutcome::Processed)
+    }
+
     /// Handle an incoming group message.
+    #[allow(clippy::boxed_local)] // Box comes from proto definition for large nested messages
     fn handle_group_message(
         &self,
         msg: Box<content_v1::AnonGroupMessage>,
@@ -414,7 +501,7 @@ impl AnonGroupHandler {
         // For anon groups, we emit the standard reaction event
         let message_id = crate::domain::MessageId::from_timestamp(reaction.target_sent_timestamp);
         let author_id = UserId::from_str(&reaction.target_author_aci)
-            .unwrap_or_else(|_| sender_id);
+            .unwrap_or(sender_id);
 
         let event = if reaction.remove {
             DomainEvent::ReactionRemoved {
@@ -667,6 +754,9 @@ impl InboxHandler for AnonGroupHandler {
             }
             Some(content_v1::content::Content::AnonGroupMessage(msg)) => {
                 self.handle_group_message(msg, sender_id, ctx)
+            }
+            Some(content_v1::content::Content::AnonGroupProfileShare(profile)) => {
+                self.handle_profile_share(profile, sender_id, ctx)
             }
             _ => Ok(HandlerOutcome::Ignored),
         }

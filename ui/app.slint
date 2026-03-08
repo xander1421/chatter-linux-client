@@ -29,6 +29,7 @@ import { SessionsModal, SessionInfo } from "modals/sessions.slint";
 import { JoinChannelModal, SearchResultChannel } from "modals/join_channel.slint";
 import { SearchModal, SearchResult } from "modals/search_modal.slint";
 import { ChannelSettingsModal, ChannelMemberData } from "modals/channel_settings.slint";
+import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
@@ -265,6 +266,12 @@ export component App inherits Rectangle {
     in-out property <[PrivateGroupFriend]> create-channel-available-friends: [];
     in-out property <int> create-channel-selected-friend-count: 0;
 
+    // Invite to private group modal properties
+    in-out property <string> invite-private-group-id: "";
+    in-out property <[PrivateGroupFriend]> invite-private-group-friends: [];
+    in-out property <int> invite-private-group-selected-count: 0;
+    in property <bool> invite-private-group-loading: false;
+
     // Join channel modal properties
     in-out property <string> join-channel-search-query: "";
     in property <[SearchResultChannel]> join-channel-results: [];
@@ -454,7 +461,12 @@ export component App inherits Rectangle {
     // Private group creation
     callback create-private-group(string, [PrivateGroupFriend]);
     callback toggle-friend-selection(int);
+    callback toggle-friend-role(int);  // toggle role between member/admin
     callback create-channel-template-selected(string);
+    // Invite to private group
+    callback invite-to-private-group([PrivateGroupFriend]);
+    callback toggle-invite-friend-selection(int);
+    callback toggle-invite-friend-role(int);  // toggle role for invite modal
 
     // Join channel
     callback search-channels(string);
@@ -532,6 +544,7 @@ export component App inherits Rectangle {
     callback channel-settings-toggle-mute(bool);
     callback channel-settings-change-member-role(string, string);  // user-id, new-role
     callback channel-settings-remove-member(string);  // user-id
+    callback channel-settings-invite-members();  // opens invite modal for private groups
     callback channel-settings-archive();
     callback channel-settings-leave();
     callback channel-settings-delete();
@@ -912,8 +925,32 @@ export component App inherits Rectangle {
         toggle-friend-selection(idx) => {
             root.toggle-friend-selection(idx);
         }
+        toggle-friend-role(idx) => {
+            root.toggle-friend-role(idx);
+        }
         template-selected(template) => {
             root.create-channel-template-selected(template);
+        }
+    }
+
+    // Invite to Private Group Modal
+    InvitePrivateGroupModal {
+        show-modal: root.active-modal == "invite-private-group";
+        available-friends <=> root.invite-private-group-friends;
+        selected-count <=> root.invite-private-group-selected-count;
+        loading: root.invite-private-group-loading;
+
+        close => {
+            root.active-modal = "none";
+        }
+        invite(friends) => {
+            root.invite-to-private-group(friends);
+        }
+        toggle-selection(idx) => {
+            root.toggle-invite-friend-selection(idx);
+        }
+        toggle-role(idx) => {
+            root.toggle-invite-friend-role(idx);
         }
     }
 
@@ -1179,6 +1216,9 @@ export component App inherits Rectangle {
         }
         remove-member(user-id) => {
             root.channel-settings-remove-member(user-id);
+        }
+        invite-members => {
+            root.channel-settings-invite-members();
         }
         archive-channel => {
             root.channel-settings-archive();

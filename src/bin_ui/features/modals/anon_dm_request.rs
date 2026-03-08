@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use slint::{Model, ModelRc, VecModel, Weak};
+use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::anon_dm::AnonDm;
@@ -26,6 +26,7 @@ pub fn spawn_anon_dm_request_handler(
     ui_ctx: &Arc<UIContext>,
 ) -> tokio::task::JoinHandle<()> {
     let anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let attachment_service = ui_ctx.attachment_service.clone();
     let mut event_rx = ui_ctx.event_bus.subscribe_domain();
 
     tokio::spawn(async move {
@@ -277,6 +278,7 @@ pub fn spawn_anon_dm_request_handler(
                     let sender_initials = get_initials(&sender_name);
                     let timestamp_ns_str = sent_at.to_string();
                     let weak = weak_window.clone();
+                    let attachment_service_for_gifs = attachment_service.clone();
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -372,6 +374,12 @@ pub fn spawn_anon_dm_request_handler(
 
                                 messages.insert(insert_pos, new_message);
                                 w.set_messages(ModelRc::new(VecModel::from(messages)));
+
+                                // Auto-register GIF animations for inline playback
+                                crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                                    w.as_weak(),
+                                    attachment_service_for_gifs,
+                                );
                             }
                         }
                     });

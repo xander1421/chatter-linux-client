@@ -103,30 +103,26 @@ impl JarvisBackground {
 
     /// Handle a domain event.
     async fn handle_event(jarvis: &JarvisService, event: DomainEvent) {
-        match event {
-            DomainEvent::MessageReceived { message } => {
-                let context = JarvisContext::channel(message.channel_id);
-                let author_id = message.sender_id;
-                let message_id = message.id.to_string();
+        if let DomainEvent::MessageReceived { message } = event {
+            let context = JarvisContext::channel(message.channel_id);
+            let author_id = message.sender_id;
+            let message_id = message.id.to_string();
 
-                // Get message text
-                let content = Self::extract_message_text(&message);
-                if content.is_empty() {
-                    return;
-                }
-
-                // Observe the message for learning
-                if let Err(e) = jarvis
-                    .observe_message(&context, &content, author_id.as_ref(), Some(&message_id))
-                    .await
-                {
-                    tracing::debug!(error = %e, "Failed to observe message");
-                }
+            // Get message text
+            let content = Self::extract_message_text(&message);
+            if content.is_empty() {
+                return;
             }
 
-            // Ignore other events
-            _ => {}
+            // Observe the message for learning
+            if let Err(e) = jarvis
+                .observe_message(&context, &content, author_id.as_ref(), Some(&message_id))
+                .await
+            {
+                tracing::debug!(error = %e, "Failed to observe message");
+            }
         }
+        // Other events are ignored
     }
 
     /// Extract text content from a message.

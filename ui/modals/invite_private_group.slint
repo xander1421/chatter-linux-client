@@ -1,0 +1,211 @@
+// InvitePrivateGroupModal - Modal for inviting members to an existing private group
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { PrivateGroupFriend } from "create_channel.slint";
+
+export component InvitePrivateGroupModal inherits Rectangle {
+    in property <bool> show-modal: false;
+    in-out property <[PrivateGroupFriend]> available-friends: [];
+    in-out property <int> selected-count: 0;
+    in property <bool> loading: false;
+
+    callback close();
+    callback invite([PrivateGroupFriend]);
+    callback toggle-selection(int);
+    callback toggle-role(int);  // toggle role between member/admin
+
+    Modal {
+        show: root.show-modal;
+        title: "Invite Members";
+        modal-width: 480px;
+
+        close => {
+            root.close();
+        }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            // Header text
+            Text {
+                text: "Select friends to invite to this group";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+            }
+
+            // Friend list (scrollable)
+            Rectangle {
+                min-height: 200px;
+                max-height: 350px;
+                vertical-stretch: 1;
+                background: Colors.surface;
+                border-radius: Spacing.radius-md;
+                border-width: 1px;
+                border-color: Colors.text-muted.with-alpha(0.2);
+
+                if root.available-friends.length == 0: Rectangle {
+                    Text {
+                        text: "No friends available to invite";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Flickable {
+                    viewport-height: friend-list.preferred-height;
+                    viewport-width: parent.width;
+
+                    friend-list := VerticalLayout {
+                        padding: Spacing.xs;
+
+                        for friend[index] in root.available-friends: Rectangle {
+                            height: 52px;
+                            background: friend-touch.has-hover ? Colors.surface-hover : transparent;
+                            border-radius: Spacing.radius-md;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.sm;
+                                padding-right: Spacing.sm;
+                                spacing: Spacing.sm;
+
+                                // Avatar placeholder
+                                Rectangle {
+                                    width: 36px;
+                                    height: 36px;
+                                    border-radius: 18px;
+                                    background: Colors.surface-hover;
+
+                                    Text {
+                                        text: friend.display-name != "" ? friend.display-name : "?";
+                                        color: Colors.text-secondary;
+                                        font-size: Typography.sm;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // Name
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+
+                                    Text {
+                                        text: friend.display-name;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        overflow: elide;
+                                    }
+
+                                    if friend.username != "": Text {
+                                        text: "@" + friend.username;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                // Role selector (only shown when selected)
+                                if friend.selected: Rectangle {
+                                    width: invite-role-text.width + Spacing.sm * 2;
+                                    height: 24px;
+                                    border-radius: Spacing.radius-sm;
+                                    background: friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover;
+                                    border-width: 1px;
+                                    border-color: friend.role == "admin" ? Colors.warning.with-alpha(0.5) : Colors.text-muted.with-alpha(0.3);
+
+                                    invite-role-text := Text {
+                                        text: friend.role == "admin" ? "Admin" : "Member";
+                                        color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
+                                        font-size: Typography.xs;
+                                        font-weight: Typography.medium;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    invite-role-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.toggle-role(index);
+                                        }
+                                    }
+                                }
+
+                                // Checkbox
+                                Rectangle {
+                                    width: 20px;
+                                    height: 20px;
+                                    border-radius: Spacing.radius-sm;
+                                    border-width: friend.selected ? 0 : 2px;
+                                    border-color: Colors.text-muted;
+                                    background: friend.selected ? Colors.primary : transparent;
+
+                                    if friend.selected: Text {
+                                        text: "\u{2713}";
+                                        color: Colors.text-primary;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        width: 100%;
+                                        height: 100%;
+                                    }
+                                }
+                            }
+
+                            friend-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.toggle-selection(index);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Footer with action buttons
+            HorizontalLayout {
+                spacing: Spacing.md;
+                height: 40px;
+
+                // Spacer
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                // Cancel button
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+
+                    clicked => {
+                        root.close();
+                    }
+                }
+
+                // Invite button
+                Button {
+                    text: root.loading ? "" :
+                        (root.selected-count == 0 ? "Invite" :
+                         root.selected-count == 1 ? "Invite 1 member" :
+                         "Invite " + root.selected-count + " members");
+                    variant: "primary";
+                    disabled: root.selected-count == 0 || root.loading;
+                    loading: root.loading;
+
+                    clicked => {
+                        if root.selected-count > 0 && !root.loading {
+                            root.invite(root.available-friends);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

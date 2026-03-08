@@ -135,6 +135,7 @@ impl ContextBuilder {
     /// Build context for a query.
     ///
     /// Retrieves relevant information from memory and the knowledge graph.
+    #[allow(clippy::field_reassign_with_default)]
     pub fn build(
         &self,
         context: &JarvisContext,
@@ -206,7 +207,7 @@ impl ContextBuilder {
             }
 
             // Check if it looks like a proper noun (capitalized)
-            if clean.chars().next().map_or(false, |c| c.is_uppercase()) {
+            if clean.chars().next().is_some_and(|c| c.is_uppercase()) {
                 names.push(clean.to_lowercase());
             }
         }

@@ -354,7 +354,7 @@ Summary:"#,
 
                 // Extract until end of sentence or specific delimiter
                 let extracted = rest
-                    .split(|c: char| c == '.' || c == ',' || c == '!' || c == '?')
+                    .split(['.', ',', '!', '?'])
                     .next()?
                     .trim();
 

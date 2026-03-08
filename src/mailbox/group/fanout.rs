@@ -325,7 +325,7 @@ impl GroupFanout {
         // Debug: Log the destination public key hex
         tracing::info!(
             member_id = %member.user_id,
-            dest_pk_hex = %hex::encode(&member.public_key),
+            dest_pk_hex = %hex::encode(member.public_key),
             envelope_len = encrypted_envelope.len(),
             "[FANOUT_SEND] Sending to member mailbox"
         );
@@ -449,7 +449,7 @@ impl GroupFanout {
         tracing::info!(
             group_id = %group_id,
             mailbox_id = %our_mailbox.id,
-            our_pk_hex = %hex::encode(&our_mailbox.public_key),
+            our_pk_hex = %hex::encode(our_mailbox.public_key),
             "[POLL_GROUP] Starting poll"
         );
 

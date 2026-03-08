@@ -416,6 +416,191 @@ impl AttachmentService {
         })
     }
 
+    /// Upload bytes directly to CDN with Signal-compatible encryption.
+    ///
+    /// This method takes raw bytes instead of a file path, useful for:
+    /// - GIFs downloaded from external CDNs (Klipy, Tenor)
+    /// - Generated content that doesn't need to be written to disk first
+    ///
+    /// The encrypted content is stored on the local filesystem after upload.
+    pub async fn upload_bytes_to_cdn_encrypted(
+        &self,
+        grpc_pool: &GrpcClientPool,
+        content: &[u8],
+        filename: &str,
+        mime_type: &str,
+    ) -> Result<CdnUploadResult, AttachmentError> {
+        let plaintext_size = content.len() as u64;
+
+        tracing::debug!(
+            filename = %filename,
+            plaintext_size = plaintext_size,
+            mime_type = %mime_type,
+            "Encrypting bytes for CDN upload"
+        );
+
+        // Encrypt with Signal-compatible encryption
+        let encrypt_start = std::time::Instant::now();
+        let encrypted = AttachmentCrypto::encrypt(content)
+            .map_err(|e| AttachmentError::EncryptionError(e.to_string()))?;
+
+        let encrypted_size = encrypted.ciphertext.len() as u64;
+        tracing::info!(
+            encrypted_size = encrypted_size,
+            elapsed = ?encrypt_start.elapsed(),
+            "Bytes encrypted"
+        );
+
+        // Get presigned upload URL
+        let mut file_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let upload_response = file_client
+            .get_attachment_upload_url(encrypted_size)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e)))?;
+
+        let cdn_key = upload_response.cdn_key;
+        let upload_url = upload_response.upload_url;
+
+        tracing::debug!(
+            cdn_key = %cdn_key,
+            "Got presigned URL, uploading encrypted content"
+        );
+
+        // Upload encrypted ciphertext via HTTP PUT
+        let upload_start = std::time::Instant::now();
+        let http_client = reqwest::Client::new();
+        let response = http_client
+            .put(&upload_url)
+            .header("Content-Type", "application/octet-stream")
+            .header("Content-Length", encrypted_size)
+            .body(encrypted.ciphertext.clone())
+            .send()
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(AttachmentError::NetworkError(format!(
+                "CDN upload failed with status: {}",
+                response.status()
+            )));
+        }
+
+        tracing::info!(cdn_key = %cdn_key, elapsed = ?upload_start.elapsed(), "CDN upload complete");
+
+        // Confirm upload with server
+        file_client
+            .confirm_attachment_upload(&cdn_key)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e)))?;
+
+        // Generate deterministic attachment ID from cdn_key
+        let attachment_id = AttachmentId::from_cdn_key(&cdn_key);
+
+        // Extract media metadata from bytes (for GIFs)
+        let media_meta = self.extract_media_metadata_from_bytes(content, mime_type);
+
+        // Build metadata
+        let domain_metadata = FileMetadata {
+            name: filename.to_string(),
+            mime_type: mime_type.to_string(),
+            size: plaintext_size,
+            sha256: encrypted.digest.to_vec(),
+            chunk_size: 0,
+            width: media_meta.width,
+            height: media_meta.height,
+            duration_seconds: if media_meta.duration_ms > 0 { Some((media_meta.duration_ms / 1000) as f64) } else { None },
+            waveform_samples: media_meta.waveform.clone(),
+            thumbnail: media_meta.thumbnail.clone(),
+            thumbnail_width: media_meta.thumbnail_width,
+            thumbnail_height: media_meta.thumbnail_height,
+        };
+
+        // Ensure attachments directory exists
+        ensure_attachments_dir()
+            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {}", e)))?;
+
+        // Write encrypted content to filesystem
+        let file_path = attachment_file_path(&attachment_id);
+        std::fs::write(&file_path, &encrypted.ciphertext)
+            .map_err(|e| AttachmentError::FileError(format!("Failed to write attachment file: {}", e)))?;
+
+        tracing::debug!(
+            "Wrote {} bytes encrypted content to {}",
+            encrypted.ciphertext.len(),
+            file_path.display()
+        );
+
+        // Create attachment record with content stored on filesystem
+        let attachment = Attachment {
+            id: attachment_id,
+            metadata: domain_metadata,
+            status: AttachmentStatus::Ready,
+            content_location: ContentLocation::OnFilesystem,
+            local_path: None,
+            remote_url: Some(cdn_key.clone()),
+            encryption_key: Some(encrypted.key.to_vec()),
+            encryption_iv: Some(encrypted.digest.to_vec()),
+            created_at: chrono::Utc::now(),
+        };
+
+        // Save to repository with file path
+        if let Err(e) = self.attachment_repo.insert_with_file_path(&attachment, &file_path) {
+            // Clean up file on failure
+            let _ = std::fs::remove_file(&file_path);
+            tracing::warn!("Failed to save CDN attachment with file path: {}", e);
+            return Err(AttachmentError::StorageError(e.to_string()));
+        }
+
+        tracing::info!(
+            cdn_key = %cdn_key,
+            attachment_id = %attachment_id,
+            filename = %filename,
+            plaintext_size = plaintext_size,
+            encrypted_size = encrypted_size,
+            file_path = %file_path.display(),
+            "Encrypted bytes uploaded to CDN and stored on filesystem"
+        );
+
+        Ok(CdnUploadResult {
+            attachment_id,
+            cdn_key,
+            encryption_key: encrypted.key,
+            digest: encrypted.digest,
+            plaintext_size,
+            content_type: mime_type.to_string(),
+            file_name: filename.to_string(),
+            waveform: media_meta.waveform.unwrap_or_default(),
+            duration_ms: media_meta.duration_ms,
+            thumbnail: media_meta.thumbnail.unwrap_or_default(),
+            thumbnail_width: media_meta.thumbnail_width.unwrap_or(0),
+            thumbnail_height: media_meta.thumbnail_height.unwrap_or(0),
+            width: media_meta.width.unwrap_or(0),
+            height: media_meta.height.unwrap_or(0),
+        })
+    }
+
+    /// Extract media metadata from bytes (for in-memory content like downloaded GIFs).
+    fn extract_media_metadata_from_bytes(&self, content: &[u8], mime_type: &str) -> MediaMetadata {
+        let mut meta = MediaMetadata::default();
+
+        if mime_type == "image/gif" || mime_type.starts_with("image/") {
+            // Get dimensions from image bytes
+            if let Ok((w, h)) = crate::media::ImageProcessor::get_dimensions_from_memory(content) {
+                meta.width = Some(w);
+                meta.height = Some(h);
+            }
+
+            // Generate thumbnail from bytes
+            if let Ok((thumb_bytes, thumb_w, thumb_h)) = crate::media::ImageProcessor::generate_thumbnail_from_memory(content) {
+                meta.thumbnail = Some(thumb_bytes);
+                meta.thumbnail_width = Some(thumb_w);
+                meta.thumbnail_height = Some(thumb_h);
+            }
+        }
+
+        meta
+    }
+
     /// Extract media metadata (waveform, thumbnail, dimensions) from a file.
     pub(crate) async fn extract_media_metadata(
         &self,

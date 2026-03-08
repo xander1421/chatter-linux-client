@@ -17,6 +17,7 @@ export struct PrivateGroupFriend {
     username: string,
     avatar-url: string,
     selected: bool,
+    role: string,  // "member" or "admin" - default is "member"
 }
 
 // AI provider option
@@ -82,7 +83,8 @@ export component CreateChannelModal inherits Rectangle {
     callback create(string, string, string, CreateChannelConfig, string, string);
     callback provider-selected(string);  // Callback to load models for provider
     callback create-private-group(string, [PrivateGroupFriend]);  // name, selected friends
-    callback toggle-friend-selection(int);  // index to toggle
+    callback toggle-friend-selection(int);  // index to toggle selection
+    callback toggle-friend-role(int);  // index to toggle role (member/admin)
     callback template-selected(string);  // notify rust when template changes
 
     // Internal state
@@ -411,6 +413,32 @@ export component CreateChannelModal inherits Rectangle {
                                                 color: Colors.text-muted;
                                                 font-size: Typography.xs;
                                                 overflow: elide;
+                                            }
+                                        }
+
+                                        // Role selector (only shown when selected)
+                                        if friend.selected: Rectangle {
+                                            width: role-text.width + Spacing.sm * 2;
+                                            height: 24px;
+                                            border-radius: Spacing.radius-sm;
+                                            background: friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover;
+                                            border-width: 1px;
+                                            border-color: friend.role == "admin" ? Colors.warning.with-alpha(0.5) : Colors.text-muted.with-alpha(0.3);
+
+                                            role-text := Text {
+                                                text: friend.role == "admin" ? "Admin" : "Member";
+                                                color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
+                                                font-size: Typography.xs;
+                                                font-weight: Typography.medium;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                            }
+
+                                            role-touch := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    root.toggle-friend-role(idx);
+                                                }
                                             }
                                         }
                                     }

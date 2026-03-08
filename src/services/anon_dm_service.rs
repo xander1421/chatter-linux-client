@@ -105,6 +105,21 @@ pub enum AnonDmError {
     /// Invalid private friend code.
     #[error("invalid private friend code: {0}")]
     InvalidFriendCode(String),
+
+    /// Profile decryption failed (missing or invalid profile key/data).
+    #[error("profile decryption failed: {0}")]
+    ProfileDecryptionFailed(String),
+}
+
+/// Decrypted profile data from an anonymous DM request or acceptance.
+#[derive(Debug, Clone)]
+pub struct DecryptedPeerProfile {
+    /// The decrypted display name (required).
+    pub display_name: String,
+    /// The decrypted avatar bytes (optional).
+    pub avatar: Option<Vec<u8>>,
+    /// The profile key used for decryption (for storage).
+    pub profile_key: Option<[u8; 32]>,
 }
 
 /// Anonymous DM service.
@@ -711,6 +726,7 @@ impl AnonDmService {
     /// Handle an incoming message request.
     ///
     /// Creates a pending conversation that can be accepted or declined.
+    #[allow(clippy::too_many_arguments)]
     pub fn handle_request(
         &self,
         conversation_id: AnonDmId,
@@ -758,6 +774,175 @@ impl AnonDmService {
         );
 
         Ok(dm)
+    }
+
+    // ========================================================================
+    // Encrypted Profile Handling (crypto isolated to service layer)
+    // ========================================================================
+
+    /// Parse a profile key from raw bytes.
+    fn parse_profile_key(profile_key: Option<Vec<u8>>) -> Option<[u8; 32]> {
+        profile_key.and_then(|pk| {
+            if pk.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&pk);
+                Some(arr)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Decrypt peer profile from encrypted data.
+    ///
+    /// This is the service-layer crypto operation that was previously in UI code.
+    /// Returns decrypted profile or error if decryption fails.
+    pub fn decrypt_peer_profile(
+        profile_key: Option<Vec<u8>>,
+        encrypted_display_name: Option<Vec<u8>>,
+        encrypted_avatar: Option<Vec<u8>>,
+    ) -> Result<DecryptedPeerProfile, AnonDmError> {
+        use crate::crypto::profile_crypto;
+
+        let profile_key_arr = Self::parse_profile_key(profile_key);
+
+        // Decrypt display name - required
+        let display_name = match (&profile_key_arr, &encrypted_display_name) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                match profile_crypto::decrypt_display_name(pk, encrypted) {
+                    Ok(name) if !name.is_empty() => name,
+                    Ok(_) => {
+                        return Err(AnonDmError::ProfileDecryptionFailed(
+                            "empty display name after decryption".to_string(),
+                        ));
+                    }
+                    Err(e) => {
+                        return Err(AnonDmError::ProfileDecryptionFailed(format!(
+                            "display name decryption failed: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+            _ => {
+                return Err(AnonDmError::ProfileDecryptionFailed(
+                    "missing profile_key or encrypted_display_name".to_string(),
+                ));
+            }
+        };
+
+        // Decrypt avatar - optional
+        let avatar = match (&profile_key_arr, &encrypted_avatar) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                match profile_crypto::decrypt_avatar(pk, encrypted) {
+                    Ok(avatar) => Some(avatar),
+                    Err(e) => {
+                        tracing::debug!(error = %e, "Failed to decrypt avatar (optional)");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
+        Ok(DecryptedPeerProfile {
+            display_name,
+            avatar,
+            profile_key: profile_key_arr,
+        })
+    }
+
+    /// Handle an incoming message request with encrypted profile data.
+    ///
+    /// This method accepts encrypted profile data and handles decryption in the
+    /// service layer, keeping crypto operations out of UI code.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns the created conversation and decrypted profile.
+    /// On failure, returns an error (caller should log and ignore).
+    #[allow(clippy::too_many_arguments)]
+    pub fn handle_request_encrypted(
+        &self,
+        conversation_id: AnonDmId,
+        sender_id: UserId,
+        sender_mailbox_pk: [u8; 32],
+        intro_message: Option<&str>,
+        profile_key: Option<Vec<u8>>,
+        encrypted_display_name: Option<Vec<u8>>,
+        encrypted_avatar: Option<Vec<u8>>,
+    ) -> Result<(AnonDm, DecryptedPeerProfile), AnonDmError> {
+        // Decrypt profile in service layer
+        let profile = Self::decrypt_peer_profile(
+            profile_key,
+            encrypted_display_name,
+            encrypted_avatar,
+        )?;
+
+        tracing::info!(
+            peer_id = %sender_id,
+            display_name = %profile.display_name,
+            has_avatar = profile.avatar.is_some(),
+            "Decrypted sender profile from AnonDmRequest"
+        );
+
+        // Store the request with decrypted data
+        let dm = self.handle_request(
+            conversation_id,
+            sender_id,
+            sender_mailbox_pk,
+            intro_message,
+            profile.profile_key,
+            Some(profile.display_name.clone()),
+            profile.avatar.clone(),
+        )?;
+
+        Ok((dm, profile))
+    }
+
+    /// Handle an acceptance with encrypted profile data.
+    ///
+    /// This method accepts encrypted profile data and handles decryption in the
+    /// service layer, keeping crypto operations out of UI code.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns the decrypted profile.
+    /// On failure, returns an error (caller should log and ignore).
+    pub fn handle_acceptance_encrypted(
+        &self,
+        conversation_id: AnonDmId,
+        peer_id: UserId,
+        responder_mailbox_pk: [u8; 32],
+        profile_key: Option<Vec<u8>>,
+        encrypted_display_name: Option<Vec<u8>>,
+        encrypted_avatar: Option<Vec<u8>>,
+    ) -> Result<DecryptedPeerProfile, AnonDmError> {
+        // Decrypt profile in service layer
+        let profile = Self::decrypt_peer_profile(
+            profile_key,
+            encrypted_display_name,
+            encrypted_avatar,
+        )?;
+
+        tracing::info!(
+            peer_id = %peer_id,
+            display_name = %profile.display_name,
+            has_avatar = profile.avatar.is_some(),
+            "Decrypted responder profile from AnonDmAccept"
+        );
+
+        // Store the acceptance with decrypted data
+        self.handle_acceptance(
+            conversation_id,
+            peer_id,
+            responder_mailbox_pk,
+            profile.profile_key,
+            Some(profile.display_name.clone()),
+            profile.avatar.clone(),
+        )?;
+
+        Ok(profile)
     }
 
     // ========================================================================

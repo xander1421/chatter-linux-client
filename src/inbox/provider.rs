@@ -165,6 +165,7 @@ impl DeviceInboxProvider {
     /// * `database` - Database for DM conversation state
     /// * `grpc_pool` - gRPC client pool for friend request polling
     /// * `event_bus` - Optional event bus for domain events
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: InboxConfig,
         message_client: Arc<tokio::sync::Mutex<MessageClient>>,

@@ -154,7 +154,8 @@ pub async fn process_anon_dm_results(
 
                     if let Some(inner) = dm_msg.inner_content {
                         // Check if the inner content is an anon group management message
-                        let was_inner_processed = match inner.content.as_ref() {
+                        
+                        match inner.content.as_ref() {
                             Some(content_v1::content::Content::AnonGroupInvite(invite)) => {
                                 tracing::info!(
                                     sender_id = %sender_id,
@@ -215,8 +216,7 @@ pub async fn process_anon_dm_results(
                                     .await;
                                 true
                             }
-                        };
-                        was_inner_processed
+                        }
                     } else {
                         false
                     }
@@ -246,7 +246,7 @@ pub async fn process_anon_dm_results(
             if was_processed {
                 processed
                     .entry(conversation_id)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(message_id);
             }
         }

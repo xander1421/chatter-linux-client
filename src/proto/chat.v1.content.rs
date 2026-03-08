@@ -41,7 +41,7 @@ pub struct Content {
     /// Padding is random bytes, stripped after decryption.
     #[prost(bytes="vec", tag="200")]
     pub padding: ::prost::alloc::vec::Vec<u8>,
-    #[prost(oneof="content::Content", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39")]
+    #[prost(oneof="content::Content", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40")]
     pub content: ::core::option::Option<content::Content>,
 }
 /// Nested message and enum types in `Content`.
@@ -129,6 +129,9 @@ pub mod content {
         /// Anonymous DM message (messages within an anonymous DM conversation)
         #[prost(message, tag="39")]
         AnonDmMessage(::prost::alloc::boxed::Box<super::AnonDmMessage>),
+        /// Anonymous group profile share (sent to members when joining or updating profile)
+        #[prost(message, tag="40")]
+        AnonGroupProfileShare(super::AnonGroupProfileShare),
     }
 }
 // =============================================================================
@@ -918,6 +921,29 @@ pub struct AnonGroupMessage {
     /// This allows full reuse of existing message types (DataMessage, etc.)
     #[prost(message, optional, boxed, tag="2")]
     pub inner_content: ::core::option::Option<::prost::alloc::boxed::Box<Content>>,
+}
+/// AnonGroupProfileShare: Share profile with group members
+/// Sent when joining a group (after receiving member list) or when updating profile.
+/// Allows members to learn each other's display names directly rather than relying
+/// on the group owner to relay profiles via MemberList.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AnonGroupProfileShare {
+    /// Group identifier (16 bytes UUID)
+    #[prost(bytes="vec", tag="1")]
+    pub group_id: ::prost::alloc::vec::Vec<u8>,
+    /// Sender's profile key (32 bytes)
+    #[prost(bytes="vec", optional, tag="2")]
+    pub profile_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    /// Sender's encrypted display name
+    #[prost(bytes="vec", optional, tag="3")]
+    pub encrypted_display_name: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    /// Sender's encrypted avatar
+    #[prost(bytes="vec", optional, tag="4")]
+    pub encrypted_avatar: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    /// When the profile was shared (nanoseconds since epoch)
+    #[prost(fixed64, tag="5")]
+    pub timestamp: u64,
 }
 // =============================================================================
 // Anonymous DM (Initiator-Anonymous Conversations)

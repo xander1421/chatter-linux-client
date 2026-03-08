@@ -660,6 +660,9 @@ struct ActiveCallState {
     livekit_url: String,
 }
 
+// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
+#[allow(clippy::await_holding_lock)]
+#[allow(clippy::too_many_arguments)]
 async fn initiate_call_impl(
     call_client: &Arc<parking_lot::RwLock<CallClient>>,
     room_manager: &Arc<RoomManager>,
@@ -724,6 +727,8 @@ async fn initiate_call_impl(
     Ok(call)
 }
 
+// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
+#[allow(clippy::await_holding_lock)]
 async fn join_call_impl(
     call_client: &Arc<parking_lot::RwLock<CallClient>>,
     room_manager: &Arc<RoomManager>,
@@ -789,6 +794,8 @@ async fn join_call_impl(
     Ok(call)
 }
 
+// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
+#[allow(clippy::await_holding_lock)]
 async fn leave_call_impl(
     call_client: &Arc<parking_lot::RwLock<CallClient>>,
     room_manager: &Arc<RoomManager>,
@@ -832,6 +839,8 @@ async fn leave_call_impl(
     Ok(())
 }
 
+// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
+#[allow(clippy::await_holding_lock)]
 async fn end_call_impl(
     call_client: &Arc<parking_lot::RwLock<CallClient>>,
     room_manager: &Arc<RoomManager>,
@@ -867,6 +876,8 @@ async fn end_call_impl(
 /// Reconnect to the current call after a connection drop.
 ///
 /// This gets a new token from the server and reconnects to LiveKit.
+// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
+#[allow(clippy::await_holding_lock)]
 async fn reconnect_impl(
     call_client: &Arc<parking_lot::RwLock<CallClient>>,
     room_manager: &Arc<RoomManager>,

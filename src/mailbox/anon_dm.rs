@@ -57,6 +57,7 @@ impl AnonDmPoller {
     /// Get all active mailbox keys for polling.
     ///
     /// Returns (conversation_id, public_key, private_key) tuples.
+    #[allow(clippy::type_complexity)]
     pub fn get_active_mailbox_keys(
         &self,
     ) -> Result<Vec<(AnonDmId, [u8; 32], [u8; 64])>, MailboxError> {
@@ -94,7 +95,7 @@ impl AnonDmPoller {
 
         let challenge = challenge_response.challenge;
         // Use hex of public key as mailbox ID (for acknowledgment tracking)
-        let mailbox_id = hex::encode(&mailbox.public_key);
+        let mailbox_id = hex::encode(mailbox.public_key);
 
         // Sign challenge with private key
         let signing_key = SigningKey::from_keypair_bytes(&mailbox.private_key)

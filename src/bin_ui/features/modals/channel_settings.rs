@@ -1,16 +1,18 @@
 //! Channel settings modal callbacks.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::ChannelId;
+use chatter_linux::domain::anon_group::AnonGroupId;
+use chatter_linux::domain::ids::{ChannelId, UserId};
 use chatter_linux::domain::ChannelType;
 use chatter_linux::services::channel::ChannelService;
 use chatter_linux::services::user::UserService;
 
-use crate::{ChannelMemberData, MainWindow};
+use crate::{ChannelMemberData, MainWindow, PrivateGroupFriend};
 
 /// Wire channel settings modal callbacks.
 pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
@@ -19,6 +21,7 @@ pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     wire_notification_settings(window, ui_ctx);
     wire_member_management(window, ui_ctx);
     wire_channel_actions(window, ui_ctx);
+    wire_invite_members(window, ui_ctx);
 }
 
 /// Open the channel settings modal with channel data.
@@ -333,6 +336,123 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     }
                 });
             }
+        });
+    });
+}
+
+fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let weak_window = window.as_weak();
+    let anon_group_service = ui_ctx.anon_group_service.clone();
+    let user_service = ui_ctx.user_service.clone();
+    let anon_dm_service = ui_ctx.anon_dm_service.clone();
+
+    window.on_channel_settings_invite_members(move || {
+        let weak = weak_window.clone();
+        let anon_group_service = anon_group_service.clone();
+        let user_service = user_service.clone();
+        let anon_dm_service = anon_dm_service.clone();
+
+        tokio::spawn(async move {
+            // Get the private group ID from channel settings
+            let group_id_str = weak
+                .upgrade()
+                .map(|w| w.get_channel_settings_id().to_string())
+                .unwrap_or_default();
+
+            if group_id_str.is_empty() {
+                return;
+            }
+
+            let group_id: AnonGroupId = match group_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid private group ID: {}", e);
+                    return;
+                }
+            };
+
+            // Get existing members to filter them out
+            let existing_members: HashSet<UserId> = anon_group_service
+                .get_members(&group_id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.user_id)
+                .collect();
+
+            // Load available friends and anon DM peers
+            let mut friend_data: Vec<PrivateGroupFriend> = Vec::new();
+            let mut seen_user_ids: HashSet<UserId> = HashSet::new();
+
+            // Load friends
+            let friends = user_service.list_friends(100, 0).await.unwrap_or_default();
+            for friendship in &friends {
+                // Skip existing members
+                if existing_members.contains(&friendship.friend_id) {
+                    continue;
+                }
+                if seen_user_ids.contains(&friendship.friend_id) {
+                    continue;
+                }
+
+                let profile = user_service.get_profile_local(&friendship.friend_id).ok().flatten();
+                let display_name = profile
+                    .as_ref()
+                    .map(|p| p.display_name.clone())
+                    .unwrap_or_else(|| friendship.friend_id.to_string());
+
+                seen_user_ids.insert(friendship.friend_id);
+                friend_data.push(PrivateGroupFriend {
+                    user_id: friendship.friend_id.to_string().into(),
+                    display_name: display_name.into(),
+                    username: "".into(),
+                    avatar_url: "".into(),
+                    selected: false,
+                    role: "member".into(),
+                });
+            }
+
+            // Load anon DM peers (active conversations only)
+            if let Ok(conversations) = anon_dm_service.list_conversations() {
+                for dm in conversations {
+                    // Skip existing members
+                    if existing_members.contains(&dm.peer_id) {
+                        continue;
+                    }
+                    if seen_user_ids.contains(&dm.peer_id) {
+                        continue;
+                    }
+                    // Only include active conversations
+                    if !dm.is_ready() {
+                        continue;
+                    }
+
+                    let display_name = dm
+                        .peer_display_name
+                        .clone()
+                        .unwrap_or_else(|| dm.peer_id.to_string());
+
+                    seen_user_ids.insert(dm.peer_id);
+                    friend_data.push(PrivateGroupFriend {
+                        user_id: dm.peer_id.to_string().into(),
+                        display_name: display_name.into(),
+                        username: "".into(),
+                        avatar_url: "".into(),
+                        selected: false,
+                        role: "member".into(),
+                    });
+                }
+            }
+
+            // Update UI - close settings modal and open invite modal
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    // Store the group ID for the invite
+                    w.set_invite_private_group_id(group_id_str.into());
+                    w.set_invite_private_group_friends(ModelRc::new(VecModel::from(friend_data)));
+                    w.set_invite_private_group_selected_count(0);
+                    w.set_active_modal("invite-private-group".into());
+                }
+            });
         });
     });
 }

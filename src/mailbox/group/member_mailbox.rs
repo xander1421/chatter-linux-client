@@ -390,7 +390,7 @@ impl GroupMailboxManager {
         tracing::info!(
             group_id = %mailbox.group_id,
             mailbox_id = %mailbox.id,
-            our_pk_hex = %hex::encode(&mailbox.public_key),
+            our_pk_hex = %hex::encode(mailbox.public_key),
             expires_at = %mailbox.expires_at.to_rfc3339(),
             "[GROUP_MAILBOX] Saving our mailbox to database"
         );
@@ -442,7 +442,7 @@ impl GroupMailboxManager {
         tracing::info!(
             group_id = %group_id,
             member_id = %mailbox.user_id,
-            member_pk_hex = %hex::encode(&mailbox.public_key),
+            member_pk_hex = %hex::encode(mailbox.public_key),
             "[STORE_MEMBER_MAILBOX] Storing member mailbox"
         );
 

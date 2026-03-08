@@ -525,7 +525,7 @@ impl MessageService {
                 token.randomizer.as_deref(),
             )
             .await
-            .map_err(|e| MessageError::Network(e))?;
+            .map_err(MessageError::Network)?;
 
         let _ = token_manager.mark_token_used(&token.id);
 
@@ -621,7 +621,7 @@ impl MessageService {
                 token.randomizer.as_deref(),
             )
             .await
-            .map_err(|e| MessageError::Network(e))?;
+            .map_err(MessageError::Network)?;
 
         let _ = token_manager.mark_token_used(&token.id);
 

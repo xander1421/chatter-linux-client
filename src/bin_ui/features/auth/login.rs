@@ -94,6 +94,24 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     .spawn();
                     tracing::debug!("Jarvis background handlers spawned");
 
+                    // Auto-load local AI model if previously configured
+                    {
+                        let local_ai = ui_ctx.local_ai_service.clone();
+                        tokio::spawn(async move {
+                            match local_ai.load_preferred_model().await {
+                                Ok(Some(info)) => {
+                                    tracing::info!("Auto-loaded local AI model: {}", info.model_id);
+                                }
+                                Ok(None) => {
+                                    tracing::debug!("No local AI model configured for auto-load");
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to auto-load local AI model: {}", e);
+                                }
+                            }
+                        });
+                    }
+
                     // NOW start inbox provider - handlers are already subscribed
                     {
                         let weak_for_inbox = weak.clone();

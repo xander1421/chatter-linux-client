@@ -60,19 +60,22 @@ pub fn spawn_anon_group_event_handler(
                         kicked_by,
                     );
                 }
-                DomainEvent::AnonGroupMemberListReceived { group_id, members } => {
+                DomainEvent::AnonGroupMemberListReceived { group_id, .. } => {
+                    // Share our profile with group members we just learned about.
+                    // This ensures all members learn our display name directly rather
+                    // than relying on the group owner to relay it.
                     let anon_group_service = ui_ctx.anon_group_service.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        if let Err(e) = anon_group_service.handle_member_list(group_id, members) {
-                            tracing::error!(
+                    tokio::spawn(async move {
+                        if let Err(e) = anon_group_service.share_profile_with_group(&group_id).await {
+                            tracing::warn!(
                                 group_id = %group_id,
                                 error = %e,
-                                "Failed to handle incoming member list"
+                                "Failed to share profile with group members"
                             );
                         } else {
-                            tracing::info!(
+                            tracing::debug!(
                                 group_id = %group_id,
-                                "Successfully synced member list from anon DM"
+                                "Shared profile with group members after member list update"
                             );
                         }
                     });

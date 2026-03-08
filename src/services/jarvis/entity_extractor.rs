@@ -149,7 +149,7 @@ JSON:"#,
         for word in words {
             // Simple heuristic: capitalized word that's not at sentence start
             if word.len() > 2
-                && word.chars().next().map_or(false, |c| c.is_uppercase())
+                && word.chars().next().is_some_and(|c| c.is_uppercase())
                 && !word.chars().all(|c| c.is_uppercase())
             {
                 let name = word.trim_matches(|c: char| !c.is_alphanumeric());
@@ -164,7 +164,7 @@ JSON:"#,
         }
 
         // Deduplicate
-        entities.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        entities.sort_by_key(|a| a.name.to_lowercase());
         entities.dedup_by(|a, b| a.name.to_lowercase() == b.name.to_lowercase());
 
         entities

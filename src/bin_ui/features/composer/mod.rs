@@ -23,7 +23,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     emoji::wire_emoji_category_changed(window);
     emoji::wire_emoji_search_changed(window);
     gif::wire_gif_clicked(window, ui_ctx);
-    gif::wire_gif_selected(window);
+    gif::wire_gif_selected(window, ui_ctx);
     gif::wire_gif_search(window, ui_ctx);
     mentions::wire_mention_triggered(
         window,

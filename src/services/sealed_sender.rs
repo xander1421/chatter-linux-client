@@ -137,7 +137,7 @@ impl SealedSenderService {
     ) -> Option<MailboxToken> {
         // Try to get an available token
         match token_manager.get_available_token() {
-            Ok(Some(token)) => return Some(token),
+            Ok(Some(token)) => Some(token),
             Ok(None) => {
                 // Request new tokens
                 let mut mailbox_client = MailboxClient::new(

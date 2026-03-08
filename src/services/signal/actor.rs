@@ -245,7 +245,7 @@ impl SignalActorHandle {
                             for (session_id, record) in sessions {
                                 let mut rng = rand::rngs::StdRng::from_os_rng();
                                 if let Ok(serialized) = record.serialize() {
-                                    if let Ok(_) = store2.key_store().store_session(&format!("{}:{}", sender_address.name(), sender_address.device_id()), &serialized) {
+                                    if store2.key_store().store_session(&format!("{}:{}", sender_address.name(), sender_address.device_id()), &serialized).is_ok() {
                                         if let Ok(prekey_msg) = libsignal_protocol::PreKeySignalMessage::try_from(envelope.as_slice()) {
                                             if let Ok(plaintext) = libsignal_protocol::message_decrypt_prekey(&prekey_msg, &sender_address, &mut store, &mut store2, &mut store3, &store6, &mut store4, &mut rng).await {
                                                 final_res = Ok(ConvergenceResult::ActiveSession { plaintext, session_id });

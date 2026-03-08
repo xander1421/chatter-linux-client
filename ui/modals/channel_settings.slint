@@ -61,9 +61,13 @@ export component ChannelSettingsModal inherits Rectangle {
     callback toggle-mute(bool);
     callback change-member-role(string, string);  // user-id, new-role
     callback remove-member(string);  // user-id
+    callback invite-members();  // opens invite modal (private groups)
     callback archive-channel();
     callback leave-channel();
     callback delete-channel();
+
+    // Private group helper
+    property <bool> is-private-group: channel-type == "private-group";
 
     // Helper to get role display color
     pure function role-color(role: string) -> color {
@@ -589,6 +593,8 @@ export component ChannelSettingsModal inherits Rectangle {
                             spacing: Spacing.md;
 
                             HorizontalLayout {
+                                spacing: Spacing.sm;
+
                                 Text {
                                     text: "Members";
                                     color: Colors.text-primary;
@@ -601,6 +607,29 @@ export component ChannelSettingsModal inherits Rectangle {
                                     text: root.member-count + " total";
                                     color: Colors.text-muted;
                                     font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+
+                                // Invite button for private groups (admins/owners only)
+                                if root.is-private-group && root.can-manage-members: Rectangle {
+                                    width: invite-btn-text.width + Spacing.md * 2;
+                                    height: 28px;
+                                    background: invite-btn-touch.has-hover ? Colors.primary.darker(10%) : Colors.primary;
+                                    border-radius: Spacing.radius-sm;
+
+                                    invite-btn-text := Text {
+                                        text: "+ Invite";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.xs;
+                                        font-weight: Typography.medium;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    invite-btn-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.invite-members(); }
+                                    }
                                 }
                             }
 

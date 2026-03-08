@@ -34,7 +34,7 @@ impl SignalService {
         channel_id: &ChannelId,
     ) -> Result<SenderKeyDistribution, ServiceError> {
         let our_address = self.get_our_address()?;
-        let skdm_bytes = self.actor.create_sender_key(channel_id.clone(), our_address).await?;
+        let skdm_bytes = self.actor.create_sender_key(*channel_id, our_address).await?;
 
         Ok(SenderKeyDistribution {
             channel_id: channel_id.to_string(),
@@ -77,7 +77,7 @@ impl SignalService {
             None
         };
 
-        let ciphertext = self.actor.encrypt_for_group(channel_id.clone(), our_address, plaintext.to_vec()).await?;
+        let ciphertext = self.actor.encrypt_for_group(*channel_id, our_address, plaintext.to_vec()).await?;
 
         let group_encrypted = GroupEncrypted {
             channel_id: channel_id.to_string(),
@@ -104,7 +104,7 @@ impl SignalService {
     /// Check if we have a sender key for a channel.
     pub async fn has_sender_key(&self, channel_id: &ChannelId) -> Result<bool, ServiceError> {
         let our_address = self.get_our_address()?;
-        self.actor.has_sender_key(channel_id.clone(), our_address).await
+        self.actor.has_sender_key(*channel_id, our_address).await
     }
 
     /// Rotate our sender key for a channel.
@@ -118,7 +118,7 @@ impl SignalService {
 
     /// Clear all sender keys for a channel.
     pub async fn clear_channel_sender_keys(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
-        self.actor.clear_channel_sender_keys(channel_id.clone()).await
+        self.actor.clear_channel_sender_keys(*channel_id).await
     }
 
     /// Mark a channel as needing sender key rotation.

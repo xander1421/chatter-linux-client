@@ -321,7 +321,7 @@ impl GroupCoordinator {
         tracing::info!(
             channel_id = %channel_id,
             mailbox_id = %mailbox.id,
-            announce_pk_hex = %hex::encode(&mailbox.public_key),
+            announce_pk_hex = %hex::encode(mailbox.public_key),
             "[BUILD_ANNOUNCEMENT] Building GroupMailboxAddress"
         );
         GroupMailboxAddress {

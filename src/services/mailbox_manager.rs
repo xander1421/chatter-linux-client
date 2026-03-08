@@ -85,25 +85,24 @@ pub struct ActiveMailbox {
     pub conversation_id: String,
 }
 
+// Settings key for cached server blind signature public key.
+const SERVER_BLIND_SIG_PUBKEY: &str = "mailbox.server_blind_sig_pubkey";
+
+// Maximum number of tokens to keep in the pool.
+// Prevents unbounded accumulation when tokens are acquired faster than used.
+const MAX_TOKEN_POOL_SIZE: usize = 50;
+
+// Maximum number of active mailboxes to track.
+// Oldest mailboxes are evicted when this limit is exceeded.
+const MAX_ACTIVE_MAILBOXES: usize = 100;
+
+// Token expiry duration in seconds (24 hours).
+// Tokens older than this are automatically discarded.
+const TOKEN_EXPIRY_SECS: u64 = 24 * 60 * 60;
+
 /// Manages ephemeral mailboxes for privacy-preserving messaging.
 ///
 /// Implements the NDSS '21 mailbox system for sender anonymity.
-
-/// Settings key for cached server blind signature public key.
-const SERVER_BLIND_SIG_PUBKEY: &str = "mailbox.server_blind_sig_pubkey";
-
-/// Maximum number of tokens to keep in the pool.
-/// Prevents unbounded accumulation when tokens are acquired faster than used.
-const MAX_TOKEN_POOL_SIZE: usize = 50;
-
-/// Maximum number of active mailboxes to track.
-/// Oldest mailboxes are evicted when this limit is exceeded.
-const MAX_ACTIVE_MAILBOXES: usize = 100;
-
-/// Token expiry duration in seconds (24 hours).
-/// Tokens older than this are automatically discarded.
-const TOKEN_EXPIRY_SECS: u64 = 24 * 60 * 60;
-
 pub struct MailboxManager {
     /// gRPC client pool (for creating MailboxClient instances)
     client_pool: Arc<GrpcClientPool>,
