@@ -834,20 +834,38 @@ export component App inherits Rectangle {
                     }
                 }
 
-                // Jarvis AI panel (appears to the right of chat when visible)
-                if root.jarvis-panel-visible: JarvisPanel {
-                    width: 360px;
-                    height: 100%;
-                    panel-visible: root.jarvis-panel-visible;
-                    thinking: root.jarvis-thinking;
-                    messages: root.jarvis-messages;
-                    current-response: root.jarvis-response;
-
-                    close => { root.jarvis-panel-close(); }
-                    send(text) => { root.jarvis-send(text); }
-                    clear => { root.jarvis-clear(); }
-                }
             }
+        }
+    }
+
+    // ========== Jarvis AI floating panel ==========
+    // Floating panel that appears on top of chat when toggled
+    if root.jarvis-panel-visible: Rectangle {
+        x: parent.width - 380px;
+        y: 60px;
+        width: 360px;
+        height: parent.height - 120px;
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+        drop-shadow-blur: 20px;
+        drop-shadow-color: Colors.background.with-alpha(0.5);
+        drop-shadow-offset-x: -4px;
+        drop-shadow-offset-y: 4px;
+
+        JarvisPanel {
+            width: 100%;
+            height: 100%;
+            panel-visible: root.jarvis-panel-visible;
+            thinking: root.jarvis-thinking;
+            messages: root.jarvis-messages;
+            current-response: root.jarvis-response;
+
+            close => {
+                root.jarvis-panel-visible = false;
+                root.jarvis-panel-close();
+            }
+            send(text) => { root.jarvis-send(text); }
+            clear => { root.jarvis-clear(); }
         }
     }
 

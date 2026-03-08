@@ -49,8 +49,8 @@ pub const MAX_INTRO_LENGTH: usize = 500;
 /// Maximum display name length.
 pub const MAX_DISPLAY_NAME_LENGTH: usize = 64;
 
-/// Maximum avatar size (25KB should be enough for compressed JPEG).
-pub const MAX_AVATAR_SIZE: usize = 25000;
+/// Maximum avatar size (2MB to match profile_crypto limit).
+pub const MAX_AVATAR_SIZE: usize = 2 * 1024 * 1024;
 
 /// Anonymous DM initial contact message.
 ///
