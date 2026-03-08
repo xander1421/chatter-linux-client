@@ -786,7 +786,7 @@ async fn process_ecies_init_message(
             conversation_id: init_msg.conversation_id,
             sender_id: init_msg.sender_id,
             sender_display_name: init_msg.sender_display_name.clone(),
-            sender_avatar: None, // TODO: Add avatar to AnonDmInitMessage
+            sender_avatar: init_msg.sender_avatar.clone(),
             peer_mailbox_pk: init_msg.mailbox_pk,
             peer_identity_key: init_msg.identity_key,
             peer_delivery_token: init_msg.delivery_token,

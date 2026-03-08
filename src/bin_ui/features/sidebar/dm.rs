@@ -317,6 +317,7 @@ pub fn add_anon_dm_to_sidebar(
     last_message: &str,
     timestamp: &str,
     is_pending: bool,
+    avatar_bytes: Option<Vec<u8>>,
 ) {
     let weak_window = window.as_weak();
     let dm_id = dm_id.to_string();
@@ -333,11 +334,22 @@ pub fn add_anon_dm_to_sidebar(
                 .collect();
 
             let channel_id = format!("anon_dm:{}", dm_id);
-            
+
             // Avoid duplicates
             if dms.iter().any(|d| d.channel_id.as_str() == channel_id) {
                 return;
             }
+
+            // Convert avatar bytes to Slint Image
+            let (avatar_source, has_avatar) = match &avatar_bytes {
+                Some(bytes) => {
+                    match crate::bin_ui::converters::avatar_bytes_to_image(bytes) {
+                        Some(img) => (img, true),
+                        None => (slint::Image::default(), false),
+                    }
+                }
+                None => (slint::Image::default(), false),
+            };
 
             // Incognito icon for private, postbox for pending incoming
             let display_name = if is_pending {
@@ -352,8 +364,8 @@ pub fn add_anon_dm_to_sidebar(
                 user_id: peer_id.into(),
                 display_name: display_name.into(),
                 avatar_url: "".into(),
-                avatar_source: slint::Image::default(),
-                has_avatar: false,
+                avatar_source,
+                has_avatar,
                 initials: crate::bin_ui::converters::get_initials(&peer_name).into(),
                 presence_status: if is_pending { "pending".into() } else { "offline".into() },
                 last_message: last_message.into(),

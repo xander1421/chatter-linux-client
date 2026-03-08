@@ -352,6 +352,7 @@ impl AnonDmService {
 
         // Build the initial contact message per NDSS'21: "init" || pk_e
         // Extended to include our identity for subsequent session establishment
+        let sender_avatar = self.get_my_avatar();
         let init_message = AnonDmInitMessage::new(
             *conversation_id,
             our_user_id,
@@ -360,6 +361,7 @@ impl AnonDmService {
             our_delivery_token,
             sender_display_name.unwrap_or(""),
             intro_message.unwrap_or_default(),
+            sender_avatar,
         );
 
         // Serialize the init message

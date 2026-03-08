@@ -217,6 +217,12 @@ impl AnonDm {
         self
     }
 
+    /// Set the peer's avatar (optional version).
+    pub fn with_avatar_opt(mut self, avatar: Option<Vec<u8>>) -> Self {
+        self.peer_avatar = avatar;
+        self
+    }
+
     /// Check if conversation is ready for messaging.
     pub fn is_ready(&self) -> bool {
         self.status == AnonDmStatus::Active && self.peer_mailbox_pk.is_some()

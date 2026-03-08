@@ -1388,6 +1388,9 @@ pub async fn handle_inbox_event(
                 }
             });
 
+            // Clone avatar for sidebar before moving to event
+            let avatar_for_sidebar = decrypted_avatar.clone();
+
             // Emit domain event for UI to show request modal
             ui_ctx.event_bus.emit_domain(DomainEvent::AnonDmRequestReceived {
                 conversation_id: anon_dm_id,
@@ -1412,6 +1415,7 @@ pub async fn handle_inbox_event(
                     "New message request",
                     "Just now",
                     true, // is_pending
+                    avatar_for_sidebar,
                 );
 
                 // Increment message requests badge
@@ -1512,6 +1516,7 @@ pub async fn handle_inbox_event(
             let peer_id_clone = peer_id;
             let display_name_for_storage = Some(responder_display_name.clone());
             let avatar_for_storage = decrypted_avatar.clone();
+            let avatar_for_sidebar = decrypted_avatar.clone();
             let avatar_for_event = decrypted_avatar;
 
             let _ = tokio::task::spawn_blocking(move || {
@@ -1540,6 +1545,7 @@ pub async fn handle_inbox_event(
                     "Request accepted!",
                     "Just now",
                     false, // Not pending anymore
+                    avatar_for_sidebar,
                 );
             }
 

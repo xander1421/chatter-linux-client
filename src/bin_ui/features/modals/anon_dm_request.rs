@@ -380,7 +380,7 @@ pub fn spawn_anon_dm_request_handler(
                     conversation_id,
                     sender_id,
                     sender_display_name,
-                    sender_avatar: _, // Always None - avatar not yet in AnonDmInitMessage protocol
+                    sender_avatar,
                     peer_mailbox_pk,
                     peer_identity_key,
                     peer_delivery_token,
@@ -401,15 +401,17 @@ pub fn spawn_anon_dm_request_handler(
                         sender_id = %sender_id,
                         sender_name = %sender_name,
                         intro_len = intro_message.len(),
+                        has_avatar = sender_avatar.is_some(),
                         "Received ECIES init message - creating anon DM conversation"
                     );
 
-                    // Create the conversation in the database with display name
+                    // Create the conversation in the database with display name and avatar
                     let dm = AnonDm::from_request(
                         conversation_id,
                         sender_id,
                         peer_mailbox_pk,
-                    ).with_display_name(&sender_display_name);
+                    ).with_display_name(&sender_display_name)
+                     .with_avatar_opt(sender_avatar.clone());
 
                     // Store the conversation with peer keys
                     if let Err(e) = anon_dm_service.create_incoming_conversation(
@@ -437,6 +439,17 @@ pub fn spawn_anon_dm_request_handler(
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            // Convert avatar bytes to Slint Image
+                            let (avatar_source, has_avatar) = match &sender_avatar {
+                                Some(bytes) => {
+                                    match crate::bin_ui::converters::avatar_bytes_to_image(bytes) {
+                                        Some(img) => (img, true),
+                                        None => (slint::Image::default(), false),
+                                    }
+                                }
+                                None => (slint::Image::default(), false),
+                            };
+
                             // Add to private requests list
                             let current_requests = w.get_friends_private_requests();
                             let mut requests: Vec<FriendRequestData> = (0..current_requests.row_count())
@@ -449,8 +462,8 @@ pub fn spawn_anon_dm_request_handler(
                                 display_name: format!("\u{1F512} {}", peer_name).into(), // Lock icon for private
                                 username: "Private".into(),
                                 avatar_url: "".into(),
-                                avatar_source: slint::Image::default(),
-                                has_avatar: false,
+                                avatar_source,
+                                has_avatar,
                                 sent_at: intro.into(),
                             });
 

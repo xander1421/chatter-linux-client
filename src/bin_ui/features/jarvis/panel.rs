@@ -31,9 +31,15 @@ pub fn wire_jarvis_panel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let jarvis_state = ui_ctx.jarvis_state.clone();
         let weak = window.as_weak();
         window.on_toggle_jarvis_panel(move || {
+            let was_visible = jarvis_state.is_panel_visible();
             jarvis_state.toggle_panel();
+            let is_visible = jarvis_state.is_panel_visible();
+            tracing::info!("Jarvis panel toggled: {} -> {}", was_visible, is_visible);
             if let Some(w) = weak.upgrade() {
-                w.set_jarvis_panel_visible(jarvis_state.is_panel_visible());
+                w.set_jarvis_panel_visible(is_visible);
+                tracing::info!("Set jarvis_panel_visible to {}", is_visible);
+            } else {
+                tracing::warn!("Failed to upgrade weak window reference");
             }
         });
     }

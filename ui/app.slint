@@ -567,7 +567,7 @@ export component App inherits Rectangle {
         key-pressed(event) => {
             // Ctrl+J: Toggle Jarvis panel
             if (event.modifiers.control && event.text == "j") {
-                root.toggle-jarvis-panel();
+                root.jarvis-panel-visible = !root.jarvis-panel-visible;
                 return accept;
             }
             reject
@@ -691,7 +691,7 @@ export component App inherits Rectangle {
                     root.toggle-sidebar();
                 }
                 toggle-jarvis => {
-                    root.toggle-jarvis-panel();
+                    root.jarvis-panel-visible = !root.jarvis-panel-visible;
                 }
                 show-tooltip(text, x, y) => {
                     root.tooltip-text = text;
@@ -711,6 +711,9 @@ export component App inherits Rectangle {
                 clip: true;
 
                 HorizontalLayout {
+                    width: 100%;
+                    height: 100%;
+
                     // Chat layout (fills remaining space, minus side panels)
                     ChatLayout {
                     horizontal-stretch: 1;
