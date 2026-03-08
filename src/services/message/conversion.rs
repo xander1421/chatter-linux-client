@@ -146,7 +146,14 @@ pub fn proto_content_to_domain(
 
     match &content.r#type {
         Some(chat_v1::message::content::Type::Text(text)) => {
-            Ok(MessageContent::Text(text.clone()))
+            // Check for [GIF:url] markers
+            if text.contains("[GIF:") {
+                // We keep it as Text for now but we could potentially tag it.
+                // The important part is that we handle it before word breaks.
+                Ok(MessageContent::Text(text.clone()))
+            } else {
+                Ok(MessageContent::Text(text.clone()))
+            }
         }
         Some(chat_v1::message::content::Type::Encrypted(_)) => {
             // Encrypted content - store as placeholder text for now

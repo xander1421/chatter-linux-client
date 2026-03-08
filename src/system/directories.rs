@@ -2,12 +2,34 @@
 //!
 //! XDG-compliant directory management for the Chatter client.
 //! Provides standardized paths for config, data, cache, and runtime files.
+//!
+//! # Security
+//!
+//! All directories are created with mode 0700 (owner read/write/execute only)
+//! to prevent other users on shared systems from accessing sensitive data.
 
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
 
 use crate::error::SystemError;
+
+/// Create a directory with secure permissions (0700).
+///
+/// On Unix systems, this sets the directory to be readable/writable/executable
+/// only by the owner. On other platforms, this just creates the directory.
+fn create_secure_dir(path: &Path) -> Result<(), SystemError> {
+    std::fs::create_dir_all(path).map_err(SystemError::DirectoryCreate)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let permissions = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(path, permissions).map_err(SystemError::DirectoryCreate)?;
+    }
+
+    Ok(())
+}
 
 /// XDG-compliant directories for the Chatter client.
 ///
@@ -16,6 +38,7 @@ use crate::error::SystemError;
 /// - Data: `~/.local/share/chatter-linux/`
 /// - Cache: `~/.cache/chatter-linux/`
 /// - Runtime: `/run/user/{uid}/chatter-linux/` (optional)
+#[derive(Clone)]
 pub struct Directories {
     config_dir: PathBuf,
     data_dir: PathBuf,
@@ -39,15 +62,15 @@ impl Directories {
         let cache_dir = project_dirs.cache_dir().to_path_buf();
         let runtime_dir = project_dirs.runtime_dir().map(|p| p.to_path_buf());
 
-        // Create directories if they don't exist
-        std::fs::create_dir_all(&config_dir).map_err(SystemError::DirectoryCreate)?;
-        std::fs::create_dir_all(&data_dir).map_err(SystemError::DirectoryCreate)?;
-        std::fs::create_dir_all(&cache_dir).map_err(SystemError::DirectoryCreate)?;
+        // Create directories with secure permissions (0700)
+        create_secure_dir(&config_dir)?;
+        create_secure_dir(&data_dir)?;
+        create_secure_dir(&cache_dir)?;
 
         // Runtime directory is optional (may not exist on all systems)
+        // Runtime dirs typically already have correct permissions from systemd
         if let Some(ref runtime) = runtime_dir {
-            // Ignore errors for runtime dir - it's optional
-            let _ = std::fs::create_dir_all(runtime);
+            let _ = create_secure_dir(runtime);
         }
 
         Ok(Self {
@@ -101,11 +124,11 @@ impl Directories {
     /// Returns the logs directory path.
     ///
     /// Convenience method returning `{data_dir}/logs/`.
-    /// Creates the directory if it doesn't exist.
+    /// Creates the directory with secure permissions (0700) if it doesn't exist.
     pub fn logs_dir(&self) -> PathBuf {
         let logs = self.data_dir.join("logs");
-        // Best effort to create logs directory
-        let _ = std::fs::create_dir_all(&logs);
+        // Best effort to create logs directory with secure permissions
+        let _ = create_secure_dir(&logs);
         logs
     }
 }

@@ -8,10 +8,11 @@ import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { ChannelList, ChannelListItemData } from "channel_list.slint";
 import { DMList, DMListItemData } from "dm_list.slint";
+import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
 import { UserProfileBar } from "user_profile_bar.slint";
 
 // Re-export types for parent components
-export { ChannelListItemData, DMListItemData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData }
 
 export component Sidebar inherits Rectangle {
     // Properties - Channel list
@@ -21,6 +22,10 @@ export component Sidebar inherits Rectangle {
     // Properties - DM list
     in property <[DMListItemData]> dm-conversations: [];
     in property <string> selected-dm-id: "";
+
+    // Properties - Private groups
+    in property <[PrivateGroupListItemData]> private-groups: [];
+    in property <string> selected-private-group-id: "";
 
     // Properties - User profile
     in property <string> user-display-name: "User";
@@ -35,6 +40,7 @@ export component Sidebar inherits Rectangle {
     // Callbacks - Navigation
     callback channel-selected(string);
     callback dm-selected(string);
+    callback private-group-selected(string);
     callback saved-messages-clicked();
     callback create-channel-clicked();
     callback join-channel-clicked();
@@ -47,8 +53,18 @@ export component Sidebar inherits Rectangle {
     // Properties - Friend requests badge
     in property <int> pending-friend-requests: 0;
 
+    // Properties - Message requests badge
+    in property <int> pending-message-requests: 0;
+
+    // Callbacks - Message requests
+    callback message-requests-clicked();
+
     // Callback - Toggle collapsed
     callback toggle-collapsed();
+
+    // Callbacks - Jarvis AI
+    callback toggle-jarvis();
+    in property <bool> jarvis-active: false;
 
     // Callbacks - Tooltip (bubble up to App for global rendering)
     callback show-tooltip(string, length, length);
@@ -153,6 +169,117 @@ export component Sidebar inherits Rectangle {
             }
         }
 
+        // Message requests entry (only shown when there are pending requests)
+        if root.pending-message-requests > 0: message-requests := Rectangle {
+            height: 44px;
+            border-radius: Spacing.radius-sm;
+            background: msg-req-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+            // Internal state for tracking if tooltip is currently shown
+            property <bool> tooltip-shown: false;
+
+            HorizontalLayout {
+                padding-left: root.collapsed ? 0px : Spacing.sm;
+                padding-right: root.collapsed ? 0px : Spacing.sm;
+                spacing: root.collapsed ? 0px : Spacing.sm;
+                alignment: root.collapsed ? center : start;
+
+                // Message icon - aligned with channel icons (20px wide container)
+                Rectangle {
+                    width: 20px;
+                    height: parent.height;
+
+                    Image {
+                        source: Icons.message-circle;
+                        width: 16px;
+                        height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Colors.primary;
+                    }
+
+                    // Badge showing count (in collapsed mode)
+                    if root.collapsed: Rectangle {
+                        x: parent.width - 8px;
+                        y: 8px;
+                        width: root.pending-message-requests > 9 ? 18px : 14px;
+                        height: 14px;
+                        border-radius: 7px;
+                        background: Colors.error;
+
+                        Text {
+                            text: root.pending-message-requests > 9 ? "9+" : root.pending-message-requests;
+                            color: Colors.text-primary;
+                            font-size: 10px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
+                    }
+                }
+
+                // Text with badge (hidden when collapsed)
+                if !root.collapsed: HorizontalLayout {
+                    spacing: Spacing.xs;
+                    alignment: start;
+
+                    Text {
+                        text: "Message Requests";
+                        color: Colors.primary;
+                        font-size: 14px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    // Badge showing count
+                    Rectangle {
+                        width: root.pending-message-requests > 9 ? 24px : 20px;
+                        height: 20px;
+                        border-radius: 10px;
+                        background: Colors.error;
+
+                        Text {
+                            text: root.pending-message-requests > 9 ? "9+" : root.pending-message-requests;
+                            color: Colors.text-primary;
+                            font-size: 12px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
+                    }
+                }
+            }
+
+            msg-req-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.message-requests-clicked(); }
+            }
+
+            // Show tooltip when hovering in collapsed mode (transition from not-shown to shown)
+            if root.collapsed && msg-req-touch.has-hover && !tooltip-shown: Rectangle {
+                width: 0;
+                height: 0;
+                init => {
+                    message-requests.tooltip-shown = true;
+                    root.show-tooltip("Message Requests (" + root.pending-message-requests + ")", root.width + 8px, message-requests.y + message-requests.height / 2 - 14px);
+                }
+            }
+
+            // Hide tooltip when hover ends (transition from shown to not-shown)
+            if tooltip-shown && !msg-req-touch.has-hover: Rectangle {
+                width: 0;
+                height: 0;
+                init => {
+                    message-requests.tooltip-shown = false;
+                    root.hide-tooltip();
+                }
+            }
+        }
+
         // Separator
         Rectangle {
             height: 1px;
@@ -181,6 +308,28 @@ export component Sidebar inherits Rectangle {
             hide-tooltip => { root.hide-tooltip(); }
         }
 
+        // Private groups list (only show if has groups)
+        if root.private-groups.length > 0: Rectangle {
+            height: 1px;
+            background: Colors.surface-hover;
+        }
+
+        if root.private-groups.length > 0: private-group-list := PrivateGroupList {
+            vertical-stretch: 0;
+            max-height: 150px;
+            groups: root.private-groups;
+            selected-group-id: root.selected-private-group-id;
+            collapsed: root.collapsed;
+
+            group-selected(id) => {
+                root.private-group-selected(id);
+            }
+            show-tooltip(text, local-y) => {
+                root.show-tooltip(text, root.width + 8px, self.y + local-y);
+            }
+            hide-tooltip => { root.hide-tooltip(); }
+        }
+
         // Separator
         Rectangle {
             height: 1px;
@@ -202,6 +351,80 @@ export component Sidebar inherits Rectangle {
                 root.show-tooltip(text, root.width + 8px, dm-list.y + local-y);
             }
             hide-tooltip => { root.hide-tooltip(); }
+        }
+
+        // Separator before Jarvis
+        Rectangle {
+            height: 1px;
+            background: Colors.surface-hover;
+        }
+
+        // Jarvis AI toggle
+        jarvis-entry := Rectangle {
+            height: 44px;
+            border-radius: Spacing.radius-sm;
+            background: root.jarvis-active ? Colors.primary.with-alpha(0.15) : (jarvis-touch.has-hover ? Colors.surface-hover : Colors.surface);
+
+            // Internal state for tracking if tooltip is currently shown
+            property <bool> tooltip-shown: false;
+
+            HorizontalLayout {
+                padding-left: root.collapsed ? 0px : Spacing.sm;
+                padding-right: root.collapsed ? 0px : Spacing.sm;
+                spacing: root.collapsed ? 0px : Spacing.sm;
+                alignment: root.collapsed ? center : start;
+
+                // Jarvis AI icon (24px circle with J)
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    border-radius: 12px;
+                    background: root.jarvis-active ? Colors.primary : Colors.surface-hover;
+
+                    Text {
+                        text: "J";
+                        font-size: 12px;
+                        font-weight: 700;
+                        color: root.jarvis-active ? Colors.text-primary : Colors.text-muted;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Text (hidden when collapsed)
+                if !root.collapsed: Text {
+                    text: "Jarvis AI";
+                    color: root.jarvis-active ? Colors.primary : Colors.text-secondary;
+                    font-size: 14px;
+                    font-weight: root.jarvis-active ? 600 : 400;
+                    vertical-alignment: center;
+                }
+            }
+
+            jarvis-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.toggle-jarvis(); }
+            }
+
+            // Show tooltip when hovering in collapsed mode
+            if root.collapsed && jarvis-touch.has-hover && !tooltip-shown: Rectangle {
+                width: 0;
+                height: 0;
+                init => {
+                    jarvis-entry.tooltip-shown = true;
+                    root.show-tooltip("Jarvis AI", root.width + 8px, jarvis-entry.y + jarvis-entry.height / 2 - 14px);
+                }
+            }
+
+            // Hide tooltip when hover ends
+            if tooltip-shown && !jarvis-touch.has-hover: Rectangle {
+                width: 0;
+                height: 0;
+                init => {
+                    jarvis-entry.tooltip-shown = false;
+                    root.hide-tooltip();
+                }
+            }
         }
 
         // Separator before toggle

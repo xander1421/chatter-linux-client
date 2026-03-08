@@ -102,6 +102,23 @@ export component IncomingCallModal inherits Rectangle {
                     color: Colors.text-muted;
                     horizontal-alignment: center;
                 }
+
+                if call-data.identity-warning != "": Rectangle {
+                    background: Colors.error.with-alpha(0.1);
+                    border-radius: Spacing.radius-sm;
+                    
+                    VerticalLayout {
+                        padding: Spacing.sm;
+                        Text {
+                            text: "⚠️ " + call-data.identity-warning;
+                            font-size: Typography.xs;
+                            color: Colors.error;
+                            font-weight: Typography.semibold;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
             }
 
             // Action buttons

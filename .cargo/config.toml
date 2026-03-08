@@ -1,0 +1,16 @@
+# Build optimizations for faster development iteration
+
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[build]
+# Use sccache for compilation caching
+rustc-wrapper = "sccache"
+
+# Parallel compilation jobs (adjust based on your CPU cores)
+jobs = 8
+
+[env]
+# Reduce debug info for faster builds (set to 2 for full debugging)
+CARGO_PROFILE_DEV_DEBUG = "0"

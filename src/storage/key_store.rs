@@ -79,6 +79,35 @@ impl KeyStore {
         Ok(count > 0)
     }
 
+    /// Clear the local identity.
+    ///
+    /// Used to clean up after a failed registration attempt.
+    pub fn clear_local_identity(&self) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute("DELETE FROM local_identity", [])?;
+        Ok(())
+    }
+
+    /// Clear all crypto state.
+    ///
+    /// Removes local identity, prekeys, signed prekeys, kyber prekeys,
+    /// and all sessions. Used to reset crypto state after failed registration.
+    pub fn clear_all_crypto_state(&self) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+
+        // Clear in order to respect foreign key constraints
+        conn.execute("DELETE FROM kyber_prekey_usage", [])?;
+        conn.execute("DELETE FROM sender_keys", [])?;
+        conn.execute("DELETE FROM sessions", [])?;
+        conn.execute("DELETE FROM kyber_prekeys", [])?;
+        conn.execute("DELETE FROM signed_prekeys", [])?;
+        conn.execute("DELETE FROM prekeys", [])?;
+        conn.execute("DELETE FROM remote_identities", [])?;
+        conn.execute("DELETE FROM local_identity", [])?;
+
+        Ok(())
+    }
+
     // ========================================================================
     // Remote Identities
     // ========================================================================
@@ -490,12 +519,23 @@ impl KeyStore {
         distribution_id: &str,
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
-
         conn.execute(
             "DELETE FROM sender_keys WHERE sender = ?1 AND distribution_id = ?2",
-            params![sender, distribution_id],
+            [sender, distribution_id],
         )?;
+        Ok(())
+    }
 
+    /// Delete all sender keys for a specific distribution ID (channel).
+    pub fn delete_sender_keys_for_distribution(
+        &self,
+        distribution_id: &str,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "DELETE FROM sender_keys WHERE distribution_id = ?1",
+            [distribution_id],
+        )?;
         Ok(())
     }
 }

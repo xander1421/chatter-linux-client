@@ -13,11 +13,14 @@ export struct DMListItemData {
     user-id: string,         // The other user's ID
     display-name: string,
     avatar-url: string,
+    avatar-source: image,    // For avatar bytes converted to image
+    has-avatar: bool,        // Whether avatar-source is valid
     initials: string,
     presence-status: string,
     last-message: string,
     timestamp: string,
     unread-count: int,
+    is-typing: bool,
 }
 
 export component DMList inherits Rectangle {
@@ -68,11 +71,13 @@ export component DMList inherits Rectangle {
                 for item in root.conversations: DMListItem {
                     user-id: item.user-id;
                     display-name: item.display-name;
+                    avatar-source: item.avatar-source;
                     initials: item.initials;
                     presence-status: item.presence-status;
                     last-message: item.last-message;
                     timestamp: item.timestamp;
                     unread-count: item.unread-count;
+                    is-typing: item.is-typing;
                     selected: item.channel-id == root.selected-conversation-id;
                     collapsed: root.collapsed;
 

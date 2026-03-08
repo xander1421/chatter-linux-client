@@ -2,7 +2,7 @@
 //!
 //! Tracks video playback state for the in-app video player.
 //! Supports two rendering modes:
-//! - GL mode: Hardware-accelerated zero-copy rendering via EGL texture sharing
+//! - Hardware mode: Zero-copy GPU rendering (GL on Linux/Android, Metal on iOS)
 //! - Software mode: Frame buffer passing with RGB conversion (fallback)
 
 use std::path::PathBuf;
@@ -12,8 +12,7 @@ use std::time::{Duration, Instant};
 
 use chatter_linux::media::InAppVideoPlayer as VideoPlayer;
 
-#[cfg(target_os = "linux")]
-use super::gl_video;
+use super::video as hw_video;
 
 /// Global video player instance (software mode).
 static VIDEO_PLAYER: OnceLock<Arc<Mutex<Option<VideoPlayer>>>> = OnceLock::new();
@@ -82,12 +81,6 @@ pub fn take_frame() -> Option<FrameData> {
     }
 }
 
-/// Check if GL video is currently being used for playback.
-#[cfg(target_os = "linux")]
-pub fn is_using_gl_video() -> bool {
-    USING_GL_VIDEO.load(Ordering::SeqCst)
-}
-
 /// Start video playback from memory (non-blocking).
 ///
 /// Tries GL video first for hardware-accelerated rendering,
@@ -107,51 +100,53 @@ pub fn start_video_from_memory_async<F>(
     // Stop any existing playback
     stop_video();
 
-    // Try GL video first (hardware-accelerated)
-    #[cfg(target_os = "linux")]
-    {
-        // Check if GL is connected (rendering notifier has set up the context)
-        if gl_video::is_gl_connected() {
-            tracing::info!("Starting GL video (hardware-accelerated)");
+    // Try hardware-accelerated video first (GL on Linux/Android, Metal on iOS)
+    // IMPORTANT: Check is_hw_connected() on UI thread where GL context lives
+    if hw_video::is_hw_available() {
+        tracing::info!("HW video available, checking connection on UI thread");
 
-            // GL video must be started from UI thread (thread_local state)
-            // We handle everything in the UI thread closure, including fallback
-            let _ = slint::invoke_from_event_loop(move || {
-                match gl_video::start_gl_video(data.clone()) {
-                    Some(duration) => {
-                        USING_GL_VIDEO.store(true, Ordering::SeqCst);
+        // HW video must be started from UI thread (thread_local state)
+        // Check connection AND start video on UI thread
+        let _ = slint::invoke_from_event_loop(move || {
+            // Check connection on UI thread where GL context is initialized
+            if !hw_video::is_hw_connected() {
+                tracing::debug!("HW video not connected on UI thread, falling back to software");
+                USING_GL_VIDEO.store(false, Ordering::SeqCst);
+                start_video_software(data, filename, on_ready);
+                return;
+            }
 
-                        // Update global state
-                        if let Ok(mut video_state) = get_video_state().lock() {
-                            video_state.current_path = None;
-                            video_state.filename = filename;
-                            video_state.is_playing = true;
-                            video_state.duration = duration;
-                            video_state.position = 0.0;
-                            video_state.volume = 1.0;
-                        }
+            match hw_video::start_hw_video(data.clone()) {
+                Some(duration) => {
+                    USING_GL_VIDEO.store(true, Ordering::SeqCst);
 
-                        let duration_str = chatter_linux::media::format_duration(duration);
-                        tracing::info!("GL video started: {}s ({})", duration, duration_str);
-                        on_ready(Ok((duration, duration_str)));
+                    // Update global state
+                    if let Ok(mut video_state) = get_video_state().lock() {
+                        video_state.current_path = None;
+                        video_state.filename = filename;
+                        video_state.is_playing = true;
+                        video_state.duration = duration;
+                        video_state.position = 0.0;
+                        video_state.volume = 1.0;
                     }
-                    None => {
-                        tracing::warn!("GL video start failed, falling back to software");
-                        USING_GL_VIDEO.store(false, Ordering::SeqCst);
 
-                        // Fall back to software rendering
-                        // Note: This runs software loading on UI thread, but it spawns its own worker
-                        start_video_software(data, filename, on_ready);
-                    }
+                    let duration_str = chatter_linux::media::format_duration(duration);
+                    tracing::info!("HW video started: {}s ({})", duration, duration_str);
+                    on_ready(Ok((duration, duration_str)));
                 }
-            });
-            return;
-        } else if gl_video::is_gl_available() {
-            tracing::debug!("GL available but not connected yet, using software rendering");
-        }
+                None => {
+                    tracing::warn!("HW video start failed, falling back to software");
+                    USING_GL_VIDEO.store(false, Ordering::SeqCst);
+
+                    // Fall back to software rendering
+                    start_video_software(data, filename, on_ready);
+                }
+            }
+        });
+        return;
     }
 
-    // Software rendering path (fallback)
+    // Software rendering path (no HW available)
     start_video_software(data, filename, on_ready);
 }
 
@@ -189,13 +184,22 @@ fn start_video_software<F>(
                 }
             };
 
+            // CRITICAL: Store player IMMEDIATELY after creation to prevent race condition.
+            // If stop_video() is called while we're in the loading poll loop below,
+            // it needs to find this player to stop it. Otherwise multiple pipelines
+            // can run simultaneously, causing multiple PipeWire audio streams.
+            let player_state = player.state().clone();
+            if let Ok(mut player_guard) = get_video_player().lock() {
+                *player_guard = Some(player);
+            }
+
             // Poll for loading completion (in background thread, doesn't block UI)
             let max_wait = Duration::from_secs(15);
             let start = Instant::now();
             let poll_interval = Duration::from_millis(50);
 
             loop {
-                let state = player.state().get_state();
+                let state = player_state.get_state();
 
                 if !state.loading {
                     tracing::debug!("Video player finished loading: duration={}s", state.duration);
@@ -216,7 +220,7 @@ fn start_video_software<F>(
             }
 
             // Get final state
-            let state = player.state().get_state();
+            let state = player_state.get_state();
             let duration = state.duration;
             let duration_str = chatter_linux::media::format_duration(duration);
             tracing::info!("Video loaded (software): {}s ({})", duration, duration_str);
@@ -231,40 +235,63 @@ fn start_video_software<F>(
                 video_state.volume = 1.0;
             }
 
-            // Store player
-            if let Ok(mut player_guard) = get_video_player().lock() {
-                *player_guard = Some(player);
-            }
-
             on_ready(Ok((duration, duration_str)));
         })
         .expect("Failed to spawn video loader thread");
 }
-
-/// Start video playback from memory (blocking - prefer async version).
-///
-/// Used for playing decrypted video attachments directly from memory.
-/// NOTE: This blocks the calling thread. Use `start_video_from_memory_async` instead.
-pub fn start_video_from_memory(data: Vec<u8>, filename: &str) -> Result<(f64, String), String> {
-    use std::sync::mpsc;
-
-    let (tx, rx) = mpsc::channel();
-
-    start_video_from_memory_async(data, filename.to_string(), move |result| {
-        let _ = tx.send(result);
-    });
-
-    // Block waiting for result (still blocking, but at least isolated)
-    rx.recv().map_err(|e| format!("Channel error: {}", e))?
-}
-
 /// Stop video playback.
+///
+/// IMPORTANT: This function handles both UI and non-UI thread calls.
+/// For GL video, it stops directly if on UI thread, otherwise schedules on UI thread.
 pub fn stop_video() {
-    // Stop GL video if active
-    #[cfg(target_os = "linux")]
+    tracing::info!("stop_video called, USING_GL_VIDEO={}", USING_GL_VIDEO.load(Ordering::SeqCst));
+
+    // Stop hardware video if active
+    // CRITICAL: GL video state is thread_local - must stop on UI thread
     if USING_GL_VIDEO.load(Ordering::SeqCst) {
-        gl_video::stop_gl_video();
+        tracing::info!("Stopping GL video...");
+
+        // First mark as not using GL to prevent race conditions
         USING_GL_VIDEO.store(false, Ordering::SeqCst);
+
+        // Check if we're already on the UI thread by trying invoke_from_event_loop
+        // If we're on the UI thread, calling invoke_from_event_loop and blocking
+        // would deadlock, so we call stop_hw_video directly instead.
+        //
+        // We detect this by checking if we can run something immediately via
+        // slint's upgrade_in_event_loop pattern - but simpler is to just try
+        // running directly and use a flag to track success.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx_clone = tx.clone();
+
+        // Try to schedule on event loop
+        match slint::invoke_from_event_loop(move || {
+            tracing::info!("GL video stop executing on UI thread (scheduled)");
+            hw_video::stop_hw_video();
+            let _ = tx_clone.send(());
+        }) {
+            Ok(()) => {
+                // Successfully scheduled - wait with very short timeout
+                // If we're on UI thread, invoke_from_event_loop returns Ok but
+                // the closure won't run until this function returns (deadlock).
+                // So use a very short timeout to detect this case.
+                match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    Ok(()) => tracing::info!("GL video stop completed (async)"),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        // Likely on UI thread - call directly
+                        tracing::info!("GL video stop: likely on UI thread, calling directly");
+                        hw_video::stop_hw_video();
+                        tracing::info!("GL video stop completed (direct)");
+                    }
+                    Err(e) => tracing::warn!("GL video stop error: {:?}", e),
+                }
+            }
+            Err(_) => {
+                // Event loop not running - call directly (we're likely shutting down)
+                tracing::info!("GL video stop: event loop not available, calling directly");
+                hw_video::stop_hw_video();
+            }
+        }
     }
 
     // Stop the software player
@@ -292,10 +319,9 @@ pub fn stop_video() {
 
 /// Toggle play/pause.
 pub fn toggle_play_pause() -> bool {
-    #[cfg(target_os = "linux")]
     if USING_GL_VIDEO.load(Ordering::SeqCst) {
-        let is_playing = gl_video::is_gl_video_active();
-        gl_video::set_gl_video_playing(!is_playing);
+        let is_playing = hw_video::is_hw_video_active();
+        hw_video::set_hw_video_playing(!is_playing);
         let new_playing = !is_playing;
         if let Ok(mut state) = get_video_state().lock() {
             state.is_playing = new_playing;
@@ -320,11 +346,10 @@ pub fn toggle_play_pause() -> bool {
 
 /// Seek to position (0.0 - 1.0).
 pub fn seek(position: f32) {
-    #[cfg(target_os = "linux")]
     if USING_GL_VIDEO.load(Ordering::SeqCst) {
-        if let Some(duration) = gl_video::get_gl_video_duration() {
+        if let Some(duration) = hw_video::get_hw_video_duration() {
             let seek_pos = position as f64 * duration;
-            gl_video::seek_gl_video(seek_pos);
+            hw_video::seek_hw_video(seek_pos);
         }
         return;
     }
@@ -340,9 +365,8 @@ pub fn seek(position: f32) {
 
 /// Set volume (0.0 - 1.0).
 pub fn set_volume(volume: f32) {
-    #[cfg(target_os = "linux")]
     if USING_GL_VIDEO.load(Ordering::SeqCst) {
-        gl_video::set_gl_video_volume(volume as f64);
+        hw_video::set_hw_video_volume(volume as f64);
     }
 
     if let Ok(player_guard) = get_video_player().lock() {
@@ -358,11 +382,13 @@ pub fn set_volume(volume: f32) {
 
 /// Get current playback state for UI updates.
 pub fn get_playback_state() -> Option<(f64, f64, bool)> {
-    #[cfg(target_os = "linux")]
     if USING_GL_VIDEO.load(Ordering::SeqCst) {
-        let position = gl_video::get_gl_video_position().unwrap_or(0.0);
-        let duration = gl_video::get_gl_video_duration().unwrap_or(0.0);
-        let is_playing = gl_video::is_gl_video_active();
+        // Try to apply pending volume if audio element is now ready
+        hw_video::apply_pending_hw_volume();
+
+        let position = hw_video::get_hw_video_position().unwrap_or(0.0);
+        let duration = hw_video::get_hw_video_duration().unwrap_or(0.0);
+        let is_playing = hw_video::is_hw_video_active();
         return Some((position, duration, is_playing));
     }
 

@@ -2,6 +2,10 @@
 //!
 //! Send, edit, delete, reply, forward, and ephemeral message operations.
 
+use std::path::Path;
+
+use prost::Message as ProstMessage;
+
 use crate::domain::ephemeral::MessageTTL;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
 use crate::domain::message::{Message, MessageContent};
@@ -10,7 +14,10 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
+use crate::proto::content_v1::{AttachmentPointer, Content, DataMessage, content};
+use crate::services::attachment::AttachmentService;
 use crate::services::current_user::CurrentUserProvider;
+use crate::util::time::TimestampNanos;
 
 use super::{MessageError, MessageService};
 
@@ -31,6 +38,7 @@ impl MessageService {
         channel_id: &ChannelId,
         text: &str,
         attachment_ids: Vec<AttachmentId>,
+        attachment_pointers: Vec<AttachmentPointer>,
         thread_id: Option<&MessageId>,
         mentioned_integrations: Vec<IntegrationId>,
         targets_ai_bot: bool,
@@ -71,6 +79,11 @@ impl MessageService {
         }
 
         // Call server
+        tracing::debug!(
+            channel_id = %channel_id,
+            text_len = trimmed_text.len(),
+            "[SEND_MESSAGE] Sending message to server API"
+        );
         let proto_message = message_client
             .send_message(
                 &channel_id.to_string(),
@@ -84,15 +97,35 @@ impl MessageService {
                 attachment_ids.iter().map(|id| id.to_string()).collect(),
             )
             .await?;
+        tracing::info!(
+            channel_id = %channel_id,
+            message_id = %proto_message.id,
+            "[SEND_MESSAGE] Server API success, message_id={}", proto_message.id
+        );
 
         // Also send via group mailboxes if available (NDSS '21 paper)
+        // Per Signal Protocol: Use pairwise sealed sender encryption for each member.
+        // Sender identity is revealed via SSDecVer, NOT from plaintext metadata.
         if let Some(fanout) = group_fanout {
             if require_encryption {
-                // Extract ciphertext from content for mailbox delivery
-                if let Some(chat_v1::message::content::Type::Encrypted(ref encrypted)) = content_to_send.r#type {
-                    self.send_via_group_mailboxes(fanout, channel_id, &encrypted.ciphertext, &sender_id)
-                        .await?;
-                }
+                // Build a proper Content proto with DataMessage including attachments
+                let sent_at = TimestampNanos::now().as_u64();
+                let content_proto = Content {
+                    timestamp: sent_at,
+                    content: Some(content::Content::DataMessage(DataMessage {
+                        body: trimmed_text.to_string(),
+                        timestamp: sent_at,
+                        channel_id: channel_id.to_string(),
+                        attachments: attachment_pointers.clone(),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                };
+                let plaintext = content_proto.encode_to_vec();
+
+                // Use pairwise encryption (Double Ratchet sealed sender) per NDSS '21
+                self.send_pairwise_to_group_mailboxes(fanout, channel_id, &plaintext, auth_client)
+                    .await?;
             }
         }
 
@@ -100,11 +133,33 @@ impl MessageService {
         let mut message = proto_to_domain_message(&proto_message, sender_id)?;
         message.attachments = attachment_ids;
 
+        // IMPORTANT: Check if server returned a different channel_id
+        if message.channel_id != *channel_id {
+            tracing::warn!(
+                input_channel_id = %channel_id,
+                server_channel_id = %message.channel_id,
+                "[SEND_MESSAGE] CHANNEL_ID MISMATCH! Server returned different channel_id"
+            );
+            // Fix: Use the input channel_id, not the server's
+            message.channel_id = *channel_id;
+        }
+
         // For sent messages, store original plaintext locally (not encrypted server response)
         message.content = MessageContent::Text(trimmed_text.to_string());
 
         // Store locally
+        tracing::info!(
+            channel_id = %message.channel_id,
+            message_id = %message.id,
+            text_len = trimmed_text.len(),
+            "[SEND_MESSAGE] Storing message locally"
+        );
         self.message_repo.insert(&message)?;
+        tracing::info!(
+            channel_id = %channel_id,
+            message_id = %message.id,
+            "[SEND_MESSAGE] Message stored successfully"
+        );
 
         Ok(message)
     }
@@ -112,6 +167,10 @@ impl MessageService {
     /// Send a message to a channel (simplified API - no client params).
     ///
     /// This is the preferred method - uses internal gRPC clients.
+    ///
+    /// # Arguments
+    /// * `attachment_ids` - IDs for server API and local storage
+    /// * `attachment_pointers` - Full AttachmentPointer protos for E2E encrypted group delivery
     #[allow(clippy::too_many_arguments)]
     pub async fn send(
         &self,
@@ -119,6 +178,7 @@ impl MessageService {
         channel_id: &ChannelId,
         text: &str,
         attachment_ids: Vec<AttachmentId>,
+        attachment_pointers: Vec<AttachmentPointer>,
         thread_id: Option<&MessageId>,
         mentioned_integrations: Vec<IntegrationId>,
         targets_ai_bot: bool,
@@ -135,6 +195,81 @@ impl MessageService {
             channel_id,
             text,
             attachment_ids,
+            attachment_pointers,
+            thread_id,
+            mentioned_integrations,
+            targets_ai_bot,
+        )
+        .await
+    }
+
+    /// Send a message with file attachments (high-level API).
+    ///
+    /// This method handles the complete flow:
+    /// 1. Upload each file to CDN with encryption
+    /// 2. Build AttachmentPointer protos
+    /// 3. Send message via server API
+    /// 4. Send via group mailboxes (if encrypted channel)
+    ///
+    /// # Arguments
+    /// * `group_fanout` - Group member mailbox info for E2E encrypted delivery
+    /// * `channel_id` - Target channel
+    /// * `text` - Message text
+    /// * `file_paths` - Local file paths to upload as attachments
+    /// * `thread_id` - Optional thread root for thread replies
+    /// * `mentioned_integrations` - IDs of mentioned integrations (bots)
+    /// * `targets_ai_bot` - Whether message targets AI bot
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_with_files(
+        &self,
+        group_fanout: Option<&GroupFanout>,
+        channel_id: &ChannelId,
+        text: &str,
+        file_paths: Vec<&Path>,
+        thread_id: Option<&MessageId>,
+        mentioned_integrations: Vec<IntegrationId>,
+        targets_ai_bot: bool,
+    ) -> Result<Message, MessageError> {
+        // Upload attachments with encryption
+        let attachment_service = AttachmentService::new(self.attachment_repo.clone());
+        let mut attachment_ids = Vec::with_capacity(file_paths.len());
+        let mut attachment_pointers = Vec::with_capacity(file_paths.len());
+
+        for file_path in &file_paths {
+            tracing::info!(
+                path = %file_path.display(),
+                "Encrypting and uploading attachment to CDN"
+            );
+
+            match attachment_service.upload_to_cdn_encrypted(&self.grpc_pool, file_path).await {
+                Ok(result) => {
+                    tracing::info!(
+                        cdn_key = %result.cdn_key,
+                        attachment_id = %result.attachment_id,
+                        filename = %result.file_name,
+                        "Attachment uploaded to CDN"
+                    );
+                    attachment_ids.push(result.attachment_id);
+                    attachment_pointers.push(result.to_attachment_pointer());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        path = %file_path.display(),
+                        error = %e,
+                        "Failed to upload attachment to CDN"
+                    );
+                    return Err(MessageError::AttachmentError(e.to_string()));
+                }
+            }
+        }
+
+        // Send message with uploaded attachments
+        self.send(
+            group_fanout,
+            channel_id,
+            text,
+            attachment_ids,
+            attachment_pointers,
             thread_id,
             mentioned_integrations,
             targets_ai_bot,
@@ -144,11 +279,11 @@ impl MessageService {
 
     /// Send control content to a group channel (typing indicators, reactions, etc.)
     ///
-    /// Uses sender key encryption for E2E privacy. When `group_fanout` is provided,
-    /// also sends via member mailboxes for NDSS '21 traffic analysis resistance.
+    /// Per NDSS '21: Uses pairwise sealed sender encryption for each member.
+    /// Sender identity is cryptographically bound inside the ciphertext.
     pub async fn send_control_content(
         &self,
-        message_client: &mut MessageClient,
+        _message_client: &mut MessageClient,
         auth_client: &mut AuthClient,
         channel_client: &mut ChannelClient,
         channel_id: &ChannelId,
@@ -158,54 +293,32 @@ impl MessageService {
         use prost::Message as ProstMessage;
 
         // Check logged in
-        let sender_id = self.settings_repo.current_user_id()?;
+        let _ = self.settings_repo.current_user_id()?;
 
         // Serialize content for encryption
         let plaintext = content.encode_to_vec();
 
         // Get encryption settings from channel config
-        let (is_dm, require_encryption) = self
+        let (_is_dm, require_encryption) = self
             .get_channel_encryption_settings(channel_id, channel_client)
             .await?;
 
-        // Build a dummy chat_v1 content for the encryption path
-        let dummy_content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(String::new())),
-        };
-
-        let (encrypted_content, skdm_opt) = self.prepare_encrypted_content(
-            auth_client,
-            channel_id,
-            &plaintext,
-            dummy_content,
-            is_dm,
-            require_encryption,
-        ).await;
-
-        // If a new sender key was created, distribute SKDM to channel members
-        if let Some(skdm) = skdm_opt {
-            self.distribute_sender_key(auth_client, message_client, channel_id, &skdm).await?;
-        }
-
         // Send via group mailboxes if available and encrypted
+        // Per Signal Protocol: Use pairwise sealed sender encryption for each member.
         if let Some(fanout) = group_fanout {
             if require_encryption {
-                if let Some(chat_v1::message::content::Type::Encrypted(ref encrypted)) = encrypted_content.r#type {
-                    self.send_via_group_mailboxes(fanout, channel_id, &encrypted.ciphertext, &sender_id)
-                        .await?;
-                }
+                // Use pairwise encryption (Double Ratchet sealed sender) per NDSS '21
+                self.send_pairwise_to_group_mailboxes(fanout, channel_id, &plaintext, auth_client)
+                    .await?;
             }
         }
 
         // For control messages in encrypted channels, we've already sent via mailboxes
         // The server doesn't need to see control messages for encrypted channels
         if !require_encryption {
-            // For unencrypted channels, send normally
-            // Control messages don't use the standard send_message API
-            // They would use a dedicated control endpoint if the server supports it
             tracing::debug!(
                 channel_id = %channel_id,
-                "Control message sent to unencrypted channel"
+                "Control message for unencrypted channel (no mailbox delivery)"
             );
         }
 
@@ -286,6 +399,16 @@ impl MessageService {
         let mut message = proto_to_domain_message(&proto_message, sender_id)?;
         message.attachments = attachment_ids;
 
+        // IMPORTANT: Ensure channel_id matches (server might return different format)
+        if message.channel_id != *channel_id {
+            tracing::warn!(
+                input_channel_id = %channel_id,
+                server_channel_id = %message.channel_id,
+                "[SEND_EPHEMERAL] CHANNEL_ID MISMATCH! Server returned different channel_id"
+            );
+            message.channel_id = *channel_id;
+        }
+
         // Store locally
         self.message_repo.insert(&message)?;
 
@@ -295,7 +418,6 @@ impl MessageService {
     /// Edit a message in a channel.
     pub async fn edit_message(
         &self,
-        message_client: &mut MessageClient,
         channel_id: &ChannelId,
         message_id: &MessageId,
         new_text: &str,
@@ -330,6 +452,7 @@ impl MessageService {
         };
 
         // Call server
+        let mut message_client = self.message_client();
         let proto_message = message_client
             .edit_message(&message_id.to_string(), &channel_id.to_string(), content)
             .await?;
@@ -349,7 +472,6 @@ impl MessageService {
     /// Delete a message from a channel.
     pub async fn delete_message(
         &self,
-        message_client: &mut MessageClient,
         channel_id: &ChannelId,
         message_id: &MessageId,
     ) -> Result<(), MessageError> {
@@ -370,6 +492,7 @@ impl MessageService {
         }
 
         // Call server
+        let mut message_client = self.message_client();
         message_client
             .delete_message(&message_id.to_string(), &channel_id.to_string())
             .await?;
@@ -458,6 +581,16 @@ impl MessageService {
         message.reply_to = Some(*reply_to_id);
         message.attachments = attachment_ids;
 
+        // IMPORTANT: Ensure channel_id matches (server might return different format)
+        if message.channel_id != *channel_id {
+            tracing::warn!(
+                input_channel_id = %channel_id,
+                server_channel_id = %message.channel_id,
+                "[SEND_REPLY] CHANNEL_ID MISMATCH! Server returned different channel_id"
+            );
+            message.channel_id = *channel_id;
+        }
+
         // For sent messages, store original plaintext locally (not encrypted server response)
         message.content = MessageContent::Text(trimmed_text.to_string());
 
@@ -478,12 +611,15 @@ impl MessageService {
         require_encryption: bool,
     ) -> (chat_v1::message::Content, Option<crate::proto::content_v1::SenderKeyDistribution>) {
         // DM: Use sealed sender (pairwise encryption)
+        // TODO: Multi-device support - server-based DM channels rely on server
+        // for device fanout. Primary mailbox-based DM flow (dm.rs) handles
+        // multi-device directly. This path may need update for consistency.
         if is_dm {
             if let Ok(recipient_id) = channel_id.to_string().parse::<uuid::Uuid>() {
                 match self.signal_service.encrypt_message(
                     auth_client,
                     &recipient_id.to_string(),
-                    1, // Default to primary device
+                    1, // Primary device - server handles fanout for channel DMs
                     plaintext
                 ).await {
                     Ok(ciphertext) => {

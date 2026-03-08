@@ -5,6 +5,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
+import { Avatar } from "../components/avatar.slint";
 
 export component RegisterPage inherits Rectangle {
     in-out property <string> display-name: "";
@@ -13,6 +14,9 @@ export component RegisterPage inherits Rectangle {
     in-out property <string> confirm-password: "";
     in property <bool> loading: false;
     in property <string> error: "";
+    in property <image> avatar-source;
+    in property <bool> has-avatar: false;
+    in property <int> selected-default-idx: -1;
 
     // Internal validation state
     property <bool> submitted: false;
@@ -24,6 +28,8 @@ export component RegisterPage inherits Rectangle {
     property <bool> fields-valid: !display-name-empty && !username-empty && !password-empty && !confirm-password-empty && passwords-match;
 
     callback register(string, string, string);
+    callback select-avatar();
+    callback select-default-avatar(int);
     callback go-to-login();
 
     background: Colors.background;
@@ -58,6 +64,83 @@ export component RegisterPage inherits Rectangle {
                     color: Colors.text-secondary;
                     font-size: Typography.base;
                     horizontal-alignment: center;
+                }
+
+                // Avatar Selection
+                VerticalLayout {
+                    spacing: Spacing.sm;
+                    alignment: center;
+
+                    Rectangle {
+                        width: 80px;
+                        height: 80px;
+                        border-radius: 40px;
+                        background: Colors.surface-hover;
+                        clip: true;
+
+                        Avatar {
+                            size: 80px;
+                            source: root.has-avatar ? root.avatar-source : @image-url("../../assets/icon-256.png");
+                            fallback-text: "+";
+                        }
+
+                        // Edit overlay
+                        Rectangle {
+                            width: 100%;
+                            height: 100%;
+                            background: touch.has-hover ? #00000040 : transparent;
+                            
+                            VerticalLayout {
+                                alignment: center;
+                                if touch.has-hover: Text {
+                                    text: "Change";
+                                    color: Colors.text-primary;
+                                    font-size: Typography.xs;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+
+                        touch := TouchArea {
+                            mouse-cursor: pointer;
+                            enabled: !root.loading;
+                            clicked => { root.select-avatar(); }
+                        }
+                    }
+
+                    // Default alternatives
+                    HorizontalLayout {
+                        width: 100%;
+                        spacing: Spacing.md;
+                        alignment: center;
+
+                        for avatar[i] in [
+                            @image-url("../../assets/avatars/pepe.jpg"),
+                            @image-url("../../assets/avatars/doge.jpg"),
+                            @image-url("../../assets/avatars/wojak.jpg")
+                        ]: Rectangle {
+                            width: 44px;
+                            height: 44px;
+                            border-radius: 22px;
+                            background: Colors.surface-hover;
+                            border-width: 2px;
+                            border-color: root.selected-default-idx == i ? Colors.primary : transparent;
+                            clip: true;
+
+                            Image {
+                                source: avatar;
+                                width: 100%;
+                                height: 100%;
+                                image-fit: cover;
+                            }
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                enabled: !root.loading;
+                                clicked => { root.select-default-avatar(i); }
+                            }
+                        }
+                    }
                 }
 
                 // Spacer

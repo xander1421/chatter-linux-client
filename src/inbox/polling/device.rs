@@ -56,20 +56,9 @@ pub async fn process_device_message(
         "[INBOX] Processing device message"
     );
 
-    // Check envelope type for identified sender (PreKey/Ciphertext vs SealedSender)
-    // envelope_type: 1=ciphertext, 2=prekey, 3=sealed_sender
-    let is_identified_sender = msg.envelope_type == 1 || msg.envelope_type == 2;
-    if is_identified_sender && !msg.source_user_id.is_empty() {
-        tracing::info!(
-            message_guid = %msg.message_guid,
-            source_user_id = %msg.source_user_id,
-            envelope_type = msg.envelope_type,
-            "[INBOX] Processing as identified sender message (PreKey/Ciphertext)"
-        );
-        process_identified_sender_message(msg, event_tx, stats, message_gateway, domain_tx).await;
-        return;
-    }
-
+    // IMPORTANT: Check for sender key messages FIRST, before envelope_type routing.
+    // Sender key messages may arrive with envelope_type=1 or 2 (ciphertext/prekey)
+    // but they need sender key decryption, not Double Ratchet.
     // First, try to decode as EncryptedData (sender key encrypted channel message)
     if let Ok(encrypted_data) = EncryptedData::decode(msg.envelope.as_slice()) {
         let associated_data_str = String::from_utf8_lossy(&encrypted_data.associated_data);
@@ -140,8 +129,34 @@ pub async fn process_device_message(
     } else {
         tracing::debug!(
             message_guid = %msg.message_guid,
-            "[INBOX] Not EncryptedData, trying sealed sender"
+            "[INBOX] Not EncryptedData, checking envelope type"
         );
+    }
+
+    // Check envelope type for identified sender (PreKey/Ciphertext vs SealedSender)
+    // envelope_type: 1=ciphertext, 2=prekey, 3=sealed_sender, 4=ecies_init
+    // This is AFTER the sender key check, so only non-sender-key messages reach here
+    let is_identified_sender = msg.envelope_type == 1 || msg.envelope_type == 2;
+    if is_identified_sender && !msg.source_user_id.is_empty() {
+        tracing::info!(
+            message_guid = %msg.message_guid,
+            source_user_id = %msg.source_user_id,
+            envelope_type = msg.envelope_type,
+            "[INBOX] Processing as identified sender message (PreKey/Ciphertext)"
+        );
+        process_identified_sender_message(msg, event_tx, stats, message_gateway, domain_tx).await;
+        return;
+    }
+
+    // Check for ECIES_INIT (HPKE-encrypted initial contact, NDSS'21 compliant)
+    if msg.envelope_type == EnvelopeType::EciesInit as i32 {
+        tracing::info!(
+            message_guid = %msg.message_guid,
+            envelope_len = msg.envelope.len(),
+            "[INBOX] Processing as ECIES init message (NDSS'21 private contact)"
+        );
+        process_ecies_init_message(msg, event_tx, stats, message_gateway, domain_tx).await;
+        return;
     }
 
     // Fall back to sealed sender processing
@@ -248,13 +263,36 @@ async fn process_sender_key_message(
                 message_guid = %msg.message_guid,
                 channel_id = %channel_id,
                 sender_id = %sender_id,
-                "[INBOX_SK] DECRYPTION FAILED - missing sender key, need SKDM from sender"
+                "[INBOX_SK] DECRYPTION FAILED - missing sender key, requesting SKDM"
             );
+            // Emit event to request sender's SKDM
+            let _ = event_tx.send(InboxEvent::SenderKeyNeeded {
+                channel_id,
+                sender_id,
+            });
+            // Also mark message as failed for now (will succeed on retry after SKDM arrives)
             let _ = event_tx.send(InboxEvent::MessageFailed {
                 message_id: msg.message_guid.clone(),
                 error: format!("Missing sender key from {}", sender_id),
             });
             stats.write().messages_failed += 1;
+        }
+        Ok(RouteResult::RespondWithSkdm { channel_id, requester_id, skdm }) => {
+            tracing::info!(
+                message_guid = %msg.message_guid,
+                channel_id = %channel_id,
+                requester_id = %requester_id,
+                "[INBOX_SK] Received sender key request, emitting event to respond"
+            );
+            // Serialize SKDM for event
+            use prost::Message as ProstMessage;
+            let skdm_bytes = skdm.encode_to_vec();
+            let _ = event_tx.send(InboxEvent::RespondWithSkdm {
+                channel_id,
+                requester_id,
+                skdm_bytes,
+            });
+            stats.write().messages_processed += 1;
         }
         Ok(RouteResult::MailboxAnnouncement { channel_id, announcement }) => {
             // Gateway detected GroupMailboxAddress - process via coordinator
@@ -386,6 +424,7 @@ fn process_decrypted_data_message(
                         message_id: msg.message_guid.clone(),
                         text: data_message.body.clone(),
                         timestamp: data_message.timestamp,
+                        attachments: data_message.attachments.clone(),
                     });
 
                     let _ = event_tx.send(InboxEvent::MessageReceived {
@@ -440,6 +479,26 @@ async fn process_identified_sender_message(
     message_gateway: &Arc<MessageGateway>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
+    // Self-send detection: skip messages from ourselves
+    // This prevents "Key already requested" errors when trying to decrypt our own messages
+    // (we don't have a valid session with ourselves, and Kyber keys were consumed during encryption)
+    if !msg.source_user_id.is_empty()
+        && !msg.destination_user_id.is_empty()
+        && msg.source_user_id == msg.destination_user_id
+    {
+        tracing::debug!(
+            message_id = %msg.message_guid,
+            user_id = %msg.source_user_id,
+            "[INBOX] Self-send detected in identified sender message, skipping decryption"
+        );
+        // Mark as processed (not failed) - self-sends are expected during multi-device sync
+        let _ = event_tx.send(InboxEvent::MessageProcessed {
+            message_id: msg.message_guid.clone(),
+        });
+        stats.write().messages_processed += 1;
+        return;
+    }
+
     // Parse sender address
     let sender_id: UserId = match msg.source_user_id.parse() {
         Ok(id) => id,
@@ -523,6 +582,88 @@ async fn process_identified_sender_message(
             s.messages_received += 1;
             s.messages_processed += 1;
         }
+        Ok(SealedSenderResult::DataMessageReceived {
+            sender_id: msg_sender,
+            channel_id,
+            message_id: msg_id,
+            body,
+            timestamp,
+            attachments,
+        }) => {
+            tracing::info!(
+                message_id = %msg.message_guid,
+                sender_id = %msg_sender,
+                channel_id = %channel_id,
+                "[INBOX] DataMessage received via identified sender"
+            );
+            let _ = event_tx.send(InboxEvent::ChannelMessageReceived {
+                channel_id,
+                sender_id: msg_sender,
+                message_id: msg_id.to_string(),
+                text: body,
+                timestamp,
+                attachments,
+            });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            let mut s = stats.write();
+            s.messages_received += 1;
+            s.messages_processed += 1;
+        }
+        Ok(SealedSenderResult::SenderKeyRequested { requester_id, channel_id }) => {
+            // SenderKeyRequest via identified sender (unusual but handled)
+            tracing::info!(
+                message_id = %msg.message_guid,
+                requester_id = %requester_id,
+                channel_id = %channel_id,
+                "[INBOX] Received SenderKeyRequest via identified sender"
+            );
+            let _ = event_tx.send(InboxEvent::RespondWithSkdm {
+                channel_id,
+                requester_id,
+                skdm_bytes: vec![], // Empty - handler will create SKDM
+            });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
+        Ok(SealedSenderResult::MailboxAnnouncement { sender_id, channel_id, announcement }) => {
+            // MailboxAnnouncement via identified sender (unusual - should use sealed sender)
+            tracing::info!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                channel_id = %channel_id,
+                "[INBOX] Received GroupMailboxAddress via identified sender (unexpected path)"
+            );
+            let _ = event_tx.send(InboxEvent::GroupMailboxAnnouncement {
+                channel_id,
+                member_id: sender_id,
+                mailbox_pk: announcement.mailbox_pk.clone(),
+                timestamp: announcement.timestamp,
+            });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
+        // AnonGroupMessage should come via group mailbox, not identified sender
+        Ok(SealedSenderResult::AnonGroupMessageReceived { .. }) => {
+            tracing::warn!(
+                message_id = %msg.message_guid,
+                "[INBOX] AnonGroupMessage via identified sender (wrong path)"
+            );
+            stats.write().messages_failed += 1;
+        }
+        // AnonGroupJoinAck should come via group mailbox, not identified sender
+        Ok(SealedSenderResult::AnonGroupJoinAckReceived { .. }) => {
+            tracing::warn!(
+                message_id = %msg.message_guid,
+                "[INBOX] AnonGroupJoinAck via identified sender (wrong path)"
+            );
+            stats.write().messages_failed += 1;
+        }
         Err(e) => {
             tracing::error!(
                 message_id = %msg.message_guid,
@@ -539,6 +680,147 @@ async fn process_identified_sender_message(
             s.messages_failed += 1;
         }
     }
+}
+
+/// Process an ECIES init message (NDSS'21 private contact).
+///
+/// These messages are HPKE-encrypted to our identity key, containing:
+/// - Conversation ID
+/// - Sender's mailbox public key
+/// - Sender's identity key
+/// - Sender's delivery token
+/// - Optional intro message
+async fn process_ecies_init_message(
+    msg: &DeviceMessage,
+    event_tx: &broadcast::Sender<InboxEvent>,
+    stats: &Arc<RwLock<InboxStats>>,
+    message_gateway: &Arc<MessageGateway>,
+    domain_tx: Option<&broadcast::Sender<DomainEvent>>,
+) {
+    use crate::crypto::ecies;
+    use crate::domain::anon_dm_init::AnonDmInitMessage;
+
+    // Get our identity key for decryption
+    let identity_key = match message_gateway.get_identity_key().await {
+        Ok(key) => key,
+        Err(e) => {
+            tracing::error!(
+                message_guid = %msg.message_guid,
+                error = %e,
+                "[INBOX_ECIES] Failed to get identity key for decryption"
+            );
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: format!("Failed to get identity key: {}", e),
+            });
+            stats.write().messages_failed += 1;
+            return;
+        }
+    };
+
+    // Parse ECIES message structure
+    let ecies_msg = match ecies::EciesMessage::from_bytes(&msg.envelope) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!(
+                message_guid = %msg.message_guid,
+                error = %e,
+                "[INBOX_ECIES] Failed to parse ECIES message"
+            );
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: format!("Invalid ECIES message: {}", e),
+            });
+            stats.write().messages_failed += 1;
+            return;
+        }
+    };
+
+    // Decrypt using our X25519 private key (already 32 bytes from get_identity_key)
+    let plaintext = match ecies::decrypt(&identity_key, &ecies_msg) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(
+                message_guid = %msg.message_guid,
+                error = %e,
+                "[INBOX_ECIES] Failed to decrypt ECIES message"
+            );
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: format!("ECIES decryption failed: {}", e),
+            });
+            stats.write().messages_failed += 1;
+            return;
+        }
+    };
+
+    // Parse AnonDmInitMessage
+    let init_msg = match AnonDmInitMessage::from_bytes(&plaintext) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!(
+                message_guid = %msg.message_guid,
+                error = %e,
+                "[INBOX_ECIES] Failed to parse AnonDmInitMessage"
+            );
+            let _ = event_tx.send(InboxEvent::MessageFailed {
+                message_id: msg.message_guid.clone(),
+                error: format!("Invalid init message: {}", e),
+            });
+            stats.write().messages_failed += 1;
+            return;
+        }
+    };
+
+    tracing::info!(
+        message_guid = %msg.message_guid,
+        conversation_id = %init_msg.conversation_id,
+        sender_id = %init_msg.sender_id,
+        intro_len = init_msg.intro_message.len(),
+        "[INBOX_ECIES] Successfully decrypted NDSS'21 private contact request"
+    );
+
+    // Emit domain event for the anon DM handler to process
+    if let Some(tx) = domain_tx {
+        let event = DomainEvent::AnonDmInitReceived {
+            conversation_id: init_msg.conversation_id,
+            sender_id: init_msg.sender_id,
+            sender_display_name: init_msg.sender_display_name.clone(),
+            sender_avatar: None, // TODO: Add avatar to AnonDmInitMessage
+            peer_mailbox_pk: init_msg.mailbox_pk,
+            peer_identity_key: init_msg.identity_key,
+            peer_delivery_token: init_msg.delivery_token,
+            intro_message: init_msg.intro_message.clone(),
+            server_timestamp: msg.server_timestamp,
+        };
+        match tx.send(event) {
+            Ok(receivers) => {
+                tracing::info!(
+                    conversation_id = %init_msg.conversation_id,
+                    receivers = receivers,
+                    "[INBOX_ECIES] Emitted AnonDmInitReceived event"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    conversation_id = %init_msg.conversation_id,
+                    error = %e,
+                    "[INBOX_ECIES] Failed to emit AnonDmInitReceived event (no receivers?)"
+                );
+            }
+        }
+    } else {
+        tracing::warn!(
+            conversation_id = %init_msg.conversation_id,
+            "[INBOX_ECIES] No domain_tx channel available - event not emitted!"
+        );
+    }
+
+    let _ = event_tx.send(InboxEvent::MessageReceived {
+        message_id: msg.message_guid.clone(),
+        envelope_type: EnvelopeType::EciesInit,
+    });
+    stats.write().messages_processed += 1;
 }
 
 /// Process a sealed sender message.
@@ -603,6 +885,89 @@ async fn process_sealed_sender_message(
                 message_id: msg.message_guid.clone(),
             });
             stats.write().messages_processed += 1;
+        }
+        Ok(SealedSenderResult::SenderKeyRequested { requester_id, channel_id }) => {
+            tracing::info!(
+                message_id = %msg.message_guid,
+                requester_id = %requester_id,
+                channel_id = %channel_id,
+                "[INBOX] Received SenderKeyRequest via sealed sender, emitting event"
+            );
+            // Emit event to respond with our SKDM - handler will create and send it
+            let _ = event_tx.send(InboxEvent::RespondWithSkdm {
+                channel_id,
+                requester_id,
+                skdm_bytes: vec![], // Empty - handler will create SKDM
+            });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
+        Ok(SealedSenderResult::MailboxAnnouncement { sender_id, channel_id, announcement }) => {
+            tracing::info!(
+                message_id = %msg.message_guid,
+                sender_id = %sender_id,
+                channel_id = %channel_id,
+                "[INBOX] Received GroupMailboxAddress via sealed sender, emitting event"
+            );
+            // Emit event for group mailbox handler to process
+            let _ = event_tx.send(InboxEvent::GroupMailboxAnnouncement {
+                channel_id,
+                member_id: sender_id,
+                mailbox_pk: announcement.mailbox_pk.clone(),
+                timestamp: announcement.timestamp,
+            });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
+        // AnonGroupMessage should come via group mailbox polling, not device inbox
+        Ok(SealedSenderResult::AnonGroupMessageReceived { .. }) => {
+            tracing::warn!(
+                message_id = %msg.message_guid,
+                "[INBOX] AnonGroupMessage via device sealed sender (wrong path)"
+            );
+            stats.write().messages_failed += 1;
+        }
+        // AnonGroupJoinAck should come via group mailbox polling, not device inbox
+        Ok(SealedSenderResult::AnonGroupJoinAckReceived { .. }) => {
+            tracing::warn!(
+                message_id = %msg.message_guid,
+                "[INBOX] AnonGroupJoinAck via device sealed sender (wrong path)"
+            );
+            stats.write().messages_failed += 1;
+        }
+        Ok(SealedSenderResult::DataMessageReceived {
+            sender_id: msg_sender,
+            channel_id,
+            message_id: msg_id,
+            body,
+            timestamp,
+            attachments,
+        }) => {
+            tracing::info!(
+                message_id = %msg.message_guid,
+                sender_id = %msg_sender,
+                channel_id = %channel_id,
+                "[INBOX] DataMessage received via sealed sender"
+            );
+            // Emit UI event so message appears in chat
+            let _ = event_tx.send(InboxEvent::ChannelMessageReceived {
+                channel_id,
+                sender_id: msg_sender,
+                message_id: msg_id.to_string(),
+                text: body,
+                timestamp,
+                attachments,
+            });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            let mut s = stats.write();
+            s.messages_received += 1;
+            s.messages_processed += 1;
         }
         Ok(SealedSenderResult::MessageStored) => {
             let envelope_type = EnvelopeType::SealedSender;
@@ -882,6 +1247,37 @@ pub fn dispatch_channel_control_content(
                 target_author_aci: sync.target_author_aci,
                 target_sent_timestamp: sync.target_sent_timestamp,
             });
+            stats.write().messages_processed += 1;
+        }
+        content::Content::Receipt(receipt) => {
+            if receipt.channel_id.is_empty() {
+                tracing::debug!(
+                    sender_id = %sender_id,
+                    receipt_type = receipt.r#type,
+                    timestamps = ?receipt.timestamps,
+                    "Channel receipt received but missing channel_id (might be DM)"
+                );
+            } else if let Ok(channel_id) = receipt.channel_id.parse::<ChannelId>() {
+                tracing::debug!(
+                    sender_id = %sender_id,
+                    channel_id = %channel_id,
+                    receipt_type = receipt.r#type,
+                    timestamps = ?receipt.timestamps,
+                    "Channel receipt received"
+                );
+                let _ = event_tx.send(InboxEvent::ChannelReceipt {
+                    channel_id,
+                    sender_id: *sender_id,
+                    receipt_type: receipt.r#type,
+                    timestamps: receipt.timestamps,
+                });
+            } else {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    channel_id = %receipt.channel_id,
+                    "Channel receipt received with invalid channel_id"
+                );
+            }
             stats.write().messages_processed += 1;
         }
         _ => {

@@ -2,10 +2,12 @@
 //!
 //! Uses SessionService for all session operations - no direct network calls.
 
+use std::sync::Arc;
+
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_linux::app::AppContext;
-use chatter_linux::services::session_service::{Session, SessionService};
+use chatter_linux::app::UIContext;
+use chatter_linux::services::session_service::Session;
 
 use crate::{MainWindow, SessionInfo};
 
@@ -36,18 +38,16 @@ fn update_sessions_ui(weak: slint::Weak<MainWindow>, sessions: Vec<Session>) {
     });
 }
 
-pub fn wire_session_callbacks(window: &MainWindow, ctx: &AppContext) {
-    let grpc_pool = ctx.grpc_pool.clone();
-    let settings_repo = ctx.settings_repo.clone();
+pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let session_service = ui_ctx.session_service.clone();
 
     // View sessions
     let weak_window = window.as_weak();
-    let grpc_pool_view = grpc_pool.clone();
-    let settings_repo_view = settings_repo.clone();
+    let session_service_view = session_service.clone();
 
     window.on_settings_view_sessions(move || {
         let weak = weak_window.clone();
-        let service = SessionService::new(grpc_pool_view.clone(), settings_repo_view.clone());
+        let service = session_service_view.clone();
 
         tokio::spawn(async move {
             let weak_loading = weak.clone();
@@ -74,12 +74,11 @@ pub fn wire_session_callbacks(window: &MainWindow, ctx: &AppContext) {
 
     // Revoke single session
     let weak_window = window.as_weak();
-    let grpc_pool_revoke = grpc_pool.clone();
-    let settings_repo_revoke = settings_repo.clone();
+    let session_service_revoke = session_service.clone();
 
     window.on_revoke_session(move |device_id: i32| {
         let weak = weak_window.clone();
-        let service = SessionService::new(grpc_pool_revoke.clone(), settings_repo_revoke.clone());
+        let service = session_service_revoke.clone();
 
         tokio::spawn(async move {
             let weak_revoking = weak.clone();
@@ -119,12 +118,11 @@ pub fn wire_session_callbacks(window: &MainWindow, ctx: &AppContext) {
 
     // Revoke all other sessions
     let weak_window = window.as_weak();
-    let grpc_pool_revoke_all = grpc_pool.clone();
-    let settings_repo_revoke_all = settings_repo.clone();
+    let session_service_revoke_all = session_service.clone();
 
     window.on_revoke_all_sessions(move || {
         let weak = weak_window.clone();
-        let service = SessionService::new(grpc_pool_revoke_all.clone(), settings_repo_revoke_all.clone());
+        let service = session_service_revoke_all.clone();
 
         tokio::spawn(async move {
             let weak_revoking = weak.clone();

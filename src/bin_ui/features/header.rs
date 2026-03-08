@@ -2,11 +2,14 @@
 //!
 //! Handles channel header actions (search, pinned, settings, load more).
 
+use std::sync::Arc;
+
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_linux::app::AppContext;
+use chatter_linux::app::UIContext;
 use chatter_linux::domain::{Attachment, FileCategory, Message};
-use chatter_linux::storage::AttachmentRepository;
+use chatter_linux::services::attachment::AttachmentService;
+use chatter_linux::services::message::MessageService;
 
 use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
 use crate::MainWindow;
@@ -58,12 +61,12 @@ fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> Str
 }
 
 /// Wire header callbacks.
-pub fn wire(window: &MainWindow, ctx: &AppContext) {
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     wire_search_clicked(window);
-    wire_search_callbacks(window, ctx);
-    wire_pinned_navigation(window, ctx);
-    wire_chat_settings_clicked(window, ctx);
-    wire_load_more(window, ctx);
+    wire_search_callbacks(window, ui_ctx);
+    wire_pinned_navigation(window, ui_ctx);
+    wire_chat_settings_clicked(window, ui_ctx);
+    wire_load_more(window, ui_ctx);
     wire_scroll_to_bottom(window);
 }
 
@@ -88,14 +91,13 @@ fn wire_search_clicked(window: &MainWindow) {
     });
 }
 
-fn wire_search_callbacks(window: &MainWindow, ctx: &AppContext) {
+fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     // Search messages
     let weak_window = window.as_weak();
-    let search_index = ctx.search_index.clone();
-    let message_repo = ctx.message_repo.clone();
-    let channel_repo = ctx.channel_repo.clone();
-    let user_repo = ctx.user_repo.clone();
-    let chat_state = ctx.chat_state.clone();
+    let message_service = ui_ctx.message_service.clone();
+    let channel_service = ui_ctx.channel_service.clone();
+    let user_service = ui_ctx.user_service.clone();
+    let chat_state = ui_ctx.chat_state.clone();
 
     window.on_search_messages(move |query: slint::SharedString| {
         let query_str = query.to_string();
@@ -112,10 +114,9 @@ fn wire_search_callbacks(window: &MainWindow, ctx: &AppContext) {
         }
 
         let weak = weak_window.clone();
-        let search_index = search_index.clone();
-        let message_repo = message_repo.clone();
-        let channel_repo = channel_repo.clone();
-        let user_repo = user_repo.clone();
+        let message_service = message_service.clone();
+        let channel_service = channel_service.clone();
+        let user_service = user_service.clone();
         let chat_state = chat_state.clone();
 
         // Set searching state
@@ -141,8 +142,8 @@ fn wire_search_callbacks(window: &MainWindow, ctx: &AppContext) {
                 chat_state.get().active_channel_id
             };
 
-            // Perform search
-            let results = match search_index.search(&query_str, channel_id.as_ref(), 50) {
+            // Perform search using message service's local search
+            let results = match message_service.search_local(&query_str, channel_id.as_ref(), 50) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::error!("Search failed: {}", e);
@@ -160,14 +161,14 @@ fn wire_search_callbacks(window: &MainWindow, ctx: &AppContext) {
             let mut display_results: Vec<crate::SearchResult> = Vec::with_capacity(results.len());
             for result in &results {
                 // Get message details
-                let msg = match message_repo.get(&result.message_id) {
+                let msg = match message_service.get_message_local(&result.message_id) {
                     Ok(Some(m)) => m,
                     _ => continue,
                 };
 
                 // Get channel name
-                let channel_name = channel_repo
-                    .get(&result.channel_id)
+                let channel_name = channel_service
+                    .get_channel_local(&result.channel_id)
                     .ok()
                     .flatten()
                     .map(|c| c.name)
@@ -177,14 +178,7 @@ fn wire_search_callbacks(window: &MainWindow, ctx: &AppContext) {
                 let sender_name = msg
                     .sender_id
                     .as_ref()
-                    .and_then(|id| {
-                        user_repo
-                            .get_profile(id)
-                            .ok()
-                            .flatten()
-                            .map(|p| p.display_name)
-                            .or_else(|| user_repo.get(id).ok().flatten().map(|u| u.username))
-                    })
+                    .map(|id| user_service.get_display_name(id))
                     .unwrap_or_else(|| "Unknown".to_string());
 
                 // Format timestamp (convert UTC to local time)
@@ -262,31 +256,31 @@ fn wire_search_callbacks(window: &MainWindow, ctx: &AppContext) {
     });
 }
 
-fn wire_pinned_navigation(window: &MainWindow, ctx: &AppContext) {
+fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     // Previous pinned message
-    let pinned_state = ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state.clone();
     let weak_window = window.as_weak();
-    let message_repo = ctx.message_repo.clone();
-    let attachment_repo = ctx.attachment_repo.clone();
+    let message_service = ui_ctx.message_service.clone();
+    let attachment_service = ui_ctx.attachment_service.clone();
 
     window.on_pinned_prev_clicked(move || {
         pinned_state.navigate_prev();
-        update_pinned_ui(&weak_window, &pinned_state, &message_repo, &attachment_repo);
+        update_pinned_ui(&weak_window, &pinned_state, &message_service, &attachment_service);
     });
 
     // Next pinned message
-    let pinned_state = ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state.clone();
     let weak_window = window.as_weak();
-    let message_repo = ctx.message_repo.clone();
-    let attachment_repo = ctx.attachment_repo.clone();
+    let message_service = ui_ctx.message_service.clone();
+    let attachment_service = ui_ctx.attachment_service.clone();
 
     window.on_pinned_next_clicked(move || {
         pinned_state.navigate_next();
-        update_pinned_ui(&weak_window, &pinned_state, &message_repo, &attachment_repo);
+        update_pinned_ui(&weak_window, &pinned_state, &message_service, &attachment_service);
     });
 
     // Dismiss pinned bar
-    let pinned_state = ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state.clone();
     let weak_window = window.as_weak();
 
     window.on_pinned_dismiss_clicked(move || {
@@ -301,7 +295,7 @@ fn wire_pinned_navigation(window: &MainWindow, ctx: &AppContext) {
     });
 
     // Go to pinned message (scroll to it in chat)
-    let pinned_state = ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state.clone();
     let weak_window = window.as_weak();
 
     window.on_pinned_go_to_message(move || {
@@ -354,8 +348,8 @@ fn wire_pinned_navigation(window: &MainWindow, ctx: &AppContext) {
 fn update_pinned_ui(
     weak_window: &slint::Weak<MainWindow>,
     pinned_state: &chatter_linux::state::PinnedState,
-    message_repo: &std::sync::Arc<chatter_linux::storage::MessageRepository>,
-    attachment_repo: &std::sync::Arc<AttachmentRepository>,
+    message_service: &Arc<MessageService>,
+    attachment_service: &Arc<AttachmentService>,
 ) {
     let state = pinned_state.get();
     let current_index = state.current_index as i32;
@@ -363,11 +357,11 @@ fn update_pinned_ui(
 
     // Get preview text for current pinned message (with attachment support)
     let preview = if let Some(msg_id) = pinned_state.current_message_id() {
-        if let Ok(Some(msg)) = message_repo.get(&msg_id) {
+        if let Ok(Some(msg)) = message_service.get_message_local(&msg_id) {
             let attachments: Vec<Attachment> = msg
                 .attachments
                 .iter()
-                .filter_map(|att_id| attachment_repo.get(att_id).ok().flatten())
+                .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
                 .collect();
             generate_pinned_preview(&msg, &attachments)
         } else {
@@ -388,15 +382,68 @@ fn update_pinned_ui(
     });
 }
 
-fn wire_chat_settings_clicked(window: &MainWindow, ctx: &AppContext) {
+fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
-    let chat_state = ctx.chat_state.clone();
-    let channel_repo = ctx.channel_repo.clone();
-    let user_repo = ctx.user_repo.clone();
-    let auth_state = ctx.auth_state.clone();
-    let grpc_pool = ctx.grpc_pool.clone();
+    let chat_state = ui_ctx.chat_state.clone();
+    let channel_service = ui_ctx.channel_service.clone();
+    let user_service = ui_ctx.user_service.clone();
+    let anon_group_service = ui_ctx.anon_group_service.clone();
 
     window.on_chat_settings_clicked(move || {
+        // Check if a private group is selected
+        let selected_private_group_id = weak_window
+            .upgrade()
+            .map(|w| w.get_selected_private_group_id().to_string())
+            .unwrap_or_default();
+
+        if !selected_private_group_id.is_empty() {
+            // Private group settings
+            let group_id: chatter_linux::domain::anon_group::AnonGroupId =
+                match selected_private_group_id.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("Invalid private group ID: {}", e);
+                        return;
+                    }
+                };
+
+            // Get group info for settings modal
+            let group = match anon_group_service.get_group(&group_id) {
+                Ok(Some(g)) => g,
+                Ok(None) => {
+                    tracing::error!("Private group not found: {}", group_id);
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to get private group: {}", e);
+                    return;
+                }
+            };
+
+            let members = anon_group_service.get_members(&group_id).unwrap_or_default();
+            let member_count = members.len() as i32;
+
+            // Open private group settings modal
+            // For now, show channel settings modal with adapted data
+            // TODO: Create dedicated PrivateGroupSettings modal
+            let weak = weak_window.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_channel_settings_name(group.name.into());
+                    w.set_channel_settings_type("private-group".into());
+                    w.set_channel_settings_member_count(member_count);
+                    w.set_active_modal("channel_settings".into());
+                    tracing::debug!(
+                        "Opened settings for private group {} with {} members",
+                        group_id,
+                        member_count
+                    );
+                }
+            });
+            return;
+        }
+
+        // Regular channel settings
         let channel_id = match chat_state.get().active_channel_id {
             Some(id) => id,
             None => {
@@ -407,30 +454,28 @@ fn wire_chat_settings_clicked(window: &MainWindow, ctx: &AppContext) {
 
         super::modals::open_channel_settings(
             weak_window.clone(),
-            channel_repo.clone(),
-            user_repo.clone(),
-            auth_state.clone(),
-            grpc_pool.clone(),
+            channel_service.clone(),
+            user_service.clone(),
             channel_id,
         );
     });
 }
 
-fn wire_load_more(window: &MainWindow, ctx: &AppContext) {
+fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
-    let chat_state = ctx.chat_state.clone();
-    let message_repo = ctx.message_repo.clone();
-    let message_state = ctx.message_state.clone();
-    let user_repo = ctx.user_repo.clone();
-    let attachment_repo = ctx.attachment_repo.clone();
+    let chat_state = ui_ctx.chat_state.clone();
+    let message_service = ui_ctx.message_service.clone();
+    let message_state = ui_ctx.message_state.clone();
+    let user_service = ui_ctx.user_service.clone();
+    let attachment_service = ui_ctx.attachment_service.clone();
 
     window.on_load_more(move || {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
-        let message_repo = message_repo.clone();
+        let message_service = message_service.clone();
         let message_state = message_state.clone();
-        let user_repo = user_repo.clone();
-        let attachment_repo = attachment_repo.clone();
+        let user_service = user_service.clone();
+        let attachment_service = attachment_service.clone();
 
         tokio::spawn(async move {
             let channel_id = match chat_state.get().active_channel_id {
@@ -458,7 +503,7 @@ fn wire_load_more(window: &MainWindow, ctx: &AppContext) {
 
             let before = cursor.and_then(|c| c.oldest_message_id);
 
-            let older_messages = match message_repo.list_for_channel(&channel_id, before.as_ref(), 50) {
+            let older_messages = match message_service.get_messages_local(&channel_id, before.as_ref(), 50) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to load more messages: {}", e);
@@ -483,19 +528,7 @@ fn wire_load_more(window: &MainWindow, ctx: &AppContext) {
             let mut display_messages: Vec<MessageDisplayData> = Vec::with_capacity(older_messages.len());
             for msg in &older_messages {
                 let sender_name = if let Some(sender_id) = &msg.sender_id {
-                    user_repo
-                        .get_profile(sender_id)
-                        .ok()
-                        .flatten()
-                        .map(|p| p.display_name)
-                        .or_else(|| {
-                            user_repo
-                                .get(sender_id)
-                                .ok()
-                                .flatten()
-                                .map(|u| u.username)
-                        })
-                        .unwrap_or_else(|| "Unknown".to_string())
+                    user_service.get_display_name(sender_id)
                 } else {
                     "Anonymous".to_string()
                 };
@@ -504,7 +537,7 @@ fn wire_load_more(window: &MainWindow, ctx: &AppContext) {
                 let resolved_attachments: Vec<_> = msg
                     .attachments
                     .iter()
-                    .filter_map(|att_id| attachment_repo.get(att_id).ok().flatten())
+                    .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
                     .collect();
 
                 display_messages.push(message_to_display_data(msg, &sender_name, &resolved_attachments));
@@ -514,11 +547,13 @@ fn wire_load_more(window: &MainWindow, ctx: &AppContext) {
             display_messages.reverse();
 
             let msg_count = older_messages.len();
+            // Get current user ID for is_own calculation
+            let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     // Convert display data to Slint types (must be done on UI thread)
-                    let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint()).collect();
+                    let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
 
                     let current_model = w.get_messages();
                     let current_count = current_model.row_count();

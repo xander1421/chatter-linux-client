@@ -1,8 +1,18 @@
 //! Authentication service.
 //!
 //! Login, logout, and session management orchestrating crypto, network, and storage layers.
+//!
+//! # Privacy
+//!
+//! Usernames are hashed with HMAC-SHA256 using a profile key derived from the password.
+//! This ensures:
+//! 1. Server never sees actual usernames
+//! 2. Username hash is deterministic (same password → same hash on any device)
+//! 3. Rainbow table attacks are infeasible (password acts as secret)
 
-use rand::RngCore;
+use base64::Engine;
+use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
@@ -64,6 +74,52 @@ pub struct LoginResult {
     pub needs_prekey_upload: bool,
 }
 
+// ============================================================================
+// Username Privacy Helpers
+// ============================================================================
+
+/// Derive a deterministic profile key from password hash.
+///
+/// Uses HKDF-SHA256 to derive a 32-byte profile key from the password hash.
+/// This ensures the same password always produces the same profile key,
+/// enabling consistent username hashing across devices.
+///
+/// # Security
+///
+/// - Password hash is the IKM (input key material)
+/// - Username is part of the info for domain separation
+/// - Output is suitable for HMAC and AES-GCM operations
+fn derive_profile_key_from_password(password_hash: &[u8], username: &str) -> [u8; 32] {
+    let hk = Hkdf::<Sha256>::new(None, password_hash);
+    let info = format!("chatter_profile_key_{}", username.trim().to_lowercase());
+    let mut profile_key = [0u8; 32];
+    hk.expand(info.as_bytes(), &mut profile_key)
+        .expect("32 bytes is valid output length for HKDF-SHA256");
+    profile_key
+}
+
+/// Hash a username with the profile key for privacy.
+///
+/// Uses HMAC-SHA256 with the profile key as the secret. The server never sees
+/// the actual username - only this hash.
+///
+/// # Privacy Properties
+///
+/// 1. Username cannot be recovered from hash (one-way)
+/// 2. Rainbow table resistant (profile key acts as secret)
+/// 3. Deterministic (same password + username = same hash on any device)
+fn hash_username_with_profile_key(username: &str, profile_key: &[u8; 32]) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+
+    let normalized = username.trim().to_lowercase();
+    let mut mac = HmacSha256::new_from_slice(profile_key)
+        .expect("HMAC can take key of any size");
+    mac.update(normalized.as_bytes());
+    let result = mac.finalize();
+
+    hex::encode(result.into_bytes())
+}
+
 /// Authentication service.
 ///
 /// Orchestrates login, registration, and logout flows by coordinating
@@ -101,8 +157,8 @@ impl AuthService {
         }
     }
 
-    /// Internal helper to create an auth client.
-    fn auth_client(&self) -> AuthClient {
+    /// Create an auth client for making gRPC calls.
+    pub fn auth_client(&self) -> AuthClient {
         AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
     }
 
@@ -113,6 +169,18 @@ impl AuthService {
             .ok()
             .flatten()
             .is_some()
+    }
+
+    /// Check if a user has ever registered on this device.
+    ///
+    /// Returns true if there's any user in the local database,
+    /// indicating the user should see login screen instead of register.
+    pub fn has_registered_before(&self) -> bool {
+        // Check if there are any users stored locally
+        match self.user_repo.count() {
+            Ok(count) => count > 0,
+            Err(_) => false,
+        }
     }
 
     /// Get the current user ID and device ID if logged in.
@@ -148,6 +216,13 @@ impl AuthService {
         // Hash password with SHA256 (server expects pre-hashed)
         let password_hash = Sha256::digest(password.as_bytes());
 
+        // PRIVACY: Derive profile key deterministically from password
+        // This ensures same password produces same profile_key on any device
+        let profile_key = derive_profile_key_from_password(&password_hash, username);
+
+        // PRIVACY: Hash username with profile key - server never sees actual username
+        let username_hash = hash_username_with_profile_key(username, &profile_key);
+
         // Get or generate identity key pair
         let (_registration_id, identity_key_pair) = if self.identity_manager.has_identity()? {
             self.identity_manager
@@ -158,10 +233,6 @@ impl AuthService {
             self.identity_manager.generate_identity(&mut rand::rng())?
         };
 
-        // Generate profile key for UAK derivation
-        let mut profile_key = [0u8; 32];
-        rand::rng().fill_bytes(&mut profile_key);
-
         // For login, device_id might come from settings (re-auth) or be assigned by server
         let stored_device_id: Option<u32> = self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten();
         let device_id_for_creds = stored_device_id.unwrap_or(1);
@@ -169,11 +240,11 @@ impl AuthService {
         // Generate device credentials
         let credentials = DeviceCredentials::generate(device_id_for_creds, &profile_key);
 
-        // Call server login
+        // Call server login with hashed username
         let identity_public_key = identity_key_pair.identity_key().serialize();
         let response = auth_client
             .login(
-                username,
+                &username_hash, // PRIVACY: Send hash, not plaintext username
                 password_hash.as_slice(),
                 device_info,
                 identity_public_key.as_ref(),
@@ -199,11 +270,26 @@ impl AuthService {
             AuthError::RegistrationFailed("invalid user_id format".to_string())
         })?;
         let device_id = session.device_id;
-        let display_name = user_profile.display_name.clone();
+
+        // PRIVACY: Decrypt display_name from server (it's base64-encoded encrypted)
+        let display_name = if user_profile.display_name.is_empty() {
+            String::new()
+        } else {
+            let encrypted_bytes = base64::engine::general_purpose::STANDARD
+                .decode(&user_profile.display_name)
+                .map_err(|e| AuthError::RegistrationFailed(format!("invalid display_name encoding: {}", e)))?;
+            crate::crypto::profile_crypto::decrypt_display_name(&profile_key, &encrypted_bytes)
+                .map_err(|e| AuthError::RegistrationFailed(format!("failed to decrypt display_name: {}", e)))?
+        };
 
         // Persist auth state in settings
         self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
         self.settings_repo.set(keys::CURRENT_DEVICE_ID, &device_id)?;
+        self.settings_repo.set_string(keys::DISPLAY_NAME, &display_name)?;
+
+        // Store identity public key for NDSS'21 private friend codes
+        // This allows generating friend codes without accessing the SignalStore
+        self.settings_repo.set_bytes(keys::IDENTITY_KEY_PUBLIC, identity_public_key.as_ref())?;
 
         // Configure auth interceptor for Basic auth
         self.auth_interceptor.set_basic(
@@ -254,6 +340,10 @@ impl AuthService {
     /// 4. Server registration
     /// 5. Local state persistence
     /// 6. Auth interceptor configuration
+    ///
+    /// # Arguments
+    ///
+    /// * `avatar` - Optional avatar image bytes (stored locally, encrypted when shared)
     pub async fn register(
         &self,
         auth_client: &mut AuthClient,
@@ -261,11 +351,23 @@ impl AuthService {
         password: &str,
         display_name: &str,
         device_info: &str,
+        avatar: Option<&[u8]>,
     ) -> Result<LoginResult, AuthError> {
         // Check not already logged in
         if self.is_logged_in() {
             return Err(AuthError::AlreadyLoggedIn);
         }
+
+        // Hash password with SHA256 (server expects pre-hashed)
+        let password_hash = Sha256::digest(password.as_bytes());
+
+        // PRIVACY: Derive profile key deterministically from password
+        // This ensures same password produces same profile_key on any device
+        // SECURITY: Profile key stays client-side only - never sent to server
+        let profile_key = derive_profile_key_from_password(&password_hash, username);
+
+        // PRIVACY: Hash username with profile key - server never sees actual username
+        let username_hash = hash_username_with_profile_key(username, &profile_key);
 
         // Generate new identity (always fresh for registration)
         let (registration_id, identity_key_pair) =
@@ -284,14 +386,15 @@ impl AuthService {
         // Generate one-time prekeys (100 for initial batch)
         let one_time_prekeys = self.prekey_manager.generate_prekeys(&mut rand::rng(), 1, 100)?;
 
-        // Generate profile key for UAK derivation
-        // SECURITY: Profile key stays client-side only - never sent to server
-        let mut profile_key = [0u8; 32];
-        rand::rng().fill_bytes(&mut profile_key);
-
         // Store profile key locally (needed for profile encryption)
         // Stored in SQLCipher encrypted database
         self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
+
+        // Store avatar locally if provided (raw bytes, encrypted when shared)
+        // Avatar is NOT uploaded to server - only shared E2E encrypted during bootstraps
+        if let Some(avatar_bytes) = avatar {
+            self.settings_repo.set_bytes(keys::AVATAR, avatar_bytes)?;
+        }
 
         // Derive UAK from profile key (16 bytes) - this is what we send to server
         let uak = crate::crypto::device_credentials::derive_uak(&profile_key);
@@ -305,9 +408,6 @@ impl AuthService {
         // Device ID is 1 for primary device during registration
         let device_id = 1u32;
         let credentials = DeviceCredentials::generate(device_id, &profile_key);
-
-        // Hash password with SHA256
-        let password_hash = Sha256::digest(password.as_bytes());
 
         // Build Signal Protocol prekey bundle for server
         use crate::proto::chat_v1::signal_pre_key_bundle::{
@@ -378,12 +478,13 @@ impl AuthService {
         }
 
         // Call server registration (wait for completion)
+        // PRIVACY: Send username_hash, NOT plaintext username
         // SECURITY: Send UAK (16 bytes), NOT profile_key (32 bytes)
         // Profile key stays client-side for profile encryption
         // SECURITY: display_name is encrypted with profile key (server sees only ciphertext)
         let result = auth_client
             .register_and_wait(
-                username,
+                &username_hash, // PRIVACY: Send hash, not plaintext username
                 password_hash.as_slice(),
                 &encrypted_display_name,
                 identity_public_key.as_ref(),
@@ -404,6 +505,11 @@ impl AuthService {
         // Persist auth state (device_id is server-assigned)
         self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
         self.settings_repo.set(keys::CURRENT_DEVICE_ID, &result.device_id)?;
+        self.settings_repo.set_string(keys::DISPLAY_NAME, display_name)?;
+
+        // Store identity public key for NDSS'21 private friend codes
+        // This allows generating friend codes without accessing the SignalStore
+        self.settings_repo.set_bytes(keys::IDENTITY_KEY_PUBLIC, identity_public_key.as_ref())?;
 
         // Configure auth interceptor for Basic auth
         // Client already has device_auth_token and UAK (generated locally)
@@ -422,12 +528,9 @@ impl AuthService {
         };
         self.user_repo.insert(&user)?;
 
-        // Create profile from server response or use provided display_name
-        let server_display_name = result
-            .user_profile
-            .as_ref()
-            .map(|p| p.display_name.clone())
-            .unwrap_or_else(|| display_name.to_string());
+        // PRIVACY: For registration, use the provided plaintext display_name.
+        // Server returns encrypted version which we don't need to decrypt since we have the original.
+        let server_display_name = display_name.to_string();
         let avatar_url = result.user_profile.as_ref().and_then(|p| {
             if p.avatar_url.is_empty() {
                 None
@@ -499,15 +602,20 @@ impl AuthService {
     }
 
     /// Simplified wrapper for register that creates the client internally.
+    ///
+    /// # Arguments
+    ///
+    /// * `avatar` - Optional avatar image bytes (stored locally, encrypted when shared)
     pub async fn do_register(
         &self,
         username: &str,
         password: &str,
         display_name: &str,
         device_name: &str,
+        avatar: Option<&[u8]>,
     ) -> Result<LoginResult, AuthError> {
         let mut auth_client = self.auth_client();
-        self.register(&mut auth_client, username, password, display_name, device_name)
+        self.register(&mut auth_client, username, password, display_name, device_name, avatar)
             .await
     }
 
@@ -538,6 +646,36 @@ impl AuthService {
         auth_client
             .change_password(&current_hash, &new_hash)
             .await?;
+
+        Ok(())
+    }
+
+    /// Clean up partial state after a failed registration attempt.
+    ///
+    /// This removes any locally stored data that was created before the
+    /// server registration failed (e.g., profile key, identity keys, prekeys).
+    pub async fn cleanup_failed_registration(&self) -> Result<(), AuthError> {
+        tracing::debug!("Cleaning up after failed registration");
+
+        // Clear all crypto state (identity keys, prekeys, sessions)
+        // This is the most important cleanup - prevents "UNIQUE constraint failed"
+        if let Err(e) = self.key_store.clear_all_crypto_state() {
+            tracing::warn!("Failed to clear crypto state: {}", e);
+        }
+
+        // Remove profile key if it was stored
+        let _ = self.settings_repo.delete(keys::PROFILE_KEY);
+
+        // Remove any partial auth state
+        let _ = self.settings_repo.delete(keys::CURRENT_USER_ID);
+        let _ = self.settings_repo.delete(keys::CURRENT_DEVICE_ID);
+
+        // Remove sender certificate if any
+        let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE);
+        let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE_REFRESH_AFTER);
+
+        // Clear auth interceptor
+        self.auth_interceptor.clear();
 
         Ok(())
     }

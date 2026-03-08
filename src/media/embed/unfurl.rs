@@ -52,6 +52,14 @@ impl UrlUnfurler {
                     height: None,
                 })
             }
+            EmbedType::Gif => {
+                Ok(LinkEmbed::Gif {
+                    url: url.to_string(),
+                    preview_url: None,
+                    width: None,
+                    height: None,
+                })
+            }
             EmbedType::Twitter => {
                 // Twitter API requires auth - fall back to generic OpenGraph
                 let preview = self.link_preview.generate(url).await?;

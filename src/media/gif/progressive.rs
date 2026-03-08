@@ -7,8 +7,8 @@ use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, ImageFormat};
 use std::io::Cursor;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::time::Duration;
-use tokio::sync::mpsc;
 
 use crate::error::MediaError;
 
@@ -80,18 +80,15 @@ pub fn decode_progressive(bytes: Arc<Vec<u8>>) -> Result<Option<ProgressiveGifRe
     };
 
     // Create channel for remaining frames
-    // Buffer enough frames for smooth playback start
-    let (tx, rx) = mpsc::channel::<GifFrame>(32);
+    let (tx, rx) = mpsc::channel::<GifFrame>();
 
     // Clone bytes for background task
     let bytes_for_bg = bytes.clone();
 
-    // Spawn background decoder
-    tokio::spawn(async move {
+    // Spawn background decoder using std::thread (works without Tokio runtime)
+    std::thread::spawn(move || {
         // Re-decode from scratch in background (skip first 2 frames we already have)
-        if let Err(e) = decode_remaining_frames(bytes_for_bg, 2, tx).await {
-            tracing::warn!("Background GIF decode error: {:?}", e);
-        }
+        decode_remaining_frames_sync(bytes_for_bg, 2, tx);
     });
 
     // Note: second_frame is decoded but we let the background decoder handle sending all frames
@@ -105,61 +102,56 @@ pub fn decode_progressive(bytes: Arc<Vec<u8>>) -> Result<Option<ProgressiveGifRe
     }))
 }
 
-/// Decode remaining frames in background.
-async fn decode_remaining_frames(
+/// Decode remaining frames synchronously (for use in std::thread::spawn).
+fn decode_remaining_frames_sync(
     bytes: Arc<Vec<u8>>,
     skip_count: usize,
     tx: mpsc::Sender<GifFrame>,
-) -> Result<(), MediaError> {
-    // Decode in a blocking task since image decoding is CPU-bound
-    tokio::task::spawn_blocking(move || {
-        let cursor = Cursor::new(bytes.as_ref());
-        let decoder = match GifDecoder::new(cursor) {
-            Ok(d) => d,
+) {
+    let cursor = Cursor::new(bytes.as_ref());
+    let decoder = match GifDecoder::new(cursor) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("Failed to re-open GIF for background decode: {}", e);
+            return;
+        }
+    };
+
+    let frames_iter = decoder.into_frames();
+
+    for (idx, frame_result) in frames_iter.enumerate() {
+        // Skip frames we already decoded
+        if idx < skip_count {
+            continue;
+        }
+
+        let frame = match frame_result {
+            Ok(f) => f,
             Err(e) => {
-                tracing::warn!("Failed to re-open GIF for background decode: {}", e);
-                return;
+                tracing::warn!("GIF frame {} decode error: {}", idx, e);
+                continue;
             }
         };
 
-        let frames_iter = decoder.into_frames();
+        let delay = frame_delay(&frame);
+        let buffer = frame.into_buffer();
+        let (width, height) = buffer.dimensions();
 
-        for (idx, frame_result) in frames_iter.enumerate() {
-            // Skip frames we already decoded
-            if idx < skip_count {
-                continue;
-            }
+        let gif_frame = GifFrame {
+            data: buffer.into_raw(),
+            width,
+            height,
+            delay,
+        };
 
-            let frame = match frame_result {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::warn!("GIF frame {} decode error: {}", idx, e);
-                    continue;
-                }
-            };
-
-            let delay = frame_delay(&frame);
-            let buffer = frame.into_buffer();
-            let (width, height) = buffer.dimensions();
-
-            let gif_frame = GifFrame {
-                data: buffer.into_raw(),
-                width,
-                height,
-                delay,
-            };
-
-            // Send frame - if receiver is dropped, stop decoding
-            if tx.blocking_send(gif_frame).is_err() {
-                tracing::debug!("GIF receiver dropped, stopping background decode at frame {}", idx);
-                break;
-            }
+        // Send frame - if receiver is dropped, stop decoding
+        if tx.send(gif_frame).is_err() {
+            tracing::debug!("GIF receiver dropped, stopping background decode at frame {}", idx);
+            break;
         }
+    }
 
-        tracing::debug!("Background GIF decode complete");
-    }).await.ok();
-
-    Ok(())
+    tracing::debug!("Background GIF decode complete");
 }
 
 /// Decode first frame only (for quick preview).
@@ -226,12 +218,12 @@ impl StreamingGifDecoder {
             return Ok(None);
         }
 
-        // Start background decode
-        let (tx, rx) = mpsc::channel::<GifFrame>(64);
+        // Start background decode using std::thread (works without Tokio runtime)
+        let (tx, rx) = mpsc::channel::<GifFrame>();
         let bytes_bg = bytes.clone();
 
-        tokio::spawn(async move {
-            let _ = decode_remaining_frames(bytes_bg, 1, tx).await;
+        std::thread::spawn(move || {
+            decode_remaining_frames_sync(bytes_bg, 1, tx);
         });
 
         Ok(Some(Self {
@@ -273,8 +265,8 @@ impl StreamingGifDecoder {
                     self.frames.push(frame);
                     count += 1;
                 }
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => {
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => {
                     self.decode_complete = true;
                     self.rx = None;
                     break;

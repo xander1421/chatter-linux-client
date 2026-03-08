@@ -19,22 +19,30 @@ use crate::error::CallError;
 /// Audio output device info.
 #[derive(Debug, Clone)]
 pub struct AudioOutputDevice {
+    /// Device name for display.
     pub name: String,
+    /// Internal device identifier.
+    pub id: String,
+    /// Whether this is the default device.
     pub is_default: bool,
 }
 
 /// Manages audio playback for remote participants.
+///
+/// Uses lazy initialization - the CPAL output stream is only created when
+/// the first audio track is added, avoiding unnecessary PipeWire/ALSA streams
+/// when no calls are active.
 pub struct AudioPlayback {
     /// Active audio streams from remote participants.
     streams: Arc<RwLock<HashMap<String, ActiveAudioStream>>>,
-    /// CPAL output stream handle.
-    _output_stream: Option<cpal::Stream>,
+    /// CPAL output stream handle (lazily initialized).
+    output_stream: Arc<RwLock<Option<cpal::Stream>>>,
     /// Audio sample buffer for mixing.
     sample_buffer: Arc<RwLock<Vec<f32>>>,
-    /// Sample rate for output.
-    sample_rate: u32,
-    /// Number of output channels.
-    channels: u16,
+    /// Sample rate for output (populated on init).
+    sample_rate: Arc<RwLock<u32>>,
+    /// Number of output channels (populated on init).
+    channels: Arc<RwLock<u16>>,
     /// Whether playback is active.
     is_active: Arc<AtomicBool>,
     /// Volume (0.0 to 1.0).
@@ -47,7 +55,34 @@ struct ActiveAudioStream {
 
 impl AudioPlayback {
     /// Create a new audio playback manager.
+    ///
+    /// This does NOT create the CPAL output stream immediately. The stream
+    /// is created lazily when `add_track()` is called for the first time.
+    /// This prevents idle PipeWire/ALSA streams when no calls are active.
     pub fn new() -> Result<Self, CallError> {
+        tracing::info!("Audio playback manager created (stream will be initialized on first use)");
+
+        Ok(Self {
+            streams: Arc::new(RwLock::new(HashMap::new())),
+            output_stream: Arc::new(RwLock::new(None)),
+            sample_buffer: Arc::new(RwLock::new(Vec::with_capacity(4096))),
+            sample_rate: Arc::new(RwLock::new(48000)), // Default, updated on init
+            channels: Arc::new(RwLock::new(2)),        // Default, updated on init
+            is_active: Arc::new(AtomicBool::new(true)),
+            volume: Arc::new(RwLock::new(1.0f32)),
+        })
+    }
+
+    /// Initialize the CPAL output stream (called lazily on first track).
+    fn ensure_stream_initialized(&self) -> Result<(), CallError> {
+        // Check if already initialized
+        {
+            let stream_guard = self.output_stream.read();
+            if stream_guard.is_some() {
+                return Ok(());
+            }
+        }
+
         let host = cpal::default_host();
         let output_device = host.default_output_device().ok_or_else(|| {
             CallError::DeviceError("No audio output device found".to_string())
@@ -60,6 +95,10 @@ impl AudioPlayback {
         let sample_rate = supported_config.sample_rate().0;
         let channels = supported_config.channels();
 
+        // Store actual sample rate and channels
+        *self.sample_rate.write() = sample_rate;
+        *self.channels.write() = channels;
+
         tracing::info!(
             "Audio playback: using device '{}' at {}Hz, {} channels",
             output_device.name().unwrap_or_else(|_| "unknown".to_string()),
@@ -67,13 +106,9 @@ impl AudioPlayback {
             channels
         );
 
-        // Create sample buffer for mixing
-        let sample_buffer: Arc<RwLock<Vec<f32>>> = Arc::new(RwLock::new(Vec::with_capacity(4096)));
-        let sample_buffer_clone = sample_buffer.clone();
-        let is_active = Arc::new(AtomicBool::new(true));
-        let is_active_clone = is_active.clone();
-        let volume = Arc::new(RwLock::new(1.0f32));
-        let volume_clone = volume.clone();
+        let sample_buffer_clone = self.sample_buffer.clone();
+        let is_active_clone = self.is_active.clone();
+        let volume_clone = self.volume.clone();
 
         // Build output stream
         let config = StreamConfig {
@@ -120,28 +155,27 @@ impl AudioPlayback {
             CallError::DeviceError(format!("Failed to start audio playback: {}", e))
         })?;
 
-        tracing::info!("Audio playback started");
+        tracing::info!("Audio playback stream started");
 
-        Ok(Self {
-            streams: Arc::new(RwLock::new(HashMap::new())),
-            _output_stream: Some(output_stream),
-            sample_buffer,
-            sample_rate,
-            channels,
-            is_active,
-            volume,
-        })
+        *self.output_stream.write() = Some(output_stream);
+        Ok(())
     }
 
     /// Add a remote audio track for playback.
     pub fn add_track(&self, participant_id: String, track: RemoteAudioTrack) {
         tracing::info!("Adding audio track from participant: {}", participant_id);
 
+        // Lazily initialize the CPAL stream on first track
+        if let Err(e) = self.ensure_stream_initialized() {
+            tracing::error!("Failed to initialize audio output: {}. Remote audio will not be played.", e);
+            return;
+        }
+
         let stop_signal = Arc::new(AtomicBool::new(false));
         let stop_signal_clone = stop_signal.clone();
         let sample_buffer = self.sample_buffer.clone();
-        let target_sample_rate = self.sample_rate as i32;
-        let target_channels = self.channels as usize;
+        let target_sample_rate = *self.sample_rate.read() as i32;
+        let target_channels = *self.channels.read() as usize;
 
         // Create native audio stream from the track
         let rtc_track = track.rtc_track();
@@ -238,7 +272,9 @@ impl AudioPlayback {
             .filter_map(|device: Device| {
                 let name = device.name().ok()?;
                 let is_default = default_name.as_ref() == Some(&name);
-                Some(AudioOutputDevice { name, is_default })
+                // Use device name as ID (CPAL doesn't provide a separate stable ID)
+                let id = name.clone();
+                Some(AudioOutputDevice { name, id, is_default })
             })
             .collect();
 

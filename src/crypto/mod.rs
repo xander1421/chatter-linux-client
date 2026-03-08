@@ -8,9 +8,11 @@
 
 pub mod attachment_crypto;
 pub mod attachment_crypto_fast;
+pub mod attachment_crypto_portable;
 pub mod call_key_provider;
 pub mod device_credentials;
 pub mod dm_crypto;
+pub mod ecies;
 pub mod envelope_crypto;
 pub mod group_encryption;
 pub mod key_derivation;
@@ -40,3 +42,4 @@ pub use secret_key::{SecretKey32, SecretKey64};
 pub use secret_string::SecretString;
 pub use secure_buffer::{SecureBuffer, SecureCursor};
 pub use signal::{IdentityKeyManager, PreKeyManager, SealedSenderManager, SenderKeyManager, SessionManager, SignalStore};
+pub use ecies::{encrypt as ecies_encrypt, decrypt as ecies_decrypt, EciesMessage, EciesError};

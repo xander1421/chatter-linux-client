@@ -1,326 +1,130 @@
 //! Thread panel callbacks.
-//!
-//! Handles thread panel actions (close, send reply, load more replies).
-//!
-//! Uses MessageService for all message operations - no direct network calls.
 
 use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::AppContext;
+use chatter_linux::app::UIContext;
 use chatter_linux::domain::ids::{ChannelId, MessageId};
+use chatter_linux::services::attachment::AttachmentService;
+use chatter_linux::services::channel::ChannelService;
+use chatter_linux::services::message::MessageService;
+use chatter_linux::services::user::UserService;
 use chatter_linux::state::ChatState;
-use chatter_linux::storage::{AttachmentRepository, ChannelRepository, MessageRepository, UserRepository};
 
-use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
+use crate::bin_ui::converters::message_to_display_data;
 use crate::MainWindow;
 
-/// Wire thread panel callbacks.
-pub fn wire(window: &MainWindow, ctx: &AppContext) {
-    wire_close_thread(window, ctx);
-    wire_send_thread_reply(window, ctx);
-    wire_load_more_thread_replies(window, ctx);
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    wire_close_thread(window, ui_ctx);
+    wire_send_thread_reply(window, ui_ctx);
+    wire_load_more_thread_replies(window, ui_ctx);
 }
 
-fn wire_close_thread(window: &MainWindow, ctx: &AppContext) {
+fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
-    let chat_state = ctx.chat_state.clone();
-
+    let chat_state = ui_ctx.chat_state.clone();
     window.on_close_thread_clicked(move || {
         let weak = weak_window.clone();
-        let chat_state = chat_state.clone();
-
-        // Get active thread and close it
-        if let Some(thread) = chat_state.active_thread() {
-            chat_state.close_thread(thread.root_message_id);
-            tracing::info!("Closed thread: {}", thread.root_message_id);
-        }
-
-        // Update UI
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_thread_panel_visible(false);
-                w.set_thread_replies(ModelRc::new(VecModel::default()));
-            }
-        });
+        if let Some(thread) = chat_state.active_thread() { chat_state.close_thread(thread.root_message_id); }
+        let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
+            w.set_thread_panel_visible(false);
+            w.set_thread_replies(ModelRc::new(VecModel::default()));
+        }});
     });
 }
 
-fn wire_send_thread_reply(window: &MainWindow, ctx: &AppContext) {
+fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
-    let chat_state = ctx.chat_state.clone();
-    let message_service = ctx.message_service.clone();
-    let group_fanout = ctx.get_group_fanout();
-
+    let chat_state = ui_ctx.chat_state.clone();
+    let message_service = ui_ctx.message_service.clone();
     window.on_send_thread_reply(move |text: SharedString| {
         let text = text.to_string();
-        if text.trim().is_empty() {
-            return;
-        }
-
+        if text.trim().is_empty() { return; }
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
         let message_service = message_service.clone();
-        let group_fanout = group_fanout.clone();
-
-        // Use spawn_blocking with nested runtime for non-Send Signal futures
-        tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create runtime for thread reply");
-
-            rt.block_on(async {
-                // Get active thread info
-                let thread = match chat_state.active_thread() {
-                    Some(t) => t,
-                    None => {
-                        tracing::warn!("Cannot send thread reply: no active thread");
-                        return;
-                    }
-                };
-
-                tracing::info!(
-                    "Sending thread reply to {} in channel {}",
-                    thread.root_message_id,
-                    thread.channel_id
-                );
-
-                // Send the message as a reply to the thread root using MessageService
-                match message_service
-                    .send(
-                        group_fanout.as_deref(),
-                        &thread.channel_id,
-                        &text,
-                        vec![],                          // no attachments
-                        Some(&thread.root_message_id),   // thread_id
-                        vec![],                          // no mentioned integrations
-                        false,                           // not targeting AI bot
-                    )
-                    .await
-                {
-                    Ok(msg) => {
-                        tracing::info!("Thread reply sent: {}", msg.id);
-
-                        // Update reply count
-                        chat_state.update_thread_reply_count(
-                            thread.root_message_id,
-                            thread.reply_count + 1,
-                        );
-
-                        // Clear composer and refresh
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_thread_composer_text(SharedString::default());
-                                // Increment reply count in UI
-                                let count = w.get_thread_reply_count();
-                                w.set_thread_reply_count(count + 1);
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to send thread reply: {}", e);
-                    }
-                }
-            });
+        tokio::spawn(async move {
+            let thread = match chat_state.active_thread() { Some(t) => t, None => return };
+            if let Ok(_msg) = message_service.send(None, &thread.channel_id, &text, vec![], vec![], Some(&thread.root_message_id), vec![], false).await {
+                chat_state.update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
+                let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
+                    w.set_thread_composer_text(SharedString::default());
+                    let count = w.get_thread_reply_count();
+                    w.set_thread_reply_count(count + 1);
+                }});
+            }
         });
     });
 }
 
-fn wire_load_more_thread_replies(window: &MainWindow, ctx: &AppContext) {
+fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
-    let chat_state = ctx.chat_state.clone();
-    let message_repo = ctx.message_repo.clone();
-    let user_repo = ctx.user_repo.clone();
-    let attachment_repo = ctx.attachment_repo.clone();
-
+    let chat_state = ui_ctx.chat_state.clone();
+    let message_service = ui_ctx.message_service.clone();
+    let user_service = ui_ctx.user_service.clone();
+    let attachment_service = ui_ctx.attachment_service.clone();
     window.on_load_more_thread_replies(move || {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
-        let message_repo = message_repo.clone();
-        let user_repo = user_repo.clone();
-        let attachment_repo = attachment_repo.clone();
-
+        let message_service = message_service.clone();
+        let user_service = user_service.clone();
+        let attachment_service = attachment_service.clone();
         tokio::spawn(async move {
-            let thread = match chat_state.active_thread() {
-                Some(t) => t,
-                None => {
-                    tracing::warn!("Cannot load more thread replies: no active thread");
-                    return;
+            let thread = match chat_state.active_thread() { Some(t) => t, None => return };
+            if let Ok(replies) = message_service.list_for_thread(&thread.root_message_id, None, 50) {
+                let mut display = Vec::new();
+                for msg in &replies {
+                    let sender_name = msg.sender_id.as_ref().map(|id| user_service.get_display_name(id)).unwrap_or_else(|| "Anonymous".to_string());
+                    let resolved: Vec<_> = msg.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
+                    display.push(message_to_display_data(msg, &sender_name, &resolved));
                 }
-            };
-
-            tracing::debug!(
-                "Loading more replies for thread: {} in channel: {}",
-                thread.root_message_id,
-                thread.channel_id
-            );
-
-            // Load replies from local storage
-            let replies = match message_repo.list_for_thread(&thread.root_message_id, None, 50)
-            {
-                Ok(msgs) => msgs,
-                Err(e) => {
-                    tracing::error!("Failed to load thread replies: {}", e);
-                    return;
-                }
-            };
-
-            // Convert to display data
-            let mut display_messages: Vec<MessageDisplayData> = Vec::with_capacity(replies.len());
-            for msg in &replies {
-                let sender_name = if let Some(sender_id) = &msg.sender_id {
-                    user_repo
-                        .get_profile(sender_id)
-                        .ok()
-                        .flatten()
-                        .map(|p| p.display_name)
-                        .or_else(|| user_repo.get(sender_id).ok().flatten().map(|u| u.username))
-                        .unwrap_or_else(|| "Unknown".to_string())
-                } else {
-                    "Anonymous".to_string()
-                };
-
-                let resolved_attachments: Vec<_> = msg
-                    .attachments
-                    .iter()
-                    .filter_map(|att_id| attachment_repo.get(att_id).ok().flatten())
-                    .collect();
-
-                display_messages.push(message_to_display_data(msg, &sender_name, &resolved_attachments));
-            }
-
-            let reply_count = replies.len() as i32;
-
-            // Update UI
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    let slint_messages: Vec<_> =
-                        display_messages.iter().map(|d| d.to_slint()).collect();
+                // Get current user ID for is_own calculation
+                let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
+                let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
+                    let slint_messages: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                     w.set_thread_replies(ModelRc::new(VecModel::from(slint_messages)));
-                    tracing::debug!("Loaded {} thread replies", reply_count);
-                }
-            });
+                }});
+            }
         });
     });
 }
 
-/// Load thread data when a thread is opened.
-///
-/// Called from chat_actions.rs when thread-clicked is triggered.
 pub fn load_thread_data(
     window: slint::Weak<MainWindow>,
     _chat_state: ChatState,
-    message_repo: Arc<MessageRepository>,
-    user_repo: Arc<UserRepository>,
-    attachment_repo: Arc<AttachmentRepository>,
-    channel_repo: Arc<ChannelRepository>,
+    message_service: Arc<MessageService>,
+    user_service: Arc<UserService>,
+    attachment_service: Arc<AttachmentService>,
+    channel_service: Arc<ChannelService>,
     channel_id: ChannelId,
     root_message_id: MessageId,
 ) {
     tokio::spawn(async move {
-        // Get root message info
-        let root_message = match message_repo.get(&root_message_id) {
-            Ok(Some(msg)) => msg,
-            Ok(None) => {
-                tracing::warn!("Thread root message not found: {}", root_message_id);
-                return;
+        if let Ok(Some(root_message)) = message_service.get_message_local(&root_message_id) {
+            let sender_name = root_message.sender_id.as_ref().map(|id| user_service.get_display_name(id)).unwrap_or_else(|| "Anonymous".to_string());
+            let content_preview = root_message.as_text().map(|t| if t.len() > 100 { format!("{}...", &t[..97]) } else { t.to_string() }).unwrap_or_else(|| "[Attachment]".to_string());
+            let replies = message_service.list_for_thread(&root_message_id, None, 50).unwrap_or_default();
+            let channel_name = channel_service.get_channel_local(&channel_id).ok().flatten().map(|c| c.name).unwrap_or_else(|| "Unknown".to_string());
+            let mut display = Vec::new();
+            for msg in &replies {
+                let reply_sender_name = msg.sender_id.as_ref().map(|id| user_service.get_display_name(id)).unwrap_or_else(|| "Anonymous".to_string());
+                let resolved: Vec<_> = msg.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
+                display.push(message_to_display_data(msg, &reply_sender_name, &resolved));
             }
-            Err(e) => {
-                tracing::error!("Failed to get thread root message: {}", e);
-                return;
-            }
-        };
-
-        // Get sender name
-        let sender_name = if let Some(sender_id) = &root_message.sender_id {
-            user_repo
-                .get_profile(sender_id)
-                .ok()
-                .flatten()
-                .map(|p| p.display_name)
-                .or_else(|| user_repo.get(sender_id).ok().flatten().map(|u| u.username))
-                .unwrap_or_else(|| "Unknown".to_string())
-        } else {
-            "Anonymous".to_string()
-        };
-
-        // Get content preview
-        let content_preview = root_message
-            .as_text()
-            .map(|t| {
-                if t.len() > 100 {
-                    format!("{}...", &t[..97])
-                } else {
-                    t.to_string()
-                }
-            })
-            .unwrap_or_else(|| "[Attachment]".to_string());
-
-        // Load replies
-        let replies = match message_repo.list_for_thread(&root_message_id, None, 50) {
-            Ok(msgs) => msgs,
-            Err(e) => {
-                tracing::error!("Failed to load thread replies: {}", e);
-                Vec::new()
-            }
-        };
-
-        let reply_count = replies.len() as i32;
-
-        // Get channel name
-        let channel_name = channel_repo
-            .get(&channel_id)
-            .ok()
-            .flatten()
-            .map(|c| c.name)
-            .unwrap_or_else(|| "Unknown Channel".to_string());
-
-        // Convert replies to display data
-        let mut display_replies: Vec<MessageDisplayData> = Vec::with_capacity(replies.len());
-        for msg in &replies {
-            let reply_sender_name = if let Some(sender_id) = &msg.sender_id {
-                user_repo
-                    .get_profile(sender_id)
-                    .ok()
-                    .flatten()
-                    .map(|p| p.display_name)
-                    .or_else(|| user_repo.get(sender_id).ok().flatten().map(|u| u.username))
-                    .unwrap_or_else(|| "Unknown".to_string())
-            } else {
-                "Anonymous".to_string()
-            };
-
-            let resolved_attachments: Vec<_> = msg
-                .attachments
-                .iter()
-                .filter_map(|att_id| attachment_repo.get(att_id).ok().flatten())
-                .collect();
-
-            display_replies.push(message_to_display_data(msg, &reply_sender_name, &resolved_attachments));
-        }
-
-        // Update UI
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = window.upgrade() {
+            // Get current user ID for is_own calculation
+            let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
+            let _ = slint::invoke_from_event_loop(move || { if let Some(w) = window.upgrade() {
                 w.set_thread_panel_visible(true);
                 w.set_thread_root_message_id(root_message_id.to_string().into());
                 w.set_thread_root_sender_name(sender_name.into());
                 w.set_thread_root_content_preview(content_preview.into());
-                w.set_thread_reply_count(reply_count);
-                w.set_thread_channel_name(channel_name.clone().into());
+                w.set_thread_reply_count(replies.len() as i32);
+                w.set_thread_channel_name(channel_name.into());
                 w.set_thread_loading(false);
-
-                let slint_replies: Vec<_> = display_replies.iter().map(|d| d.to_slint()).collect();
+                let slint_replies: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                 w.set_thread_replies(ModelRc::new(VecModel::from(slint_replies)));
-
-                tracing::info!(
-                    "Thread panel opened for message {} with {} replies",
-                    root_message_id,
-                    reply_count
-                );
-            }
-        });
+            }});
+        }
     });
 }

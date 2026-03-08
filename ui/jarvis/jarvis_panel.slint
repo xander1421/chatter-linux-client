@@ -33,11 +33,14 @@ export component JarvisPanel inherits Rectangle {
     }
 
     VerticalLayout {
+        width: 100%;
+        height: 100%;
         padding: Spacing.md;
         spacing: Spacing.sm;
 
         // Header
         HorizontalLayout {
+            width: 100%;
             spacing: Spacing.sm;
             alignment: space-between;
 
@@ -107,12 +110,14 @@ export component JarvisPanel inherits Rectangle {
 
         // Divider
         Rectangle {
+            width: 100%;
             height: 1px;
             background: Colors.text-muted.with-alpha(0.2);
         }
 
         // Messages area
         Flickable {
+            width: 100%;
             vertical-stretch: 1;
             viewport-height: messages-layout.preferred-height;
             viewport-width: self.width;
@@ -127,6 +132,7 @@ export component JarvisPanel inherits Rectangle {
 
                 // Thinking indicator
                 if thinking: Rectangle {
+                    width: 100%;
                     height: 40px;
                     background: Colors.primary.with-alpha(0.1);
                     border-radius: Spacing.radius-md;
@@ -184,6 +190,7 @@ export component JarvisPanel inherits Rectangle {
 
         // Input area
         HorizontalLayout {
+            width: 100%;
             spacing: Spacing.sm;
 
             input := Input {
@@ -215,6 +222,7 @@ export component JarvisPanel inherits Rectangle {
 
         // Quick actions
         HorizontalLayout {
+            width: 100%;
             spacing: Spacing.sm;
 
             Button {

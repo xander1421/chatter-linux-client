@@ -6,7 +6,6 @@ use chrono::Utc;
 
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::Message;
-use crate::network::grpc::message_client::MessageClient;
 use crate::services::current_user::CurrentUserProvider;
 
 use super::core::proto_to_domain_message_with_sender;
@@ -16,7 +15,6 @@ impl MessageService {
     /// Pin a message in a channel.
     pub async fn pin_message(
         &self,
-        message_client: &mut MessageClient,
         channel_id: &ChannelId,
         message_id: &MessageId,
     ) -> Result<Message, MessageError> {
@@ -24,6 +22,7 @@ impl MessageService {
         let _ = self.settings_repo.current_user_id()?;
 
         // Call server
+        let mut message_client = self.message_client();
         let proto_message = message_client
             .pin_message(&message_id.to_string(), &channel_id.to_string())
             .await?;
@@ -50,7 +49,6 @@ impl MessageService {
     /// Unpin a message from a channel.
     pub async fn unpin_message(
         &self,
-        message_client: &mut MessageClient,
         channel_id: &ChannelId,
         message_id: &MessageId,
     ) -> Result<(), MessageError> {
@@ -58,6 +56,7 @@ impl MessageService {
         let _ = self.settings_repo.current_user_id()?;
 
         // Call server
+        let mut message_client = self.message_client();
         message_client
             .unpin_message(&message_id.to_string(), &channel_id.to_string())
             .await?;
@@ -75,7 +74,6 @@ impl MessageService {
     /// List pinned messages in a channel.
     pub async fn list_pinned_messages(
         &self,
-        message_client: &mut MessageClient,
         channel_id: &ChannelId,
         limit: u32,
     ) -> Result<Vec<Message>, MessageError> {
@@ -83,6 +81,7 @@ impl MessageService {
         let _ = self.settings_repo.current_user_id()?;
 
         // Fetch from server
+        let mut message_client = self.message_client();
         let response = message_client
             .list_pinned_messages(&channel_id.to_string(), limit as i32)
             .await?;

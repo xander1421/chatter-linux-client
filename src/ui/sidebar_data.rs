@@ -93,7 +93,9 @@ impl From<Channel> for ChannelListItemData {
 /// Maps to the properties of `DMListItem` component in Slint.
 #[derive(Clone, Debug, Default)]
 pub struct DMListItemData {
-    /// User ID for identification.
+    /// DM channel ID for identification.
+    pub channel_id: String,
+    /// User ID of the peer.
     pub user_id: String,
     /// Display name of the user.
     pub display_name: String,
@@ -115,11 +117,13 @@ impl DMListItemData {
     /// Create a new DM list item data entry.
     #[must_use]
     pub fn new(
+        channel_id: impl Into<String>,
         user_id: impl Into<String>,
         display_name: impl Into<String>,
         initials: impl Into<String>,
     ) -> Self {
         Self {
+            channel_id: channel_id.into(),
             user_id: user_id.into(),
             display_name: display_name.into(),
             initials: initials.into(),
@@ -291,12 +295,13 @@ mod tests {
 
     #[test]
     fn test_dm_list_item_data() {
-        let item = DMListItemData::new("user123", "Alice", "AL")
+        let item = DMListItemData::new("channel123", "user123", "Alice", "AL")
             .with_presence("online")
             .with_last_message("Hey there!")
             .with_timestamp("2h")
             .with_unread(5);
 
+        assert_eq!(item.channel_id, "channel123");
         assert_eq!(item.user_id, "user123");
         assert_eq!(item.display_name, "Alice");
         assert_eq!(item.initials, "AL");

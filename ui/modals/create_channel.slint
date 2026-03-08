@@ -7,7 +7,17 @@ import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
+import { Avatar } from "../components/avatar.slint";
 import { ChannelTemplates } from "channel_templates.slint";
+
+// Friend data for private group selection (matches FriendData)
+export struct PrivateGroupFriend {
+    user-id: string,
+    display-name: string,
+    username: string,
+    avatar-url: string,
+    selected: bool,
+}
 
 // AI provider option
 export struct AIProviderOption {
@@ -62,14 +72,23 @@ export component CreateChannelModal inherits Rectangle {
     ];
     in property <[AIModelOption]> ai-models: [];
 
+    // Private group configuration (for private-group template)
+    in-out property <[PrivateGroupFriend]> available-friends: [];
+    // Count is updated by Rust when friends are toggled
+    in-out property <int> selected-friend-count: 0;
+
     callback close();
     // name, description, template, config, ai_provider, ai_model
     callback create(string, string, string, CreateChannelConfig, string, string);
     callback provider-selected(string);  // Callback to load models for provider
+    callback create-private-group(string, [PrivateGroupFriend]);  // name, selected friends
+    callback toggle-friend-selection(int);  // index to toggle
+    callback template-selected(string);  // notify rust when template changes
 
     // Internal state
     property <int> current-step: 1;
     property <bool> is-ai-template: root.selected-template == "ai-assistant";
+    property <bool> is-private-group: root.selected-template == "private-group";
     property <int> total-steps: is-ai-template ? 3 : 2;
 
     // Reset state when modal closes
@@ -216,12 +235,200 @@ export component CreateChannelModal inherits Rectangle {
                     selected-template <=> root.selected-template;
 
                     template-selected(template) => {
-                        // Template selected, user can proceed
+                        // Notify Rust when template is selected (for loading friends list)
+                        root.template-selected(template);
                     }
                 }
 
-                // Step 2: Channel details form
-                if current-step == 2: VerticalLayout {
+                // Step 2: Private Group - Friend selection
+                if current-step == 2 && root.is-private-group: VerticalLayout {
+                    spacing: Spacing.md;
+
+                    // Header with privacy info
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        height: 40px;
+
+                        Rectangle {
+                            width: 40px;
+                            height: 40px;
+                            border-radius: Spacing.radius-md;
+                            background: #9333ea.with-alpha(0.15);
+
+                            Image {
+                                source: Icons.shield;
+                                width: 20px;
+                                height: 20px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: #9333ea;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: 2px;
+
+                            Text {
+                                text: "Private Group";
+                                color: Colors.text-primary;
+                                font-size: Typography.base;
+                                font-weight: Typography.semibold;
+                            }
+
+                            Text {
+                                text: "Server cannot see this group exists";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                            }
+                        }
+                    }
+
+                    // Group name input
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        Text {
+                            text: "Group Name";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        Input {
+                            placeholder: "e.g., Close Friends";
+                            text <=> root.channel-name;
+                            error: root.error-message != "" && root.channel-name == "";
+                            error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
+                        }
+                    }
+
+                    // Friend selection header
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+
+                        Text {
+                            text: "Select Friends to Invite";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        Text {
+                            text: "(" + root.selected-friend-count + " selected)";
+                            color: Colors.primary;
+                            font-size: Typography.sm;
+                        }
+                    }
+
+                    // Friend list (scrollable)
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-md;
+                        border-width: 1px;
+                        border-color: Colors.text-muted.with-alpha(0.2);
+                        clip: true;
+
+                        if root.available-friends.length == 0: VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: "No friends yet";
+                                color: Colors.text-muted;
+                                font-size: Typography.sm;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: "Add friends first to create a private group";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        Flickable {
+                            viewport-height: friend-list.preferred-height;
+
+                            friend-list := VerticalLayout {
+                                padding: Spacing.xs;
+                                spacing: 2px;
+
+                                for friend[idx] in root.available-friends: Rectangle {
+                                    height: 48px;
+                                    border-radius: Spacing.radius-sm;
+                                    background: friend-touch.has-hover ? Colors.surface-hover :
+                                                (friend.selected ? Colors.primary.with-alpha(0.1) : transparent);
+                                    border-width: friend.selected ? 1px : 0px;
+                                    border-color: Colors.primary.with-alpha(0.3);
+
+                                    HorizontalLayout {
+                                        padding-left: Spacing.sm;
+                                        padding-right: Spacing.sm;
+                                        spacing: Spacing.sm;
+
+                                        // Checkbox
+                                        Rectangle {
+                                            width: 20px;
+                                            height: 20px;
+                                            border-radius: 4px;
+                                            border-width: 2px;
+                                            border-color: friend.selected ? Colors.primary : Colors.text-muted;
+                                            background: friend.selected ? Colors.primary : transparent;
+                                            y: (parent.height - self.height) / 2;
+
+                                            if friend.selected: Image {
+                                                source: Icons.check;
+                                                width: 12px;
+                                                height: 12px;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                colorize: Colors.text-primary;
+                                            }
+                                        }
+
+                                        // Avatar
+                                        Avatar {
+                                            size: 32px;
+                                            fallback-text: friend.display-name;
+                                        }
+
+                                        // Name
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: 2px;
+
+                                            Text {
+                                                text: friend.display-name;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                                overflow: elide;
+                                            }
+
+                                            Text {
+                                                text: "@" + friend.username;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                overflow: elide;
+                                            }
+                                        }
+                                    }
+
+                                    friend-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.toggle-friend-selection(idx);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Step 2: Regular channel details form
+                if current-step == 2 && !root.is-private-group: VerticalLayout {
                     spacing: Spacing.md;
 
                     // Selected template indicator
@@ -708,7 +915,22 @@ export component CreateChannelModal inherits Rectangle {
                     }
                 }
 
-                if current-step == 2 && !root.is-ai-template: Button {
+                // Create button for private group (uses separate callback)
+                if current-step == 2 && root.is-private-group: Button {
+                    text: root.loading ? "" : "Create Private Group";
+                    variant: "primary";
+                    disabled: root.channel-name == "" || root.selected-friend-count == 0 || root.loading;
+                    loading: root.loading;
+
+                    clicked => {
+                        if root.channel-name != "" && root.selected-friend-count > 0 && !root.loading {
+                            root.create-private-group(root.channel-name, root.available-friends);
+                        }
+                    }
+                }
+
+                // Create button for regular channels
+                if current-step == 2 && !root.is-ai-template && !root.is-private-group: Button {
                     text: root.loading ? "" : "Create";
                     variant: "primary";
                     disabled: root.channel-name == "" || root.loading;

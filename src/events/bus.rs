@@ -335,4 +335,82 @@ mod tests {
         assert!(debug_str.contains("EventBus"));
         assert!(debug_str.contains("domain_subscribers"));
     }
+
+    #[tokio::test]
+    async fn test_anon_dm_init_received_event() {
+        use crate::domain::AnonDmId;
+
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe_domain();
+        let tx = bus.domain_sender();
+
+        let conversation_id = AnonDmId::new();
+        let sender_id = UserId::new();
+
+        // Simulate what process_ecies_init_message does
+        let event = DomainEvent::AnonDmInitReceived {
+            conversation_id,
+            sender_id,
+            sender_display_name: "TestSender".to_string(),
+            sender_avatar: None,
+            peer_mailbox_pk: [0u8; 32],
+            peer_identity_key: [0u8; 33],
+            peer_delivery_token: [0u8; 12],
+            intro_message: "Hello!".to_string(),
+            server_timestamp: 12345,
+        };
+
+        // Send via the sender (simulating inbox provider's domain_tx.send())
+        let receivers = tx.send(event).expect("send should succeed");
+        assert_eq!(receivers, 1, "Should have one receiver");
+
+        // Receive and verify
+        let received_event = rx.recv().await.expect("should receive event");
+        match received_event {
+            DomainEvent::AnonDmInitReceived {
+                conversation_id: cid,
+                sender_id: sid,
+                intro_message,
+                ..
+            } => {
+                assert_eq!(cid, conversation_id);
+                assert_eq!(sid, sender_id);
+                assert_eq!(intro_message, "Hello!");
+            }
+            _ => panic!("Wrong event type received: {:?}", std::mem::discriminant(&received_event)),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_domain_sender_across_cloned_bus() {
+        // This tests the exact pattern used in inbox provider:
+        // - event_bus is cloned from UIContext
+        // - domain_sender() is called on the clone
+        // - subscribe_domain() is called on another clone
+        let bus1 = EventBus::new();
+
+        // Clone like UIContext.event_bus.clone()
+        let bus2 = bus1.clone();
+
+        // Handler subscribes on one clone
+        let mut rx = bus1.subscribe_domain();
+
+        // Inbox provider gets sender from another clone
+        let tx = bus2.domain_sender();
+
+        let channel_id = ChannelId::new();
+        let user_id = UserId::new();
+
+        // Send from the sender
+        let receivers = tx.send(DomainEvent::TypingStarted {
+            user_id,
+            channel_id,
+        }).expect("send should succeed");
+
+        assert_eq!(receivers, 1, "Should have one receiver");
+
+        // Receiver should get it
+        let event = rx.recv().await.expect("should receive event");
+        assert!(matches!(event, DomainEvent::TypingStarted { .. }));
+    }
 }

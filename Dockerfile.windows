@@ -1,0 +1,99 @@
+# Dockerfile for cross-compiling Chatter to Windows 11
+#
+# Build from the PARENT directory (chatter/) to include slint-code-view:
+#   cd /path/to/chatter
+#   docker build -f linux-client/Dockerfile.windows -t chatter-windows-builder .
+#
+# Run:
+#   docker run --rm -v $(pwd)/linux-client/output:/output chatter-windows-builder
+#
+# Output: ./linux-client/output/chatter.exe
+
+FROM rust:1.85-bookworm
+
+# Install cross-compilation toolchain for Windows
+RUN apt-get update && apt-get install -y \
+    mingw-w64 \
+    gcc-mingw-w64-x86-64 \
+    g++-mingw-w64-x86-64 \
+    cmake \
+    ninja-build \
+    pkg-config \
+    nasm \
+    wget \
+    unzip \
+    python3 \
+    meson \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add Windows target
+RUN rustup target add x86_64-pc-windows-gnu
+
+# Set up cargo config for cross-compilation
+RUN mkdir -p /root/.cargo && echo '\
+[target.x86_64-pc-windows-gnu]\n\
+linker = "x86_64-w64-mingw32-gcc"\n\
+ar = "x86_64-w64-mingw32-ar"\n\
+\n\
+[env]\n\
+PKG_CONFIG_ALLOW_CROSS = "1"\n\
+' > /root/.cargo/config.toml
+
+# Download and install GStreamer for Windows (MinGW development files)
+WORKDIR /opt
+ENV GSTREAMER_VERSION=1.24.10
+
+# Download GStreamer MinGW binaries
+RUN mkdir -p /opt/gstreamer-win64 && \
+    wget -q https://gstreamer.freedesktop.org/data/pkg/windows/${GSTREAMER_VERSION}/mingw/gstreamer-1.0-mingw-x86_64-${GSTREAMER_VERSION}.zip -O gst.zip && \
+    unzip -q gst.zip -d /opt/gstreamer-win64 || \
+    wget -q https://gstreamer.freedesktop.org/data/pkg/windows/1.24.0/mingw/gstreamer-1.0-mingw-x86_64-1.24.0.zip -O gst.zip && \
+    unzip -q gst.zip -d /opt/gstreamer-win64 || \
+    echo "GStreamer runtime download failed"
+
+RUN wget -q https://gstreamer.freedesktop.org/data/pkg/windows/${GSTREAMER_VERSION}/mingw/gstreamer-1.0-devel-mingw-x86_64-${GSTREAMER_VERSION}.zip -O gst-devel.zip && \
+    unzip -q gst-devel.zip -d /opt/gstreamer-win64 || \
+    wget -q https://gstreamer.freedesktop.org/data/pkg/windows/1.24.0/mingw/gstreamer-1.0-devel-mingw-x86_64-1.24.0.zip -O gst-devel.zip && \
+    unzip -q gst-devel.zip -d /opt/gstreamer-win64 || \
+    echo "GStreamer devel download failed"
+
+# Set up pkg-config for cross-compilation
+ENV PKG_CONFIG_PATH=/opt/gstreamer-win64/lib/pkgconfig
+ENV PKG_CONFIG_SYSROOT_DIR=/opt/gstreamer-win64
+ENV GSTREAMER_1_0_ROOT_X86_64=/opt/gstreamer-win64
+
+# Environment variables for cross-compilation
+ENV CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+ENV CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
+ENV CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++
+ENV AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
+ENV WINDRES=x86_64-w64-mingw32-windres
+
+# Use vendored OpenSSL to avoid cross-compilation issues
+ENV OPENSSL_STATIC=1
+ENV OPENSSL_NO_VENDOR=0
+
+# Copy both projects (build context should be parent chatter/ directory)
+WORKDIR /build
+COPY linux-client /build/linux-client
+COPY slint-code-view /build/slint-code-view
+
+WORKDIR /build/linux-client
+
+# Build for Windows
+CMD ["sh", "-c", "\
+    echo '=== Chatter Windows Cross-Compilation ===' && \
+    echo 'Target: x86_64-pc-windows-gnu' && \
+    cargo build --release --target x86_64-pc-windows-gnu 2>&1 | tee /tmp/build.log && \
+    if [ -f target/x86_64-pc-windows-gnu/release/chatter-linux.exe ]; then \
+        echo '=== Build Successful ===' && \
+        mkdir -p /output && \
+        cp target/x86_64-pc-windows-gnu/release/chatter-linux.exe /output/chatter.exe && \
+        echo 'Output: /output/chatter.exe' && \
+        ls -lh /output/; \
+    else \
+        echo '=== Build Failed ===' && \
+        tail -100 /tmp/build.log; \
+        exit 1; \
+    fi \
+"]

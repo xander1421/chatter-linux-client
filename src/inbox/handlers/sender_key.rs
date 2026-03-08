@@ -95,16 +95,17 @@ impl InboxHandler for SenderKeyHandler {
         }
 
         // Get sender from message sender (required for sender key)
-        let sender_id = message
+        let sender_address = message
             .sender_address
             .as_ref()
-            .map(|addr| {
-                UserId::from_str(addr.name()).unwrap_or_else(|_| {
-                    // Fallback: generate deterministic ID from address name
-                    UserId::from_uuid(uuid_from_string(addr.name()))
-                })
-            })
             .ok_or_else(|| HandlerError::missing_context("sender_address"))?;
+
+        let sender_id = UserId::from_str(sender_address.name()).unwrap_or_else(|_| {
+            // Fallback: generate deterministic ID from address name
+            UserId::from_uuid(uuid_from_string(sender_address.name()))
+        });
+
+        let sender_device_id: u32 = sender_address.device_id().into();
 
         // Parse channel_id as ChannelId
         let channel_id = ChannelId::from_str(&sender_key.channel_id)
@@ -130,9 +131,14 @@ impl InboxHandler for SenderKeyHandler {
                 }
             });
 
-        // Emit SenderKeyReceived event
+        // Note: The actual SKDM processing happens in MessageGateway::route_encrypted_message()
+        // -> process_sender_key_distribution(). This handler is for the HandlerRegistry path
+        // which emits domain events for UI/state updates.
+
+        // Emit SenderKeyReceived event (for UI/state updates)
         ctx.emit(DomainEvent::SenderKeyReceived {
             sender_id,
+            sender_device_id,
             channel_id,
             distribution_message: sender_key.distribution_message.clone(),
             timestamp: sender_key.timestamp,

@@ -18,10 +18,11 @@ use rand::Rng;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::error::MailboxError;
+use crate::mailbox::anon_dm::{AnonDmPollResult, AnonDmPoller};
 use crate::mailbox::dm::{DmConversationManager, PollResult, TwoWayAnonymity};
-use crate::mailbox::group::{GroupMailboxManager, GroupPollResult};
+use crate::mailbox::group::{GroupFanout, GroupPollResult};
 use crate::mailbox::timing::{TimingConfig, TimingObfuscation};
-use crate::network::grpc::MailboxClient;
+use crate::network::grpc::{AnonymousMailboxClient, MailboxClient};
 
 /// Default polling interval for DM mailboxes (5 seconds for real-time chat).
 /// NDSS '21 measured Signal delivery at ~1.5s; 5s balances latency vs server load.
@@ -101,6 +102,8 @@ pub struct UnifiedPollResult {
     pub dm_results: Vec<PollResult>,
     /// Group poll results.
     pub group_results: Vec<GroupPollResult>,
+    /// Anonymous DM poll results.
+    pub anon_dm_results: Vec<AnonDmPollResult>,
     /// Whether any dummy polls were performed.
     pub dummy_polls_performed: u32,
 }
@@ -161,7 +164,8 @@ impl DecoyMailbox {
 pub struct MailboxPoller {
     dm_manager: Arc<DmConversationManager>,
     two_way: Arc<TwoWayAnonymity>,
-    group_manager: Arc<GroupMailboxManager>,
+    group_fanout: Arc<GroupFanout>,
+    anon_dm_poller: Option<Arc<AnonDmPoller>>,
     config: PollerConfig,
     timing: TimingObfuscation,
     stats: RwLock<PollerStats>,
@@ -176,20 +180,27 @@ impl MailboxPoller {
     pub fn new(
         dm_manager: Arc<DmConversationManager>,
         two_way: Arc<TwoWayAnonymity>,
-        group_manager: Arc<GroupMailboxManager>,
+        group_fanout: Arc<GroupFanout>,
         config: PollerConfig,
     ) -> Self {
         let timing = TimingObfuscation::new(config.timing_config.clone());
         Self {
             dm_manager,
             two_way,
-            group_manager,
+            group_fanout,
+            anon_dm_poller: None,
             config,
             timing,
             stats: RwLock::new(PollerStats::default()),
             decoys: RwLock::new(Vec::new()),
             real_mailbox_keys: RwLock::new(HashSet::new()),
         }
+    }
+
+    /// Set the anonymous DM poller.
+    pub fn with_anon_dm_poller(mut self, poller: Arc<AnonDmPoller>) -> Self {
+        self.anon_dm_poller = Some(poller);
+        self
     }
 
     /// Get current statistics.
@@ -336,63 +347,99 @@ impl MailboxPoller {
     }
 
     /// Poll all group mailboxes.
+    ///
+    /// Uses GroupFanout for actual polling with timing obfuscation and dummy polls.
     async fn poll_group_mailboxes(
         &self,
         _client: &mut MailboxClient,
     ) -> Result<Vec<GroupPollResult>, MailboxError> {
-        // Get all active group mailboxes
-        let active_groups = self.group_manager.list_active_groups()?;
+        // Apply timing delay before polling
+        self.timing.delay_before_poll().await;
 
-        let mut results = Vec::new();
-
-        for group_id in active_groups {
-            // Maybe do a dummy poll instead
-            if self.should_dummy_poll() {
-                // For groups, we'd poll a decoy group mailbox
-                // (implementation similar to DM dummy polls)
-                let mut stats = self.stats.write().await;
-                stats.dummy_polls += 1;
-                stats.total_polls += 1;
-            }
-
-            // Apply timing delay
-            self.timing.delay_before_poll().await;
-
-            // Poll group mailbox (returns message count for now)
-            match self.group_manager.poll_group_mailbox(&group_id).await {
-                Ok(msg_count) => {
-                    // Create a GroupPollResult with empty messages for now
-                    // Full implementation would use GroupFanout
-                    results.push(GroupPollResult {
-                        group_id,
-                        messages: Vec::new(),
-                        has_more: false,
-                    });
-
-                    let mut stats = self.stats.write().await;
-                    stats.real_polls += 1;
-                    stats.total_polls += 1;
-                    stats.messages_received += msg_count as u64;
-                    stats.last_poll = Some(std::time::Instant::now());
-                }
-                Err(e) => {
-                    tracing::debug!(group = %group_id, error = %e, "Group poll failed");
-                    let mut stats = self.stats.write().await;
-                    stats.poll_failures += 1;
-                }
-            }
-
-            // Random delay between batch items
-            self.timing.delay_between_batch_items().await;
+        // Maybe do a dummy poll (poll a decoy mailbox)
+        if self.should_dummy_poll() {
+            // TODO: Implement decoy group mailbox polling
+            // For now just record the dummy poll
+            let mut stats = self.stats.write().await;
+            stats.dummy_polls += 1;
+            stats.total_polls += 1;
         }
 
-        Ok(results)
+        // Poll all group mailboxes via GroupFanout
+        match self.group_fanout.poll_all_group_mailboxes().await {
+            Ok(poll_results) => {
+                let mut stats = self.stats.write().await;
+                stats.real_polls += 1;
+                stats.total_polls += 1;
+
+                let total_messages: usize = poll_results.iter().map(|(_, r)| r.messages.len()).sum();
+                stats.messages_received += total_messages as u64;
+                stats.last_poll = Some(std::time::Instant::now());
+
+                // Extract just the GroupPollResult from the tuples
+                Ok(poll_results.into_iter().map(|(_, result)| result).collect())
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "Group mailbox poll failed");
+                let mut stats = self.stats.write().await;
+                stats.poll_failures += 1;
+                Err(e)
+            }
+        }
+    }
+
+    /// Poll all anonymous DM mailboxes.
+    async fn poll_anon_dm_mailboxes(
+        &self,
+        client: &mut AnonymousMailboxClient,
+    ) -> Result<Vec<AnonDmPollResult>, MailboxError> {
+        let anon_dm_poller = match &self.anon_dm_poller {
+            Some(poller) => poller,
+            None => return Ok(Vec::new()), // No anon DM poller configured
+        };
+
+        // Apply timing delay before polling
+        self.timing.delay_before_poll().await;
+
+        // Maybe do a dummy poll
+        if self.should_dummy_poll() {
+            let mut stats = self.stats.write().await;
+            stats.dummy_polls += 1;
+            stats.total_polls += 1;
+        }
+
+        // Poll all anonymous DM mailboxes
+        match anon_dm_poller.poll_all(client).await {
+            Ok(poll_results) => {
+                let mut stats = self.stats.write().await;
+                stats.real_polls += 1;
+                stats.total_polls += 1;
+
+                let total_messages: usize = poll_results.iter().map(|r| r.messages.len()).sum();
+                stats.messages_received += total_messages as u64;
+                stats.last_poll = Some(std::time::Instant::now());
+
+                Ok(poll_results)
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "Anonymous DM mailbox poll failed");
+                let mut stats = self.stats.write().await;
+                stats.poll_failures += 1;
+                Err(e)
+            }
+        }
     }
 
     /// Perform a unified poll of all mailboxes.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - Authenticated mailbox client for DM and group polling
+    /// * `anon_client` - Optional anonymous mailbox client for anon DM polling (no JWT auth)
     pub async fn poll_all(
         &self,
         client: &mut MailboxClient,
+        anon_client: Option<&mut AnonymousMailboxClient>,
     ) -> Result<UnifiedPollResult, MailboxError> {
         // Ensure we have decoy mailboxes
         self.ensure_decoys().await;
@@ -400,9 +447,16 @@ impl MailboxPoller {
         // Record initial dummy poll count
         let initial_dummy_polls = self.stats.read().await.dummy_polls;
 
-        // Poll DMs and groups
+        // Poll DMs, groups, and anonymous DMs
         let dm_results = self.poll_dm_mailboxes(client).await?;
         let group_results = self.poll_group_mailboxes(client).await?;
+
+        // Poll anon DMs if client provided
+        let anon_dm_results = if let Some(anon) = anon_client {
+            self.poll_anon_dm_mailboxes(anon).await?
+        } else {
+            Vec::new()
+        };
 
         // Maybe one final dummy poll
         if self.should_dummy_poll() {
@@ -416,6 +470,7 @@ impl MailboxPoller {
         Ok(UnifiedPollResult {
             dm_results,
             group_results,
+            anon_dm_results,
             dummy_polls_performed,
         })
     }
@@ -455,7 +510,9 @@ impl MailboxPoller {
                 _ = tokio::time::sleep(interval) => {
                     match client_fn().await {
                         Ok(mut client) => {
-                            match self.poll_all(&mut client).await {
+                            // Note: anon DM polling requires AnonymousMailboxClient
+                            // This run() method doesn't support it; use poll_all() directly
+                            match self.poll_all(&mut client, None).await {
                                 Ok(result) => {
                                     let total_messages: usize = result.dm_results.iter()
                                         .map(|r| r.messages.len())
@@ -554,11 +611,13 @@ mod tests {
         let result = UnifiedPollResult {
             dm_results: vec![],
             group_results: vec![],
+            anon_dm_results: vec![],
             dummy_polls_performed: 5,
         };
 
         assert!(result.dm_results.is_empty());
         assert!(result.group_results.is_empty());
+        assert!(result.anon_dm_results.is_empty());
         assert_eq!(result.dummy_polls_performed, 5);
     }
 
@@ -568,6 +627,7 @@ mod tests {
             group_id: ChannelId::new(),
             messages: Vec::new(),
             has_more: false,
+            mailbox_id: "test-mailbox".to_string(),
         };
 
         assert!(result.messages.is_empty());

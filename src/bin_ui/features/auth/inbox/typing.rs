@@ -3,7 +3,7 @@
 //! Signal-style per-peer typing timers with 15-second auto-clear.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use slint::{ComponentHandle, Timer, TimerMode};
 
@@ -20,6 +20,10 @@ thread_local! {
     /// Key: peer_id string, Value: timer entry
     /// Must be thread_local because slint::Timer is not Send.
     pub(crate) static DM_TYPING_TIMERS: RefCell<HashMap<String, TypingTimerEntry>> = RefCell::new(HashMap::new());
+
+    /// Set of cancelled peer IDs - timers will check this before clearing.
+    /// This avoids dropping timers early which causes calloop orphan warnings.
+    pub(crate) static CANCELLED_TIMERS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 /// Typing indicator timeout in milliseconds (Signal uses 15 seconds).
@@ -33,17 +37,31 @@ pub const TYPING_TIMEOUT_MS: u64 = 15_000;
 pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
     // Show typing indicator (peer name already shown in header for DMs)
     let indicator_text = "is typing ...";
-    tracing::debug!(
+    let current = window.get_typing_indicator().to_string();
+    tracing::info!(
         peer_id = %peer_id,
-        "TYPING_UI: Setting typing indicator"
+        current_value = %current,
+        new_value = %indicator_text,
+        "TYPING_SET: ===> Setting typing indicator on window <==="
     );
     window.set_typing_indicator(indicator_text.into());
+    let after = window.get_typing_indicator().to_string();
+    tracing::info!(
+        peer_id = %peer_id,
+        after_value = %after,
+        "TYPING_SET: Typing indicator set, verifying value"
+    );
 
     // Check if we have an existing timer for this peer - if so, restart it
     // This avoids stop+create which causes calloop orphaned event warnings
     let needs_new_timer = DM_TYPING_TIMERS.with(|timers| {
         let map = timers.borrow();
         !map.contains_key(peer_id)
+    });
+
+    // Clear from cancelled set if it was there (we're starting fresh)
+    CANCELLED_TIMERS.with(|cancelled| {
+        cancelled.borrow_mut().remove(peer_id);
     });
 
     if needs_new_timer {
@@ -63,15 +81,28 @@ pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
             TimerMode::SingleShot,
             std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
             move || {
-                tracing::debug!(
-                    peer_id = %peer_id_owned,
-                    "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
-                );
-                // Clear typing indicator
-                if let Some(w) = weak_window.upgrade() {
-                    w.set_typing_indicator("".into());
+                // Check if this timer was cancelled
+                let was_cancelled = CANCELLED_TIMERS.with(|cancelled| {
+                    cancelled.borrow_mut().remove(&peer_id_owned)
+                });
+
+                if was_cancelled {
+                    tracing::debug!(
+                        peer_id = %peer_id_owned,
+                        "TYPING_TIMER: Timer fired but was cancelled - skipping clear"
+                    );
+                } else {
+                    tracing::debug!(
+                        peer_id = %peer_id_owned,
+                        "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
+                    );
+                    // Clear typing indicator
+                    if let Some(w) = weak_window.upgrade() {
+                        w.set_typing_indicator("".into());
+                    }
                 }
-                // Remove from map
+
+                // Always remove from map when timer fires
                 DM_TYPING_TIMERS.with(|timers| {
                     timers.borrow_mut().remove(&peer_id_owned);
                 });
@@ -100,13 +131,26 @@ pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
                     TimerMode::SingleShot,
                     std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
                     move || {
-                        tracing::debug!(
-                            peer_id = %peer_id_owned,
-                            "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
-                        );
-                        if let Some(w) = weak_window.upgrade() {
-                            w.set_typing_indicator("".into());
+                        // Check if this timer was cancelled
+                        let was_cancelled = CANCELLED_TIMERS.with(|cancelled| {
+                            cancelled.borrow_mut().remove(&peer_id_owned)
+                        });
+
+                        if was_cancelled {
+                            tracing::debug!(
+                                peer_id = %peer_id_owned,
+                                "TYPING_TIMER: Timer fired but was cancelled - skipping clear"
+                            );
+                        } else {
+                            tracing::debug!(
+                                peer_id = %peer_id_owned,
+                                "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
+                            );
+                            if let Some(w) = weak_window.upgrade() {
+                                w.set_typing_indicator("".into());
+                            }
                         }
+
                         DM_TYPING_TIMERS.with(|timers| {
                             timers.borrow_mut().remove(&peer_id_owned);
                         });
@@ -117,22 +161,27 @@ pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
     }
 }
 
-/// Clear typing indicator and remove timer for a peer.
+/// Cancel typing timer for a peer.
 ///
-/// Note: We don't call timer.stop() because that can cause calloop orphaned event warnings.
-/// Instead, we just remove from map - the timer will fire harmlessly since the callback
-/// checks if the entry still exists in the map.
+/// Note: We don't remove the timer or call timer.stop() because dropping the Timer
+/// while it has pending events causes calloop orphaned event warnings.
+/// Instead, we mark it as cancelled - the timer will fire and check the cancelled set.
 pub fn clear_typing_timer(peer_id: &str) {
-    DM_TYPING_TIMERS.with(|timers| {
-        let mut map = timers.borrow_mut();
-        if map.remove(peer_id).is_some() {
-            tracing::debug!(
-                peer_id = %peer_id,
-                remaining_timers = map.len(),
-                "TYPING_TIMER: Removed timer entry for peer"
-            );
-        }
+    // Check if there's an active timer for this peer
+    let has_timer = DM_TYPING_TIMERS.with(|timers| {
+        timers.borrow().contains_key(peer_id)
     });
+
+    if has_timer {
+        // Mark as cancelled - the timer will fire and clean itself up
+        CANCELLED_TIMERS.with(|cancelled| {
+            cancelled.borrow_mut().insert(peer_id.to_string());
+        });
+        tracing::debug!(
+            peer_id = %peer_id,
+            "TYPING_TIMER: Marked timer as cancelled (will fire harmlessly)"
+        );
+    }
 }
 
 /// Clear typing indicator for a peer (called when message received or STOPPED).

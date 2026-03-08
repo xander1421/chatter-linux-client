@@ -94,6 +94,13 @@ impl UserRepository {
         }
     }
 
+    /// Count total number of users in the database.
+    pub fn count(&self) -> Result<u64, StorageError> {
+        let conn = self.db.connection()?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))?;
+        Ok(count as u64)
+    }
+
     /// Get a user by username.
     pub fn get_by_username(&self, username: &str) -> Result<Option<User>, StorageError> {
         let conn = self.db.connection()?;
@@ -436,6 +443,114 @@ impl UserRepository {
             "DELETE FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
             params![user_id.to_string(), friend_id.to_string()],
         )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!(
+                "Friendship {} -> {}",
+                user_id, friend_id
+            )));
+        }
+        Ok(())
+    }
+
+    // ========================================================================
+    // Profile key sharing operations
+    // ========================================================================
+
+    /// Get a friend's profile key for decrypting their encrypted display_name.
+    ///
+    /// Returns None if we don't have their profile key yet.
+    pub fn get_friend_profile_key(
+        &self,
+        user_id: &UserId,
+        friend_id: &UserId,
+    ) -> Result<Option<[u8; 32]>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT friend_profile_key FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
+        )?;
+
+        let result: Result<Option<Vec<u8>>, _> = stmt.query_row(
+            params![user_id.to_string(), friend_id.to_string()],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(Some(key_bytes)) if key_bytes.len() == 32 => {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(&key_bytes);
+                Ok(Some(key))
+            }
+            Ok(_) => Ok(None), // No key or wrong size
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Store a friend's profile key received from an E2E message.
+    ///
+    /// This key allows us to decrypt their encrypted display_name.
+    pub fn set_friend_profile_key(
+        &self,
+        user_id: &UserId,
+        friend_id: &UserId,
+        key: &[u8; 32],
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE friendships SET friend_profile_key = ?1 WHERE user_id = ?2 AND friend_id = ?3",
+            params![key.as_slice(), user_id.to_string(), friend_id.to_string()],
+        )?;
+
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!(
+                "Friendship {} -> {}",
+                user_id, friend_id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Check if profile sharing is enabled for a friendship.
+    ///
+    /// When true, our profile key will be included in messages to this friend.
+    pub fn is_profile_sharing(
+        &self,
+        user_id: &UserId,
+        friend_id: &UserId,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT profile_sharing FROM friendships WHERE user_id = ?1 AND friend_id = ?2",
+        )?;
+
+        let result: Result<i32, _> = stmt.query_row(
+            params![user_id.to_string(), friend_id.to_string()],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(value) => Ok(value != 0),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Enable or disable profile sharing for a friendship.
+    ///
+    /// When enabled, our profile key will be sent with messages to this friend,
+    /// allowing them to decrypt our display_name.
+    pub fn set_profile_sharing(
+        &self,
+        user_id: &UserId,
+        friend_id: &UserId,
+        enabled: bool,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE friendships SET profile_sharing = ?1 WHERE user_id = ?2 AND friend_id = ?3",
+            params![enabled as i32, user_id.to_string(), friend_id.to_string()],
+        )?;
+
         if rows == 0 {
             return Err(StorageError::NotFound(format!(
                 "Friendship {} -> {}",

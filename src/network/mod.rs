@@ -13,6 +13,6 @@ pub mod validation;
 
 pub use connection::{ConnectionEvent, ConnectionState, ConnectionStateMachine, FailReason};
 pub use connection_manager::{ConnectionConfig, ConnectionManager, ReplayResult};
-pub use offline_queue::{OfflineQueue, OperationType, QueueError, QueueEvent, QueuedOperation};
+pub use offline_queue::{OfflineQueue, OperationType, QueueError, QueueEvent, QueuedOperation, QueueStats};
 pub use recovery::{ConnectionRecovery, FibonacciBackoff};
 pub use retry::{RetryExecutor, RetryPolicy};

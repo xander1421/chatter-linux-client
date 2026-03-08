@@ -76,9 +76,6 @@ export component ChatHeader inherits Rectangle {
     // Show settings for regular channels and private groups, not for anon DMs
     property <bool> show-settings: !is-anon-dm;
 
-    // Show privacy indicator for anon types
-    property <bool> show-privacy-indicator: is-anon-dm || is-private-group;
-
     // Layout
     height: 56px;
     background: Colors.surface;
@@ -186,33 +183,6 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            // Privacy indicator badge for anonymous types
-            if root.show-privacy-indicator: HorizontalLayout {
-                spacing: Spacing.xs;
-                alignment: center;
-
-                Rectangle {
-                    width: 1px;
-                    height: 16px;
-                    background: Colors.text-muted;
-                }
-
-                Rectangle {
-                    height: 18px;
-                    width: privacy-text.preferred-width + 10px;
-                    background: Colors.primary.with-alpha(0.15);
-                    border-radius: 4px;
-
-                    privacy-text := Text {
-                        x: 5px;
-                        text: is-anon-dm ? "Anonymous" : "Private";
-                        color: Colors.primary;
-                        font-size: Typography.xs;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-
             // Member count (for channels and private groups)
             if root.show-member-count: HorizontalLayout {
                 spacing: Spacing.xs;
@@ -267,13 +237,14 @@ export component ChatHeader inherits Rectangle {
                 padding-left: 12px;
                 alignment: start;
 
-                // Animated dots
+                // Animated dots with bouncing effect
                 for i in [0, 1, 2]: Rectangle {
                     width: 6px;
                     height: 6px;
                     border-radius: 3px;
                     background: Colors.primary;
-                    y: 2px * Math.sin((animation-tick() / 250ms + i * 0.3) * 2 * 3.14159);
+                    // Convert to angle using 1deg multiplier for sin function
+                    y: 2px * Math.sin((animation-tick() / 250ms + i * 0.3) * 360deg);
                 }
 
                 Text {

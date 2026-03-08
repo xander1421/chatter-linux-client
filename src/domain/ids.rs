@@ -94,6 +94,23 @@ macro_rules! impl_uuid_id {
                 pub fn into_uuid(self) -> Uuid {
                     self.0
                 }
+
+                /// Get as raw bytes (16 bytes).
+                #[must_use]
+                pub fn as_bytes(&self) -> &[u8; 16] {
+                    self.0.as_bytes()
+                }
+
+                /// Try to create from a byte slice.
+                #[must_use]
+                pub fn try_from_slice(bytes: &[u8]) -> Option<Self> {
+                    if bytes.len() != 16 {
+                        return None;
+                    }
+                    let mut arr = [0u8; 16];
+                    arr.copy_from_slice(bytes);
+                    Some(Self(Uuid::from_bytes(arr)))
+                }
             }
 
             impl fmt::Display for $ty {
@@ -191,6 +208,25 @@ impl ChannelId {
 impl From<UserId> for ChannelId {
     fn from(user_id: UserId) -> Self {
         Self(user_id.0)
+    }
+}
+
+// ============================================================================
+// MessageId helpers
+// ============================================================================
+
+impl MessageId {
+    /// Create a deterministic MessageId from a timestamp.
+    ///
+    /// Used for Signal-style message identification where messages are
+    /// identified by (sender, timestamp) pairs. This creates a consistent
+    /// UUID from the timestamp for event emission.
+    #[must_use]
+    pub fn from_timestamp(timestamp: u64) -> Self {
+        // Create a deterministic UUID from timestamp using namespace hashing
+        let input = format!("msg_timestamp:{}", timestamp);
+        let uuid = Uuid::new_v5(&Uuid::nil(), input.as_bytes());
+        Self(uuid)
     }
 }
 

@@ -31,6 +31,13 @@ export component SettingsScreen inherits Rectangle {
     in-out property <bool> sealed-sender-unrestricted: false;
     in property <int> prekey-count: 0;
 
+    // AI settings
+    in-out property <bool> local-ai-enabled: false;
+    in-out property <string> local-ai-model-id: "";
+    in property <bool> local-ai-loading: false;
+    in property <string> local-ai-status: "";  // "not loaded", "loading", "loaded: ModelName"
+    in property <string> local-ai-error: "";
+
     // Navigation state
     property <string> active-section: "account";  // "account", "privacy", "encryption", "appearance"
     property <bool> show-password-form: false;
@@ -51,6 +58,11 @@ export component SettingsScreen inherits Rectangle {
     callback copy-fingerprint-clicked();
     callback sealed-sender-changed(bool);
     callback refresh-keys-clicked();
+
+    // AI callbacks
+    callback local-ai-enabled-changed(bool);
+    callback local-ai-load-model(string);  // model_id
+    callback local-ai-unload-model();
 
     background: Colors.background;
 
@@ -79,6 +91,7 @@ export component SettingsScreen inherits Rectangle {
                     { id: "account", label: "Account", enabled: true },
                     { id: "privacy", label: "Privacy", enabled: true },
                     { id: "encryption", label: "Encryption", enabled: true },
+                    { id: "ai", label: "AI Assistant", enabled: true },
                     { id: "appearance", label: "Appearance", enabled: true }
                 ]: Rectangle {
                     height: 40px;
@@ -757,6 +770,179 @@ export component SettingsScreen inherits Rectangle {
                                             variant: "secondary";
                                             clicked => { root.refresh-keys-clicked(); }
                                         }
+                                    }
+                                }
+                            }
+                        }
+
+                        // AI Assistant section
+                        if active-section == "ai": VerticalLayout {
+                            spacing: Spacing.lg;
+
+                            // Section header
+                            Text {
+                                text: "AI Assistant";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.semibold;
+                            }
+
+                            Text {
+                                text: "Configure local AI for Jarvis assistant (requires GPU)";
+                                color: Colors.text-muted;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                            }
+
+                            // Enable Local AI toggle
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                HorizontalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Enable Local AI";
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+
+                                        Text {
+                                            text: "Run AI models locally on your GPU for privacy";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    Toggle {
+                                        checked: root.local-ai-enabled;
+                                        toggled(value) => {
+                                            root.local-ai-enabled = value;
+                                            root.local-ai-enabled-changed(value);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Model configuration (only show if enabled)
+                            if root.local-ai-enabled: Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.md;
+
+                                    Text {
+                                        text: "Model Configuration";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.lg;
+                                        font-weight: Typography.medium;
+                                    }
+
+                                    // Status display
+                                    HorizontalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Text {
+                                            text: "Status:";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.sm;
+                                        }
+
+                                        Text {
+                                            text: root.local-ai-status != "" ? root.local-ai-status : "Not loaded";
+                                            color: root.local-ai-status == "" ? Colors.text-muted :
+                                                   (root.local-ai-loading ? Colors.warning : Colors.success);
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                        }
+                                    }
+
+                                    // Error display
+                                    if root.local-ai-error != "": Text {
+                                        text: root.local-ai-error;
+                                        color: Colors.error;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+
+                                    // Model ID input
+                                    VerticalLayout {
+                                        spacing: Spacing.xs;
+
+                                        Text {
+                                            text: "Model ID (HuggingFace)";
+                                            color: Colors.text-secondary;
+                                            font-size: Typography.xs;
+                                        }
+
+                                        Input {
+                                            text <=> root.local-ai-model-id;
+                                            placeholder: "mistralai/Mistral-7B-Instruct-v0.3";
+                                            disabled: root.local-ai-loading;
+                                        }
+
+                                        Text {
+                                            text: "Enter a HuggingFace model ID (e.g., mistralai/Mistral-7B-Instruct-v0.3)";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+
+                                    // Load/Unload buttons
+                                    HorizontalLayout {
+                                        spacing: Spacing.sm;
+                                        alignment: end;
+
+                                        Button {
+                                            text: "Unload";
+                                            variant: "ghost";
+                                            disabled: root.local-ai-loading || root.local-ai-status == "";
+                                            clicked => { root.local-ai-unload-model(); }
+                                        }
+
+                                        Button {
+                                            text: root.local-ai-loading ? "Loading..." : "Load Model";
+                                            variant: "primary";
+                                            loading: root.local-ai-loading;
+                                            disabled: root.local-ai-model-id == "" || root.local-ai-loading;
+                                            clicked => { root.local-ai-load-model(root.local-ai-model-id); }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Recommended models
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Recommended Models";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+
+                                    Text {
+                                        text: "• mistralai/Mistral-7B-Instruct-v0.3 (7B, fast)\n• meta-llama/Llama-3.2-3B-Instruct (3B, very fast)\n• Qwen/Qwen2.5-7B-Instruct (7B, good quality)";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
                                 }
                             }

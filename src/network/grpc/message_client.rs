@@ -248,6 +248,7 @@ impl MessageClient {
             destination_device_id,
             sealed_message: Some(sealed_message),
             client_request_id: uuid::Uuid::new_v4().to_string(),
+            envelope_type: 0, // Default: server determines from content
         };
 
         self.inner
@@ -372,6 +373,7 @@ impl MessageClient {
             destination_device_id,
             sealed_message: Some(sealed_message),
             client_request_id: uuid::Uuid::new_v4().to_string(),
+            envelope_type: 0, // Default: server determines from content
         };
 
         // Create request with UAK headers for anonymous delivery
@@ -409,6 +411,16 @@ impl MessageClient {
     /// The anonymous credential is a blind-signed token that proves the sender is a
     /// legitimate user without revealing their identity.
     ///
+    /// # ⚠️ WARNING: NOT FOR ANONYMOUS DM OPERATIONS
+    ///
+    /// This method uses `MessageClient` which includes `AuthInterceptor`, meaning
+    /// the server CAN identify the sender via auth headers. Use ONLY for:
+    /// - Server-managed group SKDM distribution (server knows membership anyway)
+    /// - DM bootstrap where both parties are known
+    ///
+    /// For TRUE anonymous operations (Anonymous DMs), use `AnonymousMessageClient`
+    /// which has NO auth interceptor and only sends the blind signature credential.
+    ///
     /// # Arguments
     ///
     /// * `destination_user_id` - Recipient user ID
@@ -434,6 +446,7 @@ impl MessageClient {
             destination_device_id,
             sealed_message: Some(sealed_message),
             client_request_id: uuid::Uuid::new_v4().to_string(),
+            envelope_type: 0, // Default: server determines from content
         };
 
         // Create request with anonymous credential header
@@ -488,6 +501,7 @@ impl MessageClient {
             destination_device_id,
             sealed_message: Some(sealed_message),
             client_request_id: uuid::Uuid::new_v4().to_string(),
+            envelope_type: 0, // Default: server determines from content
         };
 
         let mut request = Request::new(proto_request);

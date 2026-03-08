@@ -249,7 +249,7 @@ impl ChannelService {
             .channel_repo
             .delete_membership(channel_id, &current_user);
 
-        if let Err(e) = self.signal_service.clear_channel_sender_keys(channel_id) {
+        if let Err(e) = self.signal_service.clear_channel_sender_keys(channel_id).await {
             tracing::warn!(
                 channel_id = %channel_id,
                 error = %e,

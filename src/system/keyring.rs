@@ -70,6 +70,9 @@ impl Keyring {
 
     /// Retrieves the database passphrase from the keyring.
     ///
+    /// If `CHATTER_DB_PASSPHRASE` environment variable is set, uses that instead
+    /// of the keyring (useful for testing and CI environments).
+    ///
     /// # Errors
     ///
     /// Returns `SystemError::Keyring` if:
@@ -77,6 +80,12 @@ impl Keyring {
     /// - The keyring service is unavailable
     /// - Access is denied
     pub fn get_passphrase(&self) -> Result<String, SystemError> {
+        // Check for env var override first (useful for testing)
+        if let Ok(passphrase) = std::env::var("CHATTER_DB_PASSPHRASE") {
+            tracing::info!("Using CHATTER_DB_PASSPHRASE from environment");
+            return Ok(passphrase);
+        }
+
         tracing::debug!(username = %self.username, "Keyring: getting passphrase");
         self.entry()?.get_password().map_err(map_keyring_error)
     }
@@ -86,6 +95,9 @@ impl Keyring {
     /// Retries up to `max_retries` times with `retry_delay_secs` between attempts,
     /// giving users time to unlock their password manager (e.g., KeePassXC).
     ///
+    /// Only retries on transient errors (storage locked/inaccessible).
+    /// Returns immediately for permanent errors (entry not found).
+    ///
     /// # Errors
     ///
     /// Returns the last error if all retries fail.
@@ -94,8 +106,14 @@ impl Keyring {
         max_retries: u32,
         retry_delay_secs: u64,
     ) -> Result<String, SystemError> {
-        let mut last_error = None;
+        // Check for env var override first (no retry needed)
+        if let Ok(passphrase) = std::env::var("CHATTER_DB_PASSPHRASE") {
+            tracing::info!("Using CHATTER_DB_PASSPHRASE from environment");
+            return Ok(passphrase);
+        }
 
+        // Try to get password, with smart retry logic
+        tracing::info!("Accessing keyring for database passphrase... (please unlock if prompted)");
         for attempt in 0..=max_retries {
             if attempt > 0 {
                 tracing::info!(
@@ -106,23 +124,52 @@ impl Keyring {
                 std::thread::sleep(std::time::Duration::from_secs(retry_delay_secs));
             }
 
-            match self.get_passphrase() {
-                Ok(passphrase) => return Ok(passphrase),
+            match self.entry() {
+                Ok(entry) => {
+                    match entry.get_password() {
+                        Ok(passphrase) => return Ok(passphrase),
+                        Err(keyring::Error::NoEntry) => {
+                            // Entry doesn't exist - don't retry, just fail immediately
+                            tracing::debug!("Keyring: no entry found (not retrying)");
+                            return Err(SystemError::Keyring("No matching entry found in secure storage".to_string()));
+                        }
+                        Err(keyring::Error::NoStorageAccess(e)) => {
+                            // Storage locked - worth retrying
+                            tracing::debug!(
+                                attempt = attempt,
+                                error = %e,
+                                "Keyring: storage access denied, will retry"
+                            );
+                            // Continue to next iteration
+                        }
+                        Err(e) => {
+                            // Other errors - retry once, then fail
+                            tracing::debug!(
+                                attempt = attempt,
+                                error = %e,
+                                "Keyring: get_passphrase attempt failed"
+                            );
+                            if attempt >= 1 {
+                                return Err(map_keyring_error(e));
+                            }
+                            // Continue to retry once
+                        }
+                    }
+                }
                 Err(e) => {
-                    tracing::debug!(
-                        attempt = attempt,
-                        error = %e,
-                        "Keyring: get_passphrase attempt failed"
-                    );
-                    last_error = Some(e);
+                    // Entry creation failed (already a SystemError)
+                    tracing::debug!(error = %e, "Keyring: failed to create entry");
+                    return Err(e);
                 }
             }
         }
 
-        Err(last_error.unwrap_or_else(|| SystemError::Keyring("No attempts made".to_string())))
+        Err(SystemError::Keyring("Failed to access keyring after retries".to_string()))
     }
 
     /// Stores the database passphrase in the keyring.
+    ///
+    /// If `CHATTER_DB_PASSPHRASE` is set, this is a no-op (passphrase comes from env).
     ///
     /// # Errors
     ///
@@ -131,6 +178,12 @@ impl Keyring {
     /// - Access is denied
     /// - Storage fails
     pub fn set_passphrase(&self, passphrase: &str) -> Result<(), SystemError> {
+        // Skip keyring storage when using env var
+        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() {
+            tracing::info!("Skipping keyring storage (using CHATTER_DB_PASSPHRASE)");
+            return Ok(());
+        }
+
         tracing::info!(username = %self.username, "Keyring: storing passphrase");
         self.entry()?
             .set_password(passphrase)
@@ -144,6 +197,8 @@ impl Keyring {
     /// Retries up to `max_retries` times with `retry_delay_secs` between attempts,
     /// giving users time to unlock their password manager (e.g., KeePassXC).
     ///
+    /// Only retries on transient errors (storage locked/inaccessible).
+    ///
     /// # Errors
     ///
     /// Returns the last error if all retries fail.
@@ -153,8 +208,13 @@ impl Keyring {
         max_retries: u32,
         retry_delay_secs: u64,
     ) -> Result<(), SystemError> {
-        let mut last_error = None;
+        // Skip keyring storage when using env var
+        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() {
+            tracing::info!("Skipping keyring storage (using CHATTER_DB_PASSPHRASE)");
+            return Ok(());
+        }
 
+        tracing::info!("Storing passphrase in keyring... (please unlock if prompted)");
         for attempt in 0..=max_retries {
             if attempt > 0 {
                 tracing::info!(
@@ -165,20 +225,45 @@ impl Keyring {
                 std::thread::sleep(std::time::Duration::from_secs(retry_delay_secs));
             }
 
-            match self.set_passphrase(passphrase) {
-                Ok(()) => return Ok(()),
+            match self.entry() {
+                Ok(entry) => {
+                    match entry.set_password(passphrase) {
+                        Ok(()) => {
+                            tracing::info!(username = %self.username, "Keyring: passphrase stored successfully");
+                            return Ok(());
+                        }
+                        Err(keyring::Error::NoStorageAccess(e)) => {
+                            // Storage locked - worth retrying
+                            tracing::debug!(
+                                attempt = attempt,
+                                error = %e,
+                                "Keyring: storage access denied, will retry"
+                            );
+                            // Continue to next iteration
+                        }
+                        Err(e) => {
+                            // Other errors - retry once, then fail
+                            tracing::debug!(
+                                attempt = attempt,
+                                error = %e,
+                                "Keyring: set_passphrase attempt failed"
+                            );
+                            if attempt >= 1 {
+                                return Err(map_keyring_error(e));
+                            }
+                            // Continue to retry once
+                        }
+                    }
+                }
                 Err(e) => {
-                    tracing::debug!(
-                        attempt = attempt,
-                        error = %e,
-                        "Keyring: set_passphrase attempt failed"
-                    );
-                    last_error = Some(e);
+                    // Entry creation failed (already a SystemError)
+                    tracing::debug!(error = %e, "Keyring: failed to create entry");
+                    return Err(e);
                 }
             }
         }
 
-        Err(last_error.unwrap_or_else(|| SystemError::Keyring("No attempts made".to_string())))
+        Err(SystemError::Keyring("Failed to access keyring after retries".to_string()))
     }
 
     /// Removes the database passphrase from the keyring.
@@ -197,11 +282,14 @@ impl Keyring {
             .map_err(map_keyring_error)
     }
 
-    /// Checks if a passphrase exists in the keyring.
+    /// Checks if a passphrase exists in the keyring or environment.
     ///
-    /// Returns `true` if a passphrase is stored, `false` otherwise.
-    /// This is a convenience method that catches errors from `get_passphrase`.
+    /// Returns `true` if a passphrase is stored or CHATTER_DB_PASSPHRASE is set.
     pub fn has_passphrase(&self) -> bool {
+        // Check env var first
+        if std::env::var("CHATTER_DB_PASSPHRASE").is_ok() {
+            return true;
+        }
         self.get_passphrase().is_ok()
     }
 }

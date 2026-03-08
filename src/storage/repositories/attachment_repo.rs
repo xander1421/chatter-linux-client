@@ -5,6 +5,7 @@
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata, Thumbnail};
 use crate::domain::ids::AttachmentId;
 use crate::error::StorageError;
+use crate::storage::blob_stream::BlobInfo;
 use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
@@ -118,6 +119,9 @@ impl AttachmentRepository {
     ///
     /// Returns the encrypted ciphertext blob for decryption in memory.
     /// Returns None if content is not stored in database (needs CDN download).
+    ///
+    /// **Note**: For large attachments (>1MB), prefer `get_encrypted_content_blob_info`
+    /// with streaming access to avoid loading the entire blob into memory.
     pub fn get_encrypted_content(&self, id: &AttachmentId) -> Result<Option<Vec<u8>>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
@@ -134,6 +138,53 @@ impl AttachmentRepository {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
+    }
+
+    /// Get blob info for streaming access to encrypted content.
+    ///
+    /// Returns the SQLite rowid and size needed to open a streaming blob reader.
+    /// Use this instead of `get_encrypted_content` for large attachments to avoid
+    /// loading the entire blob into memory.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let info = repo.get_encrypted_content_blob_info(&id)?;
+    /// let stream = BlobStream::open(&conn, "attachments", "encrypted_content", info.rowid)?;
+    /// // Read in chunks...
+    /// ```
+    pub fn get_encrypted_content_blob_info(
+        &self,
+        id: &AttachmentId,
+    ) -> Result<Option<BlobInfo>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT rowid, length(encrypted_content)
+             FROM attachments
+             WHERE id = ?1 AND content_location = 1 AND encrypted_content IS NOT NULL",
+        )?;
+
+        let result = stmt.query_row(params![id.to_string()], |row| {
+            let rowid: i64 = row.get(0)?;
+            let size: i64 = row.get(1)?;
+            Ok(BlobInfo {
+                rowid,
+                size: size as usize,
+            })
+        });
+
+        match result {
+            Ok(info) => Ok(Some(info)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Get a reference to the underlying database for blob streaming.
+    ///
+    /// Used to open blob streams with `BlobStream::open()`.
+    pub fn database(&self) -> &Arc<Database> {
+        &self.db
     }
 
     /// Store encrypted content for an existing attachment.
@@ -171,6 +222,155 @@ impl AttachmentRepository {
         }
 
         Ok(())
+    }
+
+    // ========================================================================
+    // Filesystem-based storage methods
+    // ========================================================================
+
+    /// Insert an attachment with file path (filesystem storage).
+    ///
+    /// This stores the encrypted content on the filesystem instead of in the
+    /// database BLOB. Used for large files (videos, large images) to avoid
+    /// memory pressure from SQLite BLOB operations.
+    pub fn insert_with_file_path(
+        &self,
+        attachment: &Attachment,
+        file_path: &std::path::Path,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let metadata_blob = db_serialize(&attachment.metadata)?;
+        let thumbnail_bytes = attachment.metadata.thumbnail.as_deref();
+
+        conn.execute(
+            "INSERT INTO attachments (
+                id, metadata_blob, status, local_path, remote_url,
+                encryption_key, encryption_iv, thumbnail_bytes,
+                file_path, content_location, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                attachment.id.to_string(),
+                metadata_blob,
+                status_to_int(attachment.status),
+                attachment.local_path,
+                attachment.remote_url,
+                attachment.encryption_key,
+                attachment.encryption_iv,
+                thumbnail_bytes,
+                file_path.to_string_lossy().to_string(),
+                content_location_to_int(ContentLocation::OnFilesystem),
+                attachment.created_at.to_rfc3339(),
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    /// Get the file path for an attachment stored on filesystem.
+    ///
+    /// Returns None if the attachment doesn't exist or isn't stored on filesystem.
+    pub fn get_file_path(&self, id: &AttachmentId) -> Result<Option<String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT file_path FROM attachments WHERE id = ?1 AND content_location = 2",
+        )?;
+
+        let result = stmt.query_row(params![id.to_string()], |row| {
+            let path: Option<String> = row.get(0)?;
+            Ok(path)
+        });
+
+        match result {
+            Ok(path) => Ok(path),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Store file path for an existing attachment.
+    ///
+    /// Updates the attachment with the filesystem path and marks
+    /// content_location as OnFilesystem.
+    pub fn store_file_path(
+        &self,
+        id: &AttachmentId,
+        file_path: &std::path::Path,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+
+        // Set file_path, content_location AND status atomically
+        let rows = conn.execute(
+            "UPDATE attachments SET
+                file_path = ?1,
+                content_location = ?2,
+                status = ?3
+             WHERE id = ?4",
+            params![
+                file_path.to_string_lossy().to_string(),
+                content_location_to_int(ContentLocation::OnFilesystem),
+                status_to_int(AttachmentStatus::Ready),
+                id.to_string(),
+            ],
+        )?;
+
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!(
+                "Attachment {} not found",
+                id
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Update content location for an attachment.
+    ///
+    /// Used when migrating attachments between storage backends.
+    pub fn set_content_location(
+        &self,
+        id: &AttachmentId,
+        location: ContentLocation,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+
+        let rows = conn.execute(
+            "UPDATE attachments SET content_location = ?1 WHERE id = ?2",
+            params![content_location_to_int(location), id.to_string()],
+        )?;
+
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!(
+                "Attachment {} not found",
+                id
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// List all attachments stored on filesystem.
+    ///
+    /// Returns attachment IDs and their file paths for cleanup operations.
+    pub fn list_filesystem_attachments(&self) -> Result<Vec<(AttachmentId, String)>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, file_path FROM attachments
+             WHERE content_location = 2 AND file_path IS NOT NULL",
+        )?;
+
+        let mut rows = stmt.query([])?;
+        let mut results = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            let id_str: String = row.get(0)?;
+            let file_path: String = row.get(1)?;
+
+            if let Ok(id) = id_str.parse() {
+                results.push((id, file_path));
+            }
+        }
+
+        Ok(results)
     }
 
     /// Update an existing attachment.
@@ -379,6 +579,7 @@ fn content_location_to_int(location: ContentLocation) -> i32 {
     match location {
         ContentLocation::NotDownloaded => 0,
         ContentLocation::InDatabase => 1,
+        ContentLocation::OnFilesystem => 2,
     }
 }
 
@@ -386,6 +587,7 @@ fn content_location_to_int(location: ContentLocation) -> i32 {
 fn int_to_content_location(value: i32) -> ContentLocation {
     match value {
         1 => ContentLocation::InDatabase,
+        2 => ContentLocation::OnFilesystem,
         _ => ContentLocation::NotDownloaded,
     }
 }

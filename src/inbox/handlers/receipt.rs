@@ -180,6 +180,7 @@ mod tests {
             r#type: receipt_message::Type::Delivery as i32,
             timestamps: vec![1704067200000, 1704067201000],
             timestamp: 1704067202000,
+            channel_id: String::new(),
         };
 
         let content = Content {
@@ -222,6 +223,7 @@ mod tests {
             r#type: receipt_message::Type::Read as i32,
             timestamps: vec![1704067200000],
             timestamp: 1704067203000,
+            channel_id: String::new(),
         };
 
         let content = Content {
@@ -263,6 +265,7 @@ mod tests {
             r#type: receipt_message::Type::Viewed as i32,
             timestamps: vec![1704067200000, 1704067201000],
             timestamp: 1704067204000,
+            channel_id: String::new(),
         };
 
         let content = Content {
@@ -313,6 +316,7 @@ mod tests {
             r#type: receipt_message::Type::Read as i32,
             timestamps: vec![], // Empty - should be processed as no-op
             timestamp: 1704067200000,
+            channel_id: String::new(),
         };
 
         let content = Content {
@@ -339,6 +343,7 @@ mod tests {
             r#type: receipt_message::Type::Unspecified as i32,
             timestamps: vec![1704067200000],
             timestamp: 1704067200000,
+            channel_id: String::new(),
         };
 
         let content = Content {
@@ -392,6 +397,7 @@ mod tests {
             r#type: receipt_message::Type::Read as i32,
             timestamps: vec![1704067200000],
             timestamp: 1704067200000,
+            channel_id: String::new(),
         };
 
         let content = Content {

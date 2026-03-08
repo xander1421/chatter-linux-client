@@ -84,6 +84,7 @@ impl TimingConfig {
 /// let jittered = timing.jitter_interval(base_interval);
 /// tokio::time::sleep(jittered).await;
 /// ```
+#[derive(Clone)]
 pub struct TimingObfuscation {
     config: TimingConfig,
 }
@@ -192,8 +193,10 @@ impl TimingObfuscation {
     pub async fn delay_between_batch_items(&self) {
         if self.config.enabled {
             // Shorter delay for batch items (10-50ms)
-            let mut rng = rand::rng();
-            let delay_ms = rng.random_range(10..=50);
+            let delay_ms = {
+                let mut rng = rand::rng();
+                rng.random_range(10..=50)
+            };
             sleep(Duration::from_millis(delay_ms)).await;
         }
     }

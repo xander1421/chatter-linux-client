@@ -2,7 +2,14 @@
 //!
 //! Client for authentication service operations including login, registration,
 //! session management, and device management.
+//!
+//! # Privacy
+//!
+//! Usernames are hashed (SHA256) before being sent to the server. This prevents
+//! the server from knowing actual usernames - it only stores/matches hashes.
+//! If the database is compromised, attackers see hashes, not usernames.
 
+use sha2::Sha256;
 use tokio_stream::{Stream, StreamExt};
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
@@ -11,8 +18,8 @@ use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     auth_event, auth_service_client::AuthServiceClient, signal_pre_key_bundle,
-    AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordRequest, CheckUsernameRequest,
-    CheckUsernameResponse, CompletePasswordResetRequest, DeleteAccountRequest,
+    AccountDeletionEvent, AuthEvent, AuthResponse, ChangePasswordRequest,
+    CompletePasswordResetRequest, DeleteAccountRequest,
     GetActiveSessionsRequest, GetActiveSessionsResponse, GetPreKeyBundleRequest,
     GetPreKeyBundleResponse, GetPreKeyStatsRequest, GetPreKeyStatsResponse,
     GetSenderCertificateRequest, GetSenderCertificateResponse, InvalidateAllSessionsRequest,
@@ -23,6 +30,49 @@ use crate::proto::chat_v1::{
     UploadPreKeyBundleRequest, VerifyEmailRequest,
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
+
+// ============================================================================
+// Username Hashing
+// ============================================================================
+
+/// Hash a username with profile key for privacy before sending to server.
+///
+/// Uses HMAC-SHA256 with the profile key as the secret. The server never sees
+/// the actual username - only this hash. This provides:
+///
+/// 1. **Privacy**: Username cannot be recovered from hash
+/// 2. **Rainbow table resistance**: Profile key acts as unique salt
+/// 3. **Unlinkability**: Same username with different profile keys = different hashes
+///
+/// # Security Model
+///
+/// - Username is for LOGIN only, not discovery
+/// - Discovery uses QR codes / friend links with user_id
+/// - Profile keys are exchanged via E2E encrypted messages
+///
+/// # Example
+///
+/// ```ignore
+/// let hash = hash_username("alice", &profile_key);
+/// // Unique hash that only this user can reproduce
+/// ```
+pub fn hash_username(username: &str, profile_key: &[u8; 32]) -> String {
+    use hmac::{Hmac, Mac};
+
+    type HmacSha256 = Hmac<Sha256>;
+
+    // Normalize: lowercase and trim whitespace
+    let normalized = username.trim().to_lowercase();
+
+    // HMAC-SHA256 with profile_key as secret
+    let mut mac = HmacSha256::new_from_slice(profile_key)
+        .expect("HMAC can take key of any size");
+    mac.update(normalized.as_bytes());
+    let result = mac.finalize();
+
+    // Hex encode for proto String compatibility
+    hex::encode(result.into_bytes())
+}
 
 /// Auth service client wrapper.
 ///
@@ -70,6 +120,7 @@ impl AuthClient {
         device_id: Option<u32>,
     ) -> Result<AuthResponse, NetworkError> {
         let request = LoginRequest {
+            // NOTE: Caller (auth_service) is responsible for hashing username
             username: username.to_string(),
             password_hash: password_hash.to_vec(),
             svr_public_key: svr_public_key.to_vec(),
@@ -99,22 +150,6 @@ impl AuthClient {
             .logout(request)
             .await
             .map(|_| ())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Check if username is available.
-    pub async fn check_username(
-        &mut self,
-        username: &str,
-    ) -> Result<CheckUsernameResponse, NetworkError> {
-        let request = CheckUsernameRequest {
-            username: username.to_string(),
-        };
-
-        self.inner
-            .check_username(request)
-            .await
-            .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
     }
 
@@ -202,9 +237,7 @@ impl AuthClient {
             device_info: device_info.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
             device_auth_token: device_auth_token.to_vec(),
-            // profile_key field is deprecated - send empty instead
-            // UAK is sent via prekey_bundle.unidentified_access_key
-            profile_key: Vec::new(),
+            // NOTE: profile_key field removed from proto - UAK is sent via prekey_bundle.unidentified_access_key
             prekey_bundle,
             initial_one_time_prekeys,
             challenge_response: Vec::new(),

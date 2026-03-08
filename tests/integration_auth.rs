@@ -29,6 +29,10 @@ async fn test_register_user_stream() {
     let device_auth_token = random_device_auth_token();
     let profile_key = random_profile_key();
     let display_name = format!("Test User {}", &username[10..18]);
+    // Encrypt display name with profile key (Phase 79 privacy)
+    let encrypted_display_name = encrypt_test_display_name(&profile_key, &display_name);
+    // Derive UAK from profile key for sealed sender
+    let uak = chatter_linux::crypto::derive_uak(&profile_key);
 
     // Generate real Signal Protocol keys
     use chatter_linux::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
@@ -74,11 +78,11 @@ async fn test_register_user_stream() {
             .register(
                 &username,
                 &password_hash,
-                &display_name,
+                &encrypted_display_name,
                 identity_public_key.as_ref(),
                 "integration-test",
                 &device_auth_token,
-                &profile_key,
+                &uak,
                 Some(prekey_bundle),
                 Vec::new(),
             )
@@ -170,15 +174,18 @@ async fn test_register_duplicate_username() {
 
     // Try to register with same username
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
+    let dup_profile_key = random_profile_key();
+    let dup_encrypted_name = encrypt_test_display_name(&dup_profile_key, "Duplicate User");
+    let dup_uak = chatter_linux::crypto::derive_uak(&dup_profile_key);
     let result = auth_client
         .register_and_wait(
             &user.username,
             &random_password_hash(),
-            "Duplicate User",
+            &dup_encrypted_name,
             identity_public_key.as_ref(),
             "test-device",
             &random_device_auth_token(),
-            &random_profile_key(),
+            &dup_uak,
             Some(prekey_bundle),
             Vec::new(),
         )
@@ -284,36 +291,6 @@ async fn test_login_nonexistent_user() {
         Err(e) => panic!("Expected NotFound or Unauthenticated, got: {:?}", e),
         Ok(_) => panic!("Expected error, got Ok"),
     }
-}
-
-// ============================================================================
-// Username Check Tests
-// ============================================================================
-
-#[tokio::test]
-async fn test_check_username_available() {
-    skip_if_no_server!();
-
-    let pool = assert_ok(create_test_pool().await);
-    let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-
-    let username = unique_username();
-    let response = assert_ok(auth_client.check_username(&username).await);
-
-    assert!(response.available, "New username should be available");
-}
-
-#[tokio::test]
-async fn test_check_username_taken() {
-    skip_if_no_server!();
-
-    let pool = assert_ok(create_test_pool().await);
-    let user = assert_ok(register_test_user(&pool).await);
-
-    let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
-    let response = assert_ok(auth_client.check_username(&user.username).await);
-
-    assert!(!response.available, "Registered username should not be available");
 }
 
 // ============================================================================

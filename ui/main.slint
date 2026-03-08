@@ -1,10 +1,10 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData } from "app.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -32,12 +32,18 @@ export component MainWindow inherits Window {
     in-out property <string> register-confirm-password <=> app.register-confirm-password;
     in property <bool> register-loading <=> app.register-loading;
     in property <string> register-error <=> app.register-error;
-
+    in property <image> register-avatar-source <=> app.register-avatar-source;
+    in property <bool> register-has-avatar <=> app.register-has-avatar;
+    in-out property <int> register-selected-default-idx <=> app.register-selected-default-idx;
+    callback register-select-avatar <=> app.register-select-avatar;
+    callback register-select-default-avatar <=> app.register-select-default-avatar;
     // ========== Sidebar properties ==========
     in property <[ChannelListItemData]> channels <=> app.channels;
     in property <string> selected-channel-id <=> app.selected-channel-id;
     in property <[DMListItemData]> dm-conversations <=> app.dm-conversations;
     in property <string> selected-dm-id <=> app.selected-dm-id;
+    in property <[PrivateGroupListItemData]> private-groups <=> app.private-groups;
+    in property <string> selected-private-group-id <=> app.selected-private-group-id;
     in property <string> user-display-name <=> app.user-display-name;
     in property <image> user-avatar-source <=> app.user-avatar-source;
     in property <string> user-initials <=> app.user-initials;
@@ -85,11 +91,17 @@ export component MainWindow inherits Window {
     in property <string> code-preview-filename <=> app.code-preview-filename;
     in property <string> code-preview-language <=> app.code-preview-language;
     in property <int> code-preview-line-count <=> app.code-preview-line-count;
-    in property <styled-text> code-preview-content <=> app.code-preview-content;
+    in property <image> code-preview-image <=> app.code-preview-image;
     in property <string> code-preview-plain-text <=> app.code-preview-plain-text;
+    in property <bool> code-preview-has-selection <=> app.code-preview-has-selection;
+    in property <string> code-preview-selected-text <=> app.code-preview-selected-text;
     callback close-code-preview <=> app.close-code-preview;
     callback copy-code <=> app.copy-code;
+    callback copy-code-selection <=> app.copy-code-selection;
     callback open-code-external <=> app.open-code-external;
+    callback code-preview-pointer-down <=> app.code-preview-pointer-down;
+    callback code-preview-pointer-move <=> app.code-preview-pointer-move;
+    callback code-preview-pointer-up <=> app.code-preview-pointer-up;
 
     // ========== PDF preview state ==========
     in-out property <bool> pdf-preview-visible <=> app.pdf-preview-visible;
@@ -119,7 +131,11 @@ export component MainWindow inherits Window {
     in-out property <string> reaction-picker-sender-id <=> app.reaction-picker-sender-id;
     in-out property <string> reaction-picker-timestamp-ns <=> app.reaction-picker-timestamp-ns;
     in property <[EmojiData]> reaction-picker-emojis <=> app.reaction-picker-emojis;
+    in-out property <int> reaction-picker-selected-category <=> app.reaction-picker-selected-category;
+    in-out property <string> reaction-picker-search-query <=> app.reaction-picker-search-query;
     callback reaction-selected <=> app.reaction-selected;
+    callback reaction-picker-category-changed <=> app.reaction-picker-category-changed;
+    callback reaction-picker-search-changed <=> app.reaction-picker-search-changed;
 
     // ========== Composer emoji picker state ==========
     in-out property <bool> composer-emoji-picker-visible <=> app.composer-emoji-picker-visible;
@@ -131,12 +147,12 @@ export component MainWindow inherits Window {
     callback composer-emoji-search-changed <=> app.composer-emoji-search-changed;
 
     // ========== GIF picker state ==========
-    in-out property <bool> gif-picker-visible <=> app.gif-picker-visible;
-    in property <bool> gif-picker-loading <=> app.gif-picker-loading;
-    in property <[GifData]> gif-picker-results <=> app.gif-picker-results;
-    in-out property <string> gif-picker-search <=> app.gif-picker-search;
-    callback gif-selected <=> app.gif-selected;
-    callback gif-search <=> app.gif-search;
+    in-out property <bool> composer-gif-picker-visible <=> app.composer-gif-picker-visible;
+    in property <bool> composer-gif-picker-loading <=> app.composer-gif-picker-loading;
+    in property <[GifData]> composer-gif-picker-results <=> app.composer-gif-picker-results;
+    in-out property <string> composer-gif-picker-search <=> app.composer-gif-picker-search;
+    callback composer-gif-selected <=> app.composer-gif-selected;
+    callback composer-gif-search-changed <=> app.composer-gif-search-changed;
 
     // ========== Mention autocomplete state ==========
     in-out property <bool> mention-autocomplete-visible <=> app.mention-autocomplete-visible;
@@ -199,6 +215,10 @@ export component MainWindow inherits Window {
     in-out property <string> create-channel-ai-model <=> app.create-channel-ai-model;
     in property <[AIModelOption]> create-channel-ai-models <=> app.create-channel-ai-models;
 
+    // Create channel private group properties
+    in-out property <[PrivateGroupFriend]> create-channel-available-friends <=> app.create-channel-available-friends;
+    in-out property <int> create-channel-selected-friend-count <=> app.create-channel-selected-friend-count;
+
     // Join channel modal properties
     in-out property <string> join-channel-search-query <=> app.join-channel-search-query;
     in property <[SearchResultChannel]> join-channel-results <=> app.join-channel-results;
@@ -235,8 +255,17 @@ export component MainWindow inherits Window {
     in-out property <string> friends-requests-sub-tab <=> app.friends-requests-sub-tab;
     in property <[FriendRequestData]> friends-received-requests <=> app.friends-received-requests;
     in property <[FriendRequestData]> friends-sent-requests <=> app.friends-sent-requests;
+    in property <[FriendRequestData]> friends-private-requests <=> app.friends-private-requests;
     in property <[BlockedUserData]> friends-blocked-users <=> app.friends-blocked-users;
     in property <bool> friends-loading <=> app.friends-loading;
+    // Pending message requests count (for sidebar badge)
+    in property <int> pending-message-requests <=> app.pending-message-requests;
+    // Friend code (privacy-first discovery)
+    in-out property <string> friends-my-code <=> app.friends-my-code;
+    in-out property <string> friends-code-input <=> app.friends-code-input;
+    in-out property <string> friends-code-status <=> app.friends-code-status;
+    in-out property <image> friends-qr-code-image <=> app.friends-qr-code-image;
+    in-out property <bool> friends-show-qr <=> app.friends-show-qr;
 
     // Forward message modal properties
     in property <string> forward-message-preview <=> app.forward-message-preview;
@@ -271,6 +300,13 @@ export component MainWindow inherits Window {
     in property <string> settings-identity-fingerprint <=> app.settings-identity-fingerprint;
     in-out property <bool> settings-sealed-sender-unrestricted <=> app.settings-sealed-sender-unrestricted;
     in property <int> settings-prekey-count <=> app.settings-prekey-count;
+
+    // AI settings properties
+    in-out property <bool> settings-local-ai-enabled <=> app.settings-local-ai-enabled;
+    in-out property <string> settings-local-ai-model-id <=> app.settings-local-ai-model-id;
+    in property <bool> settings-local-ai-loading <=> app.settings-local-ai-loading;
+    in property <string> settings-local-ai-status <=> app.settings-local-ai-status;
+    in property <string> settings-local-ai-error <=> app.settings-local-ai-error;
 
     // ========== Channel Settings Modal properties ==========
     in property <string> channel-settings-id <=> app.channel-settings-id;
@@ -315,6 +351,12 @@ export component MainWindow inherits Window {
     in property <[ScreenSourceData]> screen-sources <=> app.screen-sources;
     in-out property <string> selected-screen-source-id <=> app.selected-screen-source-id;
 
+    // ========== Jarvis AI Assistant properties ==========
+    in-out property <bool> jarvis-panel-visible <=> app.jarvis-panel-visible;
+    in-out property <bool> jarvis-thinking <=> app.jarvis-thinking;
+    in property <string> jarvis-response <=> app.jarvis-response;
+    in property <[JarvisMessageData]> jarvis-messages <=> app.jarvis-messages;
+
     // ========== Auth callbacks ==========
     callback login <=> app.login;
     callback register <=> app.register;
@@ -324,6 +366,7 @@ export component MainWindow inherits Window {
     // ========== Sidebar callbacks ==========
     callback channel-selected <=> app.channel-selected;
     callback dm-selected <=> app.dm-selected;
+    callback private-group-selected <=> app.private-group-selected;
     callback saved-messages-clicked <=> app.saved-messages-clicked;
     callback settings-clicked <=> app.settings-clicked;
     callback profile-clicked <=> app.profile-clicked;
@@ -359,6 +402,9 @@ export component MainWindow inherits Window {
     // ========== Modal callbacks ==========
     callback create-channel <=> app.create-channel;
     callback create-channel-provider-selected <=> app.create-channel-provider-selected;
+    callback create-private-group <=> app.create-private-group;
+    callback toggle-friend-selection <=> app.toggle-friend-selection;
+    callback create-channel-template-selected <=> app.create-channel-template-selected;
     callback search-channels <=> app.search-channels;
     callback join-channel <=> app.join-channel;
     callback profile-send-message <=> app.profile-send-message;
@@ -382,6 +428,16 @@ export component MainWindow inherits Window {
     callback friends-decline-request <=> app.friends-decline-request;
     callback friends-cancel-request <=> app.friends-cancel-request;
     callback friends-unblock-user <=> app.friends-unblock-user;
+    // Friend code callbacks (privacy-first discovery)
+    callback friends-generate-code <=> app.friends-generate-code;
+    callback friends-generate-qr <=> app.friends-generate-qr;
+    callback friends-copy-code <=> app.friends-copy-code;
+    callback friends-connect-via-code <=> app.friends-connect-via-code;
+    callback friends-connect-private <=> app.friends-connect-private;
+    callback friends-accept-private-request <=> app.friends-accept-private-request;
+    callback friends-decline-private-request <=> app.friends-decline-private-request;
+    // Message requests (anon DM)
+    callback message-requests-clicked <=> app.message-requests-clicked;
     callback forward-message <=> app.forward-message;
     callback revoke-session <=> app.revoke-session;
     callback revoke-all-sessions <=> app.revoke-all-sessions;
@@ -400,6 +456,11 @@ export component MainWindow inherits Window {
     callback settings-copy-fingerprint <=> app.settings-copy-fingerprint;
     callback settings-sealed-sender-changed <=> app.settings-sealed-sender-changed;
     callback settings-refresh-keys <=> app.settings-refresh-keys;
+
+    // AI settings callbacks
+    callback settings-local-ai-enabled-changed <=> app.settings-local-ai-enabled-changed;
+    callback settings-local-ai-load-model <=> app.settings-local-ai-load-model;
+    callback settings-local-ai-unload-model <=> app.settings-local-ai-unload-model;
 
     // ========== Channel Settings callbacks ==========
     callback channel-settings-save <=> app.channel-settings-save;
@@ -425,6 +486,12 @@ export component MainWindow inherits Window {
     callback audio-device-selected <=> app.audio-device-selected;
     callback audio-output-selected <=> app.audio-output-selected;
     callback screen-source-selected <=> app.screen-source-selected;
+
+    // ========== Jarvis callbacks ==========
+    callback jarvis-panel-close <=> app.jarvis-panel-close;
+    callback jarvis-send <=> app.jarvis-send;
+    callback jarvis-clear <=> app.jarvis-clear;
+    callback toggle-jarvis-panel <=> app.toggle-jarvis-panel;
 
     // App fills the entire window - explicit sizing ensures width flows to children
     app := App {

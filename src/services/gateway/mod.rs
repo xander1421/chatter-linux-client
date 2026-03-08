@@ -3,7 +3,7 @@
 //! Central message routing and validation pipeline.
 //! Decrypts sealed sender messages, parses DataMessage proto, and stores to repository.
 
-mod builders;
+pub mod builders;
 mod decryption;
 mod routing;
 
@@ -21,13 +21,19 @@ use crate::util::time::TimestampNanos;
 pub use builders::{
     build_text_content, build_data_message_content,
     build_typing_content, build_typing_content_with_channel,
-    build_read_receipt_content, build_delivery_receipt_content,
+    build_read_receipt_content, build_read_receipt_content_with_channel,
+    build_delivery_receipt_content, build_delivery_receipt_content_with_channel,
     build_reaction_content, build_reaction_content_with_channel,
     build_pin_content, build_pin_content_with_channel,
     build_edit_content, build_edit_content_with_channel,
     build_delete_for_me_content,
     build_delete_for_everyone_content, build_delete_for_everyone_content_with_channel,
-    build_call_key_content, build_call_hangup_content,
+    // DM call key exchange (ephemeral keys for PFS)
+    build_call_key_offer, build_call_key_answer,
+    // Group call key distribution (pairwise sealed sender)
+    build_group_call_key_content,
+    // Call hangup
+    build_call_hangup_content,
 };
 
 // ============================================================================
@@ -58,6 +64,9 @@ pub enum DmContent {
         timestamp: u64,
         /// Attachment pointers for any files included
         attachments: Vec<AttachmentPointer>,
+        /// Sender's profile key (32 bytes) for decrypting their display_name.
+        /// Present when sender has enabled profile sharing with us.
+        profile_key: Option<Vec<u8>>,
     },
     /// Typing indicator
     Typing {
@@ -109,21 +118,48 @@ pub enum DmContent {
         /// Timestamp of the key exchange.
         timestamp: u64,
     },
-    /// Call key exchange (incoming call notification).
+    /// Call key offer (ephemeral key exchange for DM calls with PFS).
     ///
-    /// When someone initiates a call, they send this to notify the peer
-    /// and share the call encryption key material.
-    CallKey {
+    /// Caller sends their ephemeral X25519 public key. Callee responds
+    /// with their ephemeral key via CallKeyAnswer.
+    CallKeyOffer {
         /// Call ID.
         call_id: String,
-        /// DTLS fingerprint or SRTP key material.
-        key_material: Vec<u8>,
-        /// Timestamp when call was initiated.
+        /// Caller's ephemeral X25519 public key (32 bytes).
+        ephemeral_public_key: [u8; 32],
+        /// Timestamp when offer was sent.
         timestamp: u64,
-        /// Call type: "Voice Call", "Video Call", or "Group Call".
+        /// Call type: "Voice Call" or "Video Call".
         call_type: String,
-        /// Channel/conversation ID for context.
+        /// DM channel ID for context.
         channel_id: String,
+    },
+    /// Call key answer (response to ephemeral key offer).
+    ///
+    /// Callee responds with their ephemeral X25519 public key.
+    /// Both parties then derive: HKDF(ECDH(eph, peer_eph) || identities)
+    CallKeyAnswer {
+        /// Call ID.
+        call_id: String,
+        /// Callee's ephemeral X25519 public key (32 bytes).
+        ephemeral_public_key: [u8; 32],
+        /// Timestamp when answer was sent.
+        timestamp: u64,
+    },
+    /// Group call key received (pairwise distribution).
+    ///
+    /// Symmetric key for group call E2EE, distributed via sealed sender.
+    GroupCallKey {
+        /// Call ID.
+        call_id: String,
+        /// AES-256 encryption key (32 bytes).
+        key_material: [u8; 32],
+        /// Key epoch (increments on rotation).
+        key_epoch: u32,
+        /// Group channel ID.
+        channel_id: String,
+        /// Timestamp when key was sent.
+        timestamp: u64,
     },
     /// Call hangup notification.
     ///
@@ -135,6 +171,114 @@ pub enum DmContent {
         reason: CallHangupReason,
         /// Timestamp when hangup was sent.
         timestamp: u64,
+    },
+    // ========================================================================
+    // Anonymous Group Messages (NDSS'21 style)
+    // ========================================================================
+    /// Invite to join an anonymous group.
+    AnonGroupInvite {
+        /// Group ID (16 bytes UUID).
+        group_id: Vec<u8>,
+        /// Human-readable group name.
+        group_name: String,
+        /// Inviter's mailbox public key for this group (32 bytes Ed25519).
+        inviter_mailbox_pk: Vec<u8>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Acknowledgment of joining an anonymous group.
+    AnonGroupJoinAck {
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// Joiner's mailbox public key (32 bytes Ed25519).
+        joiner_mailbox_pk: Vec<u8>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Member list update for an anonymous group.
+    AnonGroupMemberList {
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// List of members with their mailbox keys.
+        members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Leave notification for an anonymous group.
+    AnonGroupLeave {
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Kick notification for an anonymous group.
+    AnonGroupKick {
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// User being kicked.
+        kicked_user_id: Vec<u8>,
+        /// Admin signature.
+        admin_signature: Vec<u8>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Group update (name change, role change).
+    AnonGroupUpdate {
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// Update payload.
+        update: crate::proto::content_v1::AnonGroupUpdate,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Message within an anonymous group.
+    AnonGroupMessage {
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// Inner message content.
+        inner_content: Box<crate::proto::content_v1::Content>,
+    },
+    // ========================================================================
+    // Anonymous DM Messages (NDSS'21 style stranger messaging)
+    // ========================================================================
+    /// Request to start an anonymous DM conversation.
+    AnonDmRequest {
+        /// Conversation ID (16 bytes UUID).
+        conversation_id: Vec<u8>,
+        /// Initiator's mailbox public key (32 bytes Ed25519).
+        initiator_mailbox_pk: Vec<u8>,
+        /// Optional intro message.
+        intro_message: Option<String>,
+        /// Optional profile key for decrypting sender's profile.
+        profile_key: Option<Vec<u8>>,
+        /// Encrypted display name (AES-256-GCM with profile_key).
+        encrypted_display_name: Option<Vec<u8>>,
+        /// Encrypted avatar (AES-256-GCM with profile_key).
+        encrypted_avatar: Option<Vec<u8>>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Acceptance of an anonymous DM request.
+    AnonDmAccept {
+        /// Conversation ID.
+        conversation_id: Vec<u8>,
+        /// Responder's mailbox public key (32 bytes Ed25519).
+        responder_mailbox_pk: Vec<u8>,
+        /// Optional profile key for decrypting responder's profile.
+        profile_key: Option<Vec<u8>>,
+        /// Encrypted display name (AES-256-GCM with profile_key).
+        encrypted_display_name: Option<Vec<u8>>,
+        /// Encrypted avatar (AES-256-GCM with profile_key).
+        encrypted_avatar: Option<Vec<u8>>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Message within an anonymous DM conversation.
+    AnonDmMessage {
+        /// Conversation ID.
+        conversation_id: Vec<u8>,
+        /// Inner message content.
+        inner_content: Box<crate::proto::content_v1::Content>,
     },
 }
 
@@ -164,6 +308,12 @@ pub enum RouteResult {
         channel_id: ChannelId,
         sender_id: UserId,
     },
+    /// Received a sender key request - need to respond with our SKDM.
+    RespondWithSkdm {
+        channel_id: ChannelId,
+        requester_id: UserId,
+        skdm: crate::proto::content_v1::SenderKeyDistribution,
+    },
     /// Group mailbox announcement (NDSS '21 paper).
     /// Member announcing their per-group ephemeral mailbox address.
     MailboxAnnouncement {
@@ -177,13 +327,67 @@ pub enum RouteResult {
 /// Result of processing a sealed sender message.
 #[derive(Debug)]
 pub enum SealedSenderResult {
-    /// Regular message stored successfully.
+    /// Regular message stored successfully (no details needed for UI).
     MessageStored,
+    /// Data message received and stored - includes details for UI notification.
+    DataMessageReceived {
+        /// Who sent the message (from SSDecVer).
+        sender_id: UserId,
+        /// Channel the message belongs to.
+        channel_id: ChannelId,
+        /// Message ID (server-assigned or generated).
+        message_id: MessageId,
+        /// Message text body.
+        body: String,
+        /// Sender's timestamp.
+        timestamp: u64,
+        /// Attachment pointers if any.
+        attachments: Vec<AttachmentPointer>,
+    },
     /// Key exchange message received - needs bootstrap handling.
     KeyExchange {
         sender_id: UserId,
         conversation_id: String,
         ephemeral_public_key: Vec<u8>,
+        timestamp: u64,
+    },
+    /// Sender key request received - need to respond with our SKDM.
+    SenderKeyRequested {
+        /// User who requested our sender key.
+        requester_id: UserId,
+        /// Channel for which sender key is requested.
+        channel_id: ChannelId,
+    },
+    /// Group mailbox announcement received (NDSS '21 paper bootstrap).
+    /// Member announcing their per-group ephemeral mailbox address.
+    MailboxAnnouncement {
+        /// Who sent the announcement.
+        sender_id: UserId,
+        /// Channel this mailbox is for.
+        channel_id: ChannelId,
+        /// The announcement proto.
+        announcement: GroupMailboxAddress,
+    },
+    /// Anonymous group message received.
+    AnonGroupMessageReceived {
+        /// Who sent the message (revealed via SSDecVer).
+        sender_id: UserId,
+        /// Group ID (16 bytes).
+        group_id: Vec<u8>,
+        /// Inner message content.
+        inner_content: Box<crate::proto::content_v1::Content>,
+    },
+    /// Anonymous group join acknowledgment received.
+    ///
+    /// The joiner is sending their mailbox public key so we can send them messages.
+    AnonGroupJoinAckReceived {
+        /// Who sent the ack (the joiner).
+        sender_id: UserId,
+        /// Group ID (16 bytes).
+        group_id: Vec<u8>,
+        /// Joiner's mailbox public key (32 bytes Ed25519).
+        joiner_mailbox_pk: Vec<u8>,
+        /// Timestamp.
         timestamp: u64,
     },
 }
@@ -258,14 +462,14 @@ impl MessageGateway {
         // Extract content
         let content = MessageContent::Text(data_message.body.clone());
 
-        // Convert attachments: extract attachment IDs from AttachmentPointers
+        // Convert attachments: generate deterministic attachment IDs from CDN keys
+        // CDN keys are base64 strings, we hash them to generate consistent UUIDs
+        // NOTE: Actual Attachment records are created by AttachmentService.create_from_pointers()
         let attachments: Vec<crate::domain::ids::AttachmentId> = data_message
             .attachments
             .iter()
-            .filter_map(|ptr| {
-                // cdn_key should be a UUID string
-                ptr.cdn_key.parse().ok()
-            })
+            .filter(|ptr| !ptr.cdn_key.is_empty())
+            .map(|ptr| crate::domain::ids::AttachmentId::from_cdn_key(&ptr.cdn_key))
             .collect();
 
         // Create domain message with sender's timestamp for Signal-style dedup
@@ -297,13 +501,23 @@ impl MessageGateway {
         // Store in repository
         self.message_repo.insert(&message)?;
 
-        tracing::debug!(
+        tracing::info!(
             message_id = %message.id,
             channel_id = %message.channel_id,
-            "Stored incoming message"
+            attachment_count = message.attachments.len(),
+            attachment_ids = ?message.attachments.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+            "Stored incoming message with attachments"
         );
 
-        Ok(SealedSenderResult::MessageStored)
+        // Return details so caller can emit UI events
+        Ok(SealedSenderResult::DataMessageReceived {
+            sender_id: sender_id.unwrap_or_else(|| UserId::from_uuid(uuid::Uuid::nil())),
+            channel_id,
+            message_id,
+            body: data_message.body,
+            timestamp: data_message.timestamp,
+            attachments: data_message.attachments,
+        })
     }
 
     /// Create a sender key request message for a channel member.
@@ -319,5 +533,13 @@ impl MessageGateway {
             target_user_id: target_user_id.to_string(),
             timestamp: TimestampNanos::now().as_u64(),
         }
+    }
+
+    /// Get the local identity private key for ECIES decryption.
+    ///
+    /// Returns the 32-byte X25519 private scalar used to decrypt
+    /// NDSS'21 initial contact messages.
+    pub async fn get_identity_key(&self) -> Result<[u8; 32], crate::error::ServiceError> {
+        self.signal_service.get_identity_private_key().await
     }
 }

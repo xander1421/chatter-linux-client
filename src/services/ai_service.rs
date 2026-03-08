@@ -9,6 +9,7 @@ use futures::Stream;
 use tokio_stream::StreamExt;
 
 use crate::error::NetworkError;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::integration_client::IntegrationClient;
 use crate::proto::chat_v1::{
     AvailableModel, Integration, IntegrationConfig, IntegrationEvent, IntegrationType, ModelLimits,
@@ -67,12 +68,18 @@ impl From<CurrentUserError> for AIError {
 /// ```
 pub struct AIService {
     settings_repo: Arc<SettingsRepository>,
+    grpc_pool: Arc<GrpcClientPool>,
 }
 
 impl AIService {
     /// Create a new AIService with dependencies.
-    pub fn new(settings_repo: Arc<SettingsRepository>) -> Self {
-        Self { settings_repo }
+    pub fn new(settings_repo: Arc<SettingsRepository>, grpc_pool: Arc<GrpcClientPool>) -> Self {
+        Self { settings_repo, grpc_pool }
+    }
+
+    /// Create an IntegrationClient for internal use.
+    fn client(&self) -> IntegrationClient {
+        IntegrationClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
     }
 
     // ========================================================================
@@ -86,8 +93,20 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `provider` - AI provider type (Claude, OpenAI, GoogleAi, etc.)
+    pub async fn list_models(&self, provider: IntegrationType) -> Result<Vec<AvailableModel>, AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        let response = client.list_available_models(provider, None, None).await?;
+
+        Ok(response.models)
+    }
+
+    /// List available models for an AI provider (legacy API with client parameter).
+    #[deprecated(note = "Use list_models() instead")]
     pub async fn list_available_models(
         &self,
         client: &mut IntegrationClient,
@@ -108,9 +127,26 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `provider` - AI provider type
     /// * `model` - Model identifier (e.g., "claude-3-opus", "gpt-4")
+    pub async fn get_limits(
+        &self,
+        provider: IntegrationType,
+        model: &str,
+    ) -> Result<ModelLimits, AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        let response = client.get_model_limits(provider, model).await?;
+
+        // Return limits or error if not found
+        response.limits.ok_or(AIError::InvalidModel)
+    }
+
+    /// Get token and parameter limits for a specific model (legacy API with client parameter).
+    #[deprecated(note = "Use get_limits() instead")]
     pub async fn get_model_limits(
         &self,
         client: &mut IntegrationClient,
@@ -137,8 +173,20 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `channel_id` - Channel to query integrations for
+    pub async fn get_channel_integrations(&self, channel_id: &str) -> Result<Vec<Integration>, AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        let response = client.get_channel_integrations(channel_id).await?;
+
+        Ok(response.integrations)
+    }
+
+    /// List all integrations associated with a channel (legacy API with client parameter).
+    #[deprecated(note = "Use get_channel_integrations() instead")]
     pub async fn list_channel_integrations(
         &self,
         client: &mut IntegrationClient,
@@ -160,9 +208,21 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `integration_id` - Integration to add
     /// * `channel_id` - Target channel
+    pub async fn attach_to_channel(&self, integration_id: &str, channel_id: &str) -> Result<(), AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        client.add_integration_to_channel(integration_id, channel_id).await?;
+
+        Ok(())
+    }
+
+    /// Add an integration to a channel (legacy API with client parameter).
+    #[deprecated(note = "Use attach_to_channel() instead")]
     pub async fn add_integration_to_channel(
         &self,
         client: &mut IntegrationClient,
@@ -187,9 +247,21 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `integration_id` - Integration to remove
     /// * `channel_id` - Target channel
+    pub async fn detach_from_channel(&self, integration_id: &str, channel_id: &str) -> Result<(), AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        client.remove_integration_from_channel(integration_id, channel_id).await?;
+
+        Ok(())
+    }
+
+    /// Remove an integration from a channel (legacy API with client parameter).
+    #[deprecated(note = "Use detach_from_channel() instead")]
     pub async fn remove_integration_from_channel(
         &self,
         client: &mut IntegrationClient,
@@ -217,10 +289,30 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `name` - Display name for the integration
     /// * `provider` - AI provider type (Claude, OpenAI, etc.)
     /// * `config` - Optional configuration (model, max_tokens, etc.)
+    pub async fn create(
+        &self,
+        name: &str,
+        provider: IntegrationType,
+        config: Option<IntegrationConfig>,
+    ) -> Result<Integration, AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        let response = client.create_integration(name, provider as i32, config).await?;
+
+        // Return integration from response
+        response.integration.ok_or_else(|| {
+            AIError::ConfigurationError("server did not return integration".to_string())
+        })
+    }
+
+    /// Create a new integration (legacy API with client parameter).
+    #[deprecated(note = "Use create() instead")]
     pub async fn create_integration(
         &self,
         client: &mut IntegrationClient,
@@ -248,8 +340,23 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `integration_id` - Integration to retrieve
+    pub async fn get(&self, integration_id: &str) -> Result<Integration, AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        let response = client.get_integration(integration_id).await?;
+
+        // Return integration from response
+        response.integration.ok_or_else(|| {
+            AIError::ConfigurationError("integration not found".to_string())
+        })
+    }
+
+    /// Get an integration by ID (legacy API with client parameter).
+    #[deprecated(note = "Use get() instead")]
     pub async fn get_integration(
         &self,
         client: &mut IntegrationClient,
@@ -273,12 +380,24 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `integration_id` - Integration to test
     ///
     /// # Returns
     ///
     /// A tuple of (success, message) where success indicates if the test passed.
+    pub async fn test(&self, integration_id: &str) -> Result<(bool, String), AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        let response = client.test_integration(integration_id).await?;
+
+        Ok((response.success, response.message))
+    }
+
+    /// Test an integration's connectivity (legacy API with client parameter).
+    #[deprecated(note = "Use test() instead")]
     pub async fn test_integration(
         &self,
         client: &mut IntegrationClient,
@@ -299,8 +418,23 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `integration_id` - Integration to enable
+    pub async fn enable(&self, integration_id: &str) -> Result<Integration, AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        let response = client.enable_integration(integration_id).await?;
+
+        // Return updated integration
+        response.integration.ok_or_else(|| {
+            AIError::ConfigurationError("server did not return integration".to_string())
+        })
+    }
+
+    /// Enable an integration (legacy API with client parameter).
+    #[deprecated(note = "Use enable() instead")]
     pub async fn enable_integration(
         &self,
         client: &mut IntegrationClient,
@@ -324,8 +458,23 @@ impl AIService {
     ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
     /// * `integration_id` - Integration to disable
+    pub async fn disable(&self, integration_id: &str) -> Result<Integration, AIError> {
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Call server
+        let mut client = self.client();
+        let response = client.disable_integration(integration_id).await?;
+
+        // Return updated integration
+        response.integration.ok_or_else(|| {
+            AIError::ConfigurationError("server did not return integration".to_string())
+        })
+    }
+
+    /// Disable an integration (legacy API with client parameter).
+    #[deprecated(note = "Use disable() instead")]
     pub async fn disable_integration(
         &self,
         client: &mut IntegrationClient,
@@ -352,9 +501,13 @@ impl AIService {
     /// Returns a stream of integration events (AI streaming chunks, etc.)
     /// for real-time updates.
     ///
+    /// Note: For streaming APIs, the client must be created by the caller
+    /// since the stream borrows from the client. Use `ui_ctx.grpc_pool` to
+    /// create an IntegrationClient.
+    ///
     /// # Arguments
     ///
-    /// * `client` - Mutable reference to integration client
+    /// * `client` - Mutable reference to integration client (caller-owned)
     /// * `integration_id` - Optional integration ID to filter events.
     ///   If None, receives events for all integrations.
     pub async fn subscribe_events(
@@ -411,8 +564,11 @@ mod tests {
     #[test]
     fn test_ai_service_construction() {
         // Verify the AIService struct type signatures compile correctly.
-        fn _verify_types(settings_repo: Arc<SettingsRepository>) {
-            let _service = AIService::new(settings_repo);
+        fn _verify_types(
+            settings_repo: Arc<SettingsRepository>,
+            grpc_pool: Arc<GrpcClientPool>,
+        ) {
+            let _service = AIService::new(settings_repo, grpc_pool);
         }
     }
 

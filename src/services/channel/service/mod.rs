@@ -40,6 +40,7 @@ use super::error::ChannelError;
 ///
 /// Orchestrates channel creation, retrieval, updates, and deletion by
 /// coordinating network client and local storage.
+#[derive(Clone)]
 pub struct ChannelService {
     pub(crate) grpc_pool: Arc<GrpcClientPool>,
     pub(crate) settings_repo: Arc<SettingsRepository>,
@@ -64,6 +65,11 @@ impl ChannelService {
             signal_service,
             group_coordinator,
         }
+    }
+
+    /// Get the current user's ID.
+    pub fn current_user_id(&self) -> Result<UserId, ChannelError> {
+        self.settings_repo.current_user_id().map_err(ChannelError::from)
     }
 
     /// Create a channel client for network operations.
@@ -230,11 +236,7 @@ impl ChannelService {
             .await?;
 
         let channel = proto_to_domain_channel(&proto_channel)?;
-
-        match self.channel_repo.get(channel_id)? {
-            Some(_) => self.channel_repo.update(&channel)?,
-            None => self.channel_repo.insert(&channel)?,
-        }
+        self.channel_repo.upsert(&channel)?;
 
         Ok(channel)
     }
@@ -255,12 +257,7 @@ impl ChannelService {
             .await?;
 
         let channel = proto_to_domain_channel(&proto_channel)?;
-
-        // Upsert channel
-        match self.channel_repo.get(channel_id)? {
-            Some(_) => self.channel_repo.update(&channel)?,
-            None => self.channel_repo.insert(&channel)?,
-        }
+        self.channel_repo.upsert(&channel)?;
 
         // Sync memberships
         for proto_member in &proto_channel.members {
@@ -299,11 +296,7 @@ impl ChannelService {
             .await?;
 
         let channel = proto_to_domain_channel(&proto_channel)?;
-
-        match self.channel_repo.get(channel_id)? {
-            Some(_) => self.channel_repo.update(&channel)?,
-            None => self.channel_repo.insert(&channel)?,
-        }
+        self.channel_repo.upsert(&channel)?;
 
         Ok(channel)
     }

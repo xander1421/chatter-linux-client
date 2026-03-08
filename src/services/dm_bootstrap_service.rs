@@ -12,8 +12,6 @@ use crate::services::channel::converters::proto_to_domain_membership;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
 use crate::storage::repositories::channel_repo::ChannelRepository;
-use crate::storage::Database;
-
 #[derive(Debug, thiserror::Error)]
 pub enum DmBootstrapError {
     #[error("session error: {0}")]
@@ -35,7 +33,6 @@ pub struct DmBootstrapService {
     message_service: Arc<MessageService>,
     channel_repo: Arc<ChannelRepository>,
     grpc_pool: Arc<GrpcClientPool>,
-    database: Arc<Database>,
     mailbox_manager: Arc<MailboxManager>,
 }
 
@@ -44,68 +41,52 @@ impl DmBootstrapService {
         message_service: Arc<MessageService>,
         channel_repo: Arc<ChannelRepository>,
         grpc_pool: Arc<GrpcClientPool>,
-        database: Arc<Database>,
         mailbox_manager: Arc<MailboxManager>,
     ) -> Self {
         Self {
             message_service,
             channel_repo,
             grpc_pool,
-            database,
             mailbox_manager,
         }
     }
 
     /// Handle session convergence failure by resetting and re-establishing session.
-    ///
-    /// When all Sesame sessions fail to decrypt a message, we need to:
-    /// 1. Archive all existing sessions
-    /// 2. Fetch fresh prekey bundle and establish new session
-    /// 3. Future messages should work with the new session
     pub fn handle_convergence_failure(&self, peer_id: UserId) {
         let message_service = self.message_service.clone();
         let grpc_pool = self.grpc_pool.clone();
 
-        // Use spawn_blocking because libsignal stores aren't Send
-        tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create runtime for convergence recovery");
+        tokio::spawn(async move {
+            let mut auth_client = AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
 
-            rt.block_on(async {
-                let mut auth_client = AuthClient::new(
-                    grpc_pool.channel(),
-                    grpc_pool.auth_clone(),
-                );
-
-                // Reset session and establish fresh one (device_id = 1 for primary)
-                match message_service
-                    .reset_and_establish_session(&mut auth_client, &peer_id, 1)
-                    .await
-                {
-                    Ok(()) => {
-                        tracing::info!(
-                            peer_id = %peer_id,
-                            "Session reset complete - ready for fresh messages"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            peer_id = %peer_id,
-                            error = %e,
-                            "Failed to reset session after convergence failure"
-                        );
-                    }
+            // Reset session and establish fresh one (device_id = 1 for primary)
+            match message_service
+                .reset_and_establish_session(&mut auth_client, &peer_id, 1)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        "Session reset complete - ready for fresh messages"
+                    );
                 }
-            });
+                Err(e) => {
+                    tracing::error!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "Failed to reset session after convergence failure"
+                    );
+                }
+            }
         });
     }
 
     /// Handle DM bootstrap completion by sending any pending messages.
     pub fn handle_bootstrap_completed(&self, peer_id: UserId) {
         let message_service = self.message_service.clone();
-        let database = self.database.clone();
         let mailbox_manager = self.mailbox_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
 
@@ -114,67 +95,55 @@ impl DmBootstrapService {
             "BOOTSTRAP[4/4] handle_dm_bootstrap_completed called - spawning task to send pending"
         );
 
-        tokio::task::spawn_blocking(move || {
+        tokio::spawn(async move {
             tracing::debug!(
                 peer_id = %peer_id,
-                "BOOTSTRAP[4/4] Inside spawn_blocking, creating runtime"
+                "BOOTSTRAP[4/4] Creating auth client for pending message send"
             );
 
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create runtime for bootstrap completion");
+            let mut auth_client = AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
 
-            rt.block_on(async {
-                tracing::debug!(
-                    peer_id = %peer_id,
-                    "BOOTSTRAP[4/4] Creating auth client for pending message send"
-                );
+            tracing::info!(
+                peer_id = %peer_id,
+                "BOOTSTRAP[4/4] Calling send_pending_messages (initiator side)"
+            );
 
-                let mut auth_client = AuthClient::new(
-                    grpc_pool.channel(),
-                    grpc_pool.auth_clone(),
-                );
-
-                tracing::info!(
-                    peer_id = %peer_id,
-                    "BOOTSTRAP[4/4] Calling send_pending_messages (initiator side)"
-                );
-
-                match message_service
-                    .send_pending_messages(&mut auth_client, &peer_id, database, &mailbox_manager)
-                    .await
-                {
-                    Ok(count) => {
-                        if count > 0 {
-                            tracing::info!(
-                                peer_id = %peer_id,
-                                count = count,
-                                "BOOTSTRAP[4/4] SUCCESS - Sent {} pending message(s) after bootstrap!",
-                                count
-                            );
-                        } else {
-                            tracing::info!(
-                                peer_id = %peer_id,
-                                "BOOTSTRAP[4/4] No pending messages to send (initiator side)"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
+            match message_service
+                .send_pending_messages(&mut auth_client, &peer_id, &mailbox_manager)
+                .await
+            {
+                Ok(count) => {
+                    if count > 0 {
+                        tracing::info!(
                             peer_id = %peer_id,
-                            error = %e,
-                            "BOOTSTRAP[4/4] FAILED - Could not send pending messages"
+                            count = count,
+                            "BOOTSTRAP[4/4] SUCCESS - Sent {} pending message(s) after bootstrap!",
+                            count
+                        );
+                    } else {
+                        tracing::info!(
+                            peer_id = %peer_id,
+                            "BOOTSTRAP[4/4] No pending messages to send (initiator side)"
                         );
                     }
                 }
-            });
+                Err(e) => {
+                    tracing::error!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "BOOTSTRAP[4/4] FAILED - Could not send pending messages"
+                    );
+                }
+            }
         });
     }
 
-    /// Save a newly created DM channel to local storage.
+    /// Save a DM channel to local storage if it doesn't already exist.
     pub fn save_dm_channel(&self, channel: &Channel) -> Result<(), DmBootstrapError> {
-        self.channel_repo.insert(channel)?;
+        self.channel_repo.insert_or_ignore(channel)?;
         Ok(())
     }
 

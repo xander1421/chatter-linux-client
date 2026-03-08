@@ -2,30 +2,29 @@
 //!
 //! Uses UserService for all profile operations - no direct network calls.
 
+use std::sync::Arc;
+
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_linux::app::AppContext;
+use chatter_linux::app::UIContext;
 use chatter_linux::domain::ids::UserId;
-use chatter_linux::services::user_service::UserService;
+use chatter_linux::services::user::FriendRequestFilter;
 
-use crate::MainWindow;
+use crate::bin_ui::converters::{get_initials, DMListItemSendData, FriendRequestSendData};
+use crate::{DMListItemData, FriendRequestData, MainWindow};
 
-pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
-    let grpc_pool = ctx.grpc_pool.clone();
-    let settings_repo = ctx.settings_repo.clone();
-    let user_repo = ctx.user_repo.clone();
+pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let user_service = ui_ctx.user_service.clone();
+    let channel_service = ui_ctx.channel_service.clone();
+    let mailbox_manager = ui_ctx.mailbox_manager.clone();
 
     // Add friend
     let weak_window = window.as_weak();
-    let grpc_pool_add = grpc_pool.clone();
-    let settings_repo_add = settings_repo.clone();
-    let user_repo_add = user_repo.clone();
+    let user_service_add = user_service.clone();
 
     window.on_profile_add_friend(move || {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool_add.clone();
-        let settings_repo = settings_repo_add.clone();
-        let user_repo = user_repo_add.clone();
+        let user_service = user_service_add.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
         let profile_user_id = match profile_user_id {
@@ -57,33 +56,34 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(grpc_pool.clone(), settings_repo, user_repo);
-
             match user_service.send_friend_request(&friend_id, None).await {
                 Ok(_) => {
                     tracing::info!("Friend request sent to {}", friend_id);
 
                     // Refresh sent requests list via UserService
-                    use chatter_linux::services::user_service::FriendRequestFilter;
                     match user_service.list_friend_requests(FriendRequestFilter::Sent, 50, 0).await {
                         Ok(friendships) => {
                             // We need to get the full profile info for each friend
                             // For now, just use friend_id as display info
-                            let sent_requests: Vec<crate::FriendRequestData> = friendships
+                            // Use Send-safe type to pass across thread boundary
+                            let sent_requests: Vec<FriendRequestSendData> = friendships
                                 .into_iter()
-                                .map(|f| crate::FriendRequestData {
-                                    user_id: f.friend_id.to_string().into(),
-                                    display_name: f.friend_id.to_string().into(),
-                                    username: "".into(),
-                                    avatar_url: "".into(),
-                                    sent_at: "".into(),
+                                .map(|f| FriendRequestSendData {
+                                    user_id: f.friend_id.to_string(),
+                                    display_name: f.friend_id.to_string(),
+                                    username: String::new(),
+                                    avatar_url: String::new(),
+                                    avatar_bytes: None,
+                                    sent_at: String::new(),
                                 })
                                 .collect();
 
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak.upgrade() {
                                     w.set_profile_loading(false);
-                                    w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_requests)));
+                                    // Convert Send-safe data to Slint types inside event loop
+                                    let sent_slint: Vec<FriendRequestData> = sent_requests.into_iter().map(|r| r.to_slint()).collect();
+                                    w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_slint)));
                                 }
                             });
                         }
@@ -111,15 +111,11 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
 
     // Remove friend
     let weak_window = window.as_weak();
-    let grpc_pool_remove = grpc_pool.clone();
-    let settings_repo_remove = settings_repo.clone();
-    let user_repo_remove = user_repo.clone();
+    let user_service_remove = user_service.clone();
 
     window.on_profile_remove_friend(move || {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool_remove.clone();
-        let settings_repo = settings_repo_remove.clone();
-        let user_repo = user_repo_remove.clone();
+        let user_service = user_service_remove.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
         let profile_user_id = match profile_user_id {
@@ -151,8 +147,6 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(grpc_pool, settings_repo, user_repo);
-
             match user_service.remove_friend(&friend_id).await {
                 Ok(()) => {
                     let _ = slint::invoke_from_event_loop(move || {
@@ -177,15 +171,11 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
 
     // Block user
     let weak_window = window.as_weak();
-    let grpc_pool_block = grpc_pool.clone();
-    let settings_repo_block = settings_repo.clone();
-    let user_repo_block = user_repo.clone();
+    let user_service_block = user_service.clone();
 
     window.on_profile_block_user(move || {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool_block.clone();
-        let settings_repo = settings_repo_block.clone();
-        let user_repo = user_repo_block.clone();
+        let user_service = user_service_block.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
         let profile_user_id = match profile_user_id {
@@ -216,8 +206,6 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                     return;
                 }
             };
-
-            let user_service = UserService::new(grpc_pool, settings_repo, user_repo);
 
             match user_service.block_user(&user_id).await {
                 Ok(()) => {
@@ -244,15 +232,11 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
 
     // Unblock user
     let weak_window = window.as_weak();
-    let grpc_pool_unblock = grpc_pool.clone();
-    let settings_repo_unblock = settings_repo.clone();
-    let user_repo_unblock = user_repo.clone();
+    let user_service_unblock = user_service.clone();
 
     window.on_profile_unblock_user(move || {
         let weak = weak_window.clone();
-        let grpc_pool = grpc_pool_unblock.clone();
-        let settings_repo = settings_repo_unblock.clone();
-        let user_repo = user_repo_unblock.clone();
+        let user_service = user_service_unblock.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
         let profile_user_id = match profile_user_id {
@@ -284,8 +268,6 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                 }
             };
 
-            let user_service = UserService::new(grpc_pool, settings_repo, user_repo);
-
             match user_service.unblock_user(&user_id).await {
                 Ok(()) => {
                     let _ = slint::invoke_from_event_loop(move || {
@@ -310,17 +292,15 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
 
     // Send message (open DM)
     let weak_window = window.as_weak();
-    let mailbox_manager = ctx.mailbox_manager.clone();
-    let user_repo_dm = user_repo.clone();
-    let chat_state = ctx.chat_state.clone();
-    let channel_repo = ctx.channel_repo.clone();
+    let mailbox_manager = mailbox_manager.clone();
+    let channel_service = channel_service.clone();
+    let user_service_dm = user_service.clone();
 
     window.on_profile_send_message(move || {
         let weak = weak_window.clone();
         let mailbox_manager = mailbox_manager.clone();
-        let user_repo = user_repo_dm.clone();
-        let _chat_state = chat_state.clone(); // Reserved for future DM state tracking
-        let channel_repo = channel_repo.clone();
+        let channel_service = channel_service.clone();
+        let user_service = user_service_dm.clone();
 
         // Get profile user ID synchronously before spawning
         let profile_user_id = weak
@@ -389,51 +369,44 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                         mailbox.mailbox_id
                     );
 
-                    // Get peer display name
-                    let peer_name = user_repo
-                        .get_profile(&peer_id)
-                        .ok()
-                        .flatten()
-                        .map(|p| p.display_name)
-                        .or_else(|| {
-                            user_repo
-                                .get(&peer_id)
-                                .ok()
-                                .flatten()
-                                .map(|u| u.username)
-                        })
-                        .unwrap_or_else(|| "Unknown".to_string());
+                    // Get peer display name via UserService
+                    let peer_name = match user_service.get_user_profile(&peer_id).await {
+                        Ok(profile) => {
+                            if profile.display_name.is_empty() {
+                                peer_id.to_string()
+                            } else {
+                                profile.display_name
+                            }
+                        }
+                        Err(_) => peer_id.to_string(),
+                    };
 
-                    // Find the DM channel for this peer by checking memberships
-                    let dm_channel = channel_repo
-                        .list_by_type(chatter_linux::domain::channel::ChannelType::DirectMessage)
+                    // Find the DM channel for this peer using channel service
+                    let dm_channel = channel_service
+                        .get_dm_channel_for_peer(&peer_id)
                         .ok()
-                        .and_then(|channels| {
-                            channels.into_iter().find(|c| {
-                                // Check if peer is a member of this DM channel
-                                channel_repo.list_members(&c.id)
-                                    .map(|members| members.iter().any(|m| m.user_id == peer_id))
-                                    .unwrap_or(false)
-                            })
-                        });
+                        .flatten();
 
                     let channel_id_for_ui = dm_channel
                         .as_ref()
                         .map(|c| c.id.to_string())
                         .unwrap_or_else(|| profile_id_for_ui.clone());
 
-                    // Create DM sidebar item data
-                    let initials = crate::bin_ui::converters::get_initials(&peer_name);
-                    let dm_item = crate::DMListItemData {
-                        channel_id: channel_id_for_ui.clone().into(),
-                        user_id: profile_id_for_ui.clone().into(),
-                        display_name: peer_name.clone().into(),
-                        initials: initials.into(),
-                        avatar_url: "".into(),
-                        presence_status: "offline".into(),
-                        last_message: "".into(),
-                        timestamp: "".into(),
-                        unread_count: dm_channel.as_ref().map(|c| c.unread_count as i32).unwrap_or(0),
+                    // Create Send-safe DM sidebar item data
+                    let initials = get_initials(&peer_name);
+                    let unread = dm_channel.as_ref().map(|c| c.unread_count as i32).unwrap_or(0);
+                    let dm_send_data = DMListItemSendData {
+                        channel_id: channel_id_for_ui.clone(),
+                        user_id: profile_id_for_ui.clone(),
+                        display_name: peer_name.clone(),
+                        initials,
+                        avatar_url: String::new(),
+                        avatar_bytes: None, // Regular DMs fetch avatar from server
+                        presence_status: "offline".to_string(),
+                        last_message: String::new(),
+                        timestamp: String::new(),
+                        unread_count: unread,
+                        is_typing: false,
                     };
 
                     // Update UI to show the DM and add to sidebar
@@ -441,12 +414,14 @@ pub fn wire_profile_actions(window: &MainWindow, ctx: &AppContext) {
                         if let Some(w) = weak.upgrade() {
                             // Add to sidebar if not already present
                             let current_dms = w.get_dm_conversations();
-                            let mut dms: Vec<crate::DMListItemData> = (0..current_dms.row_count())
+                            let mut dms: Vec<DMListItemData> = (0..current_dms.row_count())
                                 .filter_map(|i| current_dms.row_data(i))
                                 .collect();
 
                             let exists = dms.iter().any(|dm| dm.user_id.as_str() == profile_id_for_ui);
                             if !exists {
+                                // Convert Send-safe data to Slint type inside event loop
+                                let dm_item = dm_send_data.to_slint();
                                 dms.push(dm_item);
                                 w.set_dm_conversations(ModelRc::new(VecModel::from(dms)));
                                 tracing::info!("Added DM to sidebar from profile modal");

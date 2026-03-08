@@ -136,7 +136,7 @@ impl AttachmentHandler {
         };
 
         // Build attachment with pending status (needs download)
-        // Content will be stored in database when downloaded via download_to_database()
+        // Content will be stored on filesystem when downloaded via download_to_filesystem()
         let mut attachment = Attachment::new(attachment_id, metadata);
         attachment.status = AttachmentStatus::Pending;
         // content_location remains NotDownloaded (set by Attachment::new)

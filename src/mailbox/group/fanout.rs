@@ -109,6 +109,8 @@ pub struct GroupPollResult {
     pub messages: Vec<ReceivedMessage>,
     /// Whether there may be more messages.
     pub has_more: bool,
+    /// Mailbox ID for acknowledgment (not secret - just an identifier).
+    pub mailbox_id: String,
 }
 
 impl GroupPollResult {
@@ -223,6 +225,72 @@ impl GroupFanout {
         })
     }
 
+    /// Send pairwise-encrypted messages to group member mailboxes.
+    ///
+    /// Per NDSS '21, each group message is encrypted separately for each member
+    /// using their pairwise Double Ratchet session (sealed sender). This provides
+    /// proper forward secrecy and post-compromise security per member.
+    ///
+    /// # Arguments
+    ///
+    /// * `group_id` - The group channel ID
+    /// * `member_ciphertexts` - Map of member UserId to their sealed sender ciphertext
+    /// * `envelope_type` - Type of message (Message, KeyExchange, etc.)
+    ///
+    /// # Returns
+    ///
+    /// GroupFanoutResult with per-member delivery results.
+    pub async fn send_to_group_pairwise(
+        &self,
+        group_id: &ChannelId,
+        member_ciphertexts: std::collections::HashMap<UserId, Vec<u8>>,
+        envelope_type: EnvelopeType,
+    ) -> Result<GroupFanoutResult, MailboxError> {
+        // Load group state to get member mailboxes
+        let group_state = self
+            .mailbox_manager
+            .load_group_state(group_id)?
+            .ok_or(MailboxError::GroupNotFound)?;
+
+        // Check we have member mailboxes
+        if group_state.member_mailboxes.is_empty() {
+            return Err(MailboxError::GroupNotReady);
+        }
+
+        let total_members = member_ciphertexts.len();
+        let envelope_type_i32 = envelope_type as i32;
+
+        // Create futures for parallel delivery - each member gets their unique ciphertext
+        let futures: Vec<_> = member_ciphertexts
+            .into_iter()
+            .filter_map(|(user_id, ciphertext)| {
+                // Look up member's mailbox
+                group_state.member_mailboxes.get(&user_id).map(|member| {
+                    let member = member.clone();
+                    let client = Arc::clone(&self.mailbox_client);
+                    async move {
+                        Self::send_to_member_internal(client, &member, &ciphertext, envelope_type_i32).await
+                    }
+                })
+            })
+            .collect();
+
+        // Execute all deliveries in parallel
+        let results = join_all(futures).await;
+
+        // Count successes and failures
+        let successful = results.iter().filter(|r| r.success).count();
+        let failed = results.iter().filter(|r| !r.success).count();
+
+        Ok(GroupFanoutResult {
+            group_id: *group_id,
+            total_members,
+            successful,
+            failed,
+            results,
+        })
+    }
+
     /// Send to a single member's mailbox.
     ///
     /// # Arguments
@@ -254,6 +322,14 @@ impl GroupFanout {
     ) -> FanoutResult {
         let mut client_guard = client.lock().await;
 
+        // Debug: Log the destination public key hex
+        tracing::info!(
+            member_id = %member.user_id,
+            dest_pk_hex = %hex::encode(&member.public_key),
+            envelope_len = encrypted_envelope.len(),
+            "[FANOUT_SEND] Sending to member mailbox"
+        );
+
         match client_guard
             .send_to_ephemeral_mailbox(
                 member.public_key.to_vec(),
@@ -262,8 +338,22 @@ impl GroupFanout {
             )
             .await
         {
-            Ok(response) => FanoutResult::success(member.user_id, response.message_id),
-            Err(e) => FanoutResult::failure(member.user_id, e.to_string()),
+            Ok(response) => {
+                tracing::info!(
+                    member_id = %member.user_id,
+                    message_id = %response.message_id,
+                    "[FANOUT_SEND] Success"
+                );
+                FanoutResult::success(member.user_id, response.message_id)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    member_id = %member.user_id,
+                    error = %e,
+                    "[FANOUT_SEND] Failed"
+                );
+                FanoutResult::failure(member.user_id, e.to_string())
+            }
         }
     }
 
@@ -311,6 +401,17 @@ impl GroupFanout {
         Ok(state.is_some_and(|s| s.is_ready_to_send()))
     }
 
+    /// Get the group mailbox state for a channel.
+    ///
+    /// Returns the group state including our mailbox and member mailboxes.
+    /// Used for pairwise encryption where we need to know which members to encrypt for.
+    pub fn get_group_state(
+        &self,
+        group_id: &ChannelId,
+    ) -> Result<Option<super::GroupMailboxState>, MailboxError> {
+        self.mailbox_manager.load_group_state(group_id)
+    }
+
     // ==================== Polling Methods ====================
 
     /// Poll a group's mailbox for new messages.
@@ -344,6 +445,14 @@ impl GroupFanout {
             .our_mailbox
             .ok_or(MailboxError::NoMailboxConfigured)?;
 
+        // Debug: Log our mailbox public key hex
+        tracing::info!(
+            group_id = %group_id,
+            mailbox_id = %our_mailbox.id,
+            our_pk_hex = %hex::encode(&our_mailbox.public_key),
+            "[POLL_GROUP] Starting poll"
+        );
+
         // Check mailbox not expired
         if our_mailbox.is_expired() {
             return Err(MailboxError::TokenExpired);
@@ -371,6 +480,13 @@ impl GroupFanout {
             .await
             .map_err(|e| MailboxError::Network(e.to_string()))?;
 
+        tracing::info!(
+            group_id = %group_id,
+            mailbox_id = %our_mailbox.id,
+            message_count = poll_response.messages.len(),
+            "[POLL_GROUP] Poll complete"
+        );
+
         // Update poll timestamp
         self.mailbox_manager.update_poll_time(&our_mailbox.id)?;
 
@@ -392,6 +508,7 @@ impl GroupFanout {
             group_id: *group_id,
             messages,
             has_more,
+            mailbox_id: our_mailbox.id.clone(),
         })
     }
 
@@ -412,6 +529,11 @@ impl GroupFanout {
         if group_mailboxes.is_empty() {
             return Ok(Vec::new());
         }
+
+        tracing::debug!(
+            mailbox_count = group_mailboxes.len(),
+            "[GROUP_FANOUT] Found group mailboxes to poll"
+        );
 
         // Create futures for parallel polling
         let futures: Vec<_> = group_mailboxes
@@ -508,6 +630,7 @@ impl GroupFanout {
             group_id: *group_id,
             messages,
             has_more,
+            mailbox_id: mailbox_id.to_string(),
         })
     }
 
@@ -568,6 +691,60 @@ impl GroupFanout {
         Ok(ack_count)
     }
 
+    /// Acknowledge messages by mailbox ID.
+    ///
+    /// Looks up keys by mailbox_id and acknowledges messages. Works with both
+    /// server-managed and anonymous group mailboxes.
+    ///
+    /// # Arguments
+    ///
+    /// * `mailbox_id` - The mailbox identifier
+    /// * `message_ids` - Message IDs to acknowledge (will be deleted)
+    ///
+    /// # Returns
+    ///
+    /// Number of messages acknowledged.
+    pub async fn acknowledge_by_mailbox_id(
+        &self,
+        mailbox_id: &str,
+        message_ids: Vec<String>,
+    ) -> Result<u32, MailboxError> {
+        if message_ids.is_empty() {
+            return Ok(0);
+        }
+
+        // Look up keys by mailbox_id (checks both tables)
+        let (public_key, private_key) = self.mailbox_manager.get_mailbox_keys_by_id(mailbox_id)?;
+
+        // Get challenge from server
+        let mut client = self.mailbox_client.lock().await;
+        let challenge_response = client
+            .get_mailbox_challenge(public_key.to_vec())
+            .await
+            .map_err(|e| MailboxError::Network(e.to_string()))?;
+
+        // Sign challenge
+        let secret_bytes: [u8; 32] = private_key[..32]
+            .try_into()
+            .map_err(|_| MailboxError::BlindSignature("Invalid private key format".to_string()))?;
+        let signing_key = SigningKey::from_bytes(&secret_bytes);
+        let signature = signing_key.sign(&challenge_response.challenge);
+
+        // Acknowledge
+        let ack_count = message_ids.len() as u32;
+        client
+            .acknowledge_messages(
+                public_key.to_vec(),
+                signature.to_bytes().to_vec(),
+                challenge_response.challenge,
+                message_ids,
+            )
+            .await
+            .map_err(|e| MailboxError::Network(e.to_string()))?;
+
+        Ok(ack_count)
+    }
+
     /// Sign a challenge with mailbox private key.
     fn sign_challenge(
         &self,
@@ -583,6 +760,62 @@ impl GroupFanout {
     pub fn is_ready_to_receive(&self, group_id: &ChannelId) -> Result<bool, MailboxError> {
         let state = self.mailbox_manager.load_group_state(group_id)?;
         Ok(state.is_some_and(|s| s.is_ready_to_receive()))
+    }
+
+    // =========================================================================
+    // Pending Channel Message Queue (Bootstrap Support)
+    // =========================================================================
+
+    /// Queue a pending message for the channel bootstrap phase.
+    ///
+    /// Messages are queued when member mailboxes aren't available yet.
+    /// They're flushed when mailbox addresses are received via GroupMailboxAddress.
+    ///
+    /// # Arguments
+    ///
+    /// * `channel_id` - Channel the message is for
+    /// * `member_id` - Target member who we don't have a mailbox for yet
+    /// * `plaintext` - Message content (plaintext proto bytes)
+    /// * `timestamp` - Message timestamp (nanoseconds)
+    pub fn queue_pending_message(
+        &self,
+        channel_id: &ChannelId,
+        member_id: &UserId,
+        plaintext: &[u8],
+        timestamp: u64,
+    ) -> Result<(), MailboxError> {
+        self.mailbox_manager
+            .queue_pending_message(channel_id, member_id, plaintext, timestamp)
+    }
+
+    /// Drain all pending messages for a specific channel/member.
+    ///
+    /// Called when we receive a member's mailbox address. Returns all queued
+    /// messages for that member and deletes them from the queue.
+    ///
+    /// # Returns
+    ///
+    /// Vector of (plaintext, timestamp) tuples for messages to send.
+    pub fn drain_pending_messages(
+        &self,
+        channel_id: &ChannelId,
+        member_id: &UserId,
+    ) -> Result<Vec<(Vec<u8>, u64)>, MailboxError> {
+        self.mailbox_manager
+            .drain_pending_messages(channel_id, member_id)
+    }
+
+    /// Get count of pending messages for a channel.
+    pub fn pending_message_count(&self, channel_id: &ChannelId) -> Result<usize, MailboxError> {
+        self.mailbox_manager.pending_message_count(channel_id)
+    }
+
+    /// Get the mailbox manager reference for pending message operations.
+    ///
+    /// Used by GroupCoordinator to flush pending messages when a new member
+    /// mailbox is received.
+    pub fn mailbox_manager(&self) -> &Arc<GroupMailboxManager> {
+        &self.mailbox_manager
     }
 }
 
@@ -693,6 +926,7 @@ mod tests {
             group_id,
             messages: vec![],
             has_more: false,
+            mailbox_id: "test-mailbox".to_string(),
         };
 
         assert!(!result.has_messages());
@@ -722,6 +956,7 @@ mod tests {
                 },
             ],
             has_more: true,
+            mailbox_id: "test-mailbox".to_string(),
         };
 
         assert!(result.has_messages());

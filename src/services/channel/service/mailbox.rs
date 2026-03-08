@@ -46,11 +46,23 @@ impl ChannelService {
     ) -> Result<Option<GroupMailboxSetupResult>, ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
 
+        tracing::info!(
+            channel_id = %channel_id,
+            "[MAILBOX_SETUP] Starting group mailbox setup"
+        );
+
         // Check if this is an encrypted channel that needs group mailbox
         let channel = self
             .channel_repo
             .get(channel_id)?
             .ok_or_else(|| ChannelError::ChannelNotFound(*channel_id))?;
+
+        tracing::info!(
+            channel_id = %channel_id,
+            channel_type = ?channel.channel_type,
+            require_encryption = channel.config.require_encryption,
+            "[MAILBOX_SETUP] Channel retrieved from DB"
+        );
 
         // Skip DMs - they use two-way anonymous mailboxes
         if channel.channel_type == ChannelType::DirectMessage {
@@ -63,12 +75,17 @@ impl ChannelService {
 
         // Skip non-encrypted channels
         if !channel.config.require_encryption {
-            tracing::debug!(
+            tracing::info!(
                 channel_id = %channel_id,
-                "Skipping group mailbox setup for non-encrypted channel"
+                "[MAILBOX_SETUP] Skipping - require_encryption is false"
             );
             return Ok(None);
         }
+
+        tracing::info!(
+            channel_id = %channel_id,
+            "[MAILBOX_SETUP] Channel requires encryption, proceeding with mailbox setup"
+        );
 
         // Setup the ephemeral mailbox via GroupCoordinator
         match self.group_coordinator.setup_group_mailbox(channel_id, mailbox_client).await {

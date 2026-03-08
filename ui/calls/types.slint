@@ -16,6 +16,8 @@ export struct ActiveCallData {
     title: string,
     is-video-call: bool,
     is-encrypted: bool,
+    is-identity-verified: bool,
+    identity-warning: string,
     participant-count: int,
     duration-seconds: int,
     participants: [CallParticipantData],
@@ -33,6 +35,8 @@ export struct IncomingCallData {
     caller-avatar: string,
     channel-name: string,
     is-video-call: bool,
+    is-identity-verified: bool,
+    identity-warning: string,
     // Encryption key from caller (base64 encoded for UI transport)
     encryption-key: string,
     // Call start timestamp (nanoseconds since epoch, stored as string for precision)

@@ -35,6 +35,8 @@ export struct FriendRequestData {
     display-name: string,
     username: string,
     avatar-url: string,
+    avatar-source: image,   // For avatar bytes converted to image
+    has-avatar: bool,       // Whether avatar-source is valid
     sent-at: string,
 }
 
@@ -54,15 +56,17 @@ export component FriendsModal inherits Rectangle {
     // Friends tab data
     in property <[FriendData]> friends: [];
 
-    // Find users tab data
+    // Find users tab data (DEPRECATED - username search disabled for privacy)
+    // Kept for backwards compatibility but no longer used
     in-out property <string> search-query: "";
     in property <[UserSearchResult]> search-results: [];
     in property <bool> search-loading: false;
 
     // Requests tab data
-    in-out property <string> requests-sub-tab: "received";  // "received" or "sent"
+    in-out property <string> requests-sub-tab: "received";  // "received", "sent", or "private"
     in property <[FriendRequestData]> received-requests: [];
     in property <[FriendRequestData]> sent-requests: [];
+    in property <[FriendRequestData]> private-requests: [];  // Anonymous DM requests
 
     // Blocked tab data
     in property <[BlockedUserData]> blocked-users: [];
@@ -70,8 +74,21 @@ export component FriendsModal inherits Rectangle {
     // Loading states
     in property <bool> loading: false;
 
+    // Friend code (privacy-first discovery)
+    in-out property <string> my-code: "";
+    in-out property <string> code-input: "";
+    in-out property <string> code-status: "";
+    in-out property <image> qr-code-image;
+    in-out property <bool> show-qr: false;
+    in-out property <bool> private-mode: true;  // Toggle between regular and private connection (default: private)
+
     // Callbacks
     callback close();
+    callback generate-code(bool);  // bool = private mode
+    callback generate-qr(bool);    // bool = private mode
+    callback copy-code();
+    callback connect-via-code(string);       // Server-managed friend request
+    callback connect-private(string);        // Private anon DM (no server involvement)
     callback switch-tab(string);
     callback switch-requests-sub-tab(string);
 
@@ -88,6 +105,10 @@ export component FriendsModal inherits Rectangle {
     callback accept-request(string);  // user_id
     callback decline-request(string); // user_id
     callback cancel-request(string);  // user_id
+
+    // Private (anon DM) request actions
+    callback accept-private-request(string);   // conversation_id
+    callback decline-private-request(string);  // conversation_id
 
     // Blocked actions
     callback unblock-user(string);    // user_id
@@ -241,8 +262,8 @@ export component FriendsModal inherits Rectangle {
                                             overflow: elide;
                                         }
 
-                                        Text {
-                                            text: friend.custom-status != "" ? friend.custom-status : "@" + friend.username;
+                                        if friend.custom-status != "": Text {
+                                            text: friend.custom-status;
                                             color: Colors.text-muted;
                                             font-size: Typography.xs;
                                             overflow: elide;
@@ -318,33 +339,209 @@ export component FriendsModal inherits Rectangle {
                 if root.active-tab == "find": VerticalLayout {
                     spacing: Spacing.md;
 
-                    // Search input
-                    HorizontalLayout {
-                        spacing: Spacing.sm;
+                    // ===== Friend Code Section =====
+                    Rectangle {
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-md;
 
-                        Input {
-                            horizontal-stretch: 1;
-                            placeholder: "Search by username or display name...";
-                            text <=> root.search-query;
+                        VerticalLayout {
+                            padding: Spacing.md;
+                            spacing: Spacing.sm;
 
-                            accepted(query) => {
-                                root.search-users(query);
+                            Text {
+                                text: "Add Friend via Code";
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.semibold;
                             }
-                        }
 
-                        Button {
-                            text: "Search";
-                            variant: "primary";
-                            loading: root.search-loading;
+                            // Your friend code
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
 
-                            clicked => {
-                                root.search-users(root.search-query);
+                                Text {
+                                    text: "Your code:";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.xs;
+                                    vertical-alignment: center;
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: 28px;
+                                    background: Colors.background;
+                                    border-radius: Spacing.radius-sm;
+
+                                    HorizontalLayout {
+                                        padding-left: Spacing.sm;
+                                        padding-right: Spacing.sm;
+
+                                        Text {
+                                            text: root.my-code != "" ? root.my-code : "Click Generate";
+                                            color: root.my-code != "" ? Colors.text-primary : Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            font-family: "monospace";
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                            horizontal-stretch: 1;
+                                        }
+                                    }
+                                }
+
+                                Button {
+                                    text: root.my-code == "" ? "Generate" : "Regenerate";
+                                    variant: "ghost";
+
+                                    clicked => {
+                                        root.generate-code(root.private-mode);
+                                    }
+                                }
+
+                                if root.my-code != "": Button {
+                                    text: "Copy";
+                                    variant: "ghost";
+
+                                    clicked => {
+                                        root.copy-code();
+                                    }
+                                }
+
+                                if root.my-code != "": Button {
+                                    text: root.show-qr ? "Hide QR" : "Show QR";
+                                    variant: "ghost";
+
+                                    clicked => {
+                                        if (!root.show-qr) {
+                                            root.generate-qr(root.private-mode);
+                                        }
+                                        root.show-qr = !root.show-qr;
+                                    }
+                                }
+                            }
+
+                            // QR Code Display
+                            if root.show-qr && root.my-code != "": Rectangle {
+                                height: 180px;
+                                background: white;
+                                border-radius: Spacing.radius-md;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    padding: Spacing.sm;
+
+                                    Image {
+                                        source: root.qr-code-image;
+                                        width: 150px;
+                                        height: 150px;
+                                        image-fit: contain;
+                                    }
+
+                                    Text {
+                                        text: "Scan to add as friend";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        horizontal-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // Enter friend's code
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                Input {
+                                    horizontal-stretch: 1;
+                                    placeholder: root.private-mode ? "Enter private friend code..." : "Enter friend's code or ID...";
+                                    text <=> root.code-input;
+
+                                    accepted(code) => {
+                                        if (root.private-mode) {
+                                            root.connect-private(code);
+                                        } else {
+                                            root.connect-via-code(code);
+                                        }
+                                    }
+                                }
+
+                                Button {
+                                    text: "Connect";
+                                    variant: "primary";
+                                    loading: root.loading;
+
+                                    clicked => {
+                                        if (root.private-mode) {
+                                            root.connect-private(root.code-input);
+                                        } else {
+                                            root.connect-via-code(root.code-input);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Private mode toggle
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+                                alignment: start;
+
+                                // Toggle switch
+                                Rectangle {
+                                    width: 40px;
+                                    height: 22px;
+                                    border-radius: 11px;
+                                    background: root.private-mode ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+
+                                    animate background { duration: 150ms; }
+
+                                    Rectangle {
+                                        x: root.private-mode ? parent.width - self.width - 2px : 2px;
+                                        y: 2px;
+                                        width: 18px;
+                                        height: 18px;
+                                        border-radius: 9px;
+                                        background: white;
+
+                                        animate x { duration: 150ms; easing: ease-out; }
+                                    }
+
+                                    toggle-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.private-mode = !root.private-mode;
+                                            // Clear code when mode changes - user should regenerate
+                                            root.my-code = "";
+                                            root.show-qr = false;
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: "Private mode";
+                                    color: root.private-mode ? Colors.text-primary : Colors.text-secondary;
+                                    font-size: Typography.xs;
+                                    font-weight: root.private-mode ? Typography.medium : Typography.normal;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: root.private-mode ? "(No server involvement)" : "(Server-managed)";
+                                    color: Colors.text-muted.with-alpha(0.7);
+                                    font-size: Typography.xs;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // Status message
+                            if root.code-status != "": Text {
+                                text: root.code-status;
+                                color: (root.code-status == "Friend request sent!" || root.code-status == "Private conversation started!") ? Colors.success : 
+                                       root.code-status == "Copied to clipboard!" ? Colors.accent-purple : Colors.error;
+                                font-size: Typography.xs;
                             }
                         }
                     }
 
-                    // Search results
-                    if root.search-results.length == 0 && !root.search-loading: Rectangle {
+                    // Privacy info section
+                    Rectangle {
                         vertical-stretch: 1;
 
                         VerticalLayout {
@@ -352,100 +549,44 @@ export component FriendsModal inherits Rectangle {
                             spacing: Spacing.sm;
 
                             Text {
-                                text: "\u{1F50D}\u{FE0F}";
+                                text: "\u{1F517}";  // Link emoji
                                 font-size: 48px;
                                 horizontal-alignment: center;
                             }
 
                             Text {
-                                text: "Search for users";
+                                text: "Share your friend code";
                                 color: Colors.text-muted;
                                 font-size: Typography.base;
                                 horizontal-alignment: center;
                             }
 
                             Text {
-                                text: "Enter a username or display name to find people";
+                                text: "Generate your code above and share it with friends";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
                                 horizontal-alignment: center;
                             }
-                        }
-                    }
 
-                    if root.search-results.length > 0: Flickable {
-                        vertical-stretch: 1;
-                        viewport-height: search-list.preferred-height;
+                            // Connection mode explanation
+                            HorizontalLayout {
+                                alignment: center;
 
-                        search-list := VerticalLayout {
-                            spacing: Spacing.xs;
-
-                            for user in root.search-results: Rectangle {
-                                height: 56px;
-                                background: search-touch.has-hover ? Colors.surface-hover : transparent;
-                                border-radius: Spacing.radius-md;
-
-                                HorizontalLayout {
-                                    padding: Spacing.sm;
-                                    spacing: Spacing.sm;
-
-                                    Avatar {
-                                        size: 40px;
-                                        fallback-text: user.display-name;
-                                    }
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        alignment: center;
-                                        spacing: 2px;
-
-                                        Text {
-                                            text: user.display-name;
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                            overflow: elide;
-                                        }
-
-                                        Text {
-                                            text: "@" + user.username;
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-
-                                    HorizontalLayout {
-                                        alignment: center;
-
-                                        if user.is-friend: Text {
-                                            text: "Friend";
-                                            color: Colors.success;
-                                            font-size: Typography.xs;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        if !user.is-friend && user.request-pending: Text {
-                                            text: "Request Sent";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-
-                                        if !user.is-friend && !user.request-pending: Button {
-                                            text: "Add Friend";
-                                            variant: "primary";
-
-                                            clicked => {
-                                                root.send-friend-request(user.user-id);
-                                            }
-                                        }
-                                    }
+                                Rectangle {
+                                    height: 1px;
+                                    width: 80%;
+                                    background: Colors.text-muted.with-alpha(0.2);
                                 }
+                            }
 
-                                search-touch := TouchArea {
-                                    clicked => {
-                                        root.view-profile(user.user-id);
-                                    }
-                                }
+                            Text {
+                                text: root.private-mode
+                                    ? "\u{1F510} Private mode uses end-to-end encryption with no server involvement"
+                                    : "\u{1F517} Standard mode sends a friend request through the server";
+                                color: Colors.text-muted.with-alpha(0.7);
+                                font-size: Typography.xs;
+                                horizontal-alignment: center;
+                                wrap: word-wrap;
                             }
                         }
                     }
@@ -524,6 +665,39 @@ export component FriendsModal inherits Rectangle {
                                 }
                             }
                         }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: priv-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
+
+                            VerticalLayout {
+                                HorizontalLayout {
+                                    alignment: center;
+                                    vertical-stretch: 1;
+
+                                    Text {
+                                        text: "Private (" + root.private-requests.length + ")";
+                                        color: root.requests-sub-tab == "private" ? Colors.text-primary : Colors.text-secondary;
+                                        font-size: Typography.xs;
+                                        font-weight: root.requests-sub-tab == "private" ? Typography.semibold : Typography.normal;
+                                    }
+                                }
+
+                                Rectangle {
+                                    height: 2px;
+                                    background: root.requests-sub-tab == "private" ? Colors.primary : transparent;
+                                }
+                            }
+
+                            priv-tab-touch := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.requests-sub-tab = "private";
+                                }
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -582,20 +756,10 @@ export component FriendsModal inherits Rectangle {
                                                 overflow: elide;
                                             }
 
-                                            HorizontalLayout {
-                                                spacing: Spacing.sm;
-
-                                                Text {
-                                                    text: "@" + request.username;
-                                                    color: Colors.text-muted;
-                                                    font-size: Typography.xs;
-                                                }
-
-                                                Text {
-                                                    text: request.sent-at;
-                                                    color: Colors.text-muted;
-                                                    font-size: Typography.xs;
-                                                }
+                                            if request.sent-at != "": Text {
+                                                text: request.sent-at;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
                                             }
                                         }
 
@@ -678,11 +842,6 @@ export component FriendsModal inherits Rectangle {
                                                 overflow: elide;
                                             }
 
-                                            Text {
-                                                text: "@" + request.username;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
                                         }
 
                                         HorizontalLayout {
@@ -694,6 +853,138 @@ export component FriendsModal inherits Rectangle {
 
                                                 clicked => {
                                                     root.cancel-request(request.user-id);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Private requests (anonymous DMs)
+                    if root.requests-sub-tab == "private": Rectangle {
+                        vertical-stretch: 1;
+
+                        if root.private-requests.length == 0: VerticalLayout {
+                            alignment: center;
+                            spacing: Spacing.sm;
+
+                            Text {
+                                text: "\u{1F510}";  // Lock emoji
+                                font-size: 48px;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "No private message requests";
+                                color: Colors.text-muted;
+                                font-size: Typography.base;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "Private requests use end-to-end encryption\nwith no server involvement";
+                                color: Colors.text-muted.with-alpha(0.7);
+                                font-size: Typography.sm;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        if root.private-requests.length > 0: Flickable {
+                            viewport-height: private-list.preferred-height;
+
+                            private-list := VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                for request in root.private-requests: Rectangle {
+                                    height: 72px;
+                                    background: priv-touch.has-hover ? Colors.surface-hover : transparent;
+                                    border-radius: Spacing.radius-md;
+
+                                    // TouchArea first (behind) for hover detection
+                                    priv-touch := TouchArea {}
+
+                                    HorizontalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.sm;
+
+                                        // Lock icon instead of avatar for privacy
+                                        Rectangle {
+                                            width: 40px;
+                                            height: 40px;
+                                            border-radius: 20px;
+                                            background: Colors.surface;
+
+                                            Text {
+                                                text: "\u{1F510}";  // Lock
+                                                font-size: 20px;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                                width: 100%;
+                                                height: 100%;
+                                            }
+                                        }
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: 2px;
+
+                                            HorizontalLayout {
+                                                spacing: Spacing.xs;
+
+                                                Text {
+                                                    text: request.display-name;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: Typography.medium;
+                                                    overflow: elide;
+                                                }
+
+                                                Rectangle {
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    border-radius: 8px;
+                                                    background: Colors.primary.with-alpha(0.2);
+
+                                                    Text {
+                                                        text: "\u{1F512}";  // Private badge
+                                                        font-size: 8px;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                    }
+                                                }
+                                            }
+
+                                            if request.sent-at != "": Text {
+                                                text: request.sent-at;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.xs;
+                                            alignment: center;
+
+                                            Button {
+                                                text: "Accept";
+                                                variant: "primary";
+
+                                                clicked => {
+                                                    root.accept-private-request(request.user-id);
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Decline";
+                                                variant: "ghost";
+
+                                                clicked => {
+                                                    root.decline-private-request(request.user-id);
                                                 }
                                             }
                                         }
@@ -781,20 +1072,10 @@ export component FriendsModal inherits Rectangle {
                                             overflow: elide;
                                         }
 
-                                        HorizontalLayout {
-                                            spacing: Spacing.sm;
-
-                                            Text {
-                                                text: "@" + user.username;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
-
-                                            Text {
-                                                text: "Blocked " + user.blocked-at;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                            }
+                                        if user.blocked-at != "": Text {
+                                            text: "Blocked " + user.blocked-at;
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
                                         }
                                     }
 

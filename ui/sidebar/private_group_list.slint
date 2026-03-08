@@ -1,0 +1,69 @@
+// Private group list component
+//
+// Displays a scrollable list of private groups with section header.
+// These are NDSS'21 style anonymous groups - server has no knowledge.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { PrivateGroupListItem } from "private_group_list_item.slint";
+
+// Data struct for private group items
+export struct PrivateGroupListItemData {
+    group-id: string,
+    name: string,
+    member-count: int,
+    unread-count: int,
+    last-message: string,
+    timestamp: string,
+    is-typing: bool,
+}
+
+export component PrivateGroupList inherits Rectangle {
+    // Properties
+    in property <[PrivateGroupListItemData]> groups: [];
+    in property <string> selected-group-id: "";
+    in property <bool> collapsed: false;
+
+    // Callbacks
+    callback group-selected(string);
+    callback show-tooltip(string, length);
+    callback hide-tooltip();
+
+    // Layout
+    background: Colors.surface;
+
+    VerticalLayout {
+        // Scrollable group list (no header - it's clear from context)
+        flickable := Flickable {
+            viewport-height: group-layout.preferred-height;
+
+            group-layout := VerticalLayout {
+                padding-left: Spacing.xs;
+                padding-right: Spacing.xs;
+                spacing: 2px;
+
+                for item in root.groups: PrivateGroupListItem {
+                    group-id: item.group-id;
+                    name: item.name;
+                    member-count: item.member-count;
+                    unread-count: item.unread-count;
+                    last-message: item.last-message;
+                    timestamp: item.timestamp;
+                    is-typing: item.is-typing;
+                    selected: item.group-id == root.selected-group-id;
+                    collapsed: root.collapsed;
+
+                    clicked => {
+                        root.group-selected(item.group-id);
+                    }
+                    show-tooltip(text, item-y) => {
+                        root.show-tooltip(text, item-y - flickable.viewport-y);
+                    }
+                    hide-tooltip => {
+                        root.hide-tooltip();
+                    }
+                }
+            }
+        }
+    }
+}

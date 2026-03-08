@@ -172,6 +172,8 @@ pub enum InboxEvent {
         text: String,
         /// Server timestamp (ms since epoch).
         timestamp: u64,
+        /// Attachment pointers (if any files were included).
+        attachments: Vec<AttachmentPointer>,
     },
     // =========================================================================
     // Channel Control Events (via sender key encryption)
@@ -242,6 +244,24 @@ pub enum InboxEvent {
         /// Target message timestamp.
         target_sent_timestamp: u64,
     },
+    /// Read/delivery receipt received from channel member.
+    ChannelReceipt {
+        /// Channel ID.
+        channel_id: ChannelId,
+        /// User who sent the receipt.
+        sender_id: UserId,
+        /// Receipt type: 1=Delivery, 2=Read, 3=Viewed.
+        receipt_type: i32,
+        /// Message timestamps being acknowledged.
+        timestamps: Vec<u64>,
+    },
+    /// Channel unread count was updated.
+    ChannelUnreadCountUpdated {
+        /// Channel ID.
+        channel_id: ChannelId,
+        /// New unread count.
+        unread_count: u32,
+    },
     // =========================================================================
     // Group Mailbox Events (ephemeral mailbox routing for privacy)
     // =========================================================================
@@ -262,6 +282,22 @@ pub enum InboxEvent {
         mailbox_pk: Vec<u8>,
         /// When the mailbox announcement was sent (ms since epoch).
         timestamp: u64,
+    },
+    /// Missing sender's key - need to request their SKDM.
+    SenderKeyNeeded {
+        /// Channel ID where message couldn't be decrypted.
+        channel_id: ChannelId,
+        /// User ID whose sender key we need.
+        sender_id: UserId,
+    },
+    /// Need to respond with our SKDM to a requester.
+    RespondWithSkdm {
+        /// Channel ID.
+        channel_id: ChannelId,
+        /// User who requested our sender key.
+        requester_id: UserId,
+        /// Our SKDM to send (serialized SenderKeyDistribution proto).
+        skdm_bytes: Vec<u8>,
     },
     // =========================================================================
     // Friend Request Events
@@ -290,21 +326,42 @@ pub enum InboxEvent {
         peer_id: UserId,
     },
     // =========================================================================
-    // Call Events
+    // Call Events (Signal-style ephemeral key exchange)
     // =========================================================================
-    /// Incoming call notification received via sealed sender.
-    IncomingCall {
+    /// Call key offer received (DM call initiation with ephemeral key).
+    ///
+    /// Caller sends their ephemeral X25519 public key. Callee should:
+    /// 1. Generate their own ephemeral keypair
+    /// 2. Send CallKeyAnswer with their ephemeral public key
+    /// 3. Derive call key: HKDF(ECDH(eph, peer_eph) || identities)
+    CallKeyOfferReceived {
         /// Peer user ID (caller).
         peer_id: UserId,
         /// Call ID.
         call_id: String,
-        /// Call encryption key material.
-        key_material: Vec<u8>,
+        /// Caller's ephemeral X25519 public key (32 bytes).
+        ephemeral_public_key: [u8; 32],
         /// Call type: "Voice Call", "Video Call", etc.
         call_type: String,
         /// Channel/DM ID for context.
         channel_id: String,
-        /// Timestamp when call was initiated.
+        /// Timestamp when offer was sent.
+        timestamp: u64,
+    },
+    /// Call key answer received (response to our offer).
+    ///
+    /// Callee responds with their ephemeral X25519 public key. Caller should:
+    /// 1. Derive call key: HKDF(ECDH(our_eph, peer_eph) || identities)
+    /// 2. Connect to LiveKit with derived key
+    /// 3. Delete ephemeral private key
+    CallKeyAnswerReceived {
+        /// Peer user ID (callee).
+        peer_id: UserId,
+        /// Call ID.
+        call_id: String,
+        /// Callee's ephemeral X25519 public key (32 bytes).
+        ephemeral_public_key: [u8; 32],
+        /// Timestamp when answer was sent.
         timestamp: u64,
     },
     /// Call hangup notification received via sealed sender.
@@ -317,6 +374,155 @@ pub enum InboxEvent {
         reason: String,
         /// Timestamp when hangup was sent.
         timestamp: u64,
+    },
+    // =========================================================================
+    // Group Call Events (pairwise key distribution)
+    // =========================================================================
+    /// Group call key received via pairwise sealed sender.
+    ///
+    /// Each group member receives an independent copy of the symmetric call key.
+    /// Per NDSS '21: Distribution is via client-side fanout to preserve privacy.
+    GroupCallKeyReceived {
+        /// Sender user ID (call initiator or key rotator).
+        sender_id: UserId,
+        /// Call ID.
+        call_id: String,
+        /// AES-256 encryption key (32 bytes) for LiveKit E2EE.
+        key_material: [u8; 32],
+        /// Key epoch (increments on rotation).
+        key_epoch: u32,
+        /// Channel ID (group channel).
+        channel_id: ChannelId,
+        /// Timestamp when key was sent.
+        timestamp: u64,
+    },
+    // =========================================================================
+    // Anonymous Group Events (NDSS'21 style server-oblivious groups)
+    // =========================================================================
+    /// Anonymous group invite received.
+    AnonGroupInvite {
+        /// Peer user ID (inviter).
+        peer_id: UserId,
+        /// Group ID (16 bytes UUID).
+        group_id: Vec<u8>,
+        /// Human-readable group name.
+        group_name: String,
+        /// Inviter's mailbox public key for this group.
+        inviter_mailbox_pk: Vec<u8>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Anonymous group join acknowledgment received.
+    AnonGroupJoinAck {
+        /// Peer user ID (joiner).
+        peer_id: UserId,
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// Joiner's mailbox public key.
+        joiner_mailbox_pk: Vec<u8>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Anonymous group member list received.
+    AnonGroupMemberList {
+        /// Peer user ID (sender).
+        peer_id: UserId,
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// Member information.
+        members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Anonymous group leave notification received.
+    AnonGroupLeave {
+        /// Peer user ID (leaver).
+        peer_id: UserId,
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Anonymous group kick notification received.
+    AnonGroupKick {
+        /// Peer user ID (admin who kicked).
+        peer_id: UserId,
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// User being kicked.
+        kicked_user_id: Vec<u8>,
+        /// Admin signature.
+        admin_signature: Vec<u8>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Anonymous group update received (name change, role change).
+    AnonGroupUpdate {
+        /// Peer user ID (sender).
+        peer_id: UserId,
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// Update payload.
+        update: crate::proto::content_v1::AnonGroupUpdate,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Anonymous group message received.
+    AnonGroupMessage {
+        /// Peer user ID (sender).
+        peer_id: UserId,
+        /// Group ID.
+        group_id: Vec<u8>,
+        /// Inner message content.
+        inner_content: Box<crate::proto::content_v1::Content>,
+    },
+    // =========================================================================
+    // Anonymous DM Events (NDSS'21 style stranger messaging)
+    // =========================================================================
+    /// Anonymous DM request received (stranger wants to message us).
+    AnonDmRequest {
+        /// Peer user ID (initiator).
+        peer_id: UserId,
+        /// Conversation ID (16 bytes UUID).
+        conversation_id: Vec<u8>,
+        /// Initiator's mailbox public key.
+        initiator_mailbox_pk: Vec<u8>,
+        /// Optional intro message.
+        intro_message: Option<String>,
+        /// Optional profile key for decrypting their profile.
+        profile_key: Option<Vec<u8>>,
+        /// Encrypted display name (AES-256-GCM with profile_key).
+        encrypted_display_name: Option<Vec<u8>>,
+        /// Encrypted avatar (AES-256-GCM with profile_key).
+        encrypted_avatar: Option<Vec<u8>>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Anonymous DM acceptance received (our request was accepted).
+    AnonDmAccept {
+        /// Peer user ID (responder).
+        peer_id: UserId,
+        /// Conversation ID.
+        conversation_id: Vec<u8>,
+        /// Responder's mailbox public key.
+        responder_mailbox_pk: Vec<u8>,
+        /// Optional profile key for decrypting their profile.
+        profile_key: Option<Vec<u8>>,
+        /// Encrypted display name (AES-256-GCM with profile_key).
+        encrypted_display_name: Option<Vec<u8>>,
+        /// Encrypted avatar (AES-256-GCM with profile_key).
+        encrypted_avatar: Option<Vec<u8>>,
+        /// Timestamp.
+        timestamp: u64,
+    },
+    /// Anonymous DM message received.
+    AnonDmMessage {
+        /// Peer user ID (sender).
+        peer_id: UserId,
+        /// Conversation ID.
+        conversation_id: Vec<u8>,
+        /// Inner message content.
+        inner_content: Box<crate::proto::content_v1::Content>,
     },
 }
 

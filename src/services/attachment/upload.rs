@@ -11,7 +11,7 @@ use crate::network::grpc::file_client::FileClient;
 use crate::network::grpc::GrpcClientPool;
 use crate::proto::chat_v1::FileChunk;
 
-use super::{AttachmentError, AttachmentService, CdnUploadResult, UploadResult, CHUNK_SIZE};
+use super::{attachment_file_path, ensure_attachments_dir, AttachmentError, AttachmentService, CdnUploadResult, UploadResult, CHUNK_SIZE};
 
 impl AttachmentService {
     /// Upload a file to a channel.
@@ -346,12 +346,27 @@ impl AttachmentService {
             thumbnail_height: media_meta.thumbnail_height,
         };
 
-        // Create attachment record with content stored in database
+        // Ensure attachments directory exists
+        ensure_attachments_dir()
+            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {}", e)))?;
+
+        // Write encrypted content to filesystem
+        let file_path = attachment_file_path(&attachment_id);
+        std::fs::write(&file_path, &encrypted.ciphertext)
+            .map_err(|e| AttachmentError::FileError(format!("Failed to write attachment file: {}", e)))?;
+
+        tracing::debug!(
+            "Wrote {} bytes encrypted content to {}",
+            encrypted.ciphertext.len(),
+            file_path.display()
+        );
+
+        // Create attachment record with content stored on filesystem
         let attachment = Attachment {
             id: attachment_id,
             metadata: domain_metadata,
             status: AttachmentStatus::Ready,
-            content_location: ContentLocation::InDatabase,
+            content_location: ContentLocation::OnFilesystem,
             local_path: None,
             remote_url: Some(cdn_key.clone()),
             encryption_key: Some(encrypted.key.to_vec()),
@@ -359,19 +374,19 @@ impl AttachmentService {
             created_at: chrono::Utc::now(),
         };
 
-        // Save to repository WITH encrypted content
-        if let Err(e) = self.attachment_repo.insert_with_content(&attachment, &encrypted.ciphertext) {
-            tracing::warn!("Failed to save CDN attachment with content: {}", e);
-            if let Err(e2) = self.attachment_repo.insert(&attachment) {
-                tracing::warn!("Fallback insert also failed: {}", e2);
-            }
-        } else {
-            tracing::debug!(
-                "Saved CDN attachment {} with {} bytes encrypted content to database",
-                attachment_id,
-                encrypted.ciphertext.len()
-            );
+        // Save to repository with file path
+        if let Err(e) = self.attachment_repo.insert_with_file_path(&attachment, &file_path) {
+            // Clean up file on failure
+            let _ = std::fs::remove_file(&file_path);
+            tracing::warn!("Failed to save CDN attachment with file path: {}", e);
+            return Err(AttachmentError::StorageError(e.to_string()));
         }
+
+        tracing::debug!(
+            "Saved CDN attachment {} with file path {} to database",
+            attachment_id,
+            file_path.display()
+        );
 
         tracing::info!(
             cdn_key = %cdn_key,
@@ -379,7 +394,8 @@ impl AttachmentService {
             filename = %filename,
             plaintext_size = plaintext_size,
             encrypted_size = encrypted_size,
-            "Encrypted attachment uploaded to CDN and stored locally"
+            file_path = %file_path.display(),
+            "Encrypted attachment uploaded to CDN and stored on filesystem"
         );
 
         Ok(CdnUploadResult {

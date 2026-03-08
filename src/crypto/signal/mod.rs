@@ -19,7 +19,7 @@ pub use sealed_sender::{
 pub use sender_key::SenderKeyManager;
 pub use sesame::{
     ConvergenceResult, DeviceRecord, PendingMessage, SesameManager, SesameStore, SessionEntry,
-    SqliteSesameStore, UserRecord, MAX_INACTIVE_SESSIONS, MAX_PENDING_MESSAGES,
+    SqliteSesameStore, UserRecord, MAX_INACTIVE_SESSIONS, MAX_PENDING_MESSAGES, PENDING_MESSAGE_TTL_SECS,
 };
 pub use session::SessionManager;
 pub use store::SignalStore;

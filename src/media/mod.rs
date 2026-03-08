@@ -26,7 +26,7 @@ pub mod waveform;
 // Re-exports for convenient access
 pub use audio_player::{AudioPlayer, PlaybackState};
 pub use audio_recorder::{AudioRecorder, RecordingState};
-pub use code_preview::{CodePreview, HighlightedLine, HighlightedSegment, SegmentStyle};
+pub use code_preview::{CodePreview, HighlightedLine, HighlightedSpan, CodeViewState};
 pub use file_picker::{FileFilter, FilePicker, FilePickerConfig};
 pub use gif::{GifCache, GifClient, GifPicker, GifResult};
 pub use image_processor::{ImageProcessor, DEFAULT_THUMBNAIL_SIZE};

@@ -30,6 +30,13 @@ impl MessageRepository {
 
     /// Insert a new message.
     pub fn insert(&self, message: &Message) -> Result<(), StorageError> {
+        tracing::debug!(
+            message_id = %message.id,
+            channel_id = %message.channel_id,
+            sender_id = ?message.sender_id,
+            content_type = ?std::mem::discriminant(&message.content),
+            "[MESSAGE_REPO] Inserting message"
+        );
         let conn = self.db.connection()?;
         // content_json kept as JSON for FTS5 json_extract() compatibility
         let content_json = serde_json::to_string(&message.content)
@@ -71,6 +78,11 @@ impl MessageRepository {
                 message.targets_ai_bot as i32,
             ],
         )?;
+        tracing::debug!(
+            message_id = %message.id,
+            channel_id = %message.channel_id,
+            "[MESSAGE_REPO] Message inserted successfully"
+        );
         Ok(())
     }
 
@@ -306,6 +318,12 @@ impl MessageRepository {
         before: Option<&MessageId>,
         limit: u32,
     ) -> Result<Vec<Message>, StorageError> {
+        tracing::debug!(
+            channel_id = %channel_id,
+            before = ?before,
+            limit = limit,
+            "[MESSAGE_REPO] Listing messages for channel"
+        );
         let conn = self.db.read_connection()?;
 
         let messages = if let Some(before_id) = before {
@@ -320,8 +338,8 @@ impl MessageRepository {
                         m.mentioned_integrations_blob, m.targets_ai_bot
                  FROM messages m
                  WHERE m.channel_id = ?1
-                   AND (m.sent_at, m.id) < (SELECT sent_at, id FROM messages WHERE id = ?2)
-                 ORDER BY m.sent_at DESC, m.id DESC
+                   AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2)
+                 ORDER BY m.sent_at DESC, m.sender_id DESC
                  LIMIT ?3",
             )?;
             let mut rows = stmt.query(params![channel_id.to_string(), before_id.to_string(), limit])?;
@@ -338,13 +356,19 @@ impl MessageRepository {
                         mentioned_integrations_blob, targets_ai_bot
                  FROM messages
                  WHERE channel_id = ?1
-                 ORDER BY sent_at DESC, id DESC
+                 ORDER BY sent_at DESC, sender_id DESC
                  LIMIT ?2",
             )?;
             let mut rows = stmt.query(params![channel_id.to_string(), limit])?;
             collect_messages(&mut rows)?
         };
 
+        tracing::debug!(
+            channel_id = %channel_id,
+            message_count = messages.len(),
+            "[MESSAGE_REPO] Retrieved {} messages for channel",
+            messages.len()
+        );
         Ok(messages)
     }
 
@@ -367,8 +391,8 @@ impl MessageRepository {
                         m.mentioned_integrations_blob, m.targets_ai_bot
                  FROM messages m
                  WHERE m.thread_id = ?1
-                   AND (m.sent_at, m.id) < (SELECT sent_at, id FROM messages WHERE id = ?2)
-                 ORDER BY m.sent_at DESC, m.id DESC
+                   AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2)
+                 ORDER BY m.sent_at DESC, m.sender_id DESC
                  LIMIT ?3",
             )?;
             let mut rows = stmt.query(params![thread_id.to_string(), before_id.to_string(), limit])?;
@@ -383,7 +407,7 @@ impl MessageRepository {
                         mentioned_integrations_blob, targets_ai_bot
                  FROM messages
                  WHERE thread_id = ?1
-                 ORDER BY sent_at DESC, id DESC
+                 ORDER BY sent_at DESC, sender_id DESC
                  LIMIT ?2",
             )?;
             let mut rows = stmt.query(params![thread_id.to_string(), limit])?;

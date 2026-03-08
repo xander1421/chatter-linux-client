@@ -5,29 +5,44 @@
 //!
 //! # Design
 //!
-//! For calls, we use ECDH between identity keys + HKDF to derive a shared
-//! symmetric key. This is separate from the Double Ratchet session:
-//! - Double Ratchet is too slow for 30fps media encryption
-//! - We use the identity keys for a one-time key agreement
-//! - The derived key is used with LiveKit's E2EE (AES-GCM)
+//! ## DM Calls (Ephemeral Key Exchange)
+//!
+//! For 1:1 calls, we use ephemeral X25519 keys for Perfect Forward Secrecy (PFS):
+//! 1. Caller generates ephemeral keypair, sends public key in offer
+//! 2. Callee generates ephemeral keypair, sends public key in answer
+//! 3. Both sides compute: ECDH(our_ephemeral, peer_ephemeral)
+//! 4. Derive SRTP key: HKDF(shared || caller_identity || callee_identity)
+//! 5. Delete ephemeral private keys immediately after derivation
+//!
+//! This mirrors Signal's 1:1 call setup (per Signal Protocol spec).
+//!
+//! ## Group Calls (Distributed Key)
+//!
+//! For group calls, the initiator generates a random symmetric key and
+//! distributes it to all participants via sender key encrypted messages.
+//! Key rotation occurs when members leave.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! // Derive call key from identity keys
-//! let shared_secret = derive_call_shared_secret(&our_identity_pair, &peer_identity_public)?;
-//! let call_key = derive_call_key(&shared_secret, "call-id-123")?;
+//! // DM call with ephemeral keys (PFS)
+//! let ephemeral = EphemeralCallKey::generate();
+//! let offer_bytes = ephemeral.public_key_bytes();
+//! // ... send offer, receive answer ...
+//! let shared = ephemeral.diffie_hellman(&peer_ephemeral_pk)?;
+//! let call_key = derive_call_key_ephemeral(&shared, &our_identity, &peer_identity, call_id, true)?;
+//! // ephemeral is automatically zeroized on drop
 //!
-//! // Or use CallKeyState for key lifecycle management
-//! let mut state = CallKeyState::new(&shared_secret, "call-id-123")?;
-//! let key = state.current_key_vec(); // For LiveKit KeyProvider
-//! state.ratchet()?; // Rotate key during long calls
+//! // Group call key
+//! let group_key = generate_group_call_key();
+//! // ... distribute to members via sender key messages ...
 //! ```
 
 use hkdf::Hkdf;
 use libsignal_protocol::{IdentityKey, IdentityKeyPair};
 use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519PrivateKey};
+use zeroize::ZeroizeOnDrop;
 
 use crate::error::CryptoError;
 
@@ -36,6 +51,9 @@ const CALL_KEY_SALT: &[u8] = b"ChatterCallKey-v1";
 
 /// Info prefix for call key derivation.
 const CALL_KEY_INFO_PREFIX: &[u8] = b"call-encryption:";
+
+/// Info string for ephemeral DH-based call key derivation (Signal-style).
+const EPHEMERAL_CALL_INFO: &[u8] = b"Chatter_Calling_EphemeralDH_SRTPKey_KDF";
 
 /// Derive a shared secret from identity keys using X25519 ECDH.
 ///
@@ -109,13 +127,157 @@ pub fn derive_call_key(
     Ok(call_key)
 }
 
+// =============================================================================
+// Ephemeral Key Exchange (Signal-style PFS for DM calls)
+// =============================================================================
+
+/// Ephemeral X25519 keypair for call key exchange.
+///
+/// This provides Perfect Forward Secrecy (PFS) for DM calls:
+/// - Private key is zeroized on drop
+/// - Generate fresh keypair for each call
+/// - Exchange public keys in offer/answer
+/// - Delete after deriving shared secret
+///
+/// Per Signal Protocol: ephemeral keys provide PFS - even if identity keys
+/// are later compromised, past call keys cannot be derived.
+#[derive(ZeroizeOnDrop)]
+pub struct EphemeralCallKey {
+    /// X25519 private key (32 bytes, zeroized on drop).
+    #[zeroize(skip)] // X25519PrivateKey handles its own zeroization
+    secret: X25519PrivateKey,
+    /// X25519 public key (32 bytes).
+    public: X25519PublicKey,
+}
+
+impl EphemeralCallKey {
+    /// Generate a new ephemeral X25519 keypair.
+    ///
+    /// The private key is automatically zeroized when this struct is dropped.
+    pub fn generate() -> Self {
+        // Generate 32 random bytes for the private key
+        let mut secret_bytes = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut secret_bytes);
+
+        // Create X25519 private key from bytes
+        let secret = X25519PrivateKey::from(secret_bytes);
+        let public = X25519PublicKey::from(&secret);
+        Self { secret, public }
+    }
+
+    /// Get the public key bytes to send in offer/answer.
+    pub fn public_key_bytes(&self) -> [u8; 32] {
+        *self.public.as_bytes()
+    }
+
+    /// Compute ECDH with peer's ephemeral public key.
+    ///
+    /// # Arguments
+    /// * `peer_public` - Peer's ephemeral public key (32 bytes from offer/answer)
+    ///
+    /// # Returns
+    /// 32-byte ECDH shared secret.
+    pub fn diffie_hellman(&self, peer_public: &[u8; 32]) -> [u8; 32] {
+        let peer_pk = X25519PublicKey::from(*peer_public);
+        let shared = self.secret.diffie_hellman(&peer_pk);
+        *shared.as_bytes()
+    }
+}
+
+/// Derive call encryption key using ephemeral ECDH + identity binding.
+///
+/// Signal-style derivation that binds both identity keys into the KDF,
+/// providing MITM protection while using ephemeral keys for PFS.
+///
+/// Key = HKDF(
+///     salt: "ChatterCallKey-v1",
+///     ikm: ephemeral_shared_secret,
+///     info: "Chatter_Calling_EphemeralDH_SRTPKey_KDF" || call_id || caller_identity || callee_identity
+/// )
+///
+/// # Arguments
+/// * `ephemeral_shared` - ECDH(our_ephemeral, peer_ephemeral)
+/// * `our_identity` - Our Signal identity keypair
+/// * `peer_identity` - Peer's Signal identity public key
+/// * `call_id` - Unique call identifier
+/// * `we_are_caller` - True if we initiated the call (determines identity ordering)
+///
+/// # Returns
+/// 32-byte AES-256 key suitable for LiveKit E2EE.
+pub fn derive_call_key_ephemeral(
+    ephemeral_shared: &[u8; 32],
+    our_identity: &IdentityKeyPair,
+    peer_identity: &IdentityKey,
+    call_id: &str,
+    we_are_caller: bool,
+) -> Result<[u8; 32], CryptoError> {
+    let hkdf = Hkdf::<Sha256>::new(Some(CALL_KEY_SALT), ephemeral_shared);
+
+    // Build info: prefix || call_id || caller_identity || callee_identity
+    // Order is deterministic based on who initiated
+    let our_id_bytes = our_identity.identity_key().serialize();
+    let peer_id_bytes = peer_identity.serialize();
+
+    let mut info = Vec::with_capacity(
+        EPHEMERAL_CALL_INFO.len() + call_id.len() + our_id_bytes.len() + peer_id_bytes.len(),
+    );
+    info.extend_from_slice(EPHEMERAL_CALL_INFO);
+    info.extend_from_slice(call_id.as_bytes());
+
+    // Caller identity always comes first for deterministic derivation
+    if we_are_caller {
+        info.extend_from_slice(&our_id_bytes);
+        info.extend_from_slice(&peer_id_bytes);
+    } else {
+        info.extend_from_slice(&peer_id_bytes);
+        info.extend_from_slice(&our_id_bytes);
+    }
+
+    let mut call_key = [0u8; 32];
+    hkdf.expand(&info, &mut call_key)
+        .map_err(|_| CryptoError::KeyDerivationFailed("Ephemeral HKDF expand failed".into()))?;
+
+    Ok(call_key)
+}
+
+// =============================================================================
+// Group Call Key Generation
+// =============================================================================
+
+/// Generate a random 32-byte group call encryption key.
+///
+/// This key is distributed to all group members via **pairwise sealed sender**
+/// messages (client-side fanout). Each member receives an independent encrypted
+/// message - the server cannot correlate these to a single group.
+///
+/// Per Signal Protocol & NDSS '21:
+/// - Server-side fanout (Sender Keys) is prohibited - reveals group membership
+/// - Client-side pairwise encryption preserves metadata privacy
+/// - Each GroupCallKey message is sent via sealed sender like a DM
+///
+/// Key rotation:
+/// - When a member leaves, generate new key and redistribute via pairwise
+/// - Use 3-second delay before using new key (allow propagation)
+pub fn generate_group_call_key() -> [u8; 32] {
+    let mut key = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+    key
+}
+
 /// Key provider for LiveKit E2EE integration.
 ///
 /// Wraps the derived key and provides methods for key ratcheting
 /// during long calls. Each ratchet produces a new key derived from
 /// the current key, providing forward secrecy within the call.
+///
+/// # Security
+///
+/// Automatically zeroizes the encryption key when dropped to prevent
+/// key material from lingering in memory after the call ends.
+#[derive(ZeroizeOnDrop)]
 pub struct CallKeyState {
-    /// Current encryption key.
+    /// Current encryption key (zeroized on drop).
+    #[zeroize(drop)]
     current_key: [u8; 32],
     /// Call ID this key is for.
     call_id: String,
@@ -282,7 +444,7 @@ mod tests {
 
         // Try to derive shared secret
         let result = derive_call_shared_secret(&alice_identity, bob_identity.identity_key());
-        
+
         match &result {
             Ok(secret) => println!("Success! Secret: {:?}", &secret[..8]),
             Err(e) => println!("Error: {:?}", e),
@@ -295,5 +457,140 @@ mod tests {
         let bob_to_alice = derive_call_shared_secret(&bob_identity, alice_identity.identity_key()).unwrap();
 
         assert_eq!(alice_to_bob, bob_to_alice, "Both parties should derive the same shared secret");
+    }
+
+    // =========================================================================
+    // Ephemeral Key Exchange Tests (Signal-style PFS)
+    // =========================================================================
+
+    #[test]
+    fn test_ephemeral_key_generation() {
+        let key1 = EphemeralCallKey::generate();
+        let key2 = EphemeralCallKey::generate();
+
+        // Each key should be unique
+        assert_ne!(key1.public_key_bytes(), key2.public_key_bytes());
+
+        // Public key should be 32 bytes
+        assert_eq!(key1.public_key_bytes().len(), 32);
+    }
+
+    #[test]
+    fn test_ephemeral_ecdh_symmetric() {
+        // Simulate offer/answer exchange
+        let caller_ephemeral = EphemeralCallKey::generate();
+        let callee_ephemeral = EphemeralCallKey::generate();
+
+        // Exchange public keys
+        let caller_pk = caller_ephemeral.public_key_bytes();
+        let callee_pk = callee_ephemeral.public_key_bytes();
+
+        // Both sides compute ECDH
+        let caller_shared = caller_ephemeral.diffie_hellman(&callee_pk);
+        let callee_shared = callee_ephemeral.diffie_hellman(&caller_pk);
+
+        // ECDH should produce same result on both sides
+        assert_eq!(caller_shared, callee_shared, "ECDH should be symmetric");
+    }
+
+    #[test]
+    fn test_derive_call_key_ephemeral_symmetric() {
+        let mut rng = rand::rng();
+        let caller_identity = IdentityKeyPair::generate(&mut rng);
+        let callee_identity = IdentityKeyPair::generate(&mut rng);
+
+        // Generate ephemeral keys
+        let caller_ephemeral = EphemeralCallKey::generate();
+        let callee_ephemeral = EphemeralCallKey::generate();
+
+        // Exchange public keys
+        let caller_eph_pk = caller_ephemeral.public_key_bytes();
+        let callee_eph_pk = callee_ephemeral.public_key_bytes();
+
+        // Both compute ECDH
+        let caller_shared = caller_ephemeral.diffie_hellman(&callee_eph_pk);
+        let callee_shared = callee_ephemeral.diffie_hellman(&caller_eph_pk);
+
+        let call_id = "test-call-123";
+
+        // Caller derives key (we_are_caller = true)
+        let caller_key = derive_call_key_ephemeral(
+            &caller_shared,
+            &caller_identity,
+            callee_identity.identity_key(),
+            call_id,
+            true,
+        ).unwrap();
+
+        // Callee derives key (we_are_caller = false)
+        let callee_key = derive_call_key_ephemeral(
+            &callee_shared,
+            &callee_identity,
+            caller_identity.identity_key(),
+            call_id,
+            false,
+        ).unwrap();
+
+        // Both should derive the same call key
+        assert_eq!(caller_key, callee_key, "Both parties should derive same call key");
+    }
+
+    #[test]
+    fn test_ephemeral_keys_unique_per_call() {
+        let mut rng = rand::rng();
+        let caller_identity = IdentityKeyPair::generate(&mut rng);
+        let callee_identity = IdentityKeyPair::generate(&mut rng);
+
+        // Call 1
+        let caller_eph1 = EphemeralCallKey::generate();
+        let callee_eph1 = EphemeralCallKey::generate();
+        let shared1 = caller_eph1.diffie_hellman(&callee_eph1.public_key_bytes());
+        let key1 = derive_call_key_ephemeral(
+            &shared1,
+            &caller_identity,
+            callee_identity.identity_key(),
+            "call-1",
+            true,
+        ).unwrap();
+
+        // Call 2 (different ephemeral keys)
+        let caller_eph2 = EphemeralCallKey::generate();
+        let callee_eph2 = EphemeralCallKey::generate();
+        let shared2 = caller_eph2.diffie_hellman(&callee_eph2.public_key_bytes());
+        let key2 = derive_call_key_ephemeral(
+            &shared2,
+            &caller_identity,
+            callee_identity.identity_key(),
+            "call-2",
+            true,
+        ).unwrap();
+
+        // Different calls should have different keys (PFS)
+        assert_ne!(key1, key2, "Different calls should have different keys");
+    }
+
+    // =========================================================================
+    // Group Call Key Tests
+    // =========================================================================
+
+    #[test]
+    fn test_generate_group_call_key() {
+        let key1 = generate_group_call_key();
+        let key2 = generate_group_call_key();
+
+        // Each key should be 32 bytes
+        assert_eq!(key1.len(), 32);
+        assert_eq!(key2.len(), 32);
+
+        // Keys should be unique
+        assert_ne!(key1, key2, "Each group call key should be unique");
+    }
+
+    #[test]
+    fn test_group_call_key_not_all_zeros() {
+        let key = generate_group_call_key();
+
+        // Key should not be all zeros (cryptographic randomness)
+        assert_ne!(key, [0u8; 32], "Group call key should not be all zeros");
     }
 }

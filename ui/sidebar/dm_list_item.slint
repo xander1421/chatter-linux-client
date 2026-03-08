@@ -17,6 +17,7 @@ export component DMListItem inherits Rectangle {
     in property <string> last-message: "";
     in property <string> timestamp: "";
     in property <int> unread-count: 0;
+    in property <bool> is-typing: false;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
 
@@ -24,6 +25,33 @@ export component DMListItem inherits Rectangle {
     callback clicked();
     callback show-tooltip(string, length); // text, local-y
     callback hide-tooltip();
+
+    // Typing animation (0.0 to 1.0 cycling)
+    property <float> typing-animation-progress: 0.0;
+
+    // Animation states
+    states [
+        typing when is-typing: {
+            typing-animation-progress: 1.0;
+            in {
+                animate typing-animation-progress {
+                    duration: 600ms;
+                    iteration-count: -1;
+                }
+            }
+        }
+    ]
+
+    // Calculate dot opacity with staggered timing
+    pure function dot-opacity(dot-index: int) -> float {
+        if dot-index == 0 {
+            0.3 + 0.7 * Math.max(0.0, Math.cos(typing-animation-progress * 360deg))
+        } else if dot-index == 1 {
+            0.3 + 0.7 * Math.max(0.0, Math.cos((typing-animation-progress - 0.33) * 360deg))
+        } else {
+            0.3 + 0.7 * Math.max(0.0, Math.cos((typing-animation-progress - 0.66) * 360deg))
+        }
+    }
 
     // Layout
     height: root.collapsed ? 44px : 52px;
@@ -72,8 +100,42 @@ export component DMListItem inherits Rectangle {
                 overflow: elide;
             }
 
-            // Last message preview
-            Text {
+            // Typing indicator or last message preview
+            if root.is-typing: HorizontalLayout {
+                spacing: 3px;
+                alignment: start;
+
+                // Animated dots with staggered opacity
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Colors.primary;
+                    opacity: root.dot-opacity(0);
+                }
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Colors.primary;
+                    opacity: root.dot-opacity(1);
+                }
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Colors.primary;
+                    opacity: root.dot-opacity(2);
+                }
+
+                Text {
+                    text: "typing";
+                    color: Colors.primary;
+                    font-size: 12px;
+                }
+            }
+
+            if !root.is-typing: Text {
                 text: root.last-message;
                 color: Colors.text-muted;
                 font-size: 12px;

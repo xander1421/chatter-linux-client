@@ -144,20 +144,68 @@ impl UserService {
     /// Get a user's profile by ID.
     ///
     /// Fetches from server and upserts to local storage.
+    /// If we have the user's profile key (from friendship), decrypts display_name.
     pub async fn get_user_profile(&self, user_id: &UserId) -> Result<Profile, UserError> {
-        let _ = self.settings_repo.current_user_id()?;
+        let current_user = self.settings_repo.current_user_id()?;
 
         let mut user_client = self.user_client();
         let proto_profile = user_client
             .get_user_profile(&user_id.to_string())
             .await?;
 
-        let profile = proto_to_domain_profile(&proto_profile)?;
+        let mut profile = proto_to_domain_profile(&proto_profile)?;
+
+        // Try to decrypt display_name if we have their profile key
+        profile.display_name = self.try_decrypt_display_name(
+            &current_user,
+            user_id,
+            &proto_profile.display_name,
+        ).unwrap_or_else(|| {
+            // No profile key or decryption failed - use placeholder
+            if proto_profile.display_name.is_empty() {
+                format!("User {}", &user_id.to_string()[..8.min(user_id.to_string().len())])
+            } else {
+                // Keep the ciphertext/original value (might be unencrypted legacy)
+                proto_profile.display_name.clone()
+            }
+        });
 
         self.user_repo.ensure_user_exists(user_id)?;
         self.user_repo.upsert_profile(&profile)?;
 
         Ok(profile)
+    }
+
+    /// Try to decrypt a friend's display_name using their profile key.
+    ///
+    /// Returns Some(decrypted_name) if we have their profile key and decryption succeeds.
+    /// Returns None if no profile key or decryption fails.
+    fn try_decrypt_display_name(
+        &self,
+        current_user_id: &UserId,
+        friend_id: &UserId,
+        encrypted_base64: &str,
+    ) -> Option<String> {
+        use base64::Engine;
+
+        // Skip if empty
+        if encrypted_base64.is_empty() {
+            return None;
+        }
+
+        // Get friend's profile key from our local storage
+        let profile_key = self.user_repo
+            .get_friend_profile_key(current_user_id, friend_id)
+            .ok()
+            .flatten()?;
+
+        // Try to decode from base64
+        let encrypted_bytes = base64::engine::general_purpose::STANDARD
+            .decode(encrypted_base64)
+            .ok()?;
+
+        // Try to decrypt
+        crate::crypto::profile_crypto::decrypt_display_name(&profile_key, &encrypted_bytes).ok()
     }
 
     /// Update the current user's profile.
@@ -618,5 +666,261 @@ impl UserService {
         }
 
         Ok(profiles)
+    }
+
+    // ========================================================================
+    // Friend Code Operations (Privacy-first discovery)
+    // ========================================================================
+
+    /// Generate a friend code URL for the current user.
+    ///
+    /// Format: `chatter://connect/{user_id}`
+    ///
+    /// This code can be shared or encoded as a QR code. It only contains
+    /// the user ID - no username is exposed. Profile key is exchanged
+    /// via E2E message after connection is established.
+    pub fn generate_friend_code(&self) -> Result<String, UserError> {
+        let current_user = self.settings_repo.current_user_id()?;
+        Ok(format!("chatter://connect/{}", current_user))
+    }
+
+    /// Generate a friend code as plain text (for copying).
+    ///
+    /// Format: `{user_id}` (just the UUID, no URL scheme)
+    pub fn generate_friend_code_plain(&self) -> Result<String, UserError> {
+        let current_user = self.settings_repo.current_user_id()?;
+        Ok(current_user.to_string())
+    }
+
+    /// Generate a QR code image (PNG) containing the friend code URL.
+    ///
+    /// Returns PNG image bytes that can be displayed in the UI.
+    /// The QR code encodes `chatter://connect/{user_id}`.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Size of the QR code in pixels (width = height)
+    pub fn generate_friend_qr(&self, size: u32) -> Result<Vec<u8>, UserError> {
+        use image::{ImageEncoder, Luma};
+        use qrcode::QrCode;
+
+        let code_url = self.generate_friend_code()?;
+
+        // Generate QR code
+        let qr = QrCode::new(code_url.as_bytes()).map_err(|e| {
+            UserError::InvalidInput(format!("Failed to generate QR code: {}", e))
+        })?;
+
+        // Render to image with quiet zone
+        let qr_image = qr.render::<Luma<u8>>().quiet_zone(true).build();
+
+        // Scale to requested size
+        let scaled = image::imageops::resize(
+            &qr_image,
+            size,
+            size,
+            image::imageops::FilterType::Nearest,
+        );
+
+        // Encode as PNG
+        let mut png_bytes = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+        encoder
+            .write_image(
+                scaled.as_raw(),
+                size,
+                size,
+                image::ExtendedColorType::L8,
+            )
+            .map_err(|e| UserError::InvalidInput(format!("Failed to encode PNG: {}", e)))?;
+
+        Ok(png_bytes)
+    }
+
+    /// Generate a QR code as base64-encoded PNG (for embedding in UI).
+    ///
+    /// Returns a data URL that can be used directly in image sources.
+    pub fn generate_friend_qr_base64(&self, size: u32) -> Result<String, UserError> {
+        use base64::Engine;
+        let png_bytes = self.generate_friend_qr(size)?;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+        Ok(format!("data:image/png;base64,{}", b64))
+    }
+
+    // ========================================================================
+    // NDSS'21 Private Friend Codes (includes identity key + delivery token)
+    // ========================================================================
+
+    /// Generate a private friend code for NDSS'21 compliant anonymous DM.
+    ///
+    /// Format: `chatter://private/{base32(user_id || identity_key || delivery_token)}`
+    ///
+    /// This code embeds all cryptographic material needed for initial contact:
+    /// - User ID (16 bytes)
+    /// - Identity key (33 bytes - 0x05 + Curve25519)
+    /// - Delivery token (12 bytes - derived from profile key)
+    ///
+    /// # Privacy Guarantees
+    ///
+    /// When someone scans this code and connects:
+    /// - NO prekey fetch is required (keys are embedded)
+    /// - Server learns NOTHING about who is contacting whom
+    /// - Initial message is HPKE-encrypted to identity key
+    ///
+    /// # Security Note
+    ///
+    /// This code contains your identity key. Only share with people you want
+    /// to be able to contact you privately. The code can be regenerated with
+    /// a new profile key to invalidate old delivery tokens.
+    pub fn generate_private_friend_code(&self) -> Result<String, UserError> {
+        use crate::domain::PrivateFriendCode;
+
+        let current_user = self.settings_repo.current_user_id()?;
+
+        // Get identity key
+        let identity_key_bytes = self
+            .settings_repo
+            .get_bytes(keys::IDENTITY_KEY_PUBLIC)?
+            .ok_or(UserError::NotLoggedIn)?;
+
+        if identity_key_bytes.len() != 33 {
+            return Err(UserError::InvalidInput(format!(
+                "Invalid identity key length: {}",
+                identity_key_bytes.len()
+            )));
+        }
+
+        let mut identity_key = [0u8; 33];
+        identity_key.copy_from_slice(&identity_key_bytes);
+
+        // Get profile key and derive delivery token
+        let profile_key_bytes = self
+            .settings_repo
+            .get_bytes(keys::PROFILE_KEY)?
+            .ok_or(UserError::NotLoggedIn)?;
+
+        if profile_key_bytes.len() != 32 {
+            return Err(UserError::InvalidInput(format!(
+                "Invalid profile key length: {}",
+                profile_key_bytes.len()
+            )));
+        }
+
+        let mut profile_key = [0u8; 32];
+        profile_key.copy_from_slice(&profile_key_bytes);
+        let delivery_token = PrivateFriendCode::derive_delivery_token(&profile_key);
+
+        // Build the private friend code
+        let code = PrivateFriendCode::new(current_user, identity_key, delivery_token);
+
+        Ok(code.to_url())
+    }
+
+    /// Generate a QR code for private friend code.
+    ///
+    /// Returns PNG image bytes encoding the private friend code URL.
+    pub fn generate_private_friend_qr(&self, size: u32) -> Result<Vec<u8>, UserError> {
+        use image::{ImageEncoder, Luma};
+        use qrcode::QrCode;
+
+        let code_url = self.generate_private_friend_code()?;
+
+        // Generate QR code (private codes are longer, may need higher error correction)
+        let qr = QrCode::with_error_correction_level(
+            code_url.as_bytes(),
+            qrcode::EcLevel::M,
+        )
+        .map_err(|e| {
+            UserError::InvalidInput(format!("Failed to generate private QR code: {}", e))
+        })?;
+
+        // Render to image with quiet zone
+        let qr_image = qr.render::<Luma<u8>>().quiet_zone(true).build();
+
+        // Scale to requested size
+        let scaled = image::imageops::resize(
+            &qr_image,
+            size,
+            size,
+            image::imageops::FilterType::Nearest,
+        );
+
+        // Encode as PNG
+        let mut png_bytes = Vec::new();
+        let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+        encoder
+            .write_image(
+                scaled.as_raw(),
+                size,
+                size,
+                image::ExtendedColorType::L8,
+            )
+            .map_err(|e| UserError::InvalidInput(format!("Failed to encode PNG: {}", e)))?;
+
+        Ok(png_bytes)
+    }
+
+    /// Parse a friend code and extract the user ID.
+    ///
+    /// Accepts formats:
+    /// - `chatter://connect/{user_id}` (URL format)
+    /// - `{user_id}` (plain UUID)
+    pub fn parse_friend_code(code: &str) -> Result<UserId, UserError> {
+        let code = code.trim();
+
+        // Try URL format first
+        if let Some(id_str) = code.strip_prefix("chatter://connect/") {
+            return id_str.parse::<UserId>().map_err(|_| {
+                UserError::InvalidInput(format!("Invalid user ID in friend code: {}", id_str))
+            });
+        }
+
+        // Try plain UUID
+        code.parse::<UserId>().map_err(|_| {
+            UserError::InvalidInput(format!("Invalid friend code format: {}", code))
+        })
+    }
+
+    /// Connect with a user via friend code.
+    ///
+    /// This initiates the friend request flow using only the user ID.
+    /// The profile key will be exchanged via E2E message once connected.
+    ///
+    /// # Arguments
+    ///
+    /// * `code` - Friend code (URL or plain user ID)
+    /// * `message` - Optional friend request message
+    pub async fn connect_via_friend_code(
+        &self,
+        code: &str,
+        message: Option<&str>,
+    ) -> Result<Friendship, UserError> {
+        // Parse the friend code to get user ID
+        let friend_id = Self::parse_friend_code(code)?;
+
+        // Check we're not adding ourselves
+        let current_user = self.settings_repo.current_user_id()?;
+        if friend_id == current_user {
+            return Err(UserError::InvalidInput(
+                "Cannot add yourself as a friend".to_string(),
+            ));
+        }
+
+        // Check if already a friend
+        if let Ok(Some(existing)) = self.user_repo.get_friendship(&current_user, &friend_id) {
+            if existing.status == FriendshipStatus::Accepted {
+                return Err(UserError::InvalidInput(
+                    "Already friends with this user".to_string(),
+                ));
+            }
+            if existing.status == FriendshipStatus::Pending {
+                return Err(UserError::InvalidInput(
+                    "Friend request already pending".to_string(),
+                ));
+            }
+        }
+
+        // Send friend request
+        self.send_friend_request(&friend_id, message).await
     }
 }

@@ -1,0 +1,206 @@
+// Private group list item component
+//
+// Displays a single private group in the sidebar list.
+// Shows shield icon, group name, member count, and unread badge.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+export component PrivateGroupListItem inherits Rectangle {
+    in property <string> group-id;
+    in property <string> name;
+    in property <int> member-count: 0;
+    in property <int> unread-count: 0;
+    in property <string> last-message: "";
+    in property <string> timestamp: "";
+    in property <bool> is-typing: false;
+    in property <bool> selected: false;
+    in property <bool> collapsed: false;
+
+    callback clicked();
+    callback show-tooltip(string, length);
+    callback hide-tooltip();
+
+    // Track if tooltip is shown
+    property <bool> tooltip-shown: false;
+
+    // Typing animation (0.0 to 1.0 cycling)
+    property <float> typing-animation-progress: 0.0;
+
+    // Animation states
+    states [
+        typing when is-typing: {
+            typing-animation-progress: 1.0;
+            in {
+                animate typing-animation-progress {
+                    duration: 600ms;
+                    iteration-count: -1;
+                }
+            }
+        }
+    ]
+
+    // Calculate dot opacity with staggered timing
+    pure function dot-opacity(dot-index: int) -> float {
+        if dot-index == 0 {
+            0.3 + 0.7 * Math.max(0.0, Math.cos(typing-animation-progress * 360deg))
+        } else if dot-index == 1 {
+            0.3 + 0.7 * Math.max(0.0, Math.cos((typing-animation-progress - 0.33) * 360deg))
+        } else {
+            0.3 + 0.7 * Math.max(0.0, Math.cos((typing-animation-progress - 0.66) * 360deg))
+        }
+    }
+
+    height: 44px;
+    border-radius: Spacing.radius-sm;
+    background: root.selected ? accent-color.with-alpha(0.15) :
+                (touch.has-hover ? Colors.surface-hover : Colors.surface);
+
+    // Use purple accent for private groups
+    property <color> accent-color: #9333ea;
+
+    HorizontalLayout {
+        padding-left: root.collapsed ? 0px : Spacing.sm;
+        padding-right: root.collapsed ? 0px : Spacing.sm;
+        spacing: root.collapsed ? 0px : Spacing.sm;
+        alignment: root.collapsed ? center : start;
+
+        // Shield icon with purple background
+        Rectangle {
+            width: root.collapsed ? 36px : 32px;
+            height: root.collapsed ? 36px : 32px;
+            border-radius: Spacing.radius-sm;
+            background: accent-color.with-alpha(0.15);
+
+            Image {
+                source: Icons.shield;
+                width: 16px;
+                height: 16px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: accent-color;
+            }
+        }
+
+        // Text content (hidden when collapsed)
+        if !root.collapsed: VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            HorizontalLayout {
+                spacing: Spacing.xs;
+
+                Text {
+                    text: root.name;
+                    color: root.selected ? Colors.text-primary : Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: root.selected ? Typography.semibold : Typography.normal;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+
+                // Member count badge
+                if root.member-count > 0: Rectangle {
+                    width: member-text.preferred-width + 8px;
+                    height: 16px;
+                    border-radius: 8px;
+                    background: Colors.text-muted.with-alpha(0.2);
+
+                    member-text := Text {
+                        text: root.member-count;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Typing indicator or last message preview
+            if root.is-typing: HorizontalLayout {
+                spacing: 3px;
+                alignment: start;
+
+                // Animated dots with staggered opacity
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: accent-color;
+                    opacity: root.dot-opacity(0);
+                }
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: accent-color;
+                    opacity: root.dot-opacity(1);
+                }
+                Rectangle {
+                    width: 4px;
+                    height: 4px;
+                    border-radius: 2px;
+                    background: accent-color;
+                    opacity: root.dot-opacity(2);
+                }
+
+                Text {
+                    text: "typing";
+                    color: accent-color;
+                    font-size: Typography.xs;
+                }
+            }
+
+            if !root.is-typing && root.last-message != "": Text {
+                text: root.last-message;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                overflow: elide;
+            }
+        }
+
+        // Unread badge (always visible if > 0)
+        if root.unread-count > 0: Rectangle {
+            width: max(18px, unread-text.preferred-width + 8px);
+            height: 18px;
+            border-radius: 9px;
+            background: accent-color;
+
+            unread-text := Text {
+                text: root.unread-count > 99 ? "99+" : root.unread-count;
+                color: Colors.text-primary;
+                font-size: Typography.xs;
+                font-weight: Typography.semibold;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    // Tooltip logic for collapsed mode
+    if root.collapsed && touch.has-hover && !tooltip-shown: Rectangle {
+        width: 0;
+        height: 0;
+        init => {
+            root.tooltip-shown = true;
+            root.show-tooltip(root.name, self.y + root.height / 2);
+        }
+    }
+
+    if tooltip-shown && !touch.has-hover: Rectangle {
+        width: 0;
+        height: 0;
+        init => {
+            root.tooltip-shown = false;
+            root.hide-tooltip();
+        }
+    }
+}

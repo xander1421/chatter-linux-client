@@ -18,6 +18,11 @@ pub mod draft;
 pub mod ephemeral;
 pub mod mention;
 pub mod embed;
+pub mod anon_group;
+pub mod anon_dm;
+pub mod anon_dm_init;
+pub mod private_friend_code;
+pub mod jarvis;
 
 // Re-export core types for convenience
 pub use ids::{
@@ -47,3 +52,18 @@ pub use ephemeral::{EphemeralMessage, EphemeralState, MessageTTL};
 pub use saved_message::{SavedContent, SavedMessage};
 pub use mention::{Mention, MentionExtractor, MentionSuggestion, MentionType};
 pub use embed::{EmbedType, GitHubEmbed, LinkEmbed, LinkPreview, TwitterEmbed, YouTubeEmbed};
+pub use anon_group::{
+    AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupPending,
+    AnonGroupRole, PendingActionType,
+};
+pub use anon_dm::{
+    AnonDm, AnonDmId, AnonDmMailbox, AnonDmMessage, AnonDmMessageId, AnonDmStatus,
+};
+pub use anon_dm_init::{AnonDmInitMessage, InitMessageError};
+pub use private_friend_code::{PrivateFriendCode, PrivateFriendCodeError};
+pub use jarvis::{
+    ContextType, EntityKnowledge, EntityType, JarvisContext, JarvisConversation,
+    JarvisConversationId, JarvisEntity, JarvisEntityId, JarvisEntityMention,
+    JarvisFact, JarvisFactId, JarvisRelationship, JarvisRelationshipId,
+    JarvisSummary, JarvisSummaryId, Role, SubjectType,
+};

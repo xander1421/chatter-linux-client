@@ -318,6 +318,12 @@ impl GroupCoordinator {
 
     /// Build GroupMailboxAddress announcement from our mailbox.
     fn build_announcement(&self, channel_id: &ChannelId, mailbox: &GroupMailbox) -> GroupMailboxAddress {
+        tracing::info!(
+            channel_id = %channel_id,
+            mailbox_id = %mailbox.id,
+            announce_pk_hex = %hex::encode(&mailbox.public_key),
+            "[BUILD_ANNOUNCEMENT] Building GroupMailboxAddress"
+        );
         GroupMailboxAddress {
             channel_id: channel_id.to_string(),
             mailbox_pk: mailbox.public_key.to_vec(),

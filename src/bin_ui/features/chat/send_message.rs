@@ -8,7 +8,7 @@ use chatter_linux::app::UIContext;
 use chatter_linux::domain::anon_dm::AnonDmId;
 use chatter_linux::domain::channel::ChannelType;
 
-use crate::bin_ui::converters::{get_initials, message_to_display_data, attachment_to_display_data};
+use crate::bin_ui::converters::{get_initials, message_to_display_data, attachment_to_display_data, parse_gif_markers};
 use crate::bin_ui::features::auth::inbox::update_channel_sidebar_preview;
 use crate::bin_ui::features::chat::helpers::get_peer_id_from_dm_channel;
 use super::typing::clear_outgoing_typing;
@@ -70,6 +70,11 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         clear_outgoing_typing();
         if has_attachments { chat_state.clear_pending_attachments(); }
 
+        // Special handling for Klipy GIFs: if the text is just a GIF marker, 
+        // we can treat it differently (e.g. by wrapping it in an attachment later).
+        // For now, we keep it as text but ensure the UI can render it.
+        // In a full implementation, we might want to download and re-upload to our own CDN.
+        
         let message_service = message_service.clone();
         let chat_state = chat_state.clone();
         let auth_state = auth_state.clone();
@@ -138,8 +143,6 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         let sent_text = text.clone();
                         let sender_name = current_user_name.clone();
                         let sender_initials = get_initials(&sender_name);
-                        let has_attachments = !uploaded_attachments.is_empty();
-                        let attachment_count = uploaded_attachments.len() as i32;
                         // Convert to display data outside the closure (these are Send-safe)
                         let attachment_display_data: Vec<_> = uploaded_attachments
                             .iter()
@@ -150,10 +153,14 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 // Convert to Slint types inside the event loop
-                                let slint_attachments: Vec<_> = attachment_display_data
+                                let mut slint_attachments: Vec<_> = attachment_display_data
                                     .iter()
                                     .map(|a| a.to_slint())
                                     .collect();
+
+                                // Parse [GIF:url] markers and add virtual attachments
+                                let (display_content, gif_attachments) = parse_gif_markers(&sent_text);
+                                slint_attachments.extend(gif_attachments);
 
                                 let msg_item = MessageItemData {
                                     message_id: message_id_str.into(),
@@ -161,7 +168,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     sender_name: sender_name.into(),
                                     sender_initials: sender_initials.into(),
                                     sender_avatar_url: "".into(),
-                                    content: sent_text.into(),
+                                    content: display_content.into(),
                                     timestamp: timestamp_str.into(),
                                     timestamp_ns: sent_at.to_string().into(),
                                     is_own: true,
@@ -169,8 +176,8 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     is_deleted: false,
                                     is_system: false,
                                     is_ai: false,
-                                    has_attachments,
-                                    attachment_count,
+                                    has_attachments: !slint_attachments.is_empty(),
+                                    attachment_count: slint_attachments.len() as i32,
                                     attachments: ModelRc::new(VecModel::from(slint_attachments)),
                                     has_reactions: false,
                                     reaction_summary: "".into(),
@@ -247,14 +254,17 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 let weak_copy = weak.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak_copy.upgrade() {
-                                        let slint_attachments: Vec<_> = attachments.iter().map(|a| a.to_slint()).collect();
+                                        let mut slint_attachments: Vec<_> = attachments.iter().map(|a| a.to_slint()).collect();
+                                        // Parse [GIF:url] markers and add virtual attachments
+                                        let (display_content, gif_attachments) = parse_gif_markers(&sent_text);
+                                        slint_attachments.extend(gif_attachments);
                                         let msg_item = MessageItemData {
                                             message_id: message_id_str.into(),
                                             sender_id: current_user_id.into(),
                                             sender_name: sender_name.into(),
                                             sender_initials: sender_initials.into(),
                                             sender_avatar_url: "".into(),
-                                            content: sent_text.into(),
+                                            content: display_content.into(),
                                             timestamp: timestamp_str.clone().into(),
                                             timestamp_ns: msg_sent_at.to_string().into(),
                                             is_own: true,
@@ -302,6 +312,8 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 let weak_copy = weak.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak_copy.upgrade() {
+                                        // Parse [GIF:url] markers and add virtual attachments
+                                        let (display_content, gif_attachments) = parse_gif_markers(&sent_text);
                                         // Add message to UI with "sending" status
                                         let msg_item = MessageItemData {
                                             message_id: format!("pending-{}", sent_at).into(),
@@ -309,7 +321,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                             sender_name: sender_name.into(),
                                             sender_initials: sender_initials.into(),
                                             sender_avatar_url: "".into(),
-                                            content: sent_text.into(),
+                                            content: display_content.into(),
                                             timestamp: timestamp_str.clone().into(),
                                             timestamp_ns: sent_at.to_string().into(),
                                             is_own: true,
@@ -317,9 +329,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                             is_deleted: false,
                                             is_system: false,
                                             is_ai: false,
-                                            has_attachments: false,
-                                            attachment_count: 0,
-                                            attachments: ModelRc::default(),
+                                            has_attachments: !gif_attachments.is_empty(),
+                                            attachment_count: gif_attachments.len() as i32,
+                                            attachments: ModelRc::new(VecModel::from(gif_attachments)),
                                             has_reactions: false,
                                             reaction_summary: "".into(),
                                             reply_count: 0,
@@ -363,34 +375,76 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             tokio::spawn(async move {
                 if !auth_state.is_logged_in() { return; }
                 let group_id: chatter_linux::domain::anon_group::AnonGroupId = match selected_private_group_id.parse() { Ok(id) => id, _ => return };
-                if let Ok(message_id) = anon_group_service.send_text(&group_id, &text).await {
-                    let timestamp_str = chrono::Local::now().format("%H:%M").to_string();
+
+                let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
+                let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
+
+                // Upload attachments first if any
+                let mut attachment_pointers = Vec::new();
+                let mut uploaded_attachments = Vec::new();
+                for att in &pending_attachments {
+                    match attachment_service.upload_to_cdn_encrypted(&grpc_pool, &att.path).await {
+                        Ok(res) => {
+                            attachment_pointers.push(res.to_attachment_pointer());
+                            if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) {
+                                uploaded_attachments.push(full_att);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to upload private group attachment: {}", e);
+                        }
+                    }
+                }
+
+                // Send with attachments if any, otherwise just text
+                let send_result = if attachment_pointers.is_empty() {
+                    anon_group_service.send_text(&group_id, &text).await
+                } else {
+                    anon_group_service.send_with_attachments(&group_id, &text, attachment_pointers).await
+                };
+
+                if let Ok(message_id) = send_result {
+                    let now = chrono::Utc::now();
+                    let timestamp_str = now.with_timezone(&chrono::Local).format("%H:%M").to_string();
+                    let sent_at = now.timestamp_nanos_opt().unwrap_or(0) as u64;
                     let preview = if text.chars().count() > 50 { format!("You: {}...", text.chars().take(47).collect::<String>()) } else { format!("You: {}", text) };
                     let group_id_str = group_id.to_string();
-                    let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
-                    let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
                     let sender_initials = get_initials(&current_user_name);
                     let sent_text = text.clone();
+                    let attachment_display_data: Vec<_> = uploaded_attachments
+                        .iter()
+                        .map(|a| attachment_to_display_data(a))
+                        .collect();
 
+                    let attachment_service_for_gifs = attachment_service.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            let mut slint_attachments: Vec<_> = attachment_display_data
+                                .iter()
+                                .map(|a| a.to_slint())
+                                .collect();
+
+                            // Parse [GIF:url] markers and add virtual attachments
+                            let (display_content, gif_attachments) = parse_gif_markers(&sent_text);
+                            slint_attachments.extend(gif_attachments);
+
                             let msg_item = MessageItemData {
                                 message_id: message_id.to_string().into(),
                                 sender_id: current_user_id.into(),
                                 sender_name: current_user_name.into(),
                                 sender_initials: sender_initials.into(),
                                 sender_avatar_url: "".into(),
-                                content: sent_text.into(),
+                                content: display_content.into(),
                                 timestamp: timestamp_str.clone().into(),
-                                timestamp_ns: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0).to_string().into(),
+                                timestamp_ns: sent_at.to_string().into(),
                                 is_own: true,
                                 is_edited: false,
                                 is_deleted: false,
                                 is_system: false,
                                 is_ai: false,
-                                has_attachments: false,
-                                attachment_count: 0,
-                                attachments: ModelRc::default(),
+                                has_attachments: !slint_attachments.is_empty(),
+                                attachment_count: slint_attachments.len() as i32,
+                                attachments: ModelRc::new(VecModel::from(slint_attachments)),
                                 has_reactions: false,
                                 reaction_summary: "".into(),
                                 reply_count: 0,
@@ -407,15 +461,21 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             let mut messages: Vec<_> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
                             messages.push(msg_item);
                             messages.sort_by(|a, b| {
-                                            let ts_a = a.timestamp_ns.parse::<u64>().unwrap_or(0);
-                                            let ts_b = b.timestamp_ns.parse::<u64>().unwrap_or(0);
-                                            ts_a.cmp(&ts_b).then_with(|| a.sender_id.as_str().cmp(b.sender_id.as_str()))
-                                        });
+                                let ts_a = a.timestamp_ns.parse::<u64>().unwrap_or(0);
+                                let ts_b = b.timestamp_ns.parse::<u64>().unwrap_or(0);
+                                ts_a.cmp(&ts_b).then_with(|| a.sender_id.as_str().cmp(b.sender_id.as_str()))
+                            });
                             w.set_messages(ModelRc::new(VecModel::from(messages)));
                             w.set_composer_text("".into());
                             w.set_message_scroll_position(-99999.0);
                             w.set_is_at_bottom(true);
                             update_private_group_sidebar_preview(&w, &group_id_str, &preview, &timestamp_str);
+
+                            // Auto-register GIF animations for sender's attachments
+                            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                                w.as_weak(),
+                                attachment_service_for_gifs,
+                            );
                         }
                     });
                 }
@@ -435,6 +495,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     if let Ok(message) = message_service.save_message(&text, uploaded).await {
                         let resolved: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
                         let display = message_to_display_data(&message, "Me", &resolved);
+                        let attachment_service_for_gifs = attachment_service.clone();
                         let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
                             let model = w.get_messages();
                             let mut messages: Vec<_> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
@@ -446,6 +507,10 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                         });
                             w.set_messages(ModelRc::new(VecModel::from(messages)));
                             w.set_composer_text("".into());
+                            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                                w.as_weak(),
+                                attachment_service_for_gifs,
+                            );
                         }});
                     }
                 } else {
@@ -457,6 +522,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             let sidebar_channel_id = channel_id.to_string();
                             let preview = if text.chars().count() > 50 { format!("You: {}...", text.chars().take(47).collect::<String>()) } else { format!("You: {}", text) };
                             let ts = crate::bin_ui::features::auth::inbox::utils::format_timestamp(message.sent_at);
+                            let attachment_service_for_gifs = attachment_service.clone();
                             let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
                                 let model = w.get_messages();
                                 let mut messages: Vec<_> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
@@ -469,6 +535,10 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 w.set_messages(ModelRc::new(VecModel::from(messages)));
                                 w.set_composer_text("".into());
                                 update_channel_sidebar_preview(&w, &sidebar_channel_id, &preview, &ts);
+                                crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                                    w.as_weak(),
+                                    attachment_service_for_gifs,
+                                );
                             }});
                         }
                         Err(e) => { tracing::error!("Failed to send channel message: {}", e); }

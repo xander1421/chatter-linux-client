@@ -2,57 +2,66 @@
 //!
 //! Handles polling and processing messages from per-group ephemeral mailboxes
 //! (NDSS '21 paper implementation for privacy-preserving group messaging).
+//!
+//! Per NDSS '21 and Signal Protocol spec: Group messages are pairwise encrypted
+//! using Double Ratchet (sealed sender) for each member. The sender identity is
+//! cryptographically revealed during SSDecVer (sealed sender decryption), NOT
+//! from plaintext metadata.
 
 use std::sync::Arc;
 
-use prost::Message as ProstMessage;
 use tokio::sync::broadcast;
 
-use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
-use crate::domain::message::Message;
-use crate::domain::UserId;
+use crate::domain::ids::ChannelId;
 use crate::inbox::events::InboxEvent;
 use crate::mailbox::group::{GroupCoordinator, GroupFanout};
-use crate::proto::chat_v1::EncryptedData;
-use crate::proto::content_v1::DataMessage;
-use crate::services::message_gateway::{MessageGateway, RouteResult};
-use crate::storage::repositories::settings_repo::keys;
-use crate::storage::{ChannelRepository, MessageRepository, SettingsRepository};
+use crate::proto::chat_v1::SealedSenderMessage;
+use crate::services::attachment::AttachmentService;
+use crate::services::message_gateway::{MessageGateway, SealedSenderResult};
+use crate::storage::{AttachmentRepository, ChannelRepository};
 
 /// Poll all group mailboxes for new messages.
 ///
 /// Group messages are received via per-group ephemeral mailboxes (NDSS '21 paper).
-/// Messages are encrypted with sender keys and routed through anonymous mailboxes
-/// to prevent server-side correlation of group membership.
+/// Messages are pairwise encrypted with sealed sender (Double Ratchet) and routed
+/// through anonymous mailboxes to prevent server-side correlation.
+///
+/// Per Signal Protocol: The sender identity is cryptographically revealed during
+/// sealed sender decryption (SSDecVer), NOT from plaintext metadata.
 ///
 /// This method handles:
-/// - Sender key encrypted channel messages
+/// - Sealed sender encrypted messages (sender revealed via SSDecVer)
 /// - GroupMailboxAddress announcements (member mailbox exchange)
-#[allow(clippy::too_many_arguments)]
 pub async fn poll_group_mailboxes(
     group_fanout: &Arc<GroupFanout>,
     group_coordinator: &Arc<GroupCoordinator>,
     message_gateway: &Arc<MessageGateway>,
     event_tx: &broadcast::Sender<InboxEvent>,
-    settings_repo: &Arc<SettingsRepository>,
-    message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
+    attachment_repo: &Arc<AttachmentRepository>,
 ) {
-    // Get current user ID for message attribution
-    let current_user_id: Option<UserId> = settings_repo
-        .get_string(keys::CURRENT_USER_ID)
-        .ok()
-        .flatten()
-        .and_then(|s| s.parse().ok());
-
     match group_fanout.poll_all_group_mailboxes().await {
         Ok(poll_results) => {
             let mut total_groups = 0u32;
             let mut total_messages = 0u32;
 
+            if poll_results.is_empty() {
+                // Only log occasionally to avoid spam
+                static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if count % 60 == 0 {
+                    tracing::debug!("[GROUP_POLL] No group mailboxes to poll (count={})", count);
+                }
+            }
+
             for (group_id, poll_result) in poll_results {
                 total_groups += 1;
                 let message_count = poll_result.messages.len();
+                tracing::info!(
+                    group_id = %group_id,
+                    message_count = message_count,
+                    "[GROUP_POLL] Polled group mailbox"
+                );
 
                 if message_count == 0 {
                     continue;
@@ -64,50 +73,30 @@ pub async fn poll_group_mailboxes(
                 for msg in poll_result.messages {
                     total_messages += 1;
 
-                    // Try to decode as EncryptedData (sender key encrypted)
-                    if let Ok(encrypted_data) =
-                        EncryptedData::decode(msg.encrypted_envelope.as_slice())
-                    {
-                        // Extract sender from associated_data
-                        let sender_info = extract_sender_from_encrypted_data(&encrypted_data);
-
-                        if let Some(sender_id) = sender_info {
-                            process_group_message(
-                                &encrypted_data,
-                                &sender_id,
-                                group_id,
-                                &msg.message_id,
-                                message_gateway,
-                                group_coordinator,
-                                event_tx,
-                                message_repo,
-                                channel_repo,
-                                &current_user_id,
-                            )
-                            .await;
-                        } else {
-                            tracing::warn!(
-                                group_id = %group_id,
-                                "Could not extract sender from group mailbox message"
-                            );
-                        }
-                    } else {
-                        tracing::warn!(
-                            group_id = %group_id,
-                            message_id = %msg.message_id,
-                            "Failed to decode group mailbox message as EncryptedData"
-                        );
-                    }
+                    // Per NDSS '21: Group mailbox messages are sealed sender encrypted.
+                    // The sender identity is revealed during SSDecVer (decryption).
+                    process_sealed_sender_group_message(
+                        &msg.encrypted_envelope,
+                        &msg.message_id,
+                        group_id,
+                        message_gateway,
+                        group_coordinator,
+                        event_tx,
+                        channel_repo,
+                        attachment_repo,
+                    )
+                    .await;
                 }
 
-                // Acknowledge processed messages
+                // Acknowledge processed messages using mailbox_id (works for both server-managed and anon groups)
                 if !message_ids.is_empty() {
                     if let Err(e) = group_fanout
-                        .acknowledge_group_messages(&group_id, message_ids)
+                        .acknowledge_by_mailbox_id(&poll_result.mailbox_id, message_ids)
                         .await
                     {
                         tracing::warn!(
                             group_id = %group_id,
+                            mailbox_id = %poll_result.mailbox_id,
                             error = %e,
                             "Failed to acknowledge group mailbox messages"
                         );
@@ -128,88 +117,124 @@ pub async fn poll_group_mailboxes(
     }
 }
 
-/// Process a single group mailbox message.
+/// Process a sealed sender group mailbox message.
+///
+/// Per NDSS '21 and Signal Protocol: Group messages are pairwise encrypted using
+/// sealed sender (Double Ratchet). The sender identity is cryptographically revealed
+/// during SSDecVer decryption, NOT from plaintext metadata.
 #[allow(clippy::too_many_arguments)]
-async fn process_group_message(
-    encrypted_data: &EncryptedData,
-    sender_id: &UserId,
-    group_id: ChannelId,
+async fn process_sealed_sender_group_message(
+    envelope: &[u8],
     message_id: &str,
+    group_id: ChannelId,
     message_gateway: &Arc<MessageGateway>,
     group_coordinator: &Arc<GroupCoordinator>,
     event_tx: &broadcast::Sender<InboxEvent>,
-    message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
-    current_user_id: &Option<UserId>,
+    attachment_repo: &Arc<AttachmentRepository>,
 ) {
+    // Create SealedSenderMessage from raw envelope
+    let sealed_sender_msg = SealedSenderMessage {
+        sealed_body: envelope.to_vec(),
+        server_key_id: 0,
+        timestamp: 0,
+    };
+
+    // Process via message gateway - SSDecVer reveals sender identity
     match message_gateway
-        .route_encrypted_message(encrypted_data, sender_id, 1)
+        .process_incoming_message(sealed_sender_msg)
         .await
     {
-        Ok(RouteResult::Decrypted(plaintext)) => {
-            // Parse as DataMessage and store
-            if let Ok(data_message) = DataMessage::decode(plaintext.as_slice()) {
-                if current_user_id.is_some() {
-                    let msg_id = message_id
-                        .parse::<MessageId>()
-                        .unwrap_or_else(|_| MessageId::new());
-
-                    // Use sender's timestamp for Signal-style dedup (sender_id + sent_at)
-                    // created_at is derived from sent_at in Message::new_text()
-                    let mut message =
-                        Message::new_text(group_id, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
-                    message.id = msg_id;
-
-                    // Add attachment IDs to message (attachments are stored separately in attachment_repo)
-                    message.attachments = data_message
-                        .attachments
-                        .iter()
-                        .filter(|p| !p.cdn_key.is_empty())
-                        .map(|p| AttachmentId::from_cdn_key(&p.cdn_key))
-                        .collect();
-
-                    match message_repo.insert_or_ignore(&message) {
-                        Ok(true) => {
-                            if let Ok(new_count) = channel_repo.increment_unread_count(&group_id) {
-                                tracing::debug!(
-                                    channel_id = %group_id,
-                                    unread_count = new_count,
-                                    "Incremented group unread count (via mailbox)"
-                                );
-                            }
-
-                            // Emit ChannelMessageReceived for UI updates
-                            let _ = event_tx.send(InboxEvent::ChannelMessageReceived {
-                                channel_id: group_id,
-                                sender_id: *sender_id,
-                                message_id: message_id.to_string(),
-                                text: data_message.body.clone(),
-                                timestamp: data_message.timestamp,
-                            });
-                        }
-                        Ok(false) => {
-                            tracing::debug!(
-                                message_id = %message.id,
-                                "Group mailbox message already exists (skipped duplicate)"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                message_id = %message.id,
-                                error = %e,
-                                "Failed to store group mailbox message"
-                            );
-                        }
-                    }
-                }
-            }
+        Ok(SealedSenderResult::MessageStored) => {
+            tracing::debug!(
+                group_id = %group_id,
+                message_id = %message_id,
+                "Group mailbox message stored (no UI event)"
+            );
         }
-        Ok(RouteResult::MailboxAnnouncement {
+        Ok(SealedSenderResult::DataMessageReceived {
+            sender_id,
+            channel_id,
+            message_id: msg_id,
+            body,
+            timestamp,
+            attachments,
+        }) => {
+            // Increment unread count
+            if let Ok(new_count) = channel_repo.increment_unread_count(&channel_id) {
+                tracing::debug!(
+                    channel_id = %channel_id,
+                    unread_count = new_count,
+                    "Incremented group unread count (pairwise sealed sender)"
+                );
+            }
+
+            // Create attachment records from pointers (service layer responsibility)
+            if !attachments.is_empty() {
+                let attachment_service = AttachmentService::new(attachment_repo.clone());
+                let created_ids = attachment_service.create_from_pointers(&attachments);
+                tracing::debug!(
+                    channel_id = %channel_id,
+                    attachment_count = created_ids.len(),
+                    "Created attachment records from pointers"
+                );
+            }
+
+            // Emit UI event so message appears in chat
+            let _ = event_tx.send(InboxEvent::ChannelMessageReceived {
+                channel_id,
+                sender_id,
+                message_id: msg_id.to_string(),
+                text: body,
+                timestamp,
+                attachments,
+            });
+
+            tracing::info!(
+                group_id = %group_id,
+                channel_id = %channel_id,
+                sender_id = %sender_id,
+                "Group message received via pairwise sealed sender, UI notified"
+            );
+        }
+        Ok(SealedSenderResult::KeyExchange {
+            sender_id,
+            conversation_id,
+            ephemeral_public_key: _,
+            timestamp: _,
+        }) => {
+            // KeyExchange in group context is unexpected but log it
+            tracing::warn!(
+                group_id = %group_id,
+                sender_id = %sender_id,
+                conversation_id = %conversation_id,
+                "Unexpected KeyExchange in group mailbox"
+            );
+        }
+        Ok(SealedSenderResult::SenderKeyRequested {
+            requester_id,
+            channel_id,
+        }) => {
+            // Note: With pairwise encryption, sender key requests are deprecated.
+            // Keep for backwards compatibility during transition.
+            tracing::info!(
+                group_id = %group_id,
+                channel_id = %channel_id,
+                requester_id = %requester_id,
+                "Sender key request via group mailbox (legacy)"
+            );
+            let _ = event_tx.send(InboxEvent::SenderKeyNeeded {
+                channel_id,
+                sender_id: requester_id,
+            });
+        }
+        Ok(SealedSenderResult::MailboxAnnouncement {
+            sender_id,
             channel_id,
             announcement,
         }) => {
-            // Gateway detected GroupMailboxAddress - process via coordinator
-            if let Err(e) = group_coordinator.process_announcement(*sender_id, &announcement) {
+            // Member announcing their mailbox address
+            if let Err(e) = group_coordinator.process_announcement(sender_id, &announcement) {
                 tracing::error!(
                     channel_id = %channel_id,
                     sender_id = %sender_id,
@@ -220,60 +245,64 @@ async fn process_group_message(
                 tracing::info!(
                     channel_id = %channel_id,
                     sender_id = %sender_id,
-                    "Processed group mailbox announcement from group mailbox"
+                    "Processed group mailbox announcement via sealed sender"
                 );
                 let _ = event_tx.send(InboxEvent::GroupMailboxAnnouncement {
                     channel_id,
-                    member_id: *sender_id,
+                    member_id: sender_id,
                     mailbox_pk: announcement.mailbox_pk.clone(),
                     timestamp: announcement.timestamp,
                 });
             }
         }
-        Ok(RouteResult::ControlContent(_plaintext)) => {
-            tracing::debug!(
-                group_id = %group_id,
-                "Group mailbox control content received"
-            );
-        }
-        Ok(RouteResult::Processed) => {
-            tracing::debug!(
-                group_id = %group_id,
-                "Group mailbox sender key control message processed"
-            );
-        }
-        Ok(RouteResult::NeedsSenderKey {
-            channel_id,
+        Ok(SealedSenderResult::AnonGroupMessageReceived {
             sender_id,
+            group_id: anon_group_id,
+            inner_content,
         }) => {
             tracing::info!(
-                group_id = %group_id,
-                channel_id = %channel_id,
                 sender_id = %sender_id,
-                "Need sender key for group mailbox message"
+                group_id_hex = %hex::encode(&anon_group_id),
+                "Received anonymous group message, emitting UI event"
             );
+
+            // Emit UI event for the anonymous group message
+            let _ = event_tx.send(InboxEvent::AnonGroupMessage {
+                peer_id: sender_id,
+                group_id: anon_group_id,
+                inner_content,
+            });
+        }
+        Ok(SealedSenderResult::AnonGroupJoinAckReceived {
+            sender_id,
+            group_id: anon_group_id,
+            joiner_mailbox_pk,
+            timestamp,
+        }) => {
+            tracing::info!(
+                sender_id = %sender_id,
+                group_id_hex = %hex::encode(&anon_group_id),
+                joiner_mailbox_pk_len = joiner_mailbox_pk.len(),
+                timestamp = timestamp,
+                "Received anonymous group join ack, emitting event to update member mailbox"
+            );
+
+            // Emit event to update the joiner's mailbox key
+            let _ = event_tx.send(InboxEvent::AnonGroupJoinAck {
+                peer_id: sender_id,
+                group_id: anon_group_id,
+                joiner_mailbox_pk,
+                timestamp,
+            });
         }
         Err(e) => {
             tracing::error!(
                 group_id = %group_id,
+                message_id = %message_id,
                 error = %e,
-                "Failed to decrypt group mailbox message"
+                "Failed to process group mailbox message"
             );
         }
     }
 }
 
-/// Extract sender UserId from EncryptedData associated_data.
-///
-/// The associated_data may contain sender info in format:
-/// "sender:{user_id}:channel:{channel_id}"
-pub fn extract_sender_from_encrypted_data(encrypted_data: &EncryptedData) -> Option<UserId> {
-    let associated_str = String::from_utf8_lossy(&encrypted_data.associated_data);
-    if associated_str.starts_with("sender:") {
-        let parts: Vec<&str> = associated_str.split(':').collect();
-        if parts.len() >= 2 {
-            return parts[1].parse().ok();
-        }
-    }
-    None
-}

@@ -15,6 +15,7 @@ use crate::mailbox::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::ai_service::AIService;
 use crate::services::anon_dm_service::AnonDmService;
+use crate::services::ai::LocalAIService;
 use crate::services::jarvis::JarvisService;
 use crate::services::anon_group_service::AnonGroupService;
 use crate::services::attachment::AttachmentService;
@@ -69,6 +70,7 @@ pub struct UIContext {
     pub draft_service: Arc<DraftService>,
     pub anon_group_service: Arc<AnonGroupService>,
     pub anon_dm_service: Arc<AnonDmService>,
+    pub local_ai_service: Arc<LocalAIService>,
     pub jarvis_service: Arc<JarvisService>,
 
     // State stores
@@ -135,6 +137,7 @@ impl UIContext {
             draft_service: services.draft_service.clone(),
             anon_group_service: services.anon_group_service.clone(),
             anon_dm_service: services.anon_dm_service.clone(),
+            local_ai_service: services.local_ai_service.clone(),
             jarvis_service: services.jarvis_service.clone(),
 
             // State stores

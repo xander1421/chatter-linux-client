@@ -13,8 +13,17 @@ use super::{DecryptResult, MessageGateway, RouteResult};
 
 impl MessageGateway {
     /// Check if an EncryptedData is a sender key message.
+    ///
+    /// Recognizes two formats:
+    /// - `sender_key` (direct channel messages)
+    /// - `sender:{user_id}:channel:{channel_id}` (group mailbox fanout)
     pub fn is_sender_key_message(encrypted_data: &crate::proto::chat_v1::EncryptedData) -> bool {
-        encrypted_data.associated_data == b"sender_key"
+        if encrypted_data.associated_data == b"sender_key" {
+            return true;
+        }
+        // Also check for group mailbox format: sender:{user_id}:channel:{channel_id}
+        let associated_str = String::from_utf8_lossy(&encrypted_data.associated_data);
+        associated_str.starts_with("sender:") && associated_str.contains(":channel:")
     }
 
     /// Check if an EncryptedData is a sender key control message (typing, reaction, etc.).
@@ -223,10 +232,8 @@ impl MessageGateway {
                 sender_id = %sender_id,
                 "[MSG_ROUTE] Detected sender key request"
             );
-            // Someone is requesting our sender key
-            self.process_sender_key_request(encrypted_data, sender_id)
-                .await?;
-            Ok(RouteResult::Processed)
+            // Someone is requesting our sender key - return SKDM for sending
+            self.process_sender_key_request(encrypted_data, sender_id).await
         } else {
             tracing::error!(
                 sender_id = %sender_id,
@@ -241,13 +248,13 @@ impl MessageGateway {
 
     /// Process an incoming sender key request.
     ///
-    /// When another member requests our sender key, we respond with our SKDM
-    /// for the specified channel.
+    /// When another member requests our sender key, we create our SKDM
+    /// and return it so the caller can send it to the requester.
     async fn process_sender_key_request(
         &self,
         encrypted_data: &crate::proto::chat_v1::EncryptedData,
         requester_id: &UserId,
-    ) -> Result<(), ServiceError> {
+    ) -> Result<super::RouteResult, ServiceError> {
         use crate::proto::content_v1::SenderKeyRequest;
 
         // Check if this is a sender key request
@@ -270,22 +277,23 @@ impl MessageGateway {
         tracing::info!(
             requester_id = %requester_id,
             channel_id = %channel_id,
-            "Received sender key request, will respond with SKDM"
+            "Received sender key request, creating SKDM to respond"
         );
 
-        // Create and store our SKDM for this channel
-        // This ensures our sender key exists and is up to date
-        let _skdm = self.signal_service.create_sender_key(&channel_id).await?;
+        // Create our SKDM for this channel
+        let skdm = self.signal_service.create_sender_key(&channel_id).await?;
 
-        tracing::debug!(
+        tracing::info!(
             channel_id = %channel_id,
             requester_id = %requester_id,
-            "Created/refreshed SKDM in response to request"
+            skdm_len = skdm.distribution_message.len(),
+            "Created SKDM to send to requester"
         );
 
-        // Note: The SKDM will be distributed when we send our next message
-        // to the channel (via distribute_sender_key in message_service)
-
-        Ok(())
+        Ok(super::RouteResult::RespondWithSkdm {
+            channel_id,
+            requester_id: *requester_id,
+            skdm,
+        })
     }
 }

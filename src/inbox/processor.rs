@@ -21,7 +21,7 @@ use crate::proto::mailbox_v1::{EnvelopeType, EphemeralMessage};
 /// Content type for routing to handlers.
 ///
 /// Determined by inspecting the decrypted plaintext after decryption.
-/// Each type routes to a specific handler in Phase 24.
+/// Each type routes to a specific handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
     /// Regular chat message (text, media, etc.).
@@ -420,6 +420,14 @@ impl MessageProcessor {
             EnvelopeType::Message => {
                 self.process_regular_message(message, identity_store, session_store)
                     .await
+            }
+            EnvelopeType::EciesInit => {
+                // ECIES init messages are handled directly in device.rs, not by this processor.
+                // If we get here, something is misconfigured.
+                Err(ProcessingError::UnsupportedEnvelope {
+                    message_id: message.id.clone(),
+                    envelope_type: message.envelope_type,
+                })
             }
             EnvelopeType::Unspecified => Err(ProcessingError::UnsupportedEnvelope {
                 message_id: message.id.clone(),
@@ -840,6 +848,7 @@ mod tests {
                 EnvelopeType::SealedSender => 1,   // Highest priority, self-contained
                 EnvelopeType::PrekeyMessage => 2,  // Needs context
                 EnvelopeType::Message => 3,        // Needs context
+                EnvelopeType::EciesInit => 0,      // Handled by device.rs, not processor
                 EnvelopeType::Unspecified => 255,  // Should not process
             }
         }

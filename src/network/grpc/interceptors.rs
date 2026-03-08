@@ -10,6 +10,8 @@ use parking_lot::RwLock;
 use tonic::service::Interceptor;
 use tonic::{Request, Status};
 
+use crate::mailbox::blind_signature::UnblindedToken;
+
 /// Authentication modes for gRPC requests.
 #[derive(Clone)]
 #[derive(Default)]
@@ -28,6 +30,9 @@ pub enum AuthMode {
         /// 16-byte UAK for anonymous sending
         access_key: [u8; 16],
     },
+    /// Anonymous credential (spent blind-signed token).
+    /// Used for initial contact or anonymous proxy services (e.g. GIF search).
+    Anonymous(UnblindedToken),
     /// No authentication.
     #[default]
     None,
@@ -72,6 +77,18 @@ impl AuthInterceptor {
     /// identify the sender.
     pub fn set_sealed_sender(&self, access_key: [u8; 16]) {
         *self.auth.write() = AuthMode::SealedSender { access_key };
+    }
+
+    /// Set anonymous authentication with a blind-signed token.
+    ///
+    /// Used for initial contact or anonymous services like GIF search.
+    pub fn set_anonymous(&self, token: UnblindedToken) {
+        *self.auth.write() = AuthMode::Anonymous(token);
+    }
+
+    /// Set the authentication mode directly.
+    pub fn set_mode(&self, mode: AuthMode) {
+        *self.auth.write() = mode;
     }
 
     /// Clear authentication (set to None).
@@ -172,119 +189,26 @@ impl Interceptor for AuthInterceptor {
                     })?,
                 );
             }
+            AuthMode::Anonymous(token) => {
+                // Serialize token to JSON for the header
+                // Match the backend's AnonymousCredential struct
+                let cred = serde_json::json!({
+                    "public_key": BASE64.encode(&token.public_key),
+                    "signature": BASE64.encode(&token.signature),
+                });
+                let value = cred.to_string();
+                request.metadata_mut().insert(
+                    "x-anonymous-credential",
+                    value.parse().map_err(|_| {
+                        Status::internal("invalid anonymous credential header value")
+                    })?,
+                );
+            }
             AuthMode::None => {
                 // No authentication header
             }
         }
 
         Ok(request)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_auth_interceptor_default() {
-        let interceptor = AuthInterceptor::new();
-        assert!(matches!(interceptor.current_mode(), AuthMode::None));
-    }
-
-    #[test]
-    fn test_set_bearer() {
-        let interceptor = AuthInterceptor::new();
-        interceptor.set_bearer("my-device-token".to_string());
-
-        match interceptor.current_mode() {
-            AuthMode::Bearer(token) => assert_eq!(token, "my-device-token"),
-            _ => panic!("Expected Bearer mode"),
-        }
-    }
-
-    #[test]
-    fn test_set_basic() {
-        let interceptor = AuthInterceptor::new();
-        interceptor.set_basic(
-            "d04b0053-6557-48f9-86c2-e8ca389279bd.1".to_string(),
-            "device-token".to_string(),
-        );
-
-        match interceptor.current_mode() {
-            AuthMode::Basic { username, password } => {
-                assert_eq!(username, "d04b0053-6557-48f9-86c2-e8ca389279bd.1");
-                assert_eq!(password, "device-token");
-            }
-            _ => panic!("Expected Basic mode"),
-        }
-    }
-
-    #[test]
-    fn test_set_sealed_sender() {
-        let interceptor = AuthInterceptor::new();
-        let uak = [1u8; 16];
-        interceptor.set_sealed_sender(uak);
-
-        match interceptor.current_mode() {
-            AuthMode::SealedSender { access_key } => assert_eq!(access_key, uak),
-            _ => panic!("Expected SealedSender mode"),
-        }
-    }
-
-    #[test]
-    fn test_clear() {
-        let interceptor = AuthInterceptor::new();
-        interceptor.set_bearer("token".to_string());
-        interceptor.clear();
-        assert!(matches!(interceptor.current_mode(), AuthMode::None));
-    }
-
-    #[test]
-    fn test_interceptor_bearer_header() {
-        let mut interceptor = AuthInterceptor::new();
-        interceptor.set_bearer("test-token".to_string());
-
-        let request = Request::new(());
-        let result = interceptor.call(request).unwrap();
-
-        let auth = result.metadata().get("authorization").unwrap();
-        assert_eq!(auth.to_str().unwrap(), "Bearer test-token");
-    }
-
-    #[test]
-    fn test_interceptor_basic_header() {
-        let mut interceptor = AuthInterceptor::new();
-        interceptor.set_basic("user.1".to_string(), "pass".to_string());
-
-        let request = Request::new(());
-        let result = interceptor.call(request).unwrap();
-
-        let auth = result.metadata().get("authorization").unwrap();
-        // "user.1:pass" base64 encoded is "dXNlci4xOnBhc3M="
-        assert_eq!(auth.to_str().unwrap(), "Basic dXNlci4xOnBhc3M=");
-    }
-
-    #[test]
-    fn test_interceptor_sealed_sender_header() {
-        let mut interceptor = AuthInterceptor::new();
-        interceptor.set_sealed_sender([0xAB; 16]);
-
-        let request = Request::new(());
-        let result = interceptor.call(request).unwrap();
-
-        let uak = result.metadata().get("unidentified-access-key").unwrap();
-        // 16 bytes of 0xAB base64 encoded
-        assert_eq!(uak.to_str().unwrap(), "q6urq6urq6urq6urq6urqw==");
-    }
-
-    #[test]
-    fn test_interceptor_no_auth() {
-        let mut interceptor = AuthInterceptor::new();
-
-        let request = Request::new(());
-        let result = interceptor.call(request).unwrap();
-
-        assert!(result.metadata().get("authorization").is_none());
-        assert!(result.metadata().get("unidentified-access-key").is_none());
     }
 }

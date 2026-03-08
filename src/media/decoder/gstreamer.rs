@@ -901,12 +901,14 @@ impl VideoDecoder for GStreamerDecoder {
         // Wait for ASYNC_DONE message which indicates seek completed
         // Timeout after 2 seconds
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut seek_completed = false;
         while std::time::Instant::now() < deadline {
             if let Some(msg) = bus.timed_pop(gst::ClockTime::from_mseconds(100)) {
                 use gst::MessageView;
                 match msg.view() {
                     MessageView::AsyncDone(_) => {
                         tracing::trace!("Seek completed (ASYNC_DONE)");
+                        seek_completed = true;
                         break;
                     }
                     MessageView::Error(err) => {
@@ -917,11 +919,19 @@ impl VideoDecoder for GStreamerDecoder {
                     }
                     MessageView::Eos(_) => {
                         tracing::debug!("EOS during seek - video may be very short");
+                        seek_completed = true;
                         break;
                     }
                     _ => {}
                 }
             }
+        }
+
+        // Give extra time for preroll to be generated after seek
+        // Some codecs need additional time to decode the frame at the seek position
+        if seek_completed && current_state == gst::State::Paused {
+            // Brief wait for preroll sample to be ready
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
         *self.position_ms.lock().unwrap() = timestamp_ms;

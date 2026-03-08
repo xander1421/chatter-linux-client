@@ -6,7 +6,6 @@
 use std::sync::Arc;
 
 use crate::error::NetworkError;
-use crate::network::grpc::integration_client::IntegrationClient;
 use crate::proto::chat_v1::{Integration, IntegrationType, Message};
 use crate::services::ai_service::AIService;
 use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
@@ -60,13 +59,13 @@ impl From<CurrentUserError> for SummarizeError {
 /// let ai_service = AIService::new(settings_repo);
 ///
 /// // Get the channel's AI integration (if any)
-/// let integration = summarize_service.get_channel_ai_integration(&ai_service, &mut client, "channel-123").await?;
+/// let integration = summarize_service.get_channel_ai_integration(&ai_service, "channel-123").await?;
 ///
 /// // Prepare a summarization prompt
 /// let prompt = AISummarizeService::prepare_summarization_prompt(&messages, Some("Summarize the key decisions"));
 ///
 /// // Validate prerequisites for summary request
-/// summarize_service.request_summary(&ai_service, &mut client, "channel-123", &messages, None).await?;
+/// summarize_service.request_summary(&ai_service, "channel-123", &messages, None).await?;
 /// ```
 pub struct AISummarizeService {
     settings_repo: Arc<SettingsRepository>,
@@ -99,7 +98,6 @@ impl AISummarizeService {
     /// # Arguments
     ///
     /// * `ai_service` - Reference to AIService for integration queries
-    /// * `client` - Mutable reference to integration client
     /// * `channel_id` - Channel to query
     ///
     /// # Returns
@@ -108,7 +106,6 @@ impl AISummarizeService {
     pub async fn get_channel_ai_integration(
         &self,
         ai_service: &AIService,
-        client: &mut IntegrationClient,
         channel_id: &str,
     ) -> Result<Option<Integration>, SummarizeError> {
         // Check logged in
@@ -116,7 +113,7 @@ impl AISummarizeService {
 
         // Get all channel integrations
         let integrations = ai_service
-            .list_channel_integrations(client, channel_id)
+            .get_channel_integrations(channel_id)
             .await
             .map_err(|e| match e {
                 crate::services::ai_service::AIError::NotLoggedIn => SummarizeError::NotLoggedIn,
@@ -183,7 +180,6 @@ impl AISummarizeService {
     /// # Arguments
     ///
     /// * `ai_service` - Reference to AIService for integration queries
-    /// * `client` - Mutable reference to integration client
     /// * `channel_id` - Channel to summarize messages from
     /// * `messages` - Messages to summarize
     /// * `instruction` - Optional custom summarization instruction
@@ -196,7 +192,6 @@ impl AISummarizeService {
     pub async fn request_summary(
         &self,
         ai_service: &AIService,
-        client: &mut IntegrationClient,
         channel_id: &str,
         messages: &[Message],
         instruction: Option<&str>,
@@ -213,7 +208,7 @@ impl AISummarizeService {
 
         // Check channel has AI integration
         let ai_integration = self
-            .get_channel_ai_integration(ai_service, client, channel_id)
+            .get_channel_ai_integration(ai_service, channel_id)
             .await?;
 
         if ai_integration.is_none() {

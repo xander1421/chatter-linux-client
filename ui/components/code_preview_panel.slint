@@ -1,7 +1,7 @@
 // Code preview panel component
 //
 // Displays syntax-highlighted code with line numbers in a scrollable panel.
-// Uses StyledText for selectable syntax-highlighted content.
+// Uses slint-code-view for rendering with selection support.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -13,21 +13,29 @@ export component CodePreviewPanel inherits Rectangle {
     in property <string> language: "";
     in property <int> line-count: 0;
 
-    // Syntax-highlighted content as styled text (supports selection)
-    in property <styled-text> code-content;
+    // Rendered code image from slint-code-view
+    in property <image> code-image;
 
-    // Plain text fallback for copy-all functionality
+    // Plain text for copy-all functionality
     in property <string> plain-text: "";
+
+    // Selection state (for UI feedback)
+    in property <bool> has-selection: false;
+    in property <string> selected-text: "";
 
     // Callbacks
     callback close-clicked();
     callback copy-clicked();
+    callback copy-selection-clicked();
     callback open-external-clicked();
 
-    // Code preview background (base16-ocean.dark theme)
+    // Pointer events for selection handling
+    callback pointer-down(/* x */ length, /* y */ length, /* shift */ bool, /* ctrl */ bool);
+    callback pointer-move(/* x */ length, /* y */ length);
+    callback pointer-up(/* x */ length, /* y */ length);
+
+    // Code preview background
     property <color> code-background: #1b2b34;
-    property <color> code-line-number: #65737e;
-    property <color> code-text: #c0c5ce;
 
     // Panel styling
     background: root.code-background;
@@ -89,7 +97,32 @@ export component CodePreviewPanel inherits Rectangle {
                     spacing: Spacing.xs;
                     alignment: end;
 
-                    // Copy button
+                    // Copy selection button (only visible when there's a selection)
+                    if root.has-selection: Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        background: copy-sel-touch.has-hover ? Colors.primary.transparentize(0.8) : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "\u{2702}"; // Scissors
+                            font-size: Typography.sm;
+                            color: Colors.primary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        copy-sel-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.copy-selection-clicked();
+                            }
+                        }
+                    }
+
+                    // Copy all button
                     Rectangle {
                         width: 32px;
                         height: 32px;
@@ -165,23 +198,44 @@ export component CodePreviewPanel inherits Rectangle {
             }
         }
 
-        // Syntax-highlighted code view with selection support
+        // Code view with rendered image
         Flickable {
             vertical-stretch: 1;
-            viewport-height: styled-code.preferred-height + Spacing.md * 2;
-            viewport-width: max(styled-code.preferred-width + Spacing.md * 2, self.width);
+            viewport-height: code-img.height;
+            viewport-width: max(code-img.width, self.width);
 
-            Rectangle {
-                x: Spacing.md;
-                y: Spacing.md;
+            code-img := Image {
+                source: root.code-image;
+                image-fit: contain;
+            }
 
-                // StyledText with syntax highlighting and selection support
-                styled-code := StyledText {
-                    text: root.code-content;
-                    font-size: 13px;
-                    color: root.code-text;
-                    selectable: true;
-                    selection-background-color: #3080ff60;
+            // Touch area for text/line selection
+            code-touch := TouchArea {
+                width: 100%;
+                height: 100%;
+                mouse-cursor: text;
+
+                clicked => {
+                    // Single click handling
+                }
+
+                pointer-event(event) => {
+                    if event.kind == PointerEventKind.down {
+                        root.pointer-down(
+                            self.mouse-x,
+                            self.mouse-y,
+                            event.modifiers.shift,
+                            event.modifiers.control
+                        );
+                    } else if event.kind == PointerEventKind.up {
+                        root.pointer-up(self.mouse-x, self.mouse-y);
+                    }
+                }
+
+                moved => {
+                    if self.pressed {
+                        root.pointer-move(self.mouse-x, self.mouse-y);
+                    }
                 }
             }
         }

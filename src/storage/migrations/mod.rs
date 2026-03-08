@@ -18,6 +18,22 @@ pub mod v015_ephemeral_messages;
 pub mod v016_message_sent_at;
 pub mod v017_encrypted_attachment_content;
 pub mod v018_rename_svr_public_key;
+pub mod v019_file_storage;
+pub mod v020_anon_groups;
+pub mod v021_anon_group_messages;
+pub mod v022_anon_group_mailbox_poll_time;
+pub mod v023_pending_channel_messages;
+pub mod v024_friend_profile_keys;
+pub mod v025_anon_dm;
+pub mod v026_blocking_rate_limits;
+pub mod v027_anon_dm_peer_display_name;
+pub mod v028_anon_dm_sent_at;
+pub mod v029_anon_group_sent_at;
+pub mod v030_anon_dm_peer_avatar;
+pub mod v031_jarvis_memory;
+pub mod v032_jarvis_graph;
+pub mod v033_anon_dm_reactions_receipts;
+pub mod v034_anon_group_member_profiles;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -39,6 +55,22 @@ pub use v015_ephemeral_messages::V015EphemeralMessages;
 pub use v016_message_sent_at::V016MessageSentAt;
 pub use v017_encrypted_attachment_content::V017EncryptedAttachmentContent;
 pub use v018_rename_svr_public_key::V018RenameSvrPublicKey;
+pub use v019_file_storage::V019FileStorage;
+pub use v020_anon_groups::V020AnonGroups;
+pub use v021_anon_group_messages::V021AnonGroupMessages;
+pub use v022_anon_group_mailbox_poll_time::V022AnonGroupMailboxPollTime;
+pub use v023_pending_channel_messages::V023PendingChannelMessages;
+pub use v024_friend_profile_keys::V024FriendProfileKeys;
+pub use v025_anon_dm::V025AnonDm;
+pub use v026_blocking_rate_limits::V026BlockingRateLimits;
+pub use v027_anon_dm_peer_display_name::V027AnonDmPeerDisplayName;
+pub use v028_anon_dm_sent_at::V028AnonDmSentAt;
+pub use v029_anon_group_sent_at::V029AnonGroupSentAt;
+pub use v030_anon_dm_peer_avatar::V030AnonDmPeerAvatar;
+pub use v031_jarvis_memory::V031JarvisMemory;
+pub use v032_jarvis_graph::V032JarvisGraph;
+pub use v033_anon_dm_reactions_receipts::V033AnonDmReactionsReceipts;
+pub use v034_anon_group_member_profiles::V034AnonGroupMemberProfiles;
 
 /// Trait for database migrations.
 ///
@@ -175,4 +207,20 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V016MessageSentAt)
         .register(V017EncryptedAttachmentContent)
         .register(V018RenameSvrPublicKey)
+        .register(V019FileStorage)
+        .register(V020AnonGroups)
+        .register(V021AnonGroupMessages)
+        .register(V022AnonGroupMailboxPollTime)
+        .register(V023PendingChannelMessages)
+        .register(V024FriendProfileKeys)
+        .register(V025AnonDm)
+        .register(V026BlockingRateLimits)
+        .register(V027AnonDmPeerDisplayName)
+        .register(V028AnonDmSentAt)
+        .register(V029AnonGroupSentAt)
+        .register(V030AnonDmPeerAvatar)
+        .register(V031JarvisMemory)
+        .register(V032JarvisGraph)
+        .register(V033AnonDmReactionsReceipts)
+        .register(V034AnonGroupMemberProfiles)
 }

@@ -52,17 +52,6 @@ export component MessageComposer inherits Rectangle {
     // Edit bar height
     property <length> edit-bar-height: is-editing ? 36px : 0px;
 
-    // Calculate input width explicitly for text wrapping
-    // Layout: [pad-left][attach-btn][space][INPUT][space][emoji][space][gif][space?][send?][pad-right]
-    // Fixed elements: attachment(36) + emoji(36) + gif(36) + send?(36) + spacing + padding
-    property <length> button-size: 36px;
-    // Fixed width without send: 3 buttons + 3 spacings + 2 paddings
-    property <length> fixed-width-no-send: button-size * 3 + Spacing.sm * 3 + Spacing.md * 2;
-    // Fixed width with send: 4 buttons + 4 spacings + 2 paddings
-    property <length> fixed-width-with-send: button-size * 4 + Spacing.sm * 4 + Spacing.md * 2;
-    // Input gets remaining width (calculated from root, not from layout)
-    property <length> input-width: max(100px, root.width - (can-send ? fixed-width-with-send : fixed-width-no-send));
-
     // Callbacks
     callback send(string);
     callback send-edit(string, string);  // (message_id, new_text)
@@ -169,7 +158,8 @@ export component MessageComposer inherits Rectangle {
             Flickable {
                 width: 100%;
                 height: 100%;
-                viewport-width: self.width;
+                // Calculate content width: each attachment is 180px + spacing, plus add button 56px
+                viewport-width: max(self.width, (180px + Spacing.sm) * root.pending-attachments.length + 56px + Spacing.md + Spacing.sm);
                 viewport-height: self.height;
                 interactive: true;
 
@@ -185,6 +175,7 @@ export component MessageComposer inherits Rectangle {
                         height: 56px;
                         background: Colors.surface;
                         border-radius: Spacing.radius-sm;
+                        opacity: attachment.is-ready ? 1.0 : 0.7;
 
                         property <color> category-bg: attachment.category == "image" ? #4ade80 :
                                                       attachment.category == "video" ? #f472b6 :
@@ -206,7 +197,7 @@ export component MessageComposer inherits Rectangle {
                             padding: Spacing.sm;
                             spacing: Spacing.sm;
 
-                            // Icon or thumbnail
+                            // Icon or thumbnail with loading indicator
                             Rectangle {
                                 width: 40px;
                                 height: 40px;
@@ -215,18 +206,28 @@ export component MessageComposer inherits Rectangle {
                                 clip: true;
 
                                 // Show thumbnail for images
-                                if attachment.has-thumbnail: Image {
+                                if attachment.has-thumbnail && attachment.is-ready: Image {
                                     width: 100%;
                                     height: 100%;
                                     source: attachment.thumbnail;
                                     image-fit: cover;
                                 }
 
-                                // Show icon for non-images
-                                if !attachment.has-thumbnail: Text {
+                                // Show icon for non-images when ready
+                                if !attachment.has-thumbnail && attachment.is-ready: Text {
                                     width: 100%;
                                     height: 100%;
                                     text: category-emoji;
+                                    font-size: Typography.lg;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+
+                                // Loading indicator when not ready
+                                if !attachment.is-ready: Text {
+                                    width: 100%;
+                                    height: 100%;
+                                    text: "\u{23F3}";  // Hourglass
                                     font-size: Typography.lg;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
@@ -245,10 +246,14 @@ export component MessageComposer inherits Rectangle {
                                     font-size: Typography.xs;
                                     overflow: elide;
                                 }
-                                Text {
-                                    text: attachment.size-display;
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
+                                HorizontalLayout {
+                                    spacing: 4px;
+
+                                    Text {
+                                        text: attachment.is-ready ? attachment.size-display : "Encrypting...";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
                                 }
                             }
 
@@ -345,10 +350,9 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Text input area - explicit width for proper text wrapping
+            // Text input area
             Rectangle {
-                // Use pre-calculated input-width for explicit sizing (required for word-wrap)
-                width: root.input-width;
+                horizontal-stretch: 1;
                 height: root.content-height;
                 background: Colors.background;
                 border-radius: Spacing.radius-md;
@@ -368,7 +372,7 @@ export component MessageComposer inherits Rectangle {
                     wrap: word-wrap;
                 }
 
-                // Text input - explicit width for word-wrap to work on long words
+                // Text input
                 text-input := TextInput {
                     x: Spacing.md;
                     y: Spacing.sm;

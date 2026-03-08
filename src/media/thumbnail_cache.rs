@@ -39,8 +39,16 @@ impl ThumbnailCache {
     pub fn new(directories: &Directories, db: Arc<Database>) -> Self {
         let thumbnails_dir = directories.cache_dir().join("thumbnails");
 
-        // Create thumbnails directory (best effort)
-        let _ = std::fs::create_dir_all(&thumbnails_dir);
+        // Create thumbnails directory with secure permissions (best effort)
+        if let Err(e) = std::fs::create_dir_all(&thumbnails_dir) {
+            tracing::warn!("Failed to create thumbnails directory: {}", e);
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&thumbnails_dir, std::fs::Permissions::from_mode(0o700));
+            }
+        }
 
         Self {
             thumbnails_dir,

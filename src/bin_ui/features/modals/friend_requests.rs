@@ -6,17 +6,17 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::AppContext;
+use chatter_linux::app::UIContext;
 use chatter_linux::domain::ids::UserId;
 use chatter_linux::services::channel::ChannelService;
-use chatter_linux::services::user_service::UserService;
+use chatter_linux::services::user::UserService;
 
 use crate::bin_ui::converters::get_initials;
 use crate::{DMListItemData, MainWindow};
 
-pub fn wire_friend_requests(window: &MainWindow, ctx: &AppContext) {
-    let user_service = Arc::new(ctx.user_service());
-    let channel_service = Arc::new(ctx.channel_service());
+pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let user_service = ui_ctx.user_service.clone();
+    let channel_service = ui_ctx.channel_service.clone();
 
     // Switch tab
     let weak_window = window.as_weak();
@@ -267,20 +267,10 @@ async fn add_dm_to_sidebar_on_accept(
                 }
             };
 
-            // Create DMListItemData and add to UI
+            // Create DMListItemData inside event loop (slint::Image is not Send)
             let other_user_id_owned = other_user_id.to_string();
             let channel_id_owned = channel_id.to_string();
-            let dm_item = DMListItemData {
-                channel_id: channel_id_owned.into(),
-                user_id: other_user_id_owned.clone().into(),
-                display_name: other_user_name.clone().into(),
-                avatar_url: SharedString::default(),
-                initials: get_initials(&other_user_name).into(),
-                presence_status: "online".into(),
-                last_message: SharedString::default(),
-                timestamp: SharedString::default(),
-                unread_count: 0,
-            };
+            let initials = get_initials(&other_user_name);
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_window.upgrade() {
@@ -296,6 +286,20 @@ async fn add_dm_to_sidebar_on_accept(
                     }
 
                     // Add new DM
+                    let dm_item = DMListItemData {
+                        channel_id: channel_id_owned.into(),
+                        user_id: other_user_id_owned.clone().into(),
+                        display_name: other_user_name.clone().into(),
+                        avatar_url: SharedString::default(),
+                        avatar_source: slint::Image::default(),
+                        has_avatar: false,
+                        initials: initials.into(),
+                        presence_status: "online".into(),
+                        last_message: SharedString::default(),
+                        timestamp: SharedString::default(),
+                        unread_count: 0,
+                        is_typing: false,
+                    };
                     dm_vec.push(dm_item);
 
                     // Update UI

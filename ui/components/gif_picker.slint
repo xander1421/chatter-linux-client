@@ -28,7 +28,7 @@ export component GifPicker inherits Rectangle {
     in-out property <string> search-query: "";
 
     // Callbacks
-    callback gif-selected(string);  // Returns full GIF URL
+    callback gif-selected(string, string);  // Returns full GIF URL
     callback search(string);
     callback close();
 
@@ -367,7 +367,7 @@ export component GifPicker inherits Rectangle {
                             width: 100%;
                             height: 100%;
                             clicked => {
-                                root.gif-selected(gif-data.full-url);
+                                root.gif-selected(gif-data.id, gif-data.full-url);
                             }
                         }
                     }
@@ -375,13 +375,13 @@ export component GifPicker inherits Rectangle {
             }
         }
 
-        // Tenor attribution (required by API TOS)
+        // Klipy attribution
         HorizontalLayout {
             height: 16px;
             alignment: center;
 
             Text {
-                text: "Powered by Tenor";
+                text: "Powered by Klipy";
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 horizontal-alignment: center;

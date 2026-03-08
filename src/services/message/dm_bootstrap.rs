@@ -11,27 +11,24 @@ use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::mailbox::dm::{
     release_bootstrap_lock, try_acquire_bootstrap_lock, DmBootstrap,
 };
-use crate::mailbox::token_manager::TokenManager;
+use crate::mailbox::TokenManager;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::message_client::MessageClient;
 use crate::network::grpc::MailboxClient;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::current_user::CurrentUserProvider;
-use crate::storage::Database;
 use crate::util::time::TimestampNanos;
 
 use super::{MessageError, MessageService};
 
 impl MessageService {
     /// Handle DM bootstrap when conversation is not ready.
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_dm_bootstrap(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
         content: crate::proto::content_v1::Content,
-        database: Arc<Database>,
         grpc_pool: Option<&Arc<GrpcClientPool>>,
         attachment_ids: Option<Vec<AttachmentId>>,
         channel_id: Option<ChannelId>,
@@ -63,7 +60,6 @@ impl MessageService {
                 auth_client,
                 peer_id,
                 content,
-                database,
                 grpc_pool,
                 attachment_ids,
                 channel_id,
@@ -85,7 +81,7 @@ impl MessageService {
             MessageError::DmError("gRPC pool required for DM bootstrap".into())
         })?;
 
-        let dm_bootstrap = DmBootstrap::new(database.clone());
+        let dm_bootstrap = DmBootstrap::new(self.database.clone());
         let mut mailbox_client =
             MailboxClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
 
@@ -96,7 +92,6 @@ impl MessageService {
                     peer_id,
                     &bootstrap_result.bootstrap_message,
                     grpc_pool,
-                    &database,
                 ).await?;
 
                 // Queue the original message to be sent once bootstrap completes
@@ -141,13 +136,11 @@ impl MessageService {
     }
 
     /// Handle DM bootstrap as the responder (higher UUID).
-    #[allow(clippy::too_many_arguments)]
     async fn handle_dm_bootstrap_responder(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
         content: crate::proto::content_v1::Content,
-        database: Arc<Database>,
         grpc_pool: Option<&Arc<GrpcClientPool>>,
         attachment_ids: Option<Vec<AttachmentId>>,
         channel_id: Option<ChannelId>,
@@ -208,7 +201,7 @@ impl MessageService {
 
         // Not pending - send a bootstrap REQUEST to prompt peer (lower UUID) to initiate
         if let Some(grpc_pool) = grpc_pool {
-            self.send_bootstrap_request(auth_client, peer_id, our_user_id, grpc_pool, &database).await;
+            self.send_bootstrap_request(auth_client, peer_id, our_user_id, grpc_pool).await;
             // DON'T release lock here - keep it held until peer's bootstrap MESSAGE arrives
         } else {
             tracing::info!(
@@ -229,7 +222,6 @@ impl MessageService {
         peer_id: &UserId,
         our_user_id: &UserId,
         grpc_pool: &Arc<GrpcClientPool>,
-        database: &Arc<Database>,
     ) {
         tracing::info!(
             peer_id = %peer_id,
@@ -265,7 +257,7 @@ impl MessageService {
         ).await {
             Ok(sealed_ciphertext) => {
                 // Get anonymous credential for the request
-                let token_manager = TokenManager::new(database.clone());
+                let token_manager = self.token_manager.clone();
                 let token = self.get_or_request_token(&token_manager, peer_id, grpc_pool).await;
 
                 if let Some(token) = token {
@@ -324,7 +316,6 @@ impl MessageService {
         peer_id: &UserId,
         bootstrap_message: &[u8],
         grpc_pool: &Arc<GrpcClientPool>,
-        database: &Arc<Database>,
     ) -> Result<(), MessageError> {
         let peer_device_id = 1u32;
         let peer_id_str = peer_id.to_string();
@@ -336,7 +327,7 @@ impl MessageService {
             .map_err(|e| MessageError::EncryptionFailed(format!("Bootstrap encrypt: {}", e)))?;
 
         // Get anonymous credential for initial contact
-        let token_manager = TokenManager::new(database.clone());
+        let token_manager = self.token_manager.clone();
 
         let credential_token = match token_manager.get_available_token() {
             Ok(Some(token)) => token,

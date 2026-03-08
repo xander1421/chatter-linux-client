@@ -64,6 +64,42 @@ impl ChannelRepository {
         Ok(())
     }
 
+    /// Insert a channel if it doesn't already exist.
+    ///
+    /// Returns Ok(true) if inserted, Ok(false) if already existed.
+    pub fn insert_or_ignore(&self, channel: &Channel) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "INSERT OR IGNORE INTO channels (
+                id, channel_type, name, description, image_url, owner_id,
+                persistence, max_members, default_ttl_seconds,
+                allow_reactions, allow_threads, allow_attachments, require_encryption,
+                created_at, updated_at, archived, unread_count, last_message_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            params![
+                channel.id.to_string(),
+                channel_type_to_i32(channel.channel_type),
+                channel.name,
+                channel.description,
+                channel.image_url,
+                channel.owner_id.to_string(),
+                persistence_to_i32(channel.config.persistence),
+                channel.config.max_members,
+                channel.config.default_ttl_seconds,
+                channel.config.allow_reactions as i32,
+                channel.config.allow_threads as i32,
+                channel.config.allow_attachments as i32,
+                channel.config.require_encryption as i32,
+                channel.created_at.to_rfc3339(),
+                channel.updated_at.to_rfc3339(),
+                channel.archived as i32,
+                channel.unread_count,
+                channel.last_message_at.map(|dt| dt.to_rfc3339()),
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Get a channel by ID.
     pub fn get(&self, id: &ChannelId) -> Result<Option<Channel>, StorageError> {
         let conn = self.db.connection()?;
@@ -117,6 +153,59 @@ impl ChannelRepository {
         if rows == 0 {
             return Err(StorageError::NotFound(format!("Channel {}", channel.id)));
         }
+        Ok(())
+    }
+
+    /// Insert or update a channel (upsert).
+    ///
+    /// If the channel exists, updates it. If not, inserts it.
+    pub fn upsert(&self, channel: &Channel) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "INSERT INTO channels (
+                id, channel_type, name, description, image_url, owner_id,
+                persistence, max_members, default_ttl_seconds,
+                allow_reactions, allow_threads, allow_attachments, require_encryption,
+                created_at, updated_at, archived, unread_count, last_message_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+            ON CONFLICT(id) DO UPDATE SET
+                channel_type = excluded.channel_type,
+                name = excluded.name,
+                description = excluded.description,
+                image_url = excluded.image_url,
+                owner_id = excluded.owner_id,
+                persistence = excluded.persistence,
+                max_members = excluded.max_members,
+                default_ttl_seconds = excluded.default_ttl_seconds,
+                allow_reactions = excluded.allow_reactions,
+                allow_threads = excluded.allow_threads,
+                allow_attachments = excluded.allow_attachments,
+                require_encryption = excluded.require_encryption,
+                updated_at = excluded.updated_at,
+                archived = excluded.archived,
+                unread_count = excluded.unread_count,
+                last_message_at = excluded.last_message_at",
+            params![
+                channel.id.to_string(),
+                channel_type_to_i32(channel.channel_type),
+                channel.name,
+                channel.description,
+                channel.image_url,
+                channel.owner_id.to_string(),
+                persistence_to_i32(channel.config.persistence),
+                channel.config.max_members,
+                channel.config.default_ttl_seconds,
+                channel.config.allow_reactions as i32,
+                channel.config.allow_threads as i32,
+                channel.config.allow_attachments as i32,
+                channel.config.require_encryption as i32,
+                channel.created_at.to_rfc3339(),
+                channel.updated_at.to_rfc3339(),
+                channel.archived as i32,
+                channel.unread_count,
+                channel.last_message_at.map(|dt| dt.to_rfc3339()),
+            ],
+        )?;
         Ok(())
     }
 

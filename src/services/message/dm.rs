@@ -3,23 +3,24 @@
 //! Signal Protocol encryption for DM messages, including bootstrap,
 //! session management, and pending message queue.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use prost::Message as ProstMessage;
 
 use crate::crypto::encrypt_dm_bytes;
-use crate::domain::ids::UserId;
+use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::Message;
 use crate::mailbox::dm::DmConversationManager;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::mailbox_v1::EnvelopeType;
+use crate::services::attachment::AttachmentService;
 use crate::services::current_user::CurrentUserProvider;
 use crate::services::mailbox_manager::MailboxManager;
-use crate::storage::Database;
 use crate::util::time::TimestampNanos;
 
-use super::{MessageError, MessageService, SendDmContentParams, SendDmMsgParams};
+use super::{DmSendResult, MessageError, MessageService, SendDmContentParams, SendDmMsgParams};
 
 impl MessageService {
     /// Send a Content proto to a DM peer via two-layer encryption.
@@ -27,6 +28,9 @@ impl MessageService {
     /// Uses two encryption layers for privacy:
     /// 1. Signal Protocol (forward secrecy via Double Ratchet)
     /// 2. Mailbox encryption (sender anonymity via XChaCha20-Poly1305)
+    ///
+    /// If profile sharing is enabled for this friendship, includes our
+    /// profile key in DataMessage so the recipient can decrypt our display_name.
     pub async fn send_dm_content(
         &self,
         params: SendDmContentParams<'_>,
@@ -35,7 +39,6 @@ impl MessageService {
             auth_client,
             peer_id,
             content,
-            database,
             mailbox_manager,
             grpc_pool,
             attachment_ids,
@@ -48,9 +51,12 @@ impl MessageService {
             "MessageService: send_dm_content called"
         );
 
+        // Inject profile key if profile sharing is enabled for this peer
+        let content = self.inject_profile_key_if_sharing(peer_id, content)?;
+
         // Load conversation to get peer's mailbox and shared secret
         tracing::debug!(peer_id = %peer_id, "MessageService: loading conversation state");
-        let conversation_manager = DmConversationManager::new(database.clone());
+        let conversation_manager = DmConversationManager::new(self.database.clone());
         let conversation = conversation_manager.load_conversation(peer_id).map_err(|e| {
             tracing::error!(peer_id = %peer_id, error = %e, "MessageService: failed to load conversation");
             MessageError::DmError(format!("Failed to load conversation: {}", e))
@@ -77,7 +83,6 @@ impl MessageService {
                 auth_client,
                 peer_id,
                 content,
-                database,
                 grpc_pool,
                 attachment_ids,
                 channel_id,
@@ -102,27 +107,38 @@ impl MessageService {
         // Serialize Content proto
         let plaintext = content.encode_to_vec();
 
-        // Layer 1: Signal Protocol encryption (forward secrecy)
-        let peer_device_id = 1u32; // Primary device
+        // Layer 1: Signal Protocol encryption for ALL peer devices (forward secrecy)
         let peer_id_str = peer_id.to_string();
 
-        let signal_ciphertext = self
+        let peer_ciphertexts = self
             .signal_service
-            .encrypt_message(auth_client, &peer_id_str, peer_device_id, &plaintext)
+            .encrypt_message_all_devices(auth_client, &peer_id_str, &plaintext)
             .await
-            .map_err(|e| MessageError::EncryptionFailed(format!("Signal encrypt: {}", e)))?;
+            .map_err(|e| MessageError::EncryptionFailed(format!("Multi-device encrypt: {}", e)))?;
 
-        // Layer 2: Mailbox encryption (sender anonymity)
-        let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, shared_secret)
-            .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
+        tracing::info!(
+            peer_id = %peer_id,
+            device_count = peer_ciphertexts.len(),
+            "Encrypted DM for all peer devices"
+        );
 
-        // Send to peer's mailbox
-        mailbox_manager
-            .send_to_mailbox(&peer_mailbox.public_key, mailbox_encrypted, EnvelopeType::SealedSender)
-            .await
-            .map_err(|e| MessageError::DmError(format!("Failed to send to mailbox: {}", e)))?;
+        // Layer 2: Mailbox encryption for each device (sender anonymity)
+        // All ciphertexts go to same mailbox - server fans out to devices
+        for (device_id, signal_ciphertext) in peer_ciphertexts {
+            let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, shared_secret)
+                .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
 
-        tracing::debug!(peer_id = %peer_id, "Sent DM via two-layer encryption");
+            mailbox_manager
+                .send_to_mailbox(&peer_mailbox.public_key, mailbox_encrypted, EnvelopeType::SealedSender)
+                .await
+                .map_err(|e| MessageError::DmError(format!("Failed to send to mailbox: {}", e)))?;
+
+            tracing::debug!(
+                peer_id = %peer_id,
+                device_id,
+                "Sent DM to device via two-layer encryption"
+            );
+        }
 
         Ok(())
     }
@@ -132,7 +148,6 @@ impl MessageService {
         &self,
         peer_id: &UserId,
         content: crate::proto::content_v1::Content,
-        database: Arc<Database>,
         mailbox_manager: &MailboxManager,
     ) -> Result<(), MessageError> {
         let mut auth_client = self.auth_client();
@@ -141,7 +156,6 @@ impl MessageService {
             auth_client: &mut auth_client,
             peer_id,
             content,
-            database,
             mailbox_manager,
             grpc_pool: Some(&self.grpc_pool),
             attachment_ids: None,
@@ -156,7 +170,6 @@ impl MessageService {
         auth_client: &mut AuthClient,
         peer_id: &UserId,
         text: &str,
-        database: Arc<Database>,
         mailbox_manager: &MailboxManager,
         grpc_pool: &Arc<GrpcClientPool>,
     ) -> Result<(), MessageError> {
@@ -171,7 +184,6 @@ impl MessageService {
             auth_client,
             peer_id,
             content,
-            database: database.clone(),
             mailbox_manager,
             grpc_pool: Some(grpc_pool),
             attachment_ids: None,
@@ -192,14 +204,12 @@ impl MessageService {
     }
 
     /// Send a DM with text and/or attachments.
-    #[allow(clippy::too_many_arguments)]
     pub async fn send_dm_message(
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
         text: &str,
         attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
-        database: Arc<Database>,
         mailbox_manager: &MailboxManager,
         grpc_pool: &Arc<GrpcClientPool>,
     ) -> Result<(), MessageError> {
@@ -215,7 +225,6 @@ impl MessageService {
             auth_client,
             peer_id,
             content,
-            database,
             mailbox_manager,
             grpc_pool: Some(grpc_pool),
             attachment_ids: None,
@@ -235,7 +244,6 @@ impl MessageService {
             attachment_pointers,
             attachment_ids,
             dm_channel_id,
-            database,
             mailbox_manager,
             sent_at,
         } = params;
@@ -245,31 +253,174 @@ impl MessageService {
 
         // Send the message via Signal Protocol - pass attachment_ids for storage
         let mut auth_client = self.auth_client();
-        self.send_dm_content(SendDmContentParams {
+        let send_result = self.send_dm_content(SendDmContentParams {
             auth_client: &mut auth_client,
             peer_id,
             content,
-            database,
             mailbox_manager,
             grpc_pool: Some(&self.grpc_pool),
             attachment_ids: None,
             channel_id: None,
-        }).await?;
+        }).await;
 
-        // Store the message locally with attachments
+        // Build the message for storage
         let current_user_id = self.settings_repo.current_user_id()?;
         let mut message = Message::new_text(*dm_channel_id, Some(current_user_id), text.to_string(), sent_at);
         message.attachments = attachment_ids;
 
-        if let Err(e) = self.message_repo.insert(&message) {
-            tracing::warn!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to store sent DM with attachments"
+        // Handle send result - save to DB for both success and bootstrap cases
+        match send_result {
+            Ok(()) => {
+                // Message sent successfully - save to DB
+                if let Err(e) = self.message_repo.insert(&message) {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "Failed to store sent DM with attachments"
+                    );
+                }
+                Ok(message)
+            }
+            Err(MessageError::BootstrapInitiated) => {
+                // Bootstrap initiated - message queued, but STILL save to DB
+                // so it persists when switching conversations
+                if let Err(e) = self.message_repo.insert(&message) {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "Failed to store queued DM during bootstrap"
+                    );
+                }
+                tracing::info!(
+                    peer_id = %peer_id,
+                    sent_at = sent_at,
+                    "Saved queued message to DB during bootstrap"
+                );
+                Err(MessageError::BootstrapInitiated)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Send a DM with file attachments (high-level API).
+    ///
+    /// This method handles the complete flow:
+    /// 1. Upload each file to CDN with encryption
+    /// 2. Build AttachmentPointer protos
+    /// 3. Send message via Signal Protocol with two-layer encryption
+    /// 4. Store message locally
+    ///
+    /// # Arguments
+    /// * `peer_id` - The peer's user ID
+    /// * `dm_channel_id` - The DM channel ID for local storage
+    /// * `text` - Message text
+    /// * `file_paths` - Local file paths to upload as attachments
+    /// * `mailbox_manager` - For sending to peer's mailbox
+    pub async fn send_dm_with_files(
+        &self,
+        peer_id: &UserId,
+        dm_channel_id: &ChannelId,
+        text: &str,
+        file_paths: Vec<&Path>,
+        mailbox_manager: &MailboxManager,
+    ) -> Result<DmSendResult, MessageError> {
+        // Upload attachments with encryption
+        let attachment_service = AttachmentService::new(self.attachment_repo.clone());
+        let mut attachment_ids = Vec::with_capacity(file_paths.len());
+        let mut attachment_pointers = Vec::with_capacity(file_paths.len());
+        let mut gif_attachment_ids = Vec::new();
+
+        for file_path in &file_paths {
+            // Detect GIF by extension or content type
+            let is_gif = file_path
+                .extension()
+                .map(|ext| ext.eq_ignore_ascii_case("gif"))
+                .unwrap_or(false);
+
+            tracing::info!(
+                path = %file_path.display(),
+                is_gif = is_gif,
+                "Encrypting and uploading DM attachment to CDN"
             );
+
+            match attachment_service.upload_to_cdn_encrypted(&self.grpc_pool, file_path).await {
+                Ok(result) => {
+                    tracing::info!(
+                        cdn_key = %result.cdn_key,
+                        attachment_id = %result.attachment_id,
+                        filename = %result.file_name,
+                        "DM attachment uploaded to CDN"
+                    );
+                    if is_gif {
+                        gif_attachment_ids.push(result.attachment_id);
+                    }
+                    attachment_ids.push(result.attachment_id);
+                    attachment_pointers.push(result.to_attachment_pointer());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        path = %file_path.display(),
+                        error = %e,
+                        "Failed to upload DM attachment to CDN"
+                    );
+                    return Err(MessageError::AttachmentError(e.to_string()));
+                }
+            }
         }
 
-        Ok(message)
+        // Generate timestamp for proto AND storage
+        let sent_at = TimestampNanos::now().as_u64();
+
+        tracing::info!(
+            peer_id = %peer_id,
+            text_len = text.len(),
+            attachment_count = attachment_pointers.len(),
+            sent_at = sent_at,
+            "Sending DM with files via send_dm_msg"
+        );
+
+        // Clone IDs before passing to send (needed for result in all cases)
+        let result_attachment_ids = attachment_ids.clone();
+        let result_gif_ids = gif_attachment_ids.clone();
+
+        // Send message with uploaded attachments
+        match self
+            .send_dm_msg(SendDmMsgParams {
+                peer_id,
+                text,
+                attachment_pointers,
+                attachment_ids,
+                dm_channel_id,
+                mailbox_manager,
+                sent_at,
+            })
+            .await
+        {
+            Ok(message) => Ok(DmSendResult {
+                message: Some(message),
+                attachment_ids: result_attachment_ids,
+                gif_attachment_ids: result_gif_ids,
+                sent_at,
+                bootstrap_initiated: false,
+            }),
+            Err(MessageError::BootstrapInitiated) => {
+                // First DM - bootstrap was initiated, message was queued
+                // Return success with bootstrap flag so UI can show the message
+                tracing::info!(
+                    peer_id = %peer_id,
+                    attachment_count = result_attachment_ids.len(),
+                    "DM bootstrap initiated - message queued, attachments uploaded"
+                );
+                Ok(DmSendResult {
+                    message: None,
+                    attachment_ids: result_attachment_ids,
+                    gif_attachment_ids: result_gif_ids,
+                    sent_at,
+                    bootstrap_initiated: true,
+                })
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Send pending messages after bootstrap completes.
@@ -277,7 +428,6 @@ impl MessageService {
         &self,
         auth_client: &mut AuthClient,
         peer_id: &UserId,
-        database: Arc<Database>,
         mailbox_manager: &MailboxManager,
     ) -> Result<usize, MessageError> {
         tracing::info!(
@@ -346,7 +496,6 @@ impl MessageService {
                     auth_client,
                     peer_id,
                     content,
-                    database: database.clone(),
                     mailbox_manager,
                     grpc_pool: None,
                     attachment_ids: Some(msg.attachment_ids.clone()),
@@ -437,5 +586,120 @@ impl MessageService {
         );
 
         Ok(())
+    }
+
+    /// Inject our profile key into the Content if profile sharing is enabled.
+    ///
+    /// If this is a DM to a friend, auto-enables profile sharing on first message
+    /// and injects our profile key into any DataMessage or EditMessage
+    /// so the recipient can decrypt our display_name.
+    fn inject_profile_key_if_sharing(
+        &self,
+        peer_id: &UserId,
+        mut content: crate::proto::content_v1::Content,
+    ) -> Result<crate::proto::content_v1::Content, MessageError> {
+        use crate::domain::user::FriendshipStatus;
+        use crate::proto::content_v1::content;
+        use crate::storage::repositories::settings_repo::keys;
+
+        // Get current user ID
+        let our_user_id = self.settings_repo.current_user_id()?;
+
+        // Check if this is a friendship
+        let friendship = self
+            .user_repo
+            .get_friendship(&our_user_id, peer_id)
+            .ok()
+            .flatten();
+
+        // Only share profile key with accepted friends
+        let is_friend = friendship
+            .as_ref()
+            .map(|f| matches!(f.status, FriendshipStatus::Accepted))
+            .unwrap_or(false);
+
+        if !is_friend {
+            tracing::trace!(
+                peer_id = %peer_id,
+                "Not a friend, skipping profile key injection"
+            );
+            return Ok(content);
+        }
+
+        // Check if profile sharing is enabled for this friendship
+        let is_sharing = self
+            .user_repo
+            .is_profile_sharing(&our_user_id, peer_id)
+            .unwrap_or(false);
+
+        // Auto-enable profile sharing on first message to a friend
+        if !is_sharing {
+            if let Err(e) = self.user_repo.set_profile_sharing(&our_user_id, peer_id, true) {
+                tracing::warn!(
+                    peer_id = %peer_id,
+                    error = %e,
+                    "Failed to auto-enable profile sharing"
+                );
+                return Ok(content);
+            }
+            tracing::info!(
+                peer_id = %peer_id,
+                "Auto-enabled profile sharing for friendship"
+            );
+        }
+
+        // Get our profile key from settings
+        let profile_key = match self.settings_repo.get_bytes(keys::PROFILE_KEY)? {
+            Some(key) if key.len() == 32 => key,
+            Some(key) => {
+                tracing::warn!(
+                    key_len = key.len(),
+                    "Profile key has unexpected length, skipping injection"
+                );
+                return Ok(content);
+            }
+            None => {
+                tracing::trace!("No profile key in settings, skipping injection");
+                return Ok(content);
+            }
+        };
+
+        // Inject profile key into DataMessage or EditMessage
+        match &mut content.content {
+            Some(content::Content::DataMessage(dm)) => {
+                dm.profile_key = Some(profile_key);
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    "Injected profile key into DataMessage"
+                );
+            }
+            Some(content::Content::Edit(edit)) => {
+                if let Some(dm) = edit.data_message.as_mut() {
+                    dm.profile_key = Some(profile_key);
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        "Injected profile key into EditMessage"
+                    );
+                }
+            }
+            Some(content::Content::Attachment(_)) => {
+                // AttachmentMessage doesn't have profile_key field,
+                // but the attachment is usually accompanied by a DataMessage
+                tracing::trace!(
+                    peer_id = %peer_id,
+                    "AttachmentMessage - profile key not applicable"
+                );
+            }
+            _ => {
+                // Other message types (typing, receipts, reactions, etc.)
+                // don't need profile key
+                tracing::trace!(
+                    peer_id = %peer_id,
+                    "Non-data message type, profile key not applicable"
+                );
+            }
+        }
+
+        Ok(content)
     }
 }

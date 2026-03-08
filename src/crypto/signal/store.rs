@@ -40,6 +40,7 @@ impl std::error::Error for StorageCallbackError {}
 /// This struct implements all 6 libsignal storage traits by delegating to our
 /// SQLite-based KeyStore. It bridges the async trait interfaces that libsignal
 /// expects with our synchronous database operations.
+#[derive(Clone)]
 pub struct SignalStore {
     key_store: Arc<KeyStore>,
 }
@@ -48,6 +49,11 @@ impl SignalStore {
     /// Create a new SignalStore wrapping the given KeyStore.
     pub fn new(key_store: Arc<KeyStore>) -> Self {
         Self { key_store }
+    }
+
+    /// Get the underlying KeyStore.
+    pub fn key_store(&self) -> Arc<KeyStore> {
+        self.key_store.clone()
     }
 }
 

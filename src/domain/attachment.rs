@@ -22,14 +22,17 @@ pub enum AttachmentStatus {
 /// Where the encrypted content is stored.
 ///
 /// Tracks whether encrypted attachment data needs to be fetched from CDN
-/// or is already stored locally in the database.
+/// or is already stored locally (in database or filesystem).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ContentLocation {
-    /// Content needs to be fetched from CDN (encrypted_content is empty).
+    /// Content needs to be fetched from CDN (not downloaded yet).
     #[default]
-    NotDownloaded,
-    /// Content is stored encrypted in database (encrypted_content populated).
-    InDatabase,
+    NotDownloaded = 0,
+    /// Content is stored encrypted in database BLOB (legacy, for migration compatibility).
+    InDatabase = 1,
+    /// Content is stored encrypted on filesystem (~/.local/share/chatter/attachments/).
+    /// This is the preferred storage for large files (videos, large images).
+    OnFilesystem = 2,
 }
 
 /// File category for UI display.
@@ -159,10 +162,10 @@ impl Attachment {
         }
     }
 
-    /// Check if encrypted content is stored in database.
+    /// Check if encrypted content is available locally (on filesystem).
     #[must_use]
     pub fn has_local_content(&self) -> bool {
-        matches!(self.content_location, ContentLocation::InDatabase)
+        self.content_location == ContentLocation::OnFilesystem
     }
 
     /// Check if content needs to be downloaded from CDN.

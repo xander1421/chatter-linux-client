@@ -69,6 +69,11 @@ export component App inherits Rectangle {
     in-out property <string> register-confirm-password: "";
     in property <bool> register-loading: false;
     in property <string> register-error: "";
+    in property <image> register-avatar-source;
+    in property <bool> register-has-avatar: false;
+    in-out property <int> register-selected-default-idx: -1;
+    callback register-select-avatar();
+    callback register-select-default-avatar(int);
 
     // ========== Sidebar properties ==========
     in property <[ChannelListItemData]> channels: [];
@@ -170,7 +175,11 @@ export component App inherits Rectangle {
     in-out property <string> reaction-picker-sender-id: "";
     in-out property <string> reaction-picker-timestamp-ns: "";
     in property <[EmojiData]> reaction-picker-emojis: [];
+    in-out property <int> reaction-picker-selected-category: 0;
+    in-out property <string> reaction-picker-search-query: "";
     callback reaction-selected(string, string, string, string);  // (sender_id, timestamp_ns, message_id, emoji)
+    callback reaction-picker-category-changed(int);
+    callback reaction-picker-search-changed(string);
 
     // ========== Composer emoji picker state ==========
     in-out property <bool> composer-emoji-picker-visible: false;
@@ -181,13 +190,13 @@ export component App inherits Rectangle {
     callback composer-emoji-category-changed(int); // category index
     callback composer-emoji-search-changed(string); // search query
 
-    // ========== GIF picker state ==========
-    in-out property <bool> gif-picker-visible: false;
-    in property <bool> gif-picker-loading: false;
-    in property <[GifData]> gif-picker-results: [];
-    in-out property <string> gif-picker-search: "";
-    callback gif-selected(string);           // GIF URL to send
-    callback gif-search(string);             // search query
+    // ========== Composer GIF picker state ==========
+    in-out property <bool> composer-gif-picker-visible: false;
+    in property <bool> composer-gif-picker-loading: false;
+    in property <[GifData]> composer-gif-picker-results: [];
+    in-out property <string> composer-gif-picker-search: "";
+    callback composer-gif-selected(string, string);
+    callback composer-gif-search-changed(string);
 
     // ========== Mention autocomplete state ==========
     in-out property <bool> mention-autocomplete-visible: false;
@@ -360,6 +369,13 @@ export component App inherits Rectangle {
     in-out property <bool> settings-sealed-sender-unrestricted: false;
     in property <int> settings-prekey-count: 0;
 
+    // AI settings properties
+    in-out property <bool> settings-local-ai-enabled: false;
+    in-out property <string> settings-local-ai-model-id: "";
+    in property <bool> settings-local-ai-loading: false;
+    in property <string> settings-local-ai-status: "";
+    in property <string> settings-local-ai-error: "";
+
     // ========== Call properties ==========
     in-out property <bool> incoming-call-visible: false;
     in property <IncomingCallData> incoming-call-data;
@@ -504,6 +520,11 @@ export component App inherits Rectangle {
     callback settings-sealed-sender-changed(bool);
     callback settings-refresh-keys();
 
+    // AI settings callbacks
+    callback settings-local-ai-enabled-changed(bool);
+    callback settings-local-ai-load-model(string);
+    callback settings-local-ai-unload-model();
+
     // ========== Channel settings callbacks ==========
     callback channel-settings-save(string, string);  // name, description
     callback channel-settings-toggle-setting(string, bool);  // setting-name, value
@@ -546,7 +567,6 @@ export component App inherits Rectangle {
         key-pressed(event) => {
             // Ctrl+J: Toggle Jarvis panel
             if (event.modifiers.control && event.text == "j") {
-                root.jarvis-panel-visible = !root.jarvis-panel-visible;
                 root.toggle-jarvis-panel();
                 return accept;
             }
@@ -589,9 +609,18 @@ export component App inherits Rectangle {
             confirm-password <=> root.register-confirm-password;
             loading: root.register-loading;
             error: root.register-error;
+            avatar-source: root.register-avatar-source;
+            has-avatar: root.register-has-avatar;
+            selected-default-idx <=> root.register-selected-default-idx;
 
             register(u, p, d) => {
                 root.register(u, p, d);
+            }
+            select-avatar => {
+                root.register-select-avatar();
+            }
+            select-default-avatar(idx) => {
+                root.register-select-default-avatar(idx);
             }
             go-to-login => {
                 root.go-to-login();
@@ -600,6 +629,9 @@ export component App inherits Rectangle {
 
         // Main chat layout
         if current-view == "main": HorizontalLayout {
+            width: 100%;
+            height: 100%;
+
             // Sidebar (width controlled by collapsed state)
             Sidebar {
                 channels: root.channels;
@@ -659,7 +691,6 @@ export component App inherits Rectangle {
                     root.toggle-sidebar();
                 }
                 toggle-jarvis => {
-                    root.jarvis-panel-visible = !root.jarvis-panel-visible;
                     root.toggle-jarvis-panel();
                 }
                 show-tooltip(text, x, y) => {
@@ -673,95 +704,145 @@ export component App inherits Rectangle {
                 }
             }
 
-            // Chat layout (fills remaining space)
-            // Explicit width calculation for proper text wrapping
-            ChatLayout {
-                width: root.width - (root.sidebar-collapsed ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width);
-                channel-id: root.channel-id;
-                channel-name: root.channel-name;
-                channel-type: root.channel-type;
-                is-dm: root.is-dm;
-                member-count: root.member-count;
-                topic: root.topic;
-                is-archived: root.is-archived;
-                typing-indicator: root.typing-indicator;
-                jarvis-thinking: root.jarvis-thinking;
-                messages: root.messages;
-                loading-messages: root.loading-messages;
-                scroll-to-message-index: root.scroll-to-message-index;
-                message-scroll-position <=> root.message-scroll-position;
-                should-auto-scroll: root.should-auto-scroll;
-                current-playing-attachment-id: root.current-playing-attachment-id;
-                is-media-playing: root.is-media-playing;
-                audio-progress: root.audio-progress;
-                audio-elapsed: root.audio-elapsed;
-                composer-text <=> root.composer-text;
-                composer-placeholder: root.composer-placeholder;
-                composer-disabled: root.composer-disabled;
-                pending-attachments: root.pending-attachments;
-                composer-is-editing <=> root.composer-is-editing;
-                composer-edit-message-id <=> root.composer-edit-message-id;
+            // Right side area (Chat + Panels)
+            Rectangle {
+                horizontal-stretch: 1;
+                // Clip this area to prevent inner panels from overflowing the whole app
+                clip: true;
 
-                search-clicked => { root.search-clicked(); }
-                settings-clicked => { root.chat-settings-clicked(); }
-                voice-call-clicked => { root.start-voice-call(); }
-                video-call-clicked => { root.start-video-call(); }
+                HorizontalLayout {
+                    // Chat layout (fills remaining space, minus side panels)
+                    ChatLayout {
+                    horizontal-stretch: 1;
+                    channel-id: root.channel-id;
+                    channel-name: root.channel-name;
+                    channel-type: root.channel-type;
+                    is-dm: root.is-dm;
+                    member-count: root.member-count;
+                    topic: root.topic;
+                    is-archived: root.is-archived;
+                    typing-indicator: root.typing-indicator;
+                    jarvis-thinking: root.jarvis-thinking;
+                    messages: root.messages;
+                    loading-messages: root.loading-messages;
+                    scroll-to-message-index: root.scroll-to-message-index;
+                    message-scroll-position <=> root.message-scroll-position;
+                    should-auto-scroll: root.should-auto-scroll;
+                    current-playing-attachment-id: root.current-playing-attachment-id;
+                    is-media-playing: root.is-media-playing;
+                    audio-progress: root.audio-progress;
+                    audio-elapsed: root.audio-elapsed;
+                    composer-text <=> root.composer-text;
+                    composer-placeholder: root.composer-placeholder;
+                    composer-disabled: root.composer-disabled;
+                    pending-attachments: root.pending-attachments;
+                    composer-is-editing <=> root.composer-is-editing;
+                    composer-edit-message-id <=> root.composer-edit-message-id;
 
-                // Pinned bar (Telegram-style)
-                has-pinned-messages: root.has-pinned-messages;
-                pinned-message-preview: root.pinned-message-preview;
-                pinned-current-index: root.pinned-current-index;
-                pinned-total-count: root.pinned-total-count;
-                pinned-prev-clicked => { root.pinned-prev-clicked(); }
-                pinned-next-clicked => { root.pinned-next-clicked(); }
-                pinned-go-to-message => { root.pinned-go-to-message(); }
-                pinned-dismiss-clicked => { root.pinned-dismiss-clicked(); }
-                message-clicked(id) => { root.message-clicked(id); }
-                reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
-                react-clicked(sender-id, timestamp-ns) => {
-                    root.reaction-picker-sender-id = sender-id;
-                    root.reaction-picker-timestamp-ns = timestamp-ns;
-                    root.reaction-picker-visible = true;
-                    root.react-clicked(sender-id, timestamp-ns);
+                    // Picker state
+                    emoji-picker-visible <=> root.composer-emoji-picker-visible;
+                    gif-picker-visible <=> root.composer-gif-picker-visible;
+                    emoji-list: root.composer-emoji-list;
+                    emoji-category: root.composer-emoji-category;
+                    emoji-search: root.composer-emoji-search;
+                    gif-loading: root.composer-gif-picker-loading;
+                    gif-results: root.composer-gif-picker-results;
+                    gif-search-query: root.composer-gif-picker-search;
+
+                    search-clicked => { root.search-clicked(); }
+                    settings-clicked => { root.chat-settings-clicked(); }
+                    voice-call-clicked => { root.start-voice-call(); }
+                    video-call-clicked => { root.start-video-call(); }
+
+                    // Pinned bar (Telegram-style)
+                    has-pinned-messages: root.has-pinned-messages;
+                    pinned-message-preview: root.pinned-message-preview;
+                    pinned-current-index: root.pinned-current-index;
+                    pinned-total-count: root.pinned-total-count;
+                    pinned-prev-clicked => { root.pinned-prev-clicked(); }
+                    pinned-next-clicked => { root.pinned-next-clicked(); }
+                    pinned-go-to-message => { root.pinned-go-to-message(); }
+                    pinned-dismiss-clicked => { root.pinned-dismiss-clicked(); }
+                    message-clicked(id) => { root.message-clicked(id); }
+                    reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
+                    react-clicked(sender-id, timestamp-ns) => {
+                        root.reaction-picker-sender-id = sender-id;
+                        root.reaction-picker-timestamp-ns = timestamp-ns;
+                        root.reaction-picker-visible = true;
+                        root.react-clicked(sender-id, timestamp-ns);
+                    }
+                    thread-clicked(id) => { root.thread-clicked(id); }
+                    more-clicked(sender-id, timestamp-ns) => { root.more-clicked(sender-id, timestamp-ns); }
+                    view-attachment(id) => { root.view-attachment(id); }
+                    audio-seek(id, pos) => { root.audio-seek(id, pos); }
+                    load-more => { root.load-more(); }
+                    send(text) => { root.send(text); }
+                    send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
+                    cancel-edit => { root.cancel-edit(); }
+                    attachment-clicked => { root.attachment-clicked(); }
+                    emoji-clicked => { root.emoji-clicked(); }
+                    gif-clicked => { root.gif-clicked(); }
+                    
+                    // Picker callbacks
+                    emoji-selected(emoji) => { root.composer-emoji-selected(emoji); }
+                    emoji-category-changed(cat) => { 
+                        root.composer-emoji-category = cat;
+                        root.composer-emoji-category-changed(cat); 
+                    }
+                    emoji-search-changed(q) => { 
+                        root.composer-emoji-search = q;
+                        root.composer-emoji-search-changed(q); 
+                    }
+                    gif-selected(id, url) => { root.composer-gif-selected(id, url); }
+                    gif-search(q) => {
+                        root.composer-gif-picker-search = q;
+                        root.composer-gif-search-changed(q);
+                    }
+
+                    mention-triggered(query) => { root.mention-triggered(query); }
+                    remove-attachment(id) => { root.remove-attachment(id); }
+                    typing-changed(is-typing) => { root.typing-changed(is-typing); }
+                    process-text(text) => { return root.process-text(text); }
+                    scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
                 }
-                thread-clicked(id) => { root.thread-clicked(id); }
-                more-clicked(sender-id, timestamp-ns) => { root.more-clicked(sender-id, timestamp-ns); }
-                view-attachment(id) => { root.view-attachment(id); }
-                audio-seek(id, pos) => { root.audio-seek(id, pos); }
-                load-more => { root.load-more(); }
-                send(text) => { root.send(text); }
-                send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
-                cancel-edit => { root.cancel-edit(); }
-                attachment-clicked => { root.attachment-clicked(); }
-                emoji-clicked => { root.emoji-clicked(); }
-                gif-clicked => { root.gif-clicked(); }
-                mention-triggered(query) => { root.mention-triggered(query); }
-                remove-attachment(id) => { root.remove-attachment(id); }
-                typing-changed(is-typing) => { root.typing-changed(is-typing); }
-                process-text(text) => { return root.process-text(text); }
-                scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
-            }
 
-            // Thread panel (appears to the right of chat when visible)
-            if root.thread-panel-visible: ThreadPanel {
-                root-message-id: root.thread-root-message-id;
-                root-sender-name: root.thread-root-sender-name;
-                root-content-preview: root.thread-root-content-preview;
-                reply-count: root.thread-reply-count;
-                channel-name: root.thread-channel-name;
-                replies: root.thread-replies;
-                loading: root.thread-loading;
-                composer-text <=> root.thread-composer-text;
+                // Thread panel (appears to the right of chat when visible)
+                if root.thread-panel-visible: ThreadPanel {
+                    width: 320px;
+                    height: 100%;
+                    root-message-id: root.thread-root-message-id;
+                    root-sender-name: root.thread-root-sender-name;
+                    root-content-preview: root.thread-root-content-preview;
+                    reply-count: root.thread-reply-count;
+                    channel-name: root.thread-channel-name;
+                    replies: root.thread-replies;
+                    loading: root.thread-loading;
+                    composer-text <=> root.thread-composer-text;
 
-                close-clicked => { root.close-thread-clicked(); }
-                send-reply(text) => { root.send-thread-reply(text); }
-                load-more-replies => { root.load-more-thread-replies(); }
-                message-clicked(id) => { root.message-clicked(id); }
-                react-clicked(sender-id, timestamp-ns) => {
-                    root.reaction-picker-sender-id = sender-id;
-                    root.reaction-picker-timestamp-ns = timestamp-ns;
-                    root.reaction-picker-visible = true;
-                    root.react-clicked(sender-id, timestamp-ns);
+                    close-clicked => { root.close-thread-clicked(); }
+                    send-reply(text) => { root.send-thread-reply(text); }
+                    load-more-replies => { root.load-more-thread-replies(); }
+                    message-clicked(id) => { root.message-clicked(id); }
+                    react-clicked(sender-id, timestamp-ns) => {
+                        root.reaction-picker-sender-id = sender-id;
+                        root.reaction-picker-timestamp-ns = timestamp-ns;
+                        root.reaction-picker-visible = true;
+                        root.react-clicked(sender-id, timestamp-ns);
+                    }
+                }
+
+                // Jarvis AI panel (appears to the right of chat when visible)
+                if root.jarvis-panel-visible: JarvisPanel {
+                    width: 360px;
+                    height: 100%;
+                    panel-visible: root.jarvis-panel-visible;
+                    thinking: root.jarvis-thinking;
+                    messages: root.jarvis-messages;
+                    current-response: root.jarvis-response;
+
+                    close => { root.jarvis-panel-close(); }
+                    send(text) => { root.jarvis-send(text); }
+                    clear => { root.jarvis-clear(); }
                 }
             }
         }
@@ -1105,6 +1186,12 @@ export component App inherits Rectangle {
         identity-fingerprint: root.settings-identity-fingerprint;
         sealed-sender-unrestricted <=> root.settings-sealed-sender-unrestricted;
         prekey-count: root.settings-prekey-count;
+        // AI settings
+        local-ai-enabled <=> root.settings-local-ai-enabled;
+        local-ai-model-id <=> root.settings-local-ai-model-id;
+        local-ai-loading: root.settings-local-ai-loading;
+        local-ai-status: root.settings-local-ai-status;
+        local-ai-error: root.settings-local-ai-error;
 
         edit-profile-clicked => {
             root.settings-edit-profile();
@@ -1139,6 +1226,16 @@ export component App inherits Rectangle {
         }
         refresh-keys-clicked => {
             root.settings-refresh-keys();
+        }
+        // AI callbacks
+        local-ai-enabled-changed(value) => {
+            root.settings-local-ai-enabled-changed(value);
+        }
+        local-ai-load-model(model-id) => {
+            root.settings-local-ai-load-model(model-id);
+        }
+        local-ai-unload-model => {
+            root.settings-local-ai-unload-model();
         }
     }
 
@@ -1382,6 +1479,8 @@ export component App inherits Rectangle {
         sender-id: root.reaction-picker-sender-id;
         timestamp-ns: root.reaction-picker-timestamp-ns;
         emoji-list: root.reaction-picker-emojis;
+        selected-category <=> root.reaction-picker-selected-category;
+        search-query <=> root.reaction-picker-search-query;
         position-x: root.width / 2 - 140px;  // Center horizontally
         position-y: root.height / 2 - 176px;  // Center vertically
 
@@ -1390,63 +1489,16 @@ export component App inherits Rectangle {
             root.reaction-selected(sender-id, timestamp-ns, msg-id, emoji);
         }
 
-        close => {
-            root.reaction-picker-visible = false;
-        }
-    }
-
-    // Composer emoji picker overlay (positioned above composer)
-    EmojiPicker {
-        show: root.composer-emoji-picker-visible;
-        emoji-list: root.composer-emoji-list;
-        selected-category: root.composer-emoji-category;
-        search-query: root.composer-emoji-search;
-        // Position above the composer, left-aligned with emoji button
-        x: root.sidebar-collapsed ? 80px : 280px;
-        y: root.height - 320px - 80px;  // 320px picker height + 80px for composer
-
-        emoji-selected(emoji) => {
-            root.composer-emoji-picker-visible = false;
-            root.composer-emoji-selected(emoji);
-        }
-
-        close => {
-            root.composer-emoji-picker-visible = false;
-        }
-
-        category-changed(cat) => {
-            root.composer-emoji-category = cat;
-            root.composer-emoji-category-changed(cat);
+        category-changed(category) => {
+            root.reaction-picker-category-changed(category);
         }
 
         search-changed(query) => {
-            root.composer-emoji-search = query;
-            root.composer-emoji-search-changed(query);
-        }
-    }
-
-    // GIF picker overlay (positioned above composer, next to emoji picker position)
-    GifPicker {
-        show: root.gif-picker-visible;
-        loading: root.gif-picker-loading;
-        results: root.gif-picker-results;
-        search-query: root.gif-picker-search;
-        // Position above the composer
-        x: root.sidebar-collapsed ? 80px : 280px;
-        y: root.height - 400px - 80px;  // 400px picker height + 80px for composer
-
-        gif-selected(url) => {
-            root.gif-picker-visible = false;
-            root.gif-selected(url);
-        }
-
-        search(query) => {
-            root.gif-picker-search = query;
-            root.gif-search(query);
+            root.reaction-picker-search-changed(query);
         }
 
         close => {
-            root.gif-picker-visible = false;
+            root.reaction-picker-visible = false;
         }
     }
 
@@ -1512,6 +1564,56 @@ export component App inherits Rectangle {
         }
     }
 
+    // Composer emoji picker overlay (positioned above composer)
+    EmojiPicker {
+        show: root.composer-emoji-picker-visible;
+        emoji-list: root.composer-emoji-list;
+        selected-category <=> root.composer-emoji-category;
+        search-query <=> root.composer-emoji-search;
+        
+        // Position above the composer buttons (right side)
+        x: root.width - self.width - Spacing.md;
+        y: root.height - self.height - 80px;
+
+        emoji-selected(emoji) => {
+            root.composer-emoji-picker-visible = false;
+            root.composer-emoji-selected(emoji);
+        }
+        category-changed(cat) => {
+            root.composer-emoji-category-changed(cat);
+        }
+        search-changed(q) => {
+            root.composer-emoji-search-changed(q);
+        }
+        close => {
+            root.composer-emoji-picker-visible = false;
+        }
+    }
+
+    // Composer GIF picker overlay (positioned above composer)
+    GifPicker {
+        show: root.composer-gif-picker-visible;
+        loading: root.composer-gif-picker-loading;
+        results: root.composer-gif-picker-results;
+        search-query <=> root.composer-gif-picker-search;
+
+        // Position above the composer buttons (right side)
+        x: root.width - self.width - Spacing.md;
+        y: root.height - self.height - 80px;
+
+        gif-selected(id, url) => {
+            root.composer-gif-picker-visible = false;
+            root.composer-gif-selected(id, url);
+        }
+        search(q) => {
+            root.composer-gif-search-changed(q);
+        }
+        close => {
+            root.composer-gif-picker-visible = false;
+        }
+    }
+    }
+
     // Global tooltip layer (rendered above everything)
     if root.tooltip-visible: Rectangle {
         x: root.tooltip-x;
@@ -1531,21 +1633,6 @@ export component App inherits Rectangle {
             horizontal-alignment: center;
             vertical-alignment: center;
         }
-    }
-
-    // Jarvis AI Assistant Panel (slides in from right)
-    if root.jarvis-panel-visible: JarvisPanel {
-        x: parent.width - self.width;
-        y: 0;
-        height: parent.height;
-        panel-visible: root.jarvis-panel-visible;
-        thinking: root.jarvis-thinking;
-        messages: root.jarvis-messages;
-        current-response: root.jarvis-response;
-
-        close => { root.jarvis-panel-close(); }
-        send(text) => { root.jarvis-send(text); }
-        clear => { root.jarvis-clear(); }
     }
 
     // Wire tooltip callbacks

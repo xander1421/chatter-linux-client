@@ -196,10 +196,19 @@ export component ChannelTemplates inherits Rectangle {
                     }
                 }
 
-                // Empty placeholder for grid balance
-                Rectangle {
+                TemplateCard {
                     horizontal-stretch: 1;
-                    background: transparent;
+                    template-id: "private-group";
+                    name: "Private Group";
+                    description: "Server-invisible group with friends";
+                    icon: Icons.shield;
+                    accent-color: #9333ea;  // Purple for privacy
+                    selected: root.selected-template == "private-group";
+
+                    clicked => {
+                        root.selected-template = "private-group";
+                        root.template-selected("private-group");
+                    }
                 }
             }
         }

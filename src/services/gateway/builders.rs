@@ -67,6 +67,11 @@ pub fn build_typing_content_with_channel(started: bool, channel_id: Option<&str>
 
 /// Create a Content proto for read receipt.
 pub fn build_read_receipt_content(message_timestamps: Vec<u64>) -> Content {
+    build_read_receipt_content_with_channel(message_timestamps, None)
+}
+
+/// Create a Content proto for read receipt with optional channel context.
+pub fn build_read_receipt_content_with_channel(message_timestamps: Vec<u64>, channel_id: Option<&str>) -> Content {
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -74,6 +79,7 @@ pub fn build_read_receipt_content(message_timestamps: Vec<u64>) -> Content {
             r#type: receipt_message::Type::Read as i32,
             timestamps: message_timestamps,
             timestamp: now,
+            channel_id: channel_id.unwrap_or_default().to_string(),
         })),
         ..Default::default()
     }
@@ -81,6 +87,11 @@ pub fn build_read_receipt_content(message_timestamps: Vec<u64>) -> Content {
 
 /// Create a Content proto for delivery receipt.
 pub fn build_delivery_receipt_content(message_timestamps: Vec<u64>) -> Content {
+    build_delivery_receipt_content_with_channel(message_timestamps, None)
+}
+
+/// Create a Content proto for delivery receipt with optional channel context.
+pub fn build_delivery_receipt_content_with_channel(message_timestamps: Vec<u64>, channel_id: Option<&str>) -> Content {
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -88,6 +99,7 @@ pub fn build_delivery_receipt_content(message_timestamps: Vec<u64>) -> Content {
             r#type: receipt_message::Type::Delivery as i32,
             timestamps: message_timestamps,
             timestamp: now,
+            channel_id: channel_id.unwrap_or_default().to_string(),
         })),
         ..Default::default()
     }
@@ -234,18 +246,25 @@ pub fn build_delete_for_everyone_content_with_channel(
     }
 }
 
-/// Create a Content proto for call key exchange (incoming call notification).
+// =============================================================================
+// DM Call Key Exchange (Ephemeral keys for PFS)
+// =============================================================================
+
+/// Create a Content proto for call key offer (caller initiating DM call).
 ///
-/// This is sent via sealed sender to notify the peer of an incoming call
-/// and share the E2EE key material for the call.
+/// Sends caller's ephemeral X25519 public key. The callee will respond with
+/// their ephemeral key in an answer message.
 ///
-/// Note: call_type and channel_id are included in the API for consistency but
-/// are not part of the proto - the receiver derives these from conversation context.
-pub fn build_call_key_content(
+/// # Arguments
+/// * `call_id` - Unique call identifier
+/// * `ephemeral_public_key` - Caller's ephemeral X25519 public key (32 bytes)
+/// * `call_type` - "Voice Call" or "Video Call"
+/// * `channel_id` - DM channel ID for context
+pub fn build_call_key_offer(
     call_id: &str,
-    key_material: Vec<u8>,
-    _call_type: &str,
-    _channel_id: &str,
+    ephemeral_public_key: [u8; 32],
+    call_type: &str,
+    channel_id: &str,
 ) -> Content {
     use crate::proto::content_v1::CallKeyExchange;
     let now = TimestampNanos::now().as_u64();
@@ -253,8 +272,76 @@ pub fn build_call_key_content(
         timestamp: now,
         content: Some(content::Content::CallKey(CallKeyExchange {
             call_id: call_id.to_string(),
-            key_material,
+            key_material: ephemeral_public_key.to_vec(),
             timestamp: now,
+            is_offer: true,
+            call_type: call_type.to_string(),
+            channel_id: channel_id.to_string(),
+        })),
+        ..Default::default()
+    }
+}
+
+/// Create a Content proto for call key answer (callee responding to offer).
+///
+/// Sends callee's ephemeral X25519 public key in response to an offer.
+/// Both parties can then derive the call key using ECDH + HKDF.
+///
+/// # Arguments
+/// * `call_id` - Call ID from the offer
+/// * `ephemeral_public_key` - Callee's ephemeral X25519 public key (32 bytes)
+pub fn build_call_key_answer(
+    call_id: &str,
+    ephemeral_public_key: [u8; 32],
+) -> Content {
+    use crate::proto::content_v1::CallKeyExchange;
+    let now = TimestampNanos::now().as_u64();
+    Content {
+        timestamp: now,
+        content: Some(content::Content::CallKey(CallKeyExchange {
+            call_id: call_id.to_string(),
+            key_material: ephemeral_public_key.to_vec(),
+            timestamp: now,
+            is_offer: false,
+            call_type: String::new(),
+            channel_id: String::new(),
+        })),
+        ..Default::default()
+    }
+}
+
+// =============================================================================
+// Group Call Key Distribution (Pairwise sealed sender)
+// =============================================================================
+
+/// Create a Content proto for group call key distribution.
+///
+/// Distributes the symmetric call key to a single group member via pairwise
+/// sealed sender. Must be called once for each member (client-side fanout).
+///
+/// Per NDSS '21: Server cannot correlate these independent messages to a group.
+///
+/// # Arguments
+/// * `call_id` - Unique call identifier
+/// * `key` - AES-256 encryption key (32 bytes) for LiveKit E2EE
+/// * `epoch` - Key epoch (0 for initial, increments on rotation)
+/// * `channel_id` - Group channel ID
+pub fn build_group_call_key_content(
+    call_id: &str,
+    key: [u8; 32],
+    epoch: u32,
+    channel_id: &str,
+) -> Content {
+    use crate::proto::content_v1::GroupCallKey;
+    let now = TimestampNanos::now().as_u64();
+    Content {
+        timestamp: now,
+        content: Some(content::Content::GroupCallKey(GroupCallKey {
+            call_id: call_id.to_string(),
+            key_material: key.to_vec(),
+            key_epoch: epoch,
+            timestamp: now,
+            channel_id: channel_id.to_string(),
         })),
         ..Default::default()
     }

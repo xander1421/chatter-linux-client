@@ -17,6 +17,8 @@
 //! 3. Handler parses plaintext, validates, emits `DomainEvent`
 //! 4. Events flow to UI/storage via broadcast channel
 
+pub mod anon_dm;
+pub mod anon_group;
 pub mod attachment;
 pub mod chat;
 pub mod key_exchange;
@@ -35,11 +37,16 @@ use std::fmt;
 use tokio::sync::broadcast;
 
 use crate::domain::{Attachment, ChannelId, Message, MessageContent, MessageId, UserId};
+use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
+use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
 use crate::inbox::processor::{ContentType, ProcessedMessage};
+use crate::proto::content_v1::Content;
 
 use std::sync::Arc;
 
 // Re-export handlers
+pub use anon_dm::AnonDmHandler;
+pub use anon_group::AnonGroupHandler;
 pub use attachment::AttachmentHandler;
 pub use chat::ChatHandler;
 pub use key_exchange::KeyExchangeHandler;
@@ -365,6 +372,8 @@ pub enum DomainEvent {
     SenderKeyReceived {
         /// User who distributed the sender key.
         sender_id: UserId,
+        /// Device ID of the sender.
+        sender_device_id: u32,
         /// Channel this key is for.
         channel_id: ChannelId,
         /// Serialized sender key distribution message (libsignal format).
@@ -413,6 +422,210 @@ pub enum DomainEvent {
         /// Hangup reason (e.g., "normal", "busy", "declined").
         reason: String,
     },
+    /// Call key answer received (callee's ephemeral key for PFS).
+    ///
+    /// Completes the ephemeral key exchange for DM calls. Caller should:
+    /// 1. Compute ECDH(our_ephemeral, peer_ephemeral)
+    /// 2. Derive call key with identity binding
+    /// 3. Update LiveKit encryption and start call
+    CallKeyAnswerReceived {
+        /// The call ID.
+        call_id: String,
+        /// Callee who sent the answer.
+        peer_id: UserId,
+        /// Callee's ephemeral X25519 public key (32 bytes).
+        ephemeral_public_key: [u8; 32],
+    },
+    /// Group call key received (distributed via pairwise sealed sender).
+    ///
+    /// Used to update LiveKit encryption key for group calls.
+    /// Key rotation occurs when members leave.
+    GroupCallKeyReceived {
+        /// The call ID.
+        call_id: String,
+        /// User who distributed the key (call initiator or rotator).
+        sender_id: UserId,
+        /// AES-256 encryption key (32 bytes).
+        key_material: [u8; 32],
+        /// Key epoch (increments on rotation).
+        key_epoch: u32,
+        /// Group channel ID.
+        channel_id: ChannelId,
+    },
+
+    // ========================================================================
+    // Anonymous Group Events (NDSS'21 Style)
+    // ========================================================================
+
+    /// Invite received to join an anonymous group.
+    AnonGroupInviteReceived {
+        /// The group being invited to.
+        group_id: AnonGroupId,
+        /// Human-readable group name.
+        group_name: String,
+        /// User who sent the invite.
+        inviter_id: UserId,
+        /// Inviter's mailbox public key for this group.
+        inviter_mailbox_pk: [u8; 32],
+        /// Inviter's profile key.
+        profile_key: Option<[u8; 32]>,
+        /// Inviter's decrypted display name.
+        inviter_display_name: Option<String>,
+        /// Inviter's decrypted avatar.
+        inviter_avatar: Option<Vec<u8>>,
+    },
+
+    /// Successfully joined an anonymous group.
+    AnonGroupJoined {
+        /// The group that was joined.
+        group_id: AnonGroupId,
+    },
+
+    /// A member joined an anonymous group.
+    AnonGroupMemberJoined {
+        /// The group.
+        group_id: AnonGroupId,
+        /// User who joined.
+        user_id: UserId,
+        /// Member's profile key.
+        profile_key: Option<[u8; 32]>,
+        /// Member's decrypted display name.
+        display_name: Option<String>,
+        /// Member's decrypted avatar.
+        avatar: Option<Vec<u8>>,
+    },
+
+    /// A member left an anonymous group voluntarily.
+    AnonGroupMemberLeft {
+        /// The group.
+        group_id: AnonGroupId,
+        /// User who left.
+        user_id: UserId,
+    },
+
+    /// A member was kicked from an anonymous group.
+    AnonGroupMemberKicked {
+        /// The group.
+        group_id: AnonGroupId,
+        /// User who was kicked.
+        user_id: UserId,
+        /// Admin who performed the kick.
+        kicked_by: UserId,
+    },
+
+    /// Message received in an anonymous group.
+    AnonGroupMessageReceived {
+        /// The group.
+        group_id: AnonGroupId,
+        /// Sender of the message.
+        sender_id: UserId,
+        /// The stored message ID.
+        message_id: AnonGroupMessageId,
+        /// The inner message content.
+        inner_content: Content,
+        /// The sender's timestamp (nanoseconds) for ordering.
+        sent_at: u64,
+    },
+
+    /// Anonymous group bootstrap complete (all members confirmed).
+    AnonGroupBootstrapComplete {
+        /// The group.
+        group_id: AnonGroupId,
+    },
+
+    /// Member list received for an anonymous group.
+    AnonGroupMemberListReceived {
+        /// The group.
+        group_id: AnonGroupId,
+        /// List of members.
+        members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
+    },
+
+    // ========================================================================
+    // Anonymous DM Events (Client-Side Managed)
+    // ========================================================================
+
+    /// Message request received from a stranger (public account mode).
+    AnonDmRequestReceived {
+        /// The conversation ID.
+        conversation_id: AnonDmId,
+        /// User who sent the request.
+        sender_id: UserId,
+        /// Sender's mailbox public key for this conversation.
+        sender_mailbox_pk: [u8; 32],
+        /// Introductory message text.
+        intro_message: Option<String>,
+        /// Sender's profile key (for decrypting their display name).
+        profile_key: Option<[u8; 32]>,
+        /// Sender's display name (decrypted from encrypted_display_name).
+        sender_display_name: Option<String>,
+        /// Sender's avatar (decrypted from encrypted_avatar).
+        sender_avatar: Option<Vec<u8>>,
+    },
+
+    /// Our message request was accepted by the recipient.
+    AnonDmRequestAccepted {
+        /// The conversation ID.
+        conversation_id: AnonDmId,
+        /// User who accepted.
+        peer_id: UserId,
+        /// Peer's mailbox public key for this conversation.
+        peer_mailbox_pk: [u8; 32],
+        /// Peer's profile key (for decrypting their display name).
+        profile_key: Option<[u8; 32]>,
+        /// Peer's display name (revealed upon acceptance).
+        peer_display_name: String,
+        /// Peer's avatar (decrypted from encrypted_avatar).
+        peer_avatar: Option<Vec<u8>>,
+    },
+
+    /// Message received in an anonymous DM conversation.
+    AnonDmMessageReceived {
+        /// The conversation ID.
+        conversation_id: AnonDmId,
+        /// Sender of the message.
+        sender_id: UserId,
+        /// The stored message ID.
+        message_id: AnonDmMessageId,
+        /// The inner message content.
+        inner_content: Content,
+        /// The sender's timestamp (nanoseconds) for ordering.
+        sent_at: u64,
+    },
+
+    /// NDSS'21 ECIES init message received (private friend contact).
+    ///
+    /// This is the Phase 1 HPKE-encrypted initial contact message.
+    /// Contains the initiator's identity and ephemeral keys for Phase 2 Double Ratchet.
+    /// Sender identity is revealed after decryption per NDSS'21 Section II-A.
+    AnonDmInitReceived {
+        /// The conversation ID (generated by initiator).
+        conversation_id: AnonDmId,
+        /// Initiator's user ID (revealed after decryption per NDSS'21).
+        sender_id: UserId,
+        /// Initiator's display name (revealed after decryption).
+        sender_display_name: String,
+        /// Initiator's avatar (revealed after decryption).
+        sender_avatar: Option<Vec<u8>>,
+        /// Initiator's mailbox public key for this conversation.
+        peer_mailbox_pk: [u8; 32],
+        /// Initiator's Signal identity key (33 bytes with 0x05 prefix).
+        peer_identity_key: [u8; 33],
+        /// Initiator's delivery token for sealed sender.
+        peer_delivery_token: [u8; 12],
+        /// Optional intro message.
+        intro_message: String,
+        /// Server timestamp (for ordering).
+        server_timestamp: u64,
+    },
+
+    /// Message deleted in an anonymous DM conversation.
+    AnonDmMessageDeleted {
+        /// The conversation ID.
+        conversation_id: AnonDmId,
+        /// The message timestamp (used as ID in Signal protocol).
+        message_timestamp: u64,
+    },
 }
 
 impl DomainEvent {
@@ -437,6 +650,23 @@ impl DomainEvent {
             DomainEvent::GroupMailboxReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::DeleteForMeSync { conversation_id, .. } => Some(*conversation_id),
             DomainEvent::CallHangupReceived { .. } => None, // Calls don't have a channel context here
+            DomainEvent::CallKeyAnswerReceived { .. } => None, // Call answer doesn't have channel context
+            DomainEvent::GroupCallKeyReceived { channel_id, .. } => Some(*channel_id),
+            // Anon group events don't have ChannelId (they use AnonGroupId)
+            DomainEvent::AnonGroupInviteReceived { .. } => None,
+            DomainEvent::AnonGroupJoined { .. } => None,
+            DomainEvent::AnonGroupMemberJoined { .. } => None,
+            DomainEvent::AnonGroupMemberLeft { .. } => None,
+            DomainEvent::AnonGroupMemberKicked { .. } => None,
+            DomainEvent::AnonGroupMessageReceived { .. } => None,
+            DomainEvent::AnonGroupBootstrapComplete { .. } => None,
+            DomainEvent::AnonGroupMemberListReceived { .. } => None,
+            // Anon DM events don't have ChannelId (they use AnonDmId)
+            DomainEvent::AnonDmRequestReceived { .. } => None,
+            DomainEvent::AnonDmRequestAccepted { .. } => None,
+            DomainEvent::AnonDmMessageReceived { .. } => None,
+            DomainEvent::AnonDmInitReceived { .. } => None,
+            DomainEvent::AnonDmMessageDeleted { .. } => None,
         }
     }
 
@@ -822,6 +1052,7 @@ mod tests {
             r#type: receipt_message::Type::Read as i32,
             timestamps: vec![1704067200000],
             timestamp: 1704067201000,
+            channel_id: String::new(),
         };
 
         let content = Content {

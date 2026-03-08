@@ -8,11 +8,9 @@
 
 mod common;
 
-use chatter_linux::domain::ids::{ChannelId, MessageId, UserId};
-use chatter_linux::domain::message::{Message, MessageContent, MessageStatus, MixedContent};
 use chatter_linux::network::grpc::{ChannelClient, MessageClient};
 use chatter_linux::proto::chat_v1::{
-    self, message::content::Type as ContentType, message::Content, ChannelType,
+    self, message::content::Type as ContentType, message::Content, ChannelType, EncryptedData,
 };
 use tokio_stream::StreamExt;
 
@@ -43,18 +41,22 @@ fn test_proto_content_text_conversion() {
 #[test]
 fn test_proto_content_encrypted_detection() {
     let content = Content {
-        r#type: Some(ContentType::Encrypted(chat_v1::message::EncryptedContent {
+        r#type: Some(ContentType::Encrypted(EncryptedData {
+            version: 1,
+            nonce: vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
             ciphertext: vec![1, 2, 3, 4],
-            iv: vec![5, 6, 7, 8],
-            key_id: "key-123".to_string(),
+            auth_tag: vec![17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32],
+            associated_data: vec![],
+            signature: vec![],
+            device_id: String::new(),
         })),
     };
 
     match &content.r#type {
         Some(ContentType::Encrypted(enc)) => {
             assert_eq!(enc.ciphertext, vec![1, 2, 3, 4]);
-            assert_eq!(enc.iv, vec![5, 6, 7, 8]);
-            assert_eq!(enc.key_id, "key-123");
+            assert_eq!(enc.nonce, vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+            assert_eq!(enc.version, 1);
         }
         _ => panic!("Expected Encrypted content type"),
     }
@@ -69,7 +71,7 @@ fn test_proto_content_file_detection() {
             name: "document.pdf".to_string(),
             mime_type: "application/pdf".to_string(),
             size: 1024,
-            sha256: "abc123".to_string(),
+            sha256: b"abc123".to_vec(),
             chunk_size: 256,
         })),
     };
@@ -103,49 +105,52 @@ fn test_encrypted_message_identifiable() {
     // When we receive an encrypted message, we should be able to identify it
     // and route it to the decryption layer
 
-    let encrypted_content = chat_v1::message::EncryptedContent {
+    let encrypted_content = EncryptedData {
+        version: 1,
+        nonce: vec![0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44],
         ciphertext: vec![0xDE, 0xAD, 0xBE, 0xEF],
-        iv: vec![0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44],
-        key_id: "sender-key-dist-id".to_string(),
+        auth_tag: vec![0; 16],
+        associated_data: vec![],
+        signature: vec![],
+        device_id: String::new(),
     };
 
     // The ciphertext should be non-empty
     assert!(!encrypted_content.ciphertext.is_empty());
 
-    // IV should be present for decryption
-    assert!(!encrypted_content.iv.is_empty());
+    // Nonce should be present for decryption
+    assert!(!encrypted_content.nonce.is_empty());
 
-    // Key ID should identify the sender key distribution
-    assert!(!encrypted_content.key_id.is_empty());
+    // Version should indicate crypto format
+    assert_eq!(encrypted_content.version, 1);
 }
 
-/// Test that we can distinguish between different encryption schemes.
+/// Test that encrypted content has required fields for AES-GCM decryption.
 #[test]
-fn test_encryption_scheme_detection() {
-    // Signal uses different encryption for:
-    // 1. Direct messages (sealed sender + double ratchet)
-    // 2. Group messages (sender keys)
+fn test_encryption_content_structure() {
+    // All encrypted content uses AES-GCM format with:
+    // - 12-byte nonce
+    // - variable-length ciphertext
+    // - 16-byte auth tag
 
-    // For DM: ciphertext is sealed sender envelope
-    let dm_content = chat_v1::message::EncryptedContent {
-        ciphertext: vec![0x01], // Sealed sender version byte
-        iv: vec![],             // IV embedded in sealed sender
-        key_id: "".to_string(), // No key ID for sealed sender
+    let encrypted_content = EncryptedData {
+        version: 1,
+        nonce: vec![0x00; 12],  // 12-byte nonce for AES-GCM
+        ciphertext: vec![0x00, 0x01, 0x02, 0x03],
+        auth_tag: vec![0x00; 16], // 16-byte authentication tag
+        associated_data: vec![],
+        signature: vec![],
+        device_id: String::new(),
     };
 
-    // For Group: ciphertext is sender key encrypted
-    let group_content = chat_v1::message::EncryptedContent {
-        ciphertext: vec![0x00, 0x01, 0x02], // Sender key ciphertext
-        iv: vec![0x00; 16],                 // AES-GCM IV
-        key_id: "group-sender-key".to_string(),
-    };
+    // Standard AES-GCM nonce length
+    assert_eq!(encrypted_content.nonce.len(), 12);
 
-    // We can distinguish by key_id presence
-    let is_group_message = !group_content.key_id.is_empty();
-    let is_dm_message = dm_content.key_id.is_empty();
+    // Standard AES-GCM auth tag length
+    assert_eq!(encrypted_content.auth_tag.len(), 16);
 
-    assert!(is_group_message);
-    assert!(is_dm_message);
+    // Ciphertext should be non-empty for real messages
+    assert!(!encrypted_content.ciphertext.is_empty());
 }
 
 // ============================================================================
@@ -350,7 +355,7 @@ async fn test_server_text_message_roundtrip() {
 
     let sent_message = assert_ok(
         msg_client
-            .send_message(&channel_id, content, None, false, None, false, None, vec![], false, vec![])
+            .send_message(&channel_id, content, None, false, None, None, vec![], false, vec![])
             .await,
     );
 

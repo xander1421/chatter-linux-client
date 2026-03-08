@@ -7,7 +7,6 @@ pub mod audio_state;
 pub mod converters;
 pub mod features;
 pub mod gif_state;
-#[cfg(target_os = "linux")]
-pub mod gl_video;
 pub mod preview_state;
+pub mod video;
 pub mod video_state;

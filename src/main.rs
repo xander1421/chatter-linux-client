@@ -3,6 +3,8 @@
 //! Native Linux desktop client for Chatter secure messaging.
 
 use chatter_linux::app::AppContext;
+use chatter_linux::system::{init_antidebug, antidebug_check};
+use tokio_util::sync::CancellationToken;
 
 // Include Slint-generated code in the binary
 slint::include_modules!();
@@ -12,6 +14,8 @@ mod bin_ui;
 
 #[tokio::main]
 async fn main() {
+    // Create shutdown token for graceful task cancellation
+    let shutdown_token = CancellationToken::new();
     // Initialize tracing for logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -22,6 +26,13 @@ async fn main() {
 
     tracing::info!("Chatter Linux Client v0.1.0");
 
+    // Security: Check for debugger attachment before handling sensitive data
+    // This is defense-in-depth - logs warning if debugger detected
+    if !init_antidebug() {
+        tracing::warn!("Security: Continuing with debugger detected - sensitive data may be exposed");
+        // Note: We continue anyway but sensitive key handling is now more aggressive about zeroization
+    }
+
     // Initialize GStreamer for media processing (video decoding, waveform extraction)
     if let Err(e) = gstreamer::init() {
         tracing::warn!("GStreamer initialization failed: {} (media features may not work)", e);
@@ -30,14 +41,12 @@ async fn main() {
     }
 
     // Select OpenGL ES backend for hardware-accelerated video rendering
-    // This enables zero-copy GL texture import from GStreamer
     if let Err(e) = slint::BackendSelector::new()
         .backend_name("winit".into())
         .require_opengl_es()
         .select()
     {
         tracing::warn!("OpenGL ES backend not available: {} (falling back to default)", e);
-        // Continue with default backend - software video rendering will be used
     } else {
         tracing::info!("Slint OpenGL ES backend selected for hardware-accelerated video");
     }
@@ -52,8 +61,11 @@ async fn main() {
         }
     };
 
+    // Get UIContext for all UI operations
+    let ui_ctx = ctx.ui_context();
+
     // Connect to server (continue in offline mode if fails)
-    let _connected = match ctx.grpc_pool.connect().await {
+    let _connected = match ui_ctx.grpc_pool.connect().await {
         Ok(()) => {
             // Initialize components that require connection
             ctx.init_device_inbox_provider();
@@ -70,21 +82,23 @@ async fn main() {
     // Create main window
     let window = MainWindow::new().expect("Failed to create window");
 
-    // Initialize GL video rendering (hardware-accelerated zero-copy video)
-    #[cfg(target_os = "linux")]
-    {
-        if bin_ui::gl_video::init_gl_video(&window) {
-            tracing::info!("Hardware-accelerated GL video enabled");
-        } else {
-            tracing::info!("Using software video rendering (GL not available)");
-        }
+    // Initialize hardware-accelerated video rendering (GL on Linux/Android, Metal on iOS)
+    if bin_ui::video::init_hw_video(&window) {
+        tracing::info!("Hardware-accelerated video enabled");
+    } else {
+        tracing::info!("Using software video rendering");
     }
 
     // Set initial view based on login state
-    let auth_service = ctx.auth_service();
-    if auth_service.is_logged_in() {
+    if ui_ctx.auth_service.is_logged_in() {
+        // Restore auth_state from stored session (critical for is_own detection in messages)
+        if let Some((user_id, device_id)) = ui_ctx.auth_service.current_user() {
+            let display_name = ui_ctx.user_service.get_display_name(&user_id);
+            ui_ctx.auth_state.set_logged_in(user_id, device_id, display_name);
+            tracing::info!("Restored auth state for user {}", user_id);
+        }
+
         window.set_current_view("main".into());
-        // No animation needed for main view
 
         // Spawn event handlers for DomainEvent processing (NDSS '21 mailboxes, etc.)
         let _event_handlers = ctx.spawn_event_handlers();
@@ -92,25 +106,9 @@ async fn main() {
         // Start inbox provider and load initial data (only if connected)
         let inbox_provider = ctx.get_device_inbox_provider();
         let weak_window = window.as_weak();
-        let grpc_pool = ctx.grpc_pool.clone();
-        let channel_repo = ctx.channel_repo.clone();
-        let message_repo = ctx.message_repo.clone();
-        let user_repo = ctx.user_repo.clone();
-        let attachment_repo = ctx.attachment_repo.clone();
-        let settings_repo = ctx.settings_repo.clone();
-        let signal_service = ctx.signal_service.clone();
-        let group_coordinator = ctx.group_coordinator.clone();
-        let auth_state = ctx.auth_state.clone();
-
-        let user_repo_for_events = user_repo.clone();
-        let dm_bootstrap_service_for_events = ctx.dm_bootstrap_service.clone();
-        let attachment_repo_for_events = attachment_repo.clone();
-        let grpc_pool_for_events = grpc_pool.clone();
-        let database_for_events = ctx.database.clone();
-        let event_bus_for_events = ctx.event_bus.clone();
-        let message_service_for_events = ctx.message_service.clone();
-        let mailbox_manager_for_events = ctx.mailbox_manager.clone();
+        let ui_ctx_for_events = ui_ctx.clone();
         let weak_for_events = weak_window.clone();
+        let shutdown_for_inbox = shutdown_token.clone();
 
         tokio::spawn(async move {
             // Start inbox provider if available
@@ -121,30 +119,41 @@ async fn main() {
                     // Subscribe to inbox events for real-time updates (DMs, friend requests, etc.)
                     let mut event_rx = provider.subscribe();
                     let weak_events = weak_for_events.clone();
-                    let user_repo_events = user_repo_for_events.clone();
-                    let dm_bootstrap_service_events = dm_bootstrap_service_for_events.clone();
-                    let attachment_repo_events = attachment_repo_for_events.clone();
-                    let grpc_pool_events = grpc_pool_for_events.clone();
-                    let database_events = database_for_events.clone();
-                    let event_bus_events = event_bus_for_events.clone();
-                    let message_service_events = message_service_for_events.clone();
-                    let mailbox_manager_events = mailbox_manager_for_events.clone();
+                    let ui_ctx_events = ui_ctx_for_events.clone();
+                    let shutdown_for_events = shutdown_for_inbox.clone();
 
                     tokio::spawn(async move {
-                        while let Ok(event) = event_rx.recv().await {
-                            bin_ui::features::auth::handle_inbox_event(
-                                event,
-                                &weak_events,
-                                &user_repo_events,
-                                &dm_bootstrap_service_events,
-                                &attachment_repo_events,
-                                &grpc_pool_events,
-                                &database_events,
-                                &event_bus_events,
-                                &message_service_events,
-                                &mailbox_manager_events,
-                            )
-                            .await;
+                        loop {
+                            tokio::select! {
+                                _ = shutdown_for_events.cancelled() => {
+                                    tracing::debug!("Inbox event handler shutting down");
+                                    break;
+                                }
+                                result = event_rx.recv() => {
+                                    match result {
+                                        Ok(event) => {
+                                            bin_ui::features::auth::handle_inbox_event(
+                                                event,
+                                                &weak_events,
+                                                &ui_ctx_events,
+                                            )
+                                            .await;
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                            tracing::warn!(
+                                                dropped_count = n,
+                                                "Inbox event receiver lagged - {} events dropped",
+                                                n
+                                            );
+                                            // Continue receiving new events
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                            tracing::info!("Inbox event channel closed");
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     });
                 }
@@ -153,44 +162,75 @@ async fn main() {
             }
 
             // Load initial data (channels, DMs, messages)
-            bin_ui::features::auth::load_initial_data(
-                weak_window,
-                grpc_pool,
-                channel_repo,
-                message_repo,
-                user_repo,
-                attachment_repo,
-                settings_repo,
-                signal_service,
-                group_coordinator,
-                auth_state,
-            )
-            .await;
+            bin_ui::features::auth::load_initial_data(weak_window, &ui_ctx_for_events).await;
         });
     } else {
-        window.set_current_view("login".into());
+        // Check if user has registered before on this device
+        // If not, show register page first; otherwise show login
+        let has_registered_before = ui_ctx.auth_service.has_registered_before();
+        if has_registered_before {
+            window.set_current_view("login".into());
+        } else {
+            window.set_current_view("register".into());
+        }
     }
 
     // Wire all UI callbacks
-    bin_ui::features::wire_all(&window, &ctx);
+    bin_ui::features::wire_all(&window, &ui_ctx);
 
-    // Run Slint event loop (blocks until window closes)
+    // Spawn periodic anti-debugging check (defense-in-depth against runtime attachment)
+    let shutdown_for_antidebug = shutdown_token.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+        loop {
+            tokio::select! {
+                _ = shutdown_for_antidebug.cancelled() => {
+                    tracing::debug!("Anti-debug check shutting down");
+                    break;
+                }
+                _ = interval.tick() => {
+                    // Check for debugger attachment - logs warning if detected
+                    let _ = antidebug_check();
+                }
+            }
+        }
+    });
+
+    // Spawn Ctrl+C handler for graceful shutdown
+    let shutdown_for_ctrlc = shutdown_token.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::info!("Ctrl+C received, initiating shutdown...");
+            shutdown_for_ctrlc.cancel();
+            // Force quit Slint's event loop
+            slint::quit_event_loop().ok();
+        }
+    });
+
+    // Run Slint event loop (blocks until window closes or Ctrl+C)
     window.run().expect("Failed to run application");
 
-    tracing::info!("Application closed, shutting down services...");
+    // Signal all background tasks to shut down
+    tracing::info!("Window closed, signaling shutdown...");
+    shutdown_token.cancel();
 
-    // Graceful shutdown of background services
+    // Quick cleanup of critical resources
+    tracing::info!("Shutting down services...");
+
+    // Stop inbox provider (has its own shutdown logic)
     if let Some(provider) = ctx.get_device_inbox_provider() {
         if let Err(e) = provider.stop().await {
             tracing::warn!("Failed to stop inbox provider: {}", e);
-        } else {
-            tracing::debug!("Inbox provider stopped");
         }
     }
 
     // Disconnect from server
-    ctx.grpc_pool.disconnect();
+    ui_ctx.grpc_pool.disconnect();
     tracing::debug!("Disconnected from server");
 
-    tracing::info!("Shutdown complete");
+    tracing::info!("Shutdown complete, exiting...");
+
+    // Force exit - some background tasks (gRPC streams, event loops) may still be running
+    // This ensures clean termination even if tokio tasks are blocked on channel receives
+    std::process::exit(0);
 }

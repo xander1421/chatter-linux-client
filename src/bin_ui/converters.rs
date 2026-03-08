@@ -1,9 +1,14 @@
 //! Domain to Slint type conversions.
 //!
 //! Pure functions for converting domain types to Slint UI types.
+//!
+//! Note: Some Slint types contain `slint::Image` which is not `Send`,
+//! so we provide Send-safe intermediate types for use across thread boundaries.
 
 use slint::{Image, ModelRc, SharedString, VecModel};
 
+use chatter_linux::domain::anon_dm::AnonDmMessage;
+use chatter_linux::domain::anon_group::AnonGroupMessage;
 use chatter_linux::domain::attachment::{Attachment, AttachmentStatus};
 use chatter_linux::domain::channel::{Channel, ChannelType};
 use chatter_linux::domain::ids::AttachmentId;
@@ -20,6 +25,54 @@ use crate::{ChannelListItemData, DMListItemData, MessageAttachmentData, MessageI
 /// Slint's word-wrap only breaks at spaces, so we insert zero-width spaces
 /// to allow long strings without spaces to wrap.
 const MAX_WORD_LENGTH: usize = 50;
+
+/// Parse [GIF:url] markers from message content.
+/// Returns (cleaned_content, virtual_gif_attachments).
+pub fn parse_gif_markers(content: &str) -> (String, Vec<MessageAttachmentData>) {
+    let mut display_content = content.to_string();
+    let mut gif_attachments = Vec::new();
+
+    while let Some(start_pos) = display_content.find("[GIF:") {
+        if let Some(end_pos) = display_content[start_pos..].find(']') {
+            let actual_end = start_pos + end_pos;
+            let marker_content = &display_content[start_pos + 5..actual_end];
+            let url = marker_content.trim().replace('\n', "").replace('\r', "");
+
+            if !url.is_empty() {
+                let virtual_att = MessageAttachmentData {
+                    id: format!("virtual-gif-{}", url).into(),
+                    filename: "gif".into(),
+                    size_display: "".into(),
+                    mime_type: "image/gif".into(),
+                    category: "image".into(),
+                    thumbnail_url: url.clone().into(),
+                    download_url: url.clone().into(),
+                    is_image: true,
+                    is_video: false,
+                    width: 0,
+                    height: 0,
+                    has_thumbnail: true,
+                    thumbnail: slint::Image::default(),
+                    is_playing: false,
+                    icon: "".into(),
+                    icon_color: slint::Color::from_argb_u8(0, 0, 0, 0),
+                    waveform: ModelRc::default(),
+                    duration_display: "".into(),
+                    is_uploading: false,
+                    is_downloading: false,
+                    progress: 1.0,
+                };
+                gif_attachments.push(virtual_att);
+            }
+
+            display_content.replace_range(start_pos..actual_end + 1, "");
+        } else {
+            break;
+        }
+    }
+
+    (display_content.trim().to_string(), gif_attachments)
+}
 
 /// Insert zero-width spaces (U+200B) into long sequences without whitespace.
 /// This allows Slint's word-wrap to break long strings that have no natural break points.
@@ -54,21 +107,126 @@ pub fn channel_to_slint(channel: &Channel) -> ChannelListItemData {
         name: channel.name.clone().into(),
         channel_type: channel_type_to_string(channel.channel_type).into(),
         unread_count: channel.unread_count as i32,
+        last_message: SharedString::default(),
+        timestamp: SharedString::default(),
+    }
+}
+
+/// Send-safe intermediate struct for DMListItemData.
+///
+/// `slint::Image` is not Send, so we use this to pass data across thread boundaries
+/// and convert to `DMListItemData` inside the Slint event loop.
+#[derive(Clone, Debug)]
+pub struct DMListItemSendData {
+    pub channel_id: String,
+    pub user_id: String,
+    pub display_name: String,
+    pub avatar_url: String,
+    pub avatar_bytes: Option<Vec<u8>>,
+    pub initials: String,
+    pub presence_status: String,
+    pub last_message: String,
+    pub timestamp: String,
+    pub unread_count: i32,
+    pub is_typing: bool,
+}
+
+impl DMListItemSendData {
+    /// Convert to Slint DMListItemData. Must be called inside Slint event loop.
+    pub fn to_slint(self) -> DMListItemData {
+        let (avatar_source, has_avatar) = match &self.avatar_bytes {
+            Some(bytes) => match avatar_bytes_to_image(bytes) {
+                Some(img) => (img, true),
+                None => (slint::Image::default(), false),
+            },
+            None => (slint::Image::default(), false),
+        };
+
+        DMListItemData {
+            channel_id: self.channel_id.into(),
+            user_id: self.user_id.into(),
+            display_name: self.display_name.into(),
+            avatar_url: self.avatar_url.into(),
+            avatar_source,
+            has_avatar,
+            initials: self.initials.into(),
+            presence_status: self.presence_status.into(),
+            last_message: self.last_message.into(),
+            timestamp: self.timestamp.into(),
+            unread_count: self.unread_count,
+            is_typing: self.is_typing,
+        }
+    }
+}
+
+/// Convert a domain Channel (DM) to Send-safe DMListItemSendData.
+pub fn dm_to_send_data(channel: &Channel, other_user_name: &str, other_user_id: &str) -> DMListItemSendData {
+    DMListItemSendData {
+        channel_id: channel.id.to_string(),
+        user_id: other_user_id.to_string(),
+        display_name: other_user_name.to_string(),
+        avatar_url: String::new(),
+        avatar_bytes: None, // Regular DMs don't use local avatar bytes
+        initials: get_initials(other_user_name),
+        presence_status: "offline".to_string(),
+        last_message: String::new(),
+        timestamp: String::new(),
+        unread_count: channel.unread_count as i32,
+        is_typing: false,
     }
 }
 
 /// Convert a domain Channel (DM) to Slint DMListItemData.
+/// Note: This creates a struct containing slint::Image which is not Send.
+/// Use `dm_to_send_data` when you need to pass data across thread boundaries.
 pub fn dm_to_slint(channel: &Channel, other_user_name: &str, other_user_id: &str) -> DMListItemData {
     DMListItemData {
         channel_id: channel.id.to_string().into(),
         user_id: other_user_id.to_string().into(),
         display_name: other_user_name.to_string().into(),
         avatar_url: SharedString::default(),
+        avatar_source: slint::Image::default(),
+        has_avatar: false,
         initials: get_initials(other_user_name).into(),
         presence_status: "offline".into(),
         last_message: SharedString::default(),
         timestamp: SharedString::default(),
         unread_count: channel.unread_count as i32,
+        is_typing: false,
+    }
+}
+
+/// Send-safe intermediate struct for FriendRequestData.
+#[derive(Clone, Debug)]
+pub struct FriendRequestSendData {
+    pub user_id: String,
+    pub display_name: String,
+    pub username: String,
+    pub avatar_url: String,
+    pub avatar_bytes: Option<Vec<u8>>,
+    pub sent_at: String,
+}
+
+impl FriendRequestSendData {
+    /// Convert to Slint FriendRequestData. Must be called inside Slint event loop.
+    pub fn to_slint(self) -> crate::FriendRequestData {
+        let (avatar_source, has_avatar) = match &self.avatar_bytes {
+            Some(bytes) => match avatar_bytes_to_image(bytes) {
+                Some(img) => (img, true),
+                None => (slint::Image::default(), false),
+            },
+            None => (slint::Image::default(), false),
+        };
+
+        crate::FriendRequestData {
+            user_id: self.user_id.into(),
+            display_name: self.display_name.into(),
+            username: self.username.into(),
+            avatar_url: self.avatar_url.into(),
+            avatar_source,
+            has_avatar,
+            sent_at: self.sent_at.into(),
+        }
     }
 }
 
@@ -109,6 +267,14 @@ impl AttachmentDisplayData {
         // Priority 2: Load from local path after download
         let (has_thumbnail, thumbnail, img_width, img_height) = if !self.thumbnail_bytes.is_empty() {
             // Load thumbnail from sender-provided bytes
+            let is_webp = self.thumbnail_bytes.starts_with(b"RIFF") && self.thumbnail_bytes.get(8..12) == Some(b"WEBP");
+            eprintln!(
+                "[DEBUG] Attempting to decode thumbnail for {}: {} bytes, is_webp={}",
+                self.filename,
+                self.thumbnail_bytes.len(),
+                is_webp
+            );
+
             match image::load_from_memory(&self.thumbnail_bytes) {
                 Ok(img) => {
                     let rgba = img.to_rgba8();
@@ -119,7 +285,13 @@ impl AttachmentDisplayData {
                         h,
                     );
                     let slint_img = Image::from_rgba8(buffer);
-                    tracing::debug!(
+                    eprintln!(
+                        "[DEBUG] Successfully decoded thumbnail for {}: {}x{}",
+                        self.filename,
+                        w,
+                        h
+                    );
+                    tracing::info!(
                         "Loaded thumbnail from bytes for {}: {}x{}, {} bytes",
                         self.filename,
                         w,
@@ -129,6 +301,11 @@ impl AttachmentDisplayData {
                     (true, slint_img, w as i32, h as i32)
                 }
                 Err(e) => {
+                    eprintln!(
+                        "[DEBUG] Failed to decode thumbnail for {}: {:?}",
+                        self.filename,
+                        e
+                    );
                     tracing::warn!(
                         "Failed to decode thumbnail bytes for {}: {:?}",
                         self.filename,
@@ -139,29 +316,37 @@ impl AttachmentDisplayData {
             }
         } else if let Some(ref path) = self.local_path {
             // Load from local file after download
-            if self.is_image {
+            if self.is_image || self.is_video {
                 let path_obj = std::path::Path::new(path);
                 if !path_obj.exists() {
-                    tracing::debug!("Attachment thumbnail path does not exist: {}", path);
+                    tracing::info!("Attachment thumbnail path does not exist: {}", path);
                     (false, Image::default(), self.width, self.height)
                 } else {
-                    match Image::load_from_path(path_obj) {
-                        Ok(img) => {
-                            // Extract actual dimensions from loaded image
-                            let size = img.size();
-                            let w = size.width as i32;
-                            let h = size.height as i32;
-                            tracing::debug!(
-                                "Loaded thumbnail for {}: {}x{}",
-                                self.filename,
-                                w,
-                                h
-                            );
-                            (true, img, w, h)
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to load thumbnail for {}: {:?}", self.filename, e);
-                            (false, Image::default(), self.width, self.height)
+                    // For videos, we need to extract a thumbnail if it hasn't been done yet
+                    // But Image::load_from_path only works for images.
+                    // If it's a video and we are here, it means we don't have thumbnail_bytes.
+                    if self.is_video {
+                        tracing::info!("Skipping local video thumbnail loading for {} (not implemented)", self.filename);
+                        (false, Image::default(), self.width, self.height)
+                    } else {
+                        match Image::load_from_path(path_obj) {
+                            Ok(img) => {
+                                // Extract actual dimensions from loaded image
+                                let size = img.size();
+                                let w = size.width as i32;
+                                let h = size.height as i32;
+                                tracing::info!(
+                                    "Loaded thumbnail from local path for {}: {}x{}",
+                                    self.filename,
+                                    w,
+                                    h
+                                );
+                                (true, img, w, h)
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to load thumbnail for {}: {:?}", self.filename, e);
+                                (false, Image::default(), self.width, self.height)
+                            }
                         }
                     }
                 }
@@ -169,6 +354,7 @@ impl AttachmentDisplayData {
                 (false, Image::default(), self.width, self.height)
             }
         } else {
+            tracing::info!("No thumbnail source available for {}", self.filename);
             (false, Image::default(), self.width, self.height)
         };
 
@@ -272,7 +458,18 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
         is_downloading,
         progress: 0.0, // Will be updated by progress callback
         // Use stored thumbnail from sender (for instant preview)
-        thumbnail_bytes: meta.thumbnail.clone().unwrap_or_default(),
+        thumbnail_bytes: {
+            let bytes = meta.thumbnail.clone().unwrap_or_default();
+            if meta.is_image() || meta.is_video() {
+                tracing::debug!(
+                    "attachment_to_display_data: {} thumbnail_bytes={}, waveform_samples={:?}",
+                    meta.name,
+                    bytes.len(),
+                    meta.waveform_samples.as_ref().map(|w| w.len())
+                );
+            }
+            bytes
+        },
     }
 }
 
@@ -379,18 +576,11 @@ pub struct MessageDisplayData {
 }
 
 impl MessageDisplayData {
-    /// Convert to Slint MessageItemData (must be called on UI thread).
-    ///
-    /// For call messages, use `to_slint_with_user` to properly determine call direction.
-    pub fn to_slint(&self) -> MessageItemData {
-        self.to_slint_with_user("")
-    }
-
     /// Convert to Slint MessageItemData with current user context.
     ///
     /// The `current_user_id` is used to determine call direction (outgoing vs incoming).
     pub fn to_slint_with_user(&self, current_user_id: &str) -> MessageItemData {
-        let slint_attachments: Vec<MessageAttachmentData> = self
+        let mut slint_attachments: Vec<MessageAttachmentData> = self
             .attachments
             .iter()
             .map(|a| a.to_slint())
@@ -417,39 +607,52 @@ impl MessageDisplayData {
         let is_own = if self.is_call {
             self.call_initiator_id == current_user_id
         } else {
-            self.sender_id == current_user_id
+            let matches = self.sender_id == current_user_id;
+            if !matches && !current_user_id.is_empty() && !self.sender_id.is_empty() {
+                tracing::debug!(
+                    sender_id = %self.sender_id,
+                    current_user_id = %current_user_id,
+                    message_id = %self.message_id,
+                    "[IS_OWN] sender_id != current_user_id"
+                );
+            }
+            matches
         };
 
-        MessageItemData {
-            message_id: self.message_id.clone().into(),
-            sender_id: self.sender_id.clone().into(),
-            sender_name: self.sender_name.clone().into(),
-            sender_initials: self.sender_initials.clone().into(),
-            sender_avatar_url: SharedString::default(),
-            content: self.content.clone().into(),
-            timestamp: self.timestamp.clone().into(),
-            timestamp_ns: self.timestamp_ns.clone().into(),
-            is_own,
-            is_edited: self.is_edited,
-            is_deleted: self.is_deleted,
-            is_system: false,
-            is_ai: self.is_ai,
-            has_attachments: self.has_attachments,
-            attachment_count: self.attachment_count,
-            attachments: ModelRc::new(VecModel::from(slint_attachments)),
-            has_reactions: self.has_reactions,
-            reaction_summary: self.reaction_summary.clone().into(),
-            reply_count: self.reply_count,
-            reply_count_text: self.reply_count_text.clone().into(),
-            is_thread_reply: self.is_thread_reply,
-            show_sender: true,
-            delivery_status: self.delivery_status.clone().into(),
-            is_pinned: false,
-            is_call: self.is_call,
-            call_type: call_type.into(),
-            call_duration: self.call_duration.clone().into(),
-        }
+    // Parse [GIF:url] markers and add virtual attachments
+    let (display_content, gif_attachments) = parse_gif_markers(&self.content);
+    slint_attachments.extend(gif_attachments);
+
+    MessageItemData {
+        message_id: self.message_id.clone().into(),
+        sender_id: self.sender_id.clone().into(),
+        sender_name: self.sender_name.clone().into(),
+        sender_initials: self.sender_initials.clone().into(),
+        sender_avatar_url: SharedString::default(),
+        content: insert_word_breaks(display_content.trim()).into(),
+        timestamp: self.timestamp.clone().into(),
+        timestamp_ns: self.timestamp_ns.clone().into(),
+        is_own,
+        is_edited: self.is_edited,
+        is_deleted: self.is_deleted,
+        is_system: false,
+        is_ai: self.is_ai,
+        has_attachments: !slint_attachments.is_empty() || self.has_attachments,
+        attachment_count: (slint_attachments.len() as i32).max(self.attachment_count),
+        attachments: ModelRc::new(VecModel::from(slint_attachments)),
+        has_reactions: self.has_reactions,
+        reaction_summary: self.reaction_summary.clone().into(),
+        reply_count: self.reply_count,
+        reply_count_text: self.reply_count_text.clone().into(),
+        is_thread_reply: self.is_thread_reply,
+        show_sender: true,
+        delivery_status: self.delivery_status.clone().into(),
+        is_pinned: false,
+        is_call: self.is_call,
+        call_type: call_type.into(),
+        call_duration: self.call_duration.clone().into(),
     }
+}
 }
 
 /// Convert a domain Message to thread-safe MessageDisplayData.
@@ -504,7 +707,7 @@ pub fn message_to_display_data_with_replies(
         sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
         sender_name: sender_name.to_string(),
         sender_initials: get_initials(sender_name),
-        content: insert_word_breaks(msg.as_text().unwrap_or("")),
+        content: msg.as_text().unwrap_or("").to_string(),
         timestamp: {
             // Convert UTC to local time for display (consistent with sidebar)
             use chrono::Local;
@@ -538,7 +741,6 @@ pub fn message_to_display_data_with_replies(
 /// Convert a domain Message to MessageDisplayData with pre-converted attachments.
 ///
 /// Use this when you have already converted attachments (e.g., using pointer fallback).
-#[allow(dead_code)]
 pub fn message_to_display_data_with_attachments(
     msg: &Message,
     sender_name: &str,
@@ -571,7 +773,7 @@ pub fn message_to_display_data_with_attachments(
         sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
         sender_name: sender_name.to_string(),
         sender_initials: get_initials(sender_name),
-        content: insert_word_breaks(msg.as_text().unwrap_or("")),
+        content: msg.as_text().unwrap_or("").to_string(),
         timestamp: {
             // Convert UTC to local time for display (consistent with sidebar)
             use chrono::Local;
@@ -619,6 +821,31 @@ pub fn get_initials(name: &str) -> String {
         .take(2)
         .collect::<String>()
         .to_uppercase()
+}
+
+/// Convert avatar bytes to a Slint Image.
+///
+/// Returns None if the bytes are empty or can't be decoded.
+pub fn avatar_bytes_to_image(bytes: &[u8]) -> Option<slint::Image> {
+    if bytes.is_empty() {
+        return None;
+    }
+    match image::load_from_memory(bytes) {
+        Ok(img) => {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                rgba.as_raw(),
+                w,
+                h,
+            );
+            Some(slint::Image::from_rgba8(buffer))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to decode avatar image: {:?}", e);
+            None
+        }
+    }
 }
 
 /// Convert a PendingAttachment to Slint PendingAttachmentData.
@@ -712,5 +939,103 @@ fn format_count(count: i32, singular: &str, plural: &str) -> String {
         format!("1 {}", singular)
     } else {
         format!("{} {}", count, plural)
+    }
+}
+
+/// Convert an AnonGroupMessage to MessageDisplayData.
+///
+/// Used for displaying messages in private groups.
+pub fn anon_group_message_to_display_data(
+    msg: &AnonGroupMessage,
+    sender_name: &str,
+    resolved_attachments: &[Attachment],
+) -> MessageDisplayData {
+    use chrono::Local;
+
+    let content = msg.as_text().unwrap_or_default();
+    let attachment_data: Vec<AttachmentDisplayData> = resolved_attachments
+        .iter()
+        .map(attachment_to_display_data)
+        .collect();
+
+    MessageDisplayData {
+        message_id: msg.id.as_str().to_string(),
+        sender_id: msg.sender_id.to_string(),
+        sender_name: sender_name.to_string(),
+        sender_initials: get_initials(sender_name),
+        content: content.to_string(),
+        timestamp: msg.created_at.with_timezone(&Local).format("%H:%M").to_string(),
+        // Use sent_at for ordering (sender's canonical timestamp), not created_at (local storage time)
+        timestamp_ns: msg.sent_at.to_string(),
+        is_edited: false,
+        is_deleted: msg.is_deleted,
+        is_ai: false,
+        has_attachments: !attachment_data.is_empty(),
+        attachment_count: attachment_data.len() as i32,
+        attachments: attachment_data,
+        has_reactions: !msg.reaction_counts.is_empty(),
+        reaction_summary: msg
+            .reaction_counts
+            .iter()
+            .map(|r| format!("{} {}", r.emoji, r.count))
+            .collect::<Vec<_>>()
+            .join(" "),
+        reply_count: 0,
+        reply_count_text: String::new(),
+        is_thread_reply: false,
+        delivery_status: msg.delivery_status.clone(),
+        is_call: false,
+        call_message_type: String::new(),
+        call_initiator_id: String::new(),
+        call_duration: String::new(),
+    }
+}
+
+/// Convert an AnonDmMessage to MessageDisplayData.
+///
+/// Used for displaying messages in anonymous DM conversations.
+pub fn anon_dm_message_to_display_data(
+    msg: &AnonDmMessage,
+    sender_name: &str,
+    resolved_attachments: &[Attachment],
+) -> MessageDisplayData {
+    use chrono::Local;
+
+    let content = msg.as_text().unwrap_or_default();
+    let attachment_data: Vec<AttachmentDisplayData> = resolved_attachments
+        .iter()
+        .map(attachment_to_display_data)
+        .collect();
+
+    MessageDisplayData {
+        message_id: msg.id.as_str().to_string(),
+        sender_id: msg.sender_id.to_string(),
+        sender_name: sender_name.to_string(),
+        sender_initials: get_initials(sender_name),
+        content: content.to_string(),
+        timestamp: msg.created_at.with_timezone(&Local).format("%H:%M").to_string(),
+        // Use sent_at for ordering (sender's canonical timestamp), not created_at (local storage time)
+        timestamp_ns: msg.sent_at.to_string(),
+        is_edited: false,
+        is_deleted: msg.is_deleted,
+        is_ai: false,
+        has_attachments: !attachment_data.is_empty(),
+        attachment_count: attachment_data.len() as i32,
+        attachments: attachment_data,
+        has_reactions: !msg.reaction_counts.is_empty(),
+        reaction_summary: msg
+            .reaction_counts
+            .iter()
+            .map(|r| format!("{} {}", r.emoji, r.count))
+            .collect::<Vec<_>>()
+            .join(" "),
+        reply_count: 0,
+        reply_count_text: String::new(),
+        is_thread_reply: false,
+        delivery_status: msg.delivery_status.clone(),
+        is_call: false,
+        call_message_type: String::new(),
+        call_initiator_id: String::new(),
+        call_duration: String::new(),
     }
 }

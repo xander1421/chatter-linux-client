@@ -19,6 +19,7 @@
 //! - **Cover Traffic** ([`cover_traffic`]): Fake messages at random intervals
 //! - **Dummy Polling** ([`poller`]): Polls to decoy mailboxes hide access patterns
 
+pub mod anon_dm;
 pub mod blind_signature;
 pub mod client;
 pub mod content;
@@ -78,3 +79,6 @@ pub use poller::{
     MailboxPoller, PollerConfig, PollerStats, UnifiedPollResult,
     DEFAULT_DUMMY_POLL_PROBABILITY, DEFAULT_POLL_INTERVAL_SECS,
 };
+
+// Re-export anonymous DM polling types
+pub use anon_dm::{AnonDmPollResult, AnonDmPoller};

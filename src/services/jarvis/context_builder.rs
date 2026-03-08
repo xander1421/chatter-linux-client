@@ -1,0 +1,269 @@
+//! Context builder for RAG-style retrieval.
+//!
+//! Builds enriched context for Jarvis responses by combining:
+//! - Recent conversation history
+//! - Relevant facts about the user
+//! - Related entities from the knowledge graph
+//! - Conversation summaries
+
+use std::sync::Arc;
+
+use crate::domain::jarvis::{
+    EntityKnowledge, JarvisContext, JarvisConversation, JarvisFact, JarvisSummary, Role,
+    SubjectType,
+};
+use crate::domain::UserId;
+use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
+
+use super::error::JarvisError;
+
+/// Context builder for enriching Jarvis queries.
+pub struct ContextBuilder {
+    memory_repo: Arc<JarvisMemoryRepository>,
+    graph_repo: Arc<JarvisGraphRepository>,
+}
+
+/// Built context for a Jarvis query.
+#[derive(Debug, Default)]
+pub struct BuiltContext {
+    /// Recent conversation history.
+    pub history: Vec<JarvisConversation>,
+    /// Facts about the user.
+    pub user_facts: Vec<JarvisFact>,
+    /// Facts relevant to the query.
+    pub query_facts: Vec<JarvisFact>,
+    /// Related entity knowledge.
+    pub entity_knowledge: Vec<EntityKnowledge>,
+    /// Conversation summaries.
+    pub summaries: Vec<JarvisSummary>,
+}
+
+impl BuiltContext {
+    /// Format context as a system prompt prefix.
+    pub fn to_system_prompt(&self) -> String {
+        let mut parts = Vec::new();
+
+        // Add conversation history
+        if !self.history.is_empty() {
+            parts.push("## Recent Conversation".to_string());
+            for conv in &self.history {
+                let role = match conv.role {
+                    Role::User => "User",
+                    Role::Assistant => "Jarvis",
+                    Role::System => "System",
+                };
+                parts.push(format!("{}: {}", role, conv.content));
+            }
+        }
+
+        // Add user facts
+        if !self.user_facts.is_empty() {
+            parts.push("\n## About the User".to_string());
+            for fact in &self.user_facts {
+                if fact.decayed_confidence() > 0.3 {
+                    parts.push(format!("- {}: {}", fact.predicate, fact.object));
+                }
+            }
+        }
+
+        // Add query-relevant facts
+        if !self.query_facts.is_empty() {
+            parts.push("\n## Relevant Knowledge".to_string());
+            for fact in &self.query_facts {
+                if fact.decayed_confidence() > 0.3 {
+                    parts.push(format!("- {} {} {}", fact.subject_id, fact.predicate, fact.object));
+                }
+            }
+        }
+
+        // Add entity knowledge
+        if !self.entity_knowledge.is_empty() {
+            parts.push("\n## Related Entities".to_string());
+            for knowledge in &self.entity_knowledge {
+                let ctx = knowledge.to_context_string();
+                if !ctx.is_empty() {
+                    parts.push(ctx);
+                }
+            }
+        }
+
+        // Add summaries
+        if !self.summaries.is_empty() {
+            parts.push("\n## Previous Conversation Summaries".to_string());
+            for summary in &self.summaries {
+                parts.push(format!("- {}", summary.summary));
+            }
+        }
+
+        if parts.is_empty() {
+            String::new()
+        } else {
+            parts.join("\n")
+        }
+    }
+
+    /// Check if the context is empty.
+    pub fn is_empty(&self) -> bool {
+        self.history.is_empty()
+            && self.user_facts.is_empty()
+            && self.query_facts.is_empty()
+            && self.entity_knowledge.is_empty()
+            && self.summaries.is_empty()
+    }
+
+    /// Get the total token estimate for this context.
+    ///
+    /// Very rough estimate: ~4 chars per token.
+    pub fn estimated_tokens(&self) -> usize {
+        let prompt = self.to_system_prompt();
+        prompt.len() / 4
+    }
+}
+
+impl ContextBuilder {
+    /// Create a new context builder.
+    pub fn new(
+        memory_repo: Arc<JarvisMemoryRepository>,
+        graph_repo: Arc<JarvisGraphRepository>,
+    ) -> Self {
+        Self {
+            memory_repo,
+            graph_repo,
+        }
+    }
+
+    /// Build context for a query.
+    ///
+    /// Retrieves relevant information from memory and the knowledge graph.
+    pub fn build(
+        &self,
+        context: &JarvisContext,
+        query: &str,
+        author_id: Option<&UserId>,
+    ) -> Result<BuiltContext, JarvisError> {
+        let mut built = BuiltContext::default();
+
+        // 1. Get recent conversation history
+        built.history = self.memory_repo.get_recent_conversations(context, 20)?;
+
+        // 2. Get facts about the user
+        if let Some(user_id) = author_id {
+            built.user_facts = self
+                .memory_repo
+                .get_facts_about(SubjectType::User, &user_id.to_string())?;
+        }
+
+        // 3. Search for query-relevant facts
+        built.query_facts = self.memory_repo.search_facts(query, 10)?;
+
+        // 4. Get related entities from the query
+        let entities = self.extract_entity_names(query);
+        for entity_name in entities {
+            let knowledge = self
+                .graph_repo
+                .get_entity_knowledge(&entity_name, &self.memory_repo)?;
+            if knowledge.entity.is_some() {
+                built.entity_knowledge.push(knowledge);
+            }
+        }
+
+        // 5. Get conversation summaries
+        built.summaries = self.memory_repo.get_summaries(context, 5)?;
+
+        Ok(built)
+    }
+
+    /// Build minimal context (just recent history).
+    ///
+    /// Use when you want fast context without full RAG retrieval.
+    pub fn build_minimal(
+        &self,
+        context: &JarvisContext,
+        limit: u32,
+    ) -> Result<BuiltContext, JarvisError> {
+        let history = self.memory_repo.get_recent_conversations(context, limit)?;
+        Ok(BuiltContext {
+            history,
+            ..Default::default()
+        })
+    }
+
+    /// Extract potential entity names from a query.
+    ///
+    /// Simple heuristic: look for capitalized words that might be names.
+    fn extract_entity_names(&self, query: &str) -> Vec<String> {
+        let mut names = Vec::new();
+
+        for word in query.split_whitespace() {
+            // Skip short words and common words
+            if word.len() < 3 {
+                continue;
+            }
+
+            let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+            if clean.is_empty() {
+                continue;
+            }
+
+            // Check if it looks like a proper noun (capitalized)
+            if clean.chars().next().map_or(false, |c| c.is_uppercase()) {
+                names.push(clean.to_lowercase());
+            }
+        }
+
+        names
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_built_context_to_system_prompt() {
+        let context = BuiltContext {
+            history: vec![
+                JarvisConversation {
+                    id: crate::domain::JarvisConversationId::new(),
+                    context_type: crate::domain::ContextType::Channel,
+                    context_id: "test".to_string(),
+                    role: Role::User,
+                    content: "Hello".to_string(),
+                    timestamp: 0,
+                    metadata_json: None,
+                    created_at: chrono::Utc::now(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let prompt = context.to_system_prompt();
+        assert!(prompt.contains("Recent Conversation"));
+        assert!(prompt.contains("User: Hello"));
+    }
+
+    #[test]
+    fn test_empty_context() {
+        let context = BuiltContext::default();
+        assert!(context.is_empty());
+        assert!(context.to_system_prompt().is_empty());
+    }
+
+    #[test]
+    fn test_estimated_tokens() {
+        let mut context = BuiltContext::default();
+        context.history.push(JarvisConversation {
+            id: crate::domain::JarvisConversationId::new(),
+            context_type: crate::domain::ContextType::Channel,
+            context_id: "test".to_string(),
+            role: Role::User,
+            content: "A".repeat(400), // ~100 tokens
+            timestamp: 0,
+            metadata_json: None,
+            created_at: chrono::Utc::now(),
+        });
+
+        let tokens = context.estimated_tokens();
+        assert!(tokens > 0);
+    }
+}

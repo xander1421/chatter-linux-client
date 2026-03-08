@@ -33,6 +33,10 @@ pub mod reaction_repo;
 pub mod search_index;
 pub mod settings_repo;
 pub mod user_repo;
+pub mod anon_group_repo;
+pub mod anon_dm_repo;
+pub mod jarvis_memory_repo;
+pub mod jarvis_graph_repo;
 
 pub use attachment_repo::AttachmentRepository;
 pub use channel_repo::ChannelRepository;
@@ -43,3 +47,7 @@ pub use reaction_repo::ReactionRepository;
 pub use search_index::{SearchIndex, SearchResult};
 pub use settings_repo::{keys as settings_keys, SettingsRepository};
 pub use user_repo::UserRepository;
+pub use anon_group_repo::AnonGroupRepository;
+pub use anon_dm_repo::AnonDmRepository;
+pub use jarvis_memory_repo::JarvisMemoryRepository;
+pub use jarvis_graph_repo::JarvisGraphRepository;

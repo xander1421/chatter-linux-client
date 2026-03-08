@@ -9,35 +9,25 @@ use slint::{Model, Weak};
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, warn};
 
+use chatter_linux::app::UIContext;
 use chatter_linux::domain::channel::{MemberRole, Membership, NotificationPreference};
 use chatter_linux::domain::ids::{ChannelId, UserId};
 use chatter_linux::network::grpc::channel_client::ChannelClient;
-use chatter_linux::network::grpc::client_pool::GrpcClientPool;
 use chatter_linux::proto::chat_v1::channel_event;
-use chatter_linux::services::signal_service::SignalService;
 use chatter_linux::services::ChannelEventService;
-use chatter_linux::storage::ChannelRepository;
 
 use crate::MainWindow;
 
 /// Spawn a task that streams channel events and updates the UI.
 ///
-/// This connects to the server's channel event stream and handles:
-/// - MemberAdded: Creates a system message "X joined the channel"
-/// - MemberRemoved: Creates a system message "X left the channel" + marks for sender key rotation
-/// - ChannelUpdated: Could update channel info in sidebar
-///
-/// Note: SKDM distribution to new members happens when we send our first message
-/// to them (via MessageService's encrypt_for_group which includes SKDM if needed).
-///
 /// Returns a handle to the spawned task.
 pub fn spawn_channel_events_handler(
     weak_window: Weak<MainWindow>,
-    grpc_pool: Arc<GrpcClientPool>,
-    channel_repo: Arc<ChannelRepository>,
+    ui_ctx: &Arc<UIContext>,
     channel_event_service: Arc<ChannelEventService>,
-    signal_service: Arc<SignalService>,
 ) -> tokio::task::JoinHandle<()> {
+    let ui_ctx = ui_ctx.clone();
+
     tokio::spawn(async move {
         // Small delay to ensure connection is stable
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -45,10 +35,8 @@ pub fn spawn_channel_events_handler(
         loop {
             match run_channel_events_stream(
                 &weak_window,
-                &grpc_pool,
-                &channel_repo,
+                &ui_ctx,
                 &channel_event_service,
-                &signal_service,
             )
             .await
             {
@@ -68,12 +56,13 @@ pub fn spawn_channel_events_handler(
 /// Run the channel events stream until it ends or errors.
 async fn run_channel_events_stream(
     weak_window: &Weak<MainWindow>,
-    grpc_pool: &Arc<GrpcClientPool>,
-    channel_repo: &Arc<ChannelRepository>,
+    ui_ctx: &Arc<UIContext>,
     channel_event_service: &Arc<ChannelEventService>,
-    signal_service: &Arc<SignalService>,
 ) -> Result<(), String> {
-    let mut channel_client = ChannelClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+    let mut channel_client = ChannelClient::new(
+        ui_ctx.grpc_pool.channel(),
+        ui_ctx.grpc_pool.auth_clone(),
+    );
 
     // Stream events for all channels (pass None for channel_id)
     let mut stream = channel_client
@@ -92,9 +81,8 @@ async fn run_channel_events_stream(
                         &event.channel_id,
                         event.timestamp,
                         weak_window,
-                        channel_repo,
+                        ui_ctx,
                         channel_event_service,
-                        signal_service,
                     )
                     .await;
                 }
@@ -110,15 +98,13 @@ async fn run_channel_events_stream(
 }
 
 /// Handle a single channel event.
-#[allow(clippy::too_many_arguments)]
 async fn handle_channel_event(
     event: channel_event::Event,
     channel_id_str: &str,
     timestamp: u64,
     weak_window: &Weak<MainWindow>,
-    channel_repo: &Arc<ChannelRepository>,
+    ui_ctx: &Arc<UIContext>,
     channel_event_service: &Arc<ChannelEventService>,
-    signal_service: &Arc<SignalService>,
 ) {
     match event {
         channel_event::Event::MemberAdded(member) => {
@@ -153,9 +139,62 @@ async fn handle_channel_event(
                     }
                 }
 
-                // Note: SKDM distribution to new members happens automatically when we send
-                // our first message - encrypt_for_group() includes SKDM if the recipient
-                // doesn't have our sender key yet.
+                // Send our SKDM to the new member so they can decrypt our messages
+                let channel_id_clone = channel_id;
+                let new_member_id = user_id;
+                let signal_svc = ui_ctx.signal_service.clone();
+                let msg_svc = ui_ctx.message_service.clone();
+
+                tokio::spawn(async move {
+                    // Check if we have a sender key for this channel
+                    match signal_svc.has_sender_key(&channel_id_clone).await {
+                        Ok(true) => {
+                            // Create our SKDM for this channel
+                            match signal_svc.create_sender_key(&channel_id_clone).await {
+                                Ok(skdm) => {
+                                    // Send SKDM to the new member pairwise
+                                    if let Err(e) = msg_svc
+                                        .send_skdm_to_member(&channel_id_clone, &new_member_id, &skdm)
+                                        .await
+                                    {
+                                        warn!(
+                                            channel_id = %channel_id_clone,
+                                            new_member = %new_member_id,
+                                            error = %e,
+                                            "Failed to send SKDM to new member"
+                                        );
+                                    } else {
+                                        info!(
+                                            channel_id = %channel_id_clone,
+                                            new_member = %new_member_id,
+                                            "Sent SKDM to new channel member"
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        channel_id = %channel_id_clone,
+                                        error = %e,
+                                        "Failed to create SKDM for new member"
+                                    );
+                                }
+                            }
+                        }
+                        Ok(false) => {
+                            debug!(
+                                channel_id = %channel_id_clone,
+                                "No sender key for channel, skipping SKDM send to new member"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                channel_id = %channel_id_clone,
+                                error = %e,
+                                "Failed to check sender key existence"
+                            );
+                        }
+                    }
+                });
             }
         }
         channel_event::Event::MemberRemovedId(user_id_str) => {
@@ -173,8 +212,7 @@ async fn handle_channel_event(
                 match channel_event_service.handle_member_removed(&channel_id, &user_id) {
                     Ok((_message, display_name)) => {
                         // Mark channel for sender key rotation (forward secrecy)
-                        // The departed member won't be able to decrypt our future messages
-                        if let Err(e) = signal_service.mark_channel_for_rotation(&channel_id) {
+                        if let Err(e) = ui_ctx.signal_service.mark_channel_for_rotation(&channel_id) {
                             warn!(
                                 channel_id = %channel_id,
                                 error = %e,
@@ -208,44 +246,42 @@ async fn handle_channel_event(
                 "Received ChannelUpdated event"
             );
 
-            // Update channel in local repo
+            // Update channel via service
             if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
-                // Convert proto to domain
-                if let Ok(channel) = chatter_linux::services::channel::converters::proto_to_domain_channel(&proto_channel) {
-                    if let Err(e) = channel_repo.update(&channel) {
-                        warn!("Failed to update channel in local repo: {}", e);
-                    }
+                // Fetch and update channel via service (syncs to local storage)
+                if let Err(e) = ui_ctx.channel_service.get_channel(&channel_id).await {
+                    warn!("Failed to sync channel update: {}", e);
+                }
 
-                    // Update sidebar UI
-                    let weak = weak_window.clone();
-                    let channel_name = channel.name.clone();
-                    let channel_id_str = channel_id.to_string();
+                // Update sidebar UI
+                let weak = weak_window.clone();
+                let channel_name = proto_channel.name.clone();
+                let channel_id_str = channel_id.to_string();
 
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(window) = weak.upgrade() {
-                            // Update channel list in sidebar
-                            let channels = window.get_channels();
-                            for i in 0..channels.row_count() {
-                                if let Some(ch) = channels.row_data(i) {
-                                    if ch.channel_id.as_str() == channel_id_str {
-                                        use slint::VecModel;
-                                        let mut updated_ch = ch.clone();
-                                        updated_ch.name = channel_name.clone().into();
-                                        if let Some(model) = channels.as_any().downcast_ref::<VecModel<crate::ChannelListItemData>>() {
-                                            model.set_row_data(i, updated_ch);
-                                        }
-                                        break;
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(window) = weak.upgrade() {
+                        // Update channel list in sidebar
+                        let channels = window.get_channels();
+                        for i in 0..channels.row_count() {
+                            if let Some(ch) = channels.row_data(i) {
+                                if ch.channel_id.as_str() == channel_id_str {
+                                    use slint::VecModel;
+                                    let mut updated_ch = ch.clone();
+                                    updated_ch.name = channel_name.clone().into();
+                                    if let Some(model) = channels.as_any().downcast_ref::<VecModel<crate::ChannelListItemData>>() {
+                                        model.set_row_data(i, updated_ch);
                                     }
+                                    break;
                                 }
                             }
-
-                            // Update header if this is the selected channel
-                            if window.get_selected_channel_id().as_str() == channel_id_str {
-                                window.set_channel_name(channel_name.into());
-                            }
                         }
-                    });
-                }
+
+                        // Update header if this is the selected channel
+                        if window.get_selected_channel_id().as_str() == channel_id_str {
+                            window.set_channel_name(channel_name.into());
+                        }
+                    }
+                });
             }
         }
         channel_event::Event::ChannelDeleted(deleted_channel_id) => {
@@ -256,9 +292,9 @@ async fn handle_channel_event(
 
             // Parse channel ID
             if let Ok(channel_id) = deleted_channel_id.parse::<ChannelId>() {
-                // Delete from local repo
-                if let Err(e) = channel_repo.delete(&channel_id) {
-                    warn!("Failed to delete channel from local repo: {}", e);
+                // Delete channel via service
+                if let Err(e) = ui_ctx.channel_service.delete_channel(&channel_id).await {
+                    warn!("Failed to delete channel: {}", e);
                 }
 
                 // Remove from sidebar UI
@@ -387,7 +423,6 @@ fn build_membership_from_proto(
     };
 
     let user_id = member.user_id.parse::<UserId>().unwrap_or_else(|_| {
-        // Fallback - this shouldn't happen if the proto is valid
         UserId::new()
     });
 
@@ -403,4 +438,3 @@ fn build_membership_from_proto(
         notification_preference: NotificationPreference::All,
     }
 }
-

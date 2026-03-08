@@ -17,8 +17,10 @@ use crate::mailbox::dm::{ConversationKey, DmConversationManager, PeerMailbox, Tw
 use crate::network::grpc::MailboxClient;
 use crate::network::validation::MessageDeduplicator;
 use crate::services::message_gateway::{DmContent, MessageGateway};
+use crate::services::attachment::AttachmentService;
 use crate::storage::repositories::settings_repo::keys;
-use crate::storage::{ChannelRepository, MessageRepository, SettingsRepository};
+use crate::storage::repositories::user_repo::UserRepository;
+use crate::storage::{AttachmentRepository, ChannelRepository, MessageRepository, SettingsRepository};
 
 /// Poll all DM mailboxes and process received messages.
 ///
@@ -42,6 +44,8 @@ pub async fn poll_dm_mailboxes(
     settings_repo: &Arc<SettingsRepository>,
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
+    attachment_repo: &Arc<AttachmentRepository>,
+    user_repo: &Arc<UserRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     deduplicator: &MessageDeduplicator,
 ) {
@@ -113,6 +117,8 @@ pub async fn poll_dm_mailboxes(
                                     event_tx,
                                     message_repo,
                                     channel_repo,
+                                    attachment_repo,
+                                    user_repo,
                                     domain_tx,
                                 );
                             }
@@ -230,10 +236,57 @@ fn dispatch_dm_content(
     event_tx: &broadcast::Sender<InboxEvent>,
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
+    attachment_repo: &Arc<AttachmentRepository>,
+    user_repo: &Arc<UserRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
 ) {
+    // Log the content type being dispatched
+    let content_type = match &dm_content {
+        DmContent::Text { .. } => "Text",
+        DmContent::Typing { .. } => "Typing",
+        DmContent::Receipt { .. } => "Receipt",
+        DmContent::Reaction { .. } => "Reaction",
+        DmContent::Pin { .. } => "Pin",
+        DmContent::Edit { .. } => "Edit",
+        DmContent::DeleteForMe { .. } => "DeleteForMe",
+        DmContent::DeleteForEveryone { .. } => "DeleteForEveryone",
+        DmContent::KeyExchange { .. } => "KeyExchange",
+        _ => "Other",
+    };
+    tracing::info!(
+        peer_id = %peer_id,
+        sender_id = %sender_id,
+        content_type = content_type,
+        message_id = %message_id,
+        "DM_DISPATCH: dispatch_dm_content called"
+    );
+
     match dm_content {
-        DmContent::Text { body, timestamp, attachments } => {
+        DmContent::Text { body, timestamp, attachments, profile_key } => {
+            // Store sender's profile key if present (for decrypting their display_name)
+            if let Some(ref key) = profile_key {
+                if key.len() == 32 {
+                    if let Some(current_user) = current_user_id {
+                        let key_array: [u8; 32] = key.as_slice().try_into().unwrap();
+                        match user_repo.set_friend_profile_key(current_user, sender_id, &key_array) {
+                            Ok(()) => {
+                                tracing::info!(
+                                    sender_id = %sender_id,
+                                    "Stored sender's profile key for display_name decryption"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    sender_id = %sender_id,
+                                    error = %e,
+                                    "Failed to store profile key (sender may not be a friend)"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             // Store message in local database for persistence
             if let Some(current_user) = current_user_id {
                 // Look up the DM channel by peer ID (server-assigned, NOT derived)
@@ -262,12 +315,12 @@ fn dispatch_dm_content(
                         *current_user, // Owner is current user for local tracking
                     );
 
-                    if let Err(e) = channel_repo.insert(&channel) {
-                        // Might fail if concurrent insert - that's OK, use the ID anyway
-                        tracing::debug!(
+                    // Insert if doesn't exist, ignore if already present
+                    if let Err(e) = channel_repo.insert_or_ignore(&channel) {
+                        tracing::warn!(
                             peer_id = %peer_id,
                             error = %e,
-                            "Could not insert DM channel (may already exist)"
+                            "Failed to ensure DM channel exists"
                         );
                     }
 
@@ -321,6 +374,17 @@ fn dispatch_dm_content(
                         tracing::warn!(peer_id = %peer_id, error = %e, "Failed to store DM");
                     }
                 }
+            }
+
+            // Create attachment records from pointers (service layer responsibility)
+            if !attachments.is_empty() {
+                let attachment_service = AttachmentService::new(attachment_repo.clone());
+                let created_ids = attachment_service.create_from_pointers(&attachments);
+                tracing::debug!(
+                    peer_id = %peer_id,
+                    attachment_count = created_ids.len(),
+                    "Created attachment records from pointers"
+                );
             }
 
             let _ = event_tx.send(InboxEvent::DmReceived {
@@ -471,36 +535,27 @@ fn dispatch_dm_content(
             }
         }
 
-        DmContent::CallKey {
+        DmContent::CallKeyOffer {
             call_id,
-            key_material,
+            ephemeral_public_key,
             timestamp,
             call_type,
             channel_id,
         } => {
-            // Incoming call notification via sealed sender
+            // Call key offer received (ephemeral key for PFS)
             tracing::info!(
                 peer_id = %peer_id,
                 call_id = %call_id,
-                key_len = key_material.len(),
-                "Incoming call notification received"
+                "Call key offer received (incoming call with ephemeral key)"
             );
 
             // Look up the actual DM channel by peer ID (server-assigned, NOT derived)
-            // This matches how text messages resolve the channel_id
             let resolved_channel_id = if channel_id.is_empty() {
                 if let Some(current_user) = current_user_id {
-                    // First try to look up the actual DM channel
                     match channel_repo.get_dm_channel_by_peer(current_user, sender_id) {
                         Ok(Some(channel)) => channel.id.to_string(),
                         _ => {
-                            // Fallback to derived ID if no channel exists yet
                             let derived = ChannelId::from_dm_participants(current_user, sender_id);
-                            tracing::debug!(
-                                peer_id = %peer_id,
-                                derived_channel_id = %derived,
-                                "No DM channel found for incoming call, using derived ID"
-                            );
                             derived.to_string()
                         }
                     }
@@ -511,19 +566,68 @@ fn dispatch_dm_content(
                 channel_id
             };
 
-            // Default call type to Voice if not specified
             let resolved_call_type = if call_type.is_empty() {
                 "Voice Call".to_string()
             } else {
                 call_type
             };
 
-            let _ = event_tx.send(InboxEvent::IncomingCall {
+            let _ = event_tx.send(InboxEvent::CallKeyOfferReceived {
                 peer_id,
                 call_id,
-                key_material,
+                ephemeral_public_key,
                 call_type: resolved_call_type,
                 channel_id: resolved_channel_id,
+                timestamp,
+            });
+        }
+
+        DmContent::CallKeyAnswer {
+            call_id,
+            ephemeral_public_key,
+            timestamp,
+        } => {
+            // Call key answer received (response to our offer)
+            tracing::info!(
+                peer_id = %peer_id,
+                call_id = %call_id,
+                "Call key answer received (peer's ephemeral key)"
+            );
+
+            let _ = event_tx.send(InboxEvent::CallKeyAnswerReceived {
+                peer_id,
+                call_id,
+                ephemeral_public_key,
+                timestamp,
+            });
+        }
+
+        DmContent::GroupCallKey {
+            call_id,
+            key_material,
+            key_epoch,
+            channel_id,
+            timestamp,
+        } => {
+            // Group call key distributed via pairwise sealed sender
+            tracing::info!(
+                peer_id = %peer_id,
+                call_id = %call_id,
+                key_epoch = key_epoch,
+                "Group call key received via pairwise distribution"
+            );
+
+            // Parse channel_id
+            let channel_id: ChannelId = channel_id
+                .parse()
+                .unwrap_or_else(|_| ChannelId::new());
+
+            let _ = event_tx.send(InboxEvent::GroupCallKeyReceived {
+                sender_id: *sender_id,
+                call_id,
+                key_material,
+                key_epoch,
+                channel_id,
                 timestamp,
             });
         }
@@ -547,6 +651,203 @@ fn dispatch_dm_content(
                 call_id,
                 reason: reason_str,
                 timestamp,
+            });
+        }
+
+        // ====================================================================
+        // Anonymous Group Messages (NDSS'21 style)
+        // ====================================================================
+        DmContent::AnonGroupInvite {
+            group_id,
+            group_name,
+            inviter_mailbox_pk,
+            timestamp,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                group_name = %group_name,
+                "Anonymous group invite received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonGroupInvite {
+                peer_id,
+                group_id,
+                group_name,
+                inviter_mailbox_pk,
+                timestamp,
+            });
+        }
+
+        DmContent::AnonGroupJoinAck {
+            group_id,
+            joiner_mailbox_pk,
+            timestamp,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                "Anonymous group join ack received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonGroupJoinAck {
+                peer_id,
+                group_id,
+                joiner_mailbox_pk,
+                timestamp,
+            });
+        }
+
+        DmContent::AnonGroupMemberList {
+            group_id,
+            members,
+            timestamp,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                member_count = members.len(),
+                "Anonymous group member list received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonGroupMemberList {
+                peer_id,
+                group_id,
+                members,
+                timestamp,
+            });
+        }
+
+        DmContent::AnonGroupLeave {
+            group_id,
+            timestamp,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                "Anonymous group leave received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonGroupLeave {
+                peer_id,
+                group_id,
+                timestamp,
+            });
+        }
+
+        DmContent::AnonGroupKick {
+            group_id,
+            kicked_user_id,
+            admin_signature,
+            timestamp,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                "Anonymous group kick received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonGroupKick {
+                peer_id,
+                group_id,
+                kicked_user_id,
+                admin_signature,
+                timestamp,
+            });
+        }
+
+        DmContent::AnonGroupUpdate {
+            group_id,
+            update,
+            timestamp,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                "Anonymous group update received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonGroupUpdate {
+                peer_id,
+                group_id,
+                update,
+                timestamp,
+            });
+        }
+
+        DmContent::AnonGroupMessage {
+            group_id,
+            inner_content,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                "Anonymous group message received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonGroupMessage {
+                peer_id,
+                group_id,
+                inner_content,
+            });
+        }
+        // =====================================================================
+        // Anonymous DM Messages
+        // =====================================================================
+        DmContent::AnonDmRequest {
+            conversation_id,
+            initiator_mailbox_pk,
+            intro_message,
+            profile_key,
+            encrypted_display_name,
+            encrypted_avatar,
+            timestamp,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                conversation_id_len = conversation_id.len(),
+                has_intro = intro_message.is_some(),
+                has_encrypted_name = encrypted_display_name.is_some(),
+                has_encrypted_avatar = encrypted_avatar.is_some(),
+                timestamp = timestamp,
+                "Anonymous DM request received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonDmRequest {
+                peer_id,
+                conversation_id,
+                initiator_mailbox_pk,
+                intro_message,
+                profile_key,
+                encrypted_display_name,
+                encrypted_avatar,
+                timestamp,
+            });
+        }
+        DmContent::AnonDmAccept {
+            conversation_id,
+            responder_mailbox_pk,
+            profile_key,
+            encrypted_display_name,
+            encrypted_avatar,
+            timestamp,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                conversation_id_len = conversation_id.len(),
+                has_encrypted_display_name = encrypted_display_name.is_some(),
+                has_encrypted_avatar = encrypted_avatar.is_some(),
+                timestamp = timestamp,
+                "Anonymous DM acceptance received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonDmAccept {
+                peer_id,
+                conversation_id,
+                responder_mailbox_pk,
+                profile_key,
+                encrypted_display_name,
+                encrypted_avatar,
+                timestamp,
+            });
+        }
+        DmContent::AnonDmMessage {
+            conversation_id,
+            inner_content,
+        } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                conversation_id_len = conversation_id.len(),
+                "Anonymous DM message received"
+            );
+            let _ = event_tx.send(InboxEvent::AnonDmMessage {
+                peer_id,
+                conversation_id,
+                inner_content,
             });
         }
     }
@@ -678,6 +979,29 @@ async fn try_parse_bootstrap_response(
                     );
                     None
                 }
+                crate::services::message_gateway::SealedSenderResult::SenderKeyRequested { .. } => {
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        "Received SenderKeyRequest in DM bootstrap path (unexpected)"
+                    );
+                    None
+                }
+                crate::services::message_gateway::SealedSenderResult::MailboxAnnouncement { .. } => {
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        "Received MailboxAnnouncement in DM bootstrap path (unexpected)"
+                    );
+                    None
+                }
+                crate::services::message_gateway::SealedSenderResult::DataMessageReceived { .. } => {
+                    tracing::debug!(
+                        peer_id = %peer_id,
+                        "Received DataMessage in DM bootstrap path (unexpected)"
+                    );
+                    None
+                }
+                // Other result types are not expected in DM bootstrap path
+                _ => None,
             }
         }
         Err(e) => {

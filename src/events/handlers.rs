@@ -422,8 +422,8 @@ impl EventHandlers {
                 channel_id,
                 ..
             } => {
-                // Sender key distribution is handled by crypto layer, not state
-                trace!(?sender_id, ?channel_id, "Sender key received (handled by crypto layer)");
+                // Sender key is processed in SenderKeyHandler before this event is emitted
+                trace!(?sender_id, ?channel_id, "Sender key received (already processed by handler)");
             }
 
             DomainEvent::GroupMailboxReceived {
@@ -470,6 +470,89 @@ impl EventHandlers {
                 // Call hangup is handled by the UI thread in calls.rs via event bus subscription.
                 // No state store updates needed here.
                 trace!(?call_id, ?peer_id, "CallHangupReceived: handled by UI thread");
+            }
+
+            DomainEvent::CallKeyAnswerReceived { call_id, peer_id, .. } => {
+                // Call key answer is handled by the UI thread in calls.rs via event bus subscription.
+                // No state store updates needed here.
+                trace!(?call_id, ?peer_id, "CallKeyAnswerReceived: handled by UI thread");
+            }
+
+            DomainEvent::GroupCallKeyReceived { call_id, sender_id, key_epoch, .. } => {
+                // Group call key is handled by the UI thread in calls.rs via event bus subscription.
+                // No state store updates needed here.
+                trace!(?call_id, ?sender_id, key_epoch, "GroupCallKeyReceived: handled by UI thread");
+            }
+
+            // ================================================================
+            // Anonymous Group Events
+            // ================================================================
+            DomainEvent::AnonGroupInviteReceived { group_id, group_name, inviter_id, .. } => {
+                // Anon group invite is handled by UI thread via event bus subscription.
+                trace!(?group_id, ?group_name, ?inviter_id, "AnonGroupInviteReceived: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupJoined { group_id } => {
+                // Anon group joined is handled by UI thread via event bus subscription.
+                trace!(?group_id, "AnonGroupJoined: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupMemberJoined { group_id, user_id, .. } => {
+                // Anon group member joined is handled by UI thread via event bus subscription.
+                trace!(?group_id, ?user_id, "AnonGroupMemberJoined: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupMemberLeft { group_id, user_id } => {
+                // Anon group member left is handled by UI thread via event bus subscription.
+                trace!(?group_id, ?user_id, "AnonGroupMemberLeft: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupMemberKicked { group_id, user_id, kicked_by } => {
+                // Anon group member kicked is handled by UI thread via event bus subscription.
+                trace!(?group_id, ?user_id, ?kicked_by, "AnonGroupMemberKicked: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupMessageReceived { group_id, sender_id, .. } => {
+                // Anon group message is handled by UI thread via event bus subscription.
+                trace!(?group_id, ?sender_id, "AnonGroupMessageReceived: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupBootstrapComplete { group_id } => {
+                // Anon group bootstrap complete is handled by UI thread via event bus subscription.
+                trace!(?group_id, "AnonGroupBootstrapComplete: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupMemberListReceived { group_id, ref members } => {
+                // Member list update - handled by UI thread.
+                trace!(?group_id, member_count = members.len(), "AnonGroupMemberListReceived: handled by UI thread");
+            }
+
+            // ================================================================
+            // Anonymous DM Events
+            // ================================================================
+            DomainEvent::AnonDmRequestReceived { conversation_id, sender_id, .. } => {
+                // Anon DM request is handled by UI thread via event bus subscription.
+                trace!(?conversation_id, ?sender_id, "AnonDmRequestReceived: handled by UI thread");
+            }
+
+            DomainEvent::AnonDmRequestAccepted { conversation_id, peer_id, .. } => {
+                // Anon DM acceptance is handled by UI thread via event bus subscription.
+                trace!(?conversation_id, ?peer_id, "AnonDmRequestAccepted: handled by UI thread");
+            }
+
+            DomainEvent::AnonDmMessageReceived { conversation_id, sender_id, .. } => {
+                // Anon DM message is handled by UI thread via event bus subscription.
+                trace!(?conversation_id, ?sender_id, "AnonDmMessageReceived: handled by UI thread");
+            }
+
+            DomainEvent::AnonDmInitReceived { conversation_id, intro_message, .. } => {
+                // NDSS'21 ECIES init message - handled by anon DM service to create conversation.
+                trace!(?conversation_id, intro_len = intro_message.len(), "AnonDmInitReceived: handled by anon DM service");
+            }
+
+            DomainEvent::AnonDmMessageDeleted { conversation_id, message_timestamp } => {
+                // Anon DM message deletion - handled by UI thread.
+                trace!(?conversation_id, ?message_timestamp, "AnonDmMessageDeleted: handled by UI thread");
             }
         }
     }

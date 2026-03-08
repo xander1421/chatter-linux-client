@@ -8,6 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use uuid::Uuid;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519Secret};
+use zeroize::Zeroize;
 
 use crate::domain::UserId;
 use crate::error::MailboxError;
@@ -832,6 +833,28 @@ impl DmConversationManager {
         .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
         Ok(())
+    }
+}
+
+// ============================================================================
+// Security: Zeroization on Drop
+// ============================================================================
+
+impl Drop for DmMailbox {
+    fn drop(&mut self) {
+        // Zeroize the Ed25519 private key
+        self.private_key.zeroize();
+    }
+}
+
+impl Drop for ConversationKey {
+    fn drop(&mut self) {
+        // Zeroize the X25519 private key
+        self.our_ephemeral_private.zeroize();
+        // Zeroize the shared secret if present
+        if let Some(ref mut secret) = self.shared_secret {
+            secret.zeroize();
+        }
     }
 }
 

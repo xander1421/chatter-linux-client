@@ -15,4 +15,6 @@ pub enum ServiceError {
     Network(#[from] NetworkError),
     #[error("Crypto error: {0}")]
     Crypto(#[from] CryptoError),
+    #[error("Internal error: {0}")]
+    Internal(String),
 }

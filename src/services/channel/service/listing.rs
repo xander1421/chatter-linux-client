@@ -27,10 +27,7 @@ impl ChannelService {
 
         let channel = proto_to_domain_channel(&proto_channel)?;
 
-        match self.channel_repo.get(channel_id)? {
-            Some(_) => self.channel_repo.update(&channel)?,
-            None => self.channel_repo.insert(&channel)?,
-        }
+        self.channel_repo.upsert(&channel)?;
 
         Ok(channel)
     }
@@ -49,10 +46,7 @@ impl ChannelService {
 
         let channel = proto_to_domain_channel(&proto_channel)?;
 
-        match self.channel_repo.get(channel_id)? {
-            Some(_) => self.channel_repo.update(&channel)?,
-            None => self.channel_repo.insert(&channel)?,
-        }
+        self.channel_repo.upsert(&channel)?;
 
         Ok(channel)
     }
@@ -99,10 +93,7 @@ impl ChannelService {
         for proto in &response.channels {
             let channel = proto_to_domain_channel(proto)?;
 
-            match self.channel_repo.get(&channel.id)? {
-                Some(_) => self.channel_repo.update(&channel)?,
-                None => self.channel_repo.insert(&channel)?,
-            }
+            self.channel_repo.upsert(&channel)?;
 
             // Sync memberships from the proto response
             for proto_member in &proto.members {
@@ -176,5 +167,46 @@ impl ChannelService {
     ) -> Result<Option<Channel>, ChannelError> {
         let channel = self.channel_repo.get(channel_id)?;
         Ok(channel)
+    }
+
+    /// List channel members from local storage (no network request).
+    pub fn list_members_local(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<Vec<crate::domain::channel::Membership>, ChannelError> {
+        let members = self.channel_repo.list_members(channel_id)?;
+        Ok(members)
+    }
+
+    /// Get the peer's user ID from a DM channel (local query).
+    ///
+    /// DM channels have exactly 2 members - returns the one that's not the current user.
+    pub fn get_dm_peer_local(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<Option<crate::domain::ids::UserId>, ChannelError> {
+        let current_user_id = self.settings_repo.current_user_id()?;
+        let memberships = self.channel_repo.list_members(channel_id)?;
+
+        for membership in memberships {
+            if membership.user_id != current_user_id {
+                return Ok(Some(membership.user_id));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Find the DM channel with a specific peer (local query).
+    ///
+    /// Looks up the DM channel where both the current user and the peer are members.
+    pub fn get_dm_channel_for_peer(
+        &self,
+        peer_id: &crate::domain::ids::UserId,
+    ) -> Result<Option<crate::domain::channel::Channel>, ChannelError> {
+        let current_user_id = self.settings_repo.current_user_id()?;
+        self.channel_repo
+            .get_dm_channel_by_peer(&current_user_id, peer_id)
+            .map_err(ChannelError::from)
     }
 }

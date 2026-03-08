@@ -307,6 +307,7 @@ mod tests {
                     r#type: 1,
                     timestamps: vec![],
                     timestamp: 0,
+                    channel_id: String::new(),
                 },
             )),
             ephemeral_reply_to: None,

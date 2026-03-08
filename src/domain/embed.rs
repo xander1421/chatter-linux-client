@@ -35,6 +35,17 @@ pub enum LinkEmbed {
         /// Image height in pixels.
         height: Option<u32>,
     },
+    /// Animated GIF embed.
+    Gif {
+        /// URL to the full-size GIF.
+        url: String,
+        /// URL to a smaller preview (for thumbnails).
+        preview_url: Option<String>,
+        /// GIF width in pixels.
+        width: Option<u32>,
+        /// GIF height in pixels.
+        height: Option<u32>,
+    },
 }
 
 /// Type hint for URL pattern detection.
@@ -54,6 +65,8 @@ pub enum EmbedType {
     GitHubPullRequest,
     /// Direct image link.
     Image,
+    /// Animated GIF.
+    Gif,
 }
 
 impl LinkEmbed {
@@ -103,8 +116,30 @@ impl LinkEmbed {
             }
         }
 
-        // Direct image patterns
-        let image_extensions = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"];
+        // GIF patterns - check before generic images
+        // Known GIF CDN domains
+        let gif_domains = [
+            "klipy.co",
+            "media.klipy.co",
+            "giphy.com",
+            "media.giphy.com",
+            "tenor.com",
+            "media.tenor.com",
+            "gfycat.com",
+            "thumbs.gfycat.com",
+        ];
+        for domain in &gif_domains {
+            if url_lower.contains(domain) {
+                return EmbedType::Gif;
+            }
+        }
+        // .gif extension
+        if url_lower.ends_with(".gif") {
+            return EmbedType::Gif;
+        }
+
+        // Direct image patterns (non-GIF)
+        let image_extensions = [".jpg", ".jpeg", ".png", ".webp", ".svg"];
         for ext in &image_extensions {
             if url_lower.ends_with(ext) {
                 return EmbedType::Image;
@@ -119,10 +154,10 @@ impl LinkEmbed {
         EmbedType::Generic
     }
 
-    /// Check if this embed is media (video or image).
+    /// Check if this embed is media (video, image, or GIF).
     #[must_use]
     pub fn is_media(&self) -> bool {
-        matches!(self, Self::YouTube(_) | Self::Image { .. })
+        matches!(self, Self::YouTube(_) | Self::Image { .. } | Self::Gif { .. })
     }
 
     /// Get the preview image URL if available.
@@ -134,6 +169,7 @@ impl LinkEmbed {
             Self::Twitter(_) => None, // Could add author avatar later
             Self::GitHub(_) => None,  // Could add repo owner avatar later
             Self::Image { url, .. } => Some(url),
+            Self::Gif { preview_url, url, .. } => preview_url.as_deref().or(Some(url)),
         }
     }
 
@@ -146,6 +182,7 @@ impl LinkEmbed {
             Self::Twitter(tw) => Some(&tw.content),
             Self::GitHub(gh) => gh.title(),
             Self::Image { .. } => None,
+            Self::Gif { .. } => None,
         }
     }
 
@@ -161,6 +198,7 @@ impl LinkEmbed {
             Self::Twitter(tw) => tw.tweet_url(),
             Self::GitHub(gh) => gh.url(),
             Self::Image { url, .. } => url.clone(),
+            Self::Gif { url, .. } => url.clone(),
         }
     }
 }
@@ -651,6 +689,30 @@ mod tests {
         assert_eq!(
             LinkEmbed::detect_type("https://i.imgur.com/abc123"),
             EmbedType::Image
+        );
+    }
+
+    #[test]
+    fn test_detect_type_gif() {
+        // .gif extension
+        assert_eq!(
+            LinkEmbed::detect_type("https://example.com/funny.gif"),
+            EmbedType::Gif
+        );
+        // Klipy CDN
+        assert_eq!(
+            LinkEmbed::detect_type("https://media.klipy.co/abc123.webp"),
+            EmbedType::Gif
+        );
+        // Giphy
+        assert_eq!(
+            LinkEmbed::detect_type("https://media.giphy.com/media/xyz/giphy.gif"),
+            EmbedType::Gif
+        );
+        // Tenor
+        assert_eq!(
+            LinkEmbed::detect_type("https://media.tenor.com/images/abc.gif"),
+            EmbedType::Gif
         );
     }
 

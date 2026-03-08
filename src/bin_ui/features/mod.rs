@@ -42,6 +42,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     modals::wire(window, ui_ctx);
     thread::wire(window, ui_ctx);
     calls::wire(window, ui_ctx);
+    jarvis::wire_jarvis_panel(window, ui_ctx);
 
     // Initialize inline GIF animation system
     crate::bin_ui::gif_state::init_inline_animations(window.as_weak());

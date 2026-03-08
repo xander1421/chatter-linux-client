@@ -338,9 +338,6 @@ export component MessageItem inherits Rectangle {
                     // Asymmetric border radius for chat bubble style
                     // Own: rounded except bottom-right, Others: rounded except bottom-left
                     border-radius: Spacing.radius-md;
-                    // AI messages get a subtle left border accent
-                    border-width: root.is-ai ? 0 : 0;
-                    // Note: Slint doesn't support per-side borders, so we use a left indicator instead
 
                     // Calculate height based on content
                     height: bubble-content.preferred-height;
@@ -570,13 +567,26 @@ export component MessageItem inherits Rectangle {
 
                                 // Video attachments
                                 if attachment.category == "video": Rectangle {
-                                    width: 260px;
-                                    height: 160px;
-                                    background: #1a1a2e;
+                                    property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.6;
+                                    property <length> max-w: 280px;
+                                    property <length> max-h: 220px;
+                                    property <length> calc-w: aspect-ratio >= 1 ? min(max-w, attachment.width * 1px) : min(max-h * aspect-ratio, attachment.width * 1px);
+                                    property <length> calc-h: aspect-ratio >= 1 ? min(max-h, calc-w / aspect-ratio) : min(max-h, attachment.height * 1px);
+
+                                    width: attachment.has-thumbnail && attachment.width > 0 ? max(160px, min(max-w, calc-w)) : 260px;
+                                    height: attachment.has-thumbnail && attachment.height > 0 ? max(100px, min(max-h, calc-h)) : 160px;
+                                    background: attachment.has-thumbnail ? #2a2a40 : #1a1a2e; // Use lighter background when thumbnail is present to detect transparency
                                     border-radius: Spacing.radius-sm;
                                     clip: true;
 
-                                    VerticalLayout {
+                                    if attachment.has-thumbnail: Image {
+                                        width: 100%;
+                                        height: 100%;
+                                        source: attachment.thumbnail;
+                                        image-fit: contain;
+                                    }
+
+                                    if !attachment.has-thumbnail: VerticalLayout {
                                         alignment: center;
                                         spacing: Spacing.xs;
 
@@ -605,7 +615,7 @@ export component MessageItem inherits Rectangle {
                                     // Play button overlay
                                     Rectangle {
                                         x: (parent.width - 56px) / 2;
-                                        y: (parent.height - 56px) / 2 - 16px;
+                                        y: (parent.height - 56px) / 2;
                                         width: 56px;
                                         height: 56px;
                                         border-radius: 28px;

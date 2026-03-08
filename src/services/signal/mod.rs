@@ -12,6 +12,7 @@
 mod session;
 mod sender_key;
 mod identity;
+pub mod actor;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,22 +21,17 @@ use tokio::sync::Mutex;
 
 use crate::storage::KeyStore;
 use crate::storage::repositories::settings_repo::SettingsRepository;
+use self::actor::SignalActorHandle;
 
 /// Signal Service for end-to-end encryption.
-///
-/// Uses per-recipient locks to prevent race conditions when multiple messages
-/// are encrypted concurrently to the same recipient. Without this, rapid sends
-/// (e.g., message + typing indicator) can both read the same session counter,
-/// resulting in duplicate counters and "old counter" errors on the receiving side.
 pub struct SignalService {
     pub(crate) key_store: Arc<KeyStore>,
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) trust_root: PublicKey,
-    /// Per-recipient encryption locks.
-    /// Ensures only one encryption to a given recipient at a time,
-    /// preventing counter collisions in the Double Ratchet.
+    /// Handle to the Signal Actor for thread-safe crypto operations.
+    pub actor: SignalActorHandle,
+    /// Per-recipient encryption locks (now managed within or by the actor logic).
     pub(crate) encrypt_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
-    /// LRU order for lock eviction (most recent at back).
     pub(crate) encrypt_lock_lru: Arc<Mutex<std::collections::VecDeque<String>>>,
 }
 
@@ -45,6 +41,7 @@ impl Clone for SignalService {
             key_store: self.key_store.clone(),
             settings_repo: self.settings_repo.clone(),
             trust_root: self.trust_root,
+            actor: self.actor.clone(),
             encrypt_locks: self.encrypt_locks.clone(),
             encrypt_lock_lru: self.encrypt_lock_lru.clone(),
         }
@@ -58,11 +55,13 @@ impl SignalService {
         settings_repo: Arc<SettingsRepository>,
     ) -> Self {
         let trust_root = *crate::config::TRUST_ROOT_PUBLIC_KEY;
+        let actor = SignalActorHandle::spawn(key_store.clone(), settings_repo.clone());
 
         Self {
             key_store,
             settings_repo,
             trust_root,
+            actor,
             encrypt_locks: Arc::new(Mutex::new(HashMap::new())),
             encrypt_lock_lru: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         }

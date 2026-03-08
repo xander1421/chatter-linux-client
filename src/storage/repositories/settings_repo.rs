@@ -27,10 +27,17 @@ pub mod keys {
     // Auth settings
     pub const CURRENT_USER_ID: &str = "auth.current_user_id";
     pub const CURRENT_DEVICE_ID: &str = "auth.current_device_id";
+    /// Current user's plaintext display name
+    pub const DISPLAY_NAME: &str = "auth.display_name";
+    /// Current user's avatar (raw image bytes, stored locally, encrypted when shared)
+    pub const AVATAR: &str = "profile.avatar";
 
     // Crypto keys
     /// Profile key for encrypting saved messages (32 bytes, base64 encoded)
     pub const PROFILE_KEY: &str = "crypto.profile_key";
+    /// Our identity public key (33 bytes - 0x05 + Curve25519, base64 encoded)
+    /// Used for NDSS'21 private friend codes that embed cryptographic material.
+    pub const IDENTITY_KEY_PUBLIC: &str = "crypto.identity_key_public";
     /// Cached sender certificate (serialized bytes, base64 encoded)
     pub const SENDER_CERTIFICATE: &str = "crypto.sender_certificate";
     /// When to refresh sender certificate (Unix timestamp ms)
@@ -45,6 +52,11 @@ pub mod keys {
     pub const FONT_SIZE: &str = "ui.font_size";
     pub const MESSAGE_FONT_SIZE: &str = "ui.message_font_size";
     pub const COMPACT_MODE: &str = "ui.compact_mode";
+
+    // Local AI settings
+    pub const LOCAL_AI_ENABLED: &str = "local_ai.enabled";
+    pub const LOCAL_AI_MODEL_ID: &str = "local_ai.model_id";
+    pub const LOCAL_AI_QUANTIZED_FILE: &str = "local_ai.quantized_file";
 }
 
 /// Settings data repository.
@@ -236,5 +248,39 @@ impl SettingsRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute("DELETE FROM settings", [])?;
         Ok(rows as u64)
+    }
+
+    // ========================================================================
+    // Local AI Settings
+    // ========================================================================
+
+    /// Check if local AI is enabled.
+    pub fn get_local_ai_enabled(&self) -> Result<bool, StorageError> {
+        Ok(self.get_bool(keys::LOCAL_AI_ENABLED)?.unwrap_or(false))
+    }
+
+    /// Set whether local AI is enabled.
+    pub fn set_local_ai_enabled(&self, enabled: bool) -> Result<(), StorageError> {
+        self.set_bool(keys::LOCAL_AI_ENABLED, enabled)
+    }
+
+    /// Get the configured local AI model.
+    ///
+    /// Returns (model_id, quantized_file) if configured.
+    pub fn get_local_ai_model(&self) -> Result<Option<(String, Option<String>)>, StorageError> {
+        let model_id = self.get_string(keys::LOCAL_AI_MODEL_ID)?;
+        let quantized = self.get_string(keys::LOCAL_AI_QUANTIZED_FILE)?;
+        Ok(model_id.map(|id| (id, quantized)))
+    }
+
+    /// Set the local AI model configuration.
+    pub fn set_local_ai_model(&self, model_id: &str, quantized_file: Option<&str>) -> Result<(), StorageError> {
+        self.set_string(keys::LOCAL_AI_MODEL_ID, model_id)?;
+        if let Some(qf) = quantized_file {
+            self.set_string(keys::LOCAL_AI_QUANTIZED_FILE, qf)?;
+        } else {
+            self.delete(keys::LOCAL_AI_QUANTIZED_FILE)?;
+        }
+        Ok(())
     }
 }

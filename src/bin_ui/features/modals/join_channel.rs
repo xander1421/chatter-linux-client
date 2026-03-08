@@ -8,7 +8,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tokio::time::{sleep, Duration};
 
-use chatter_linux::app::AppContext;
+use chatter_linux::app::UIContext;
 use chatter_linux::domain::channel::ChannelType;
 use chatter_linux::domain::ids::ChannelId;
 
@@ -16,13 +16,12 @@ use crate::bin_ui::converters::channel_to_slint;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
 use crate::{ChannelListItemData, MainWindow, SearchResultChannel};
 
-pub fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
-    // Debounce counter for search
+pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let search_counter = Arc::new(AtomicU64::new(0));
 
     // Search channels callback (with debounce)
     let weak_window = window.as_weak();
-    let channel_service = Arc::new(ctx.channel_service());
+    let channel_service = ui_ctx.channel_service.clone();
     let search_counter_clone = search_counter.clone();
 
     window.on_search_channels(move |query: SharedString| {
@@ -125,34 +124,21 @@ pub fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
 
     // Join channel callback
     let weak_window = window.as_weak();
-    let channel_service = Arc::new(ctx.channel_service());
-    let channel_repo = ctx.channel_repo.clone();
-    let message_repo = ctx.message_repo.clone();
-    let user_repo = ctx.user_repo.clone();
-    let attachment_repo = ctx.attachment_repo.clone();
-    let chat_state = ctx.chat_state.clone();
-    let message_service = ctx.message_service.clone();
+    let channel_service = ui_ctx.channel_service.clone();
+    let message_service = ui_ctx.message_service.clone();
+    let user_service = ui_ctx.user_service.clone();
+    let attachment_service = ui_ctx.attachment_service.clone();
+    let chat_state = ui_ctx.chat_state.clone();
 
     window.on_join_channel(move |channel_id_str: SharedString| {
         let weak = weak_window.clone();
         let channel_service = channel_service.clone();
-        let channel_repo = channel_repo.clone();
-        let message_repo = message_repo.clone();
-        let user_repo = user_repo.clone();
-        let attachment_repo = attachment_repo.clone();
-        let chat_state = chat_state.clone();
         let message_service = message_service.clone();
+        let user_service = user_service.clone();
+        let attachment_service = attachment_service.clone();
+        let chat_state = chat_state.clone();
         let channel_id_str = channel_id_str.to_string();
-
-        // Use spawn_blocking because ChannelService uses signal_service
-        // which has stores that aren't Send
-        tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("Failed to create runtime for join channel");
-
-            rt.block_on(async move {
+        tokio::spawn(async move {
             // Set joining state
             let weak_loading = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -262,13 +248,15 @@ pub fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
                     });
 
                     // Load the joined channel properly (loads messages, sets header)
+                    let current_user_id = channel_service.current_user_id().ok().map(|id| id.to_string());
                     load_channel_into_ui(
                         weak,
                         &channel_id,
-                        channel_repo,
-                        message_repo,
-                        user_repo,
-                        attachment_repo,
+                        channel_service.clone(),
+                        message_service.clone(),
+                        user_service.clone(),
+                        attachment_service.clone(),
+                        current_user_id,
                     )
                     .await;
 
@@ -290,7 +278,6 @@ pub fn wire_join_channel(window: &MainWindow, ctx: &AppContext) {
                     });
                 }
             }
-            });
         });
     });
 }

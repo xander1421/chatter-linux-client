@@ -14,7 +14,10 @@ use std::time::Duration;
 
 use slint::{Image, Model, Timer, TimerMode, Weak};
 
-use chatter_linux::media::gif::{frame_to_slint_image, decode_first_frame_only};
+use chatter_linux::media::gif::{
+    frame_to_slint_image, decode_first_frame_only,
+    decode_gif_auto, is_gpu_acceleration_available,
+};
 use tokio::sync::mpsc;
 
 use crate::MainWindow;
@@ -46,6 +49,165 @@ thread_local! {
     static INLINE_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
     /// Window weak reference for inline GIF updates.
     static INLINE_WINDOW: RefCell<Option<Weak<MainWindow>>> = const { RefCell::new(None) };
+    /// Cache of attachment locations: attachment_id -> (msg_idx, att_idx) for O(1) updates.
+    static INLINE_LOCATION_CACHE: RefCell<HashMap<String, (usize, usize)>> = RefCell::new(HashMap::new());
+
+    /// Picker GIF animations (gif_id -> frames).
+    static PICKER_GIFS: RefCell<HashMap<String, InlineGifState>> = RefCell::new(HashMap::new());
+    /// Global animation timer for picker GIFs.
+    static PICKER_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
+}
+
+// ============================================================================
+// Picker GIF Animation
+// ============================================================================
+
+/// Register a GIF for the picker animation.
+pub fn register_picker_gif(
+    gif_id: String,
+    raw_frames: Vec<(Vec<u8>, u32, u32, u64)>,
+) {
+    if raw_frames.len() <= 1 {
+        return;
+    }
+
+    // Convert raw frames to Slint Images
+    let frames: Vec<Image> = raw_frames
+        .iter()
+        .map(|(data, width, height, _)| {
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                data,
+                *width,
+                *height,
+            );
+            slint::Image::from_rgba8(buffer)
+        })
+        .collect();
+
+    let delays: Vec<u64> = raw_frames.iter().map(|(_, _, _, d)| *d).collect();
+
+    let state = InlineGifState {
+        frames,
+        delays,
+        current_frame: 0,
+        accumulated_ms: 0,
+    };
+
+    PICKER_GIFS.with(|gifs| {
+        gifs.borrow_mut().insert(gif_id, state);
+    });
+
+    start_picker_timer_if_needed();
+}
+
+/// Clear all picker GIF animations.
+pub fn clear_picker_gifs() {
+    PICKER_GIFS.with(|gifs| {
+        gifs.borrow_mut().clear();
+    });
+    stop_picker_timer();
+}
+
+/// Promote a picker GIF to an inline GIF instantly.
+pub fn promote_picker_gif_to_inline(picker_id: &str, inline_id: &str) {
+    let state_opt = PICKER_GIFS.with(|gifs| {
+        gifs.borrow().get(picker_id).cloned()
+    });
+
+    if let Some(state) = state_opt {
+        INLINE_GIFS.with(|gifs| {
+            gifs.borrow_mut().insert(inline_id.to_string(), state);
+        });
+
+        // Add to LRU cache
+        INLINE_LRU.with(|lru| {
+            let mut lru = lru.borrow_mut();
+            if let Some(pos) = lru.iter().position(|x| x == inline_id) {
+                lru.remove(pos);
+            }
+            lru.push_back(inline_id.to_string());
+            
+            // Trim if too many
+            while lru.len() > 100 {
+                if let Some(oldest) = lru.pop_front() {
+                    INLINE_GIFS.with(|g| g.borrow_mut().remove(&oldest));
+                }
+            }
+        });
+
+        start_inline_timer_if_needed();
+        tracing::debug!("Promoted picker GIF {} to inline GIF {}", picker_id, inline_id);
+    }
+}
+
+fn start_picker_timer_if_needed() {
+    PICKER_TIMER.with(|timer_cell| {
+        if timer_cell.borrow().is_some() {
+            return;
+        }
+
+        let timer = Timer::default();
+        timer.start(TimerMode::Repeated, Duration::from_millis(33), move || {
+            tick_picker_gifs(33);
+        });
+
+        *timer_cell.borrow_mut() = Some(timer);
+    });
+}
+
+fn stop_picker_timer() {
+    PICKER_TIMER.with(|timer_cell| {
+        if let Some(ref timer) = *timer_cell.borrow() {
+            timer.stop();
+        }
+        *timer_cell.borrow_mut() = None;
+    });
+}
+
+fn tick_picker_gifs(elapsed_ms: u64) {
+    let updates: Vec<(String, Image)> = PICKER_GIFS.with(|gifs| {
+        let mut gifs = gifs.borrow_mut();
+        let mut updates = Vec::new();
+
+        for (id, state) in gifs.iter_mut() {
+            if state.tick(elapsed_ms) {
+                updates.push((id.clone(), state.current_image()));
+            }
+        }
+
+        updates
+    });
+
+    if updates.is_empty() {
+        return;
+    }
+
+    INLINE_WINDOW.with(|window_cell| {
+        if let Some(ref window_weak) = *window_cell.borrow() {
+            if let Some(w) = window_weak.upgrade() {
+                update_picker_thumbnails(&w, &updates);
+            }
+        }
+    });
+}
+
+fn update_picker_thumbnails(window: &MainWindow, updates: &[(String, Image)]) {
+    let results = window.get_composer_gif_picker_results();
+    let count = results.row_count();
+
+    for (update_id, new_image) in updates {
+        for idx in 0..count {
+            if let Some(mut gif) = results.row_data(idx) {
+                if gif.id.as_str() == update_id {
+                    if let Some(model) = results.as_any().downcast_ref::<slint::VecModel<crate::GifData>>() {
+                        gif.preview = new_image.clone();
+                        model.set_row_data(idx, gif);
+                    }
+                    break;
+                }
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -87,7 +249,12 @@ impl ViewerGifState {
 
 /// Start GIF animation in viewer AND register for inline animation.
 ///
-/// Uses **streaming progressive** decoding:
+/// Uses **streaming progressive** decoding with automatic backend selection:
+/// 1. Try GStreamer + GL (GPU accelerated) - if available
+/// 2. Fall back to GStreamer + CPU - if GL not available
+/// 3. Fall back to pure Rust `image` crate - if GStreamer unavailable
+///
+/// For all backends:
 /// 1. Decode first frame synchronously (~16ms for any size)
 /// 2. Start animation IMMEDIATELY (even with just 1 frame)
 /// 3. Background decoder sends frames via channel as they decode
@@ -101,6 +268,7 @@ pub fn start_gif_animation_and_inline(
     attachment_id: &str,
 ) -> Option<Image> {
     let start = std::time::Instant::now();
+    let gpu_available = is_gpu_acceleration_available();
 
     // Fast path: decode first frame only (instant)
     let first_frame = match decode_first_frame_only(data) {
@@ -119,9 +287,10 @@ pub fn start_gif_animation_and_inline(
     let first_delay = first_frame.delay.as_millis() as u64;
 
     tracing::info!(
-        "GIF first frame decoded in {:?}, delay {}ms - starting animation immediately",
+        "GIF first frame decoded in {:?}, delay {}ms - starting animation immediately (GPU: {})",
         start.elapsed(),
-        first_delay
+        first_delay,
+        gpu_available
     );
 
     // Store initial state with just first frame - animation starts NOW
@@ -150,62 +319,27 @@ pub fn start_gif_animation_and_inline(
     });
 
     // Spawn background decoder - streams frames as they decode
+    // Uses GPU acceleration when available (GStreamer + GL)
     let data_vec = data.to_vec();
     std::thread::spawn(move || {
-        use image::codecs::gif::GifDecoder;
-        use image::AnimationDecoder;
-        use std::io::Cursor;
-
-        let cursor = Cursor::new(&data_vec);
-        let decoder = match GifDecoder::new(cursor) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!("Background GIF decode failed: {}", e);
-                return;
-            }
-        };
-
-        let frames_iter = decoder.into_frames();
-        let mut frame_count = 0;
         let bg_start = std::time::Instant::now();
 
-        for (idx, frame_result) in frames_iter.enumerate() {
-            // Skip first frame (already decoded)
-            if idx == 0 {
-                continue;
+        // Try GPU-accelerated decoder first, fall back to CPU
+        let decode_result = decode_gif_with_best_backend(&data_vec, &tx);
+
+        match decode_result {
+            Ok(frame_count) => {
+                tracing::info!(
+                    "GIF streaming decode complete: {} frames sent in {:?} (backend: {})",
+                    frame_count,
+                    bg_start.elapsed(),
+                    if gpu_available { "GPU" } else { "CPU" }
+                );
             }
-
-            let frame = match frame_result {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::warn!("GIF frame {} error: {}", idx, e);
-                    continue;
-                }
-            };
-
-            // Extract frame data
-            let delay = frame.delay();
-            let (numer, denom) = delay.numer_denom_ms();
-            let delay_ms = if denom == 0 { 100 } else { (numer as u64) / (denom as u64) };
-
-            let buffer = frame.into_buffer();
-            let (width, height) = buffer.dimensions();
-            let data = buffer.into_raw();
-
-            // Send frame immediately - don't wait for all frames
-            if tx.blocking_send((data, width, height, delay_ms)).is_err() {
-                tracing::debug!("GIF receiver dropped at frame {}", idx);
-                break;
+            Err(e) => {
+                tracing::warn!("GIF decode failed: {}", e);
             }
-
-            frame_count += 1;
         }
-
-        tracing::info!(
-            "GIF streaming decode complete: {} frames sent in {:?}",
-            frame_count,
-            bg_start.elapsed()
-        );
     });
 
     // Start animation timer immediately - it will poll for new frames
@@ -213,6 +347,130 @@ pub fn start_gif_animation_and_inline(
 
     // Return first frame immediately
     Some(first_frame_image)
+}
+
+/// Decode GIF using the best available backend.
+///
+/// Tries in order:
+/// 1. GStreamer + GL (GPU accelerated)
+/// 2. GStreamer + CPU
+/// 3. Pure Rust `image` crate
+fn decode_gif_with_best_backend(
+    data: &[u8],
+    tx: &mpsc::Sender<RawFrame>,
+) -> Result<usize, String> {
+    // Try unified decoder (automatically selects best backend)
+    match decode_gif_auto(data.to_vec()) {
+        Ok(mut decoder) => {
+            let mut frame_count = 0;
+
+            // The first frame is already decoded and available
+            // Skip it since we already showed it synchronously
+
+            // Poll for remaining frames
+            loop {
+                // Check for new frames
+                let new_frames = decoder.poll_frames();
+
+                if new_frames > 0 {
+                    // Send newly decoded frames
+                    let frames = decoder.frames();
+                    for frame in frames.iter().skip(1 + frame_count) {
+                        let delay_ms = frame.delay.as_millis() as u64;
+                        if tx.blocking_send((
+                            frame.data.clone(),
+                            frame.width,
+                            frame.height,
+                            delay_ms,
+                        )).is_err() {
+                            tracing::debug!("GIF receiver dropped at frame {}", frame_count);
+                            return Ok(frame_count);
+                        }
+                        frame_count += 1;
+                    }
+                }
+
+                if decoder.is_complete() {
+                    // Send any remaining frames
+                    let frames = decoder.frames();
+                    for frame in frames.iter().skip(1 + frame_count) {
+                        let delay_ms = frame.delay.as_millis() as u64;
+                        if tx.blocking_send((
+                            frame.data.clone(),
+                            frame.width,
+                            frame.height,
+                            delay_ms,
+                        )).is_err() {
+                            break;
+                        }
+                        frame_count += 1;
+                    }
+                    break;
+                }
+
+                // Small sleep to avoid busy-waiting
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+
+            Ok(frame_count)
+        }
+        Err(e) => {
+            // Fall back to image crate if unified decoder fails
+            tracing::debug!("Unified decoder failed ({}), using image crate fallback", e);
+            decode_gif_with_image_crate(data, tx)
+        }
+    }
+}
+
+/// Fallback decoder using the `image` crate (pure Rust, no GPU).
+fn decode_gif_with_image_crate(
+    data: &[u8],
+    tx: &mpsc::Sender<RawFrame>,
+) -> Result<usize, String> {
+    use image::codecs::gif::GifDecoder as ImageGifDecoder;
+    use image::AnimationDecoder;
+    use std::io::Cursor;
+
+    let cursor = Cursor::new(data);
+    let decoder = ImageGifDecoder::new(cursor)
+        .map_err(|e| format!("Image crate GIF decode failed: {}", e))?;
+
+    let frames_iter = decoder.into_frames();
+    let mut frame_count = 0;
+
+    for (idx, frame_result) in frames_iter.enumerate() {
+        // Skip first frame (already decoded synchronously)
+        if idx == 0 {
+            continue;
+        }
+
+        let frame = match frame_result {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!("GIF frame {} error: {}", idx, e);
+                continue;
+            }
+        };
+
+        // Extract frame data
+        let delay = frame.delay();
+        let (numer, denom) = delay.numer_denom_ms();
+        let delay_ms = if denom == 0 { 100 } else { (numer as u64) / (denom as u64) };
+
+        let buffer = frame.into_buffer();
+        let (width, height) = buffer.dimensions();
+        let frame_data = buffer.into_raw();
+
+        // Send frame immediately
+        if tx.blocking_send((frame_data, width, height, delay_ms)).is_err() {
+            tracing::debug!("GIF receiver dropped at frame {}", idx);
+            break;
+        }
+
+        frame_count += 1;
+    }
+
+    Ok(frame_count)
 }
 
 /// Start the frame advancement timer for image viewer.
@@ -262,9 +520,13 @@ fn advance_viewer_frame(window: Weak<MainWindow>) {
                 tracing::debug!("GIF advance_frame: not playing, skipping");
                 return (None, 0, false, 0, 0);
             }
+            if state.frames.is_empty() {
+                tracing::warn!("GIF advance_frame: no frames available");
+                return (None, 100, true, 0, 0); // Keep trying, might get frames from stream
+            }
             state.advance_frame();
             let image = state.current_image();
-            let delay = state.current_delay_ms();
+            let delay = state.current_delay_ms().max(10); // Minimum 10ms delay
             let idx = state.current_frame;
             let total = state.frames.len();
             (Some(image), delay, true, idx, total)
@@ -463,6 +725,7 @@ pub fn stop_gif_animation() {
 // ============================================================================
 
 /// State for an inline animated GIF in message list.
+#[derive(Clone)]
 struct InlineGifState {
     /// Pre-converted Slint images for each frame.
     frames: Vec<Image>,
@@ -508,46 +771,63 @@ pub fn init_inline_animations(window: Weak<MainWindow>) {
     });
 }
 
-/// Register an inline GIF from pre-decoded raw frame data.
+/// Register an inline GIF from pre-converted Slint pixel buffers.
 ///
 /// This is called on the UI thread after background decoding completes.
-/// Takes raw RGBA frame data that will be converted to Slint Images.
+/// Takes Slint pixel buffers that were created on a background thread.
 ///
 /// Returns the first frame image if successful.
-pub fn register_inline_gif_from_raw(
+pub fn register_inline_gif_from_buffers(
     attachment_id: &str,
-    raw_frames: Vec<(Vec<u8>, u32, u32, u64)>,
+    buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>>,
+    delays: Vec<u64>,
 ) -> Option<Image> {
-    if raw_frames.len() <= 1 {
+    if buffers.len() <= 1 {
         return None;
     }
 
-    // Convert raw frames to Slint Images
-    let frames: Vec<Image> = raw_frames
-        .iter()
-        .map(|(data, width, height, _)| {
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                data,
-                *width,
-                *height,
-            );
-            slint::Image::from_rgba8(buffer)
-        })
+    // Convert pixel buffers to Slint Images (fast, just ref-counting)
+    let frames: Vec<Image> = buffers
+        .into_iter()
+        .map(|buffer| slint::Image::from_rgba8(buffer))
         .collect();
 
-    let delays: Vec<u64> = raw_frames.iter().map(|(_, _, _, d)| *d).collect();
+    register_inline_gif_from_images(attachment_id, frames, delays)
+}
+
+/// Register an inline GIF from pre-converted Slint Images.
+///
+/// Must be called from the UI thread.
+pub fn register_inline_gif_from_images(
+    attachment_id: &str,
+    frames: Vec<Image>,
+    delays: Vec<u64>,
+) -> Option<Image> {
+    if frames.len() <= 1 {
+        return None;
+    }
 
     let first_frame = frames.first().cloned().unwrap_or_default();
     let frame_count = frames.len();
+    let att_id_string = attachment_id.to_string();
+
+    // Check if this GIF already exists (progressive update) - preserve playback position
+    let (current_frame, accumulated_ms) = INLINE_GIFS.with(|gifs| {
+        if let Some(existing) = gifs.borrow().get(&att_id_string) {
+            // Preserve position, but clamp to new frame count
+            let frame = existing.current_frame.min(frame_count.saturating_sub(1));
+            (frame, existing.accumulated_ms)
+        } else {
+            (0, 0)
+        }
+    });
 
     let state = InlineGifState {
         frames,
         delays,
-        current_frame: 0,
-        accumulated_ms: 0,
+        current_frame,
+        accumulated_ms,
     };
-
-    let att_id_string = attachment_id.to_string();
 
     // Evict oldest GIFs if at capacity (LRU)
     INLINE_LRU.with(|lru| {
@@ -574,8 +854,8 @@ pub fn register_inline_gif_from_raw(
         gifs.borrow_mut().insert(att_id_string, state);
     });
 
-    tracing::debug!(
-        "Registered inline GIF animation from raw: {} ({} frames)",
+    tracing::info!(
+        "Registered inline GIF animation: id={}, frames={}",
         attachment_id,
         frame_count
     );
@@ -606,6 +886,7 @@ pub fn unregister_inline_gif(attachment_id: &str) {
 fn start_inline_timer_if_needed() {
     INLINE_TIMER.with(|timer_cell| {
         if timer_cell.borrow().is_some() {
+            tracing::trace!("Inline GIF timer already running");
             return; // Already running
         }
 
@@ -616,7 +897,7 @@ fn start_inline_timer_if_needed() {
         });
 
         *timer_cell.borrow_mut() = Some(timer);
-        tracing::debug!("Started inline GIF animation timer");
+        tracing::info!("Started inline GIF animation timer (30fps)");
     });
 }
 
@@ -651,56 +932,115 @@ fn tick_inline_gifs(elapsed_ms: u64) {
         return;
     }
 
+    tracing::trace!("GIF tick: {} updates to apply", updates.len());
+
     // Update UI
     INLINE_WINDOW.with(|window_cell| {
         let window_ref = window_cell.borrow();
         if let Some(ref window_weak) = *window_ref {
             if let Some(w) = window_weak.upgrade() {
                 update_message_attachment_thumbnails(&w, &updates);
+            } else {
+                tracing::warn!("GIF tick: window reference invalid");
             }
+        } else {
+            tracing::warn!("GIF tick: no window reference set (init_inline_animations not called?)");
         }
     });
 }
 
 /// Update attachment thumbnails in the message model.
+/// Uses location cache for O(1) updates instead of O(n*m) linear search.
 fn update_message_attachment_thumbnails(window: &MainWindow, updates: &[(String, Image)]) {
     use slint::VecModel;
+    use std::collections::HashMap;
+
+    if updates.is_empty() {
+        return;
+    }
 
     let messages = window.get_messages();
+    let msg_count = messages.row_count();
 
-    for msg_idx in 0..messages.row_count() {
-        if let Some(msg) = messages.row_data(msg_idx) {
-            let attachments = &msg.attachments;
-            let mut any_changed = false;
+    // Map of attachment_id -> new_image for faster lookup during the pass
+    let mut update_map: HashMap<&str, &Image> = updates
+        .iter()
+        .map(|(id, img)| (id.as_str(), img))
+        .collect();
 
-            for att_idx in 0..attachments.row_count() {
-                if let Some(att) = attachments.row_data(att_idx) {
-                    // Check if this attachment needs an update
-                    for (update_id, new_image) in updates {
-                        if att.id.as_str() == update_id {
-                            // Update the thumbnail
-                            let mut updated_att = att.clone();
-                            updated_att.thumbnail = new_image.clone();
-                            updated_att.has_thumbnail = true;
+    // First, try using the location cache for each update (O(1))
+    for (update_id, new_image) in updates {
+        let cached_location = INLINE_LOCATION_CACHE.with(|cache| {
+            cache.borrow().get(update_id).copied()
+        });
 
-                            // Update in the attachments model
-                            if let Some(att_model) = attachments
-                                .as_any()
-                                .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
-                            {
-                                att_model.set_row_data(att_idx, updated_att);
-                                any_changed = true;
+        if let Some((msg_idx, att_idx)) = cached_location {
+            if msg_idx < msg_count {
+                if let Some(msg) = messages.row_data(msg_idx) {
+                    let attachments = &msg.attachments;
+                    if att_idx < attachments.row_count() {
+                        if let Some(att) = attachments.row_data(att_idx) {
+                            if att.id.as_str() == update_id {
+                                if let Some(att_model) = attachments
+                                    .as_any()
+                                    .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
+                                {
+                                    let mut updated_att = att.clone();
+                                    updated_att.thumbnail = new_image.clone();
+                                    updated_att.has_thumbnail = true;
+                                    att_model.set_row_data(att_idx, updated_att);
+                                    update_map.remove(update_id.as_str());
+                                    continue;
+                                }
                             }
-                            break;
                         }
                     }
                 }
             }
+            // Cache invalid - remove it
+            INLINE_LOCATION_CACHE.with(|cache| {
+                cache.borrow_mut().remove(update_id);
+            });
+        }
+    }
 
-            // If attachments changed, we might need to update the message too
-            // (Slint should handle this automatically via model bindings)
-            if any_changed {
-                // The model update above should trigger UI refresh
+    if update_map.is_empty() {
+        return;
+    }
+
+    // Cache miss or invalid - single linear search for all remaining updates
+    tracing::debug!("GIF update: {} cache misses, performing linear scan", update_map.len());
+    for msg_idx in 0..msg_count {
+        if update_map.is_empty() {
+            break;
+        }
+
+        if let Some(msg) = messages.row_data(msg_idx) {
+            let attachments = &msg.attachments;
+            for att_idx in 0..attachments.row_count() {
+                if let Some(att) = attachments.row_data(att_idx) {
+                    let att_id = att.id.to_string();
+                    if let Some(new_image) = update_map.remove(att_id.as_str()) {
+                        if let Some(att_model) = attachments
+                            .as_any()
+                            .downcast_ref::<VecModel<crate::MessageAttachmentData>>()
+                        {
+                            let mut updated_att = att.clone();
+                            updated_att.thumbnail = (*new_image).clone();
+                            updated_att.has_thumbnail = true;
+                            att_model.set_row_data(att_idx, updated_att);
+
+                            // Cache for next time
+                            INLINE_LOCATION_CACHE.with(|cache| {
+                                cache.borrow_mut().insert(att_id, (msg_idx, att_idx));
+                            });
+                        }
+
+                        if update_map.is_empty() {
+                            return;
+                        }
+                    }
+                }
             }
         }
     }
@@ -714,7 +1054,64 @@ pub fn clear_inline_gifs() {
     INLINE_LRU.with(|lru| {
         lru.borrow_mut().clear();
     });
+    INLINE_LOCATION_CACHE.with(|cache| {
+        cache.borrow_mut().clear();
+    });
     stop_inline_timer();
+}
+
+/// Auto-register all GIF attachments from current messages for animation.
+///
+/// Scans the message list in the UI for GIF attachments and registers them
+/// for inline animation. Call this after loading messages into the UI.
+///
+/// Must be called from the UI thread (inside invoke_from_event_loop).
+pub fn auto_register_gifs_from_messages(
+    window_weak: Weak<MainWindow>,
+    attachment_service: std::sync::Arc<chatter_linux::services::AttachmentService>,
+) {
+    let Some(w) = window_weak.upgrade() else {
+        return;
+    };
+
+    let messages = w.get_messages();
+    let mut gif_ids = Vec::new();
+
+    for msg_idx in 0..messages.row_count() {
+        if let Some(msg) = messages.row_data(msg_idx) {
+            for att_idx in 0..msg.attachments.row_count() {
+                if let Some(att) = msg.attachments.row_data(att_idx) {
+                    let id_str = att.id.as_str();
+
+                    // QUICK CHECK: Already registered? Skip expensive string conversions/checks
+                    if INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(id_str)) {
+                        continue;
+                    }
+
+                    let id = id_str.to_string();
+                    let mime = att.mime_type.to_string();
+                    let filename = att.filename.to_string();
+
+                    if id.starts_with("virtual-gif-") {
+                        let url = id.strip_prefix("virtual-gif-").unwrap().to_string();
+                        register_gif_url(id, url, window_weak.clone());
+                    } else if mime == "image/gif" || filename.to_lowercase().ends_with(".gif") {
+                        gif_ids.push(id);
+                    }
+                }
+            }
+        }
+    }
+    if gif_ids.is_empty() {
+        return;
+    }
+
+    tracing::debug!("Auto-registering {} GIF attachments", gif_ids.len());
+
+    // Register each GIF (spawns background threads)
+    for att_id in gif_ids {
+        register_gif_attachment(att_id, attachment_service.clone(), window_weak.clone());
+    }
 }
 
 /// Register a single GIF attachment for inline animation.
@@ -726,15 +1123,18 @@ pub fn clear_inline_gifs() {
 /// Safe to call from any context (including nested runtimes).
 pub fn register_gif_attachment(
     attachment_id: String,
-    attachment_repo: std::sync::Arc<chatter_linux::storage::AttachmentRepository>,
+    attachment_service: std::sync::Arc<chatter_linux::services::AttachmentService>,
     window_weak: slint::Weak<crate::MainWindow>,
 ) {
+    // Optimization: Check if already registered (O(1) in UI thread)
+    let already_registered = INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(&attachment_id));
+    if already_registered {
+        return;
+    }
+
     // Spawn independent thread to avoid runtime context issues
-    // (caller may be in spawn_blocking with temporary runtime)
     std::thread::spawn(move || {
         use chatter_linux::domain::attachment::ContentLocation;
-        use chatter_linux::media::gif::AnimatedGif;
-        use chatter_linux::services::AttachmentService;
 
         // Parse attachment ID
         let att_id: chatter_linux::domain::ids::AttachmentId = match attachment_id.parse() {
@@ -745,11 +1145,11 @@ pub fn register_gif_attachment(
             }
         };
 
-        // Check if attachment has content in database
-        let attachment = match attachment_repo.get(&att_id) {
-            Ok(Some(att)) if att.content_location == ContentLocation::InDatabase => att,
+        // Check if attachment has content on filesystem
+        let attachment = match attachment_service.get(&att_id) {
+            Ok(Some(att)) if att.content_location == ContentLocation::OnFilesystem => att,
             Ok(Some(_)) | Ok(None) => {
-                tracing::debug!("GIF {} not ready in database yet", attachment_id);
+                tracing::debug!("GIF {} not ready on filesystem yet", attachment_id);
                 return;
             }
             Err(e) => {
@@ -763,9 +1163,8 @@ pub fn register_gif_attachment(
             return;
         }
 
-        // Decrypt to memory
-        let attachment_service = AttachmentService::new(attachment_repo);
-        let data = match attachment_service.decrypt_to_memory(&att_id) {
+        // Decrypt to memory (uses streaming for large files)
+        let data = match attachment_service.decrypt_auto(&att_id) {
             Ok(buffer) => buffer.as_slice().to_vec(),
             Err(e) => {
                 tracing::debug!("Could not decrypt GIF {}: {}", attachment_id, e);
@@ -773,33 +1172,270 @@ pub fn register_gif_attachment(
             }
         };
 
-        // Decode GIF
-        let raw_frames = match AnimatedGif::decode(&data) {
-            Ok(Some(gif)) if gif.frames.len() > 1 => {
-                gif.frames
-                    .into_iter()
-                    .map(|f| (f.data, f.width, f.height, f.delay.as_millis().max(20) as u64))
-                    .collect::<Vec<_>>()
+        // Decode first frame immediately for instant display
+        use chatter_linux::media::gif::decode_first_frame_only;
+
+        let first_frame = match decode_first_frame_only(&data) {
+            Ok(Some(f)) => f,
+            Ok(None) => return, // Not a GIF or empty
+            Err(e) => {
+                tracing::debug!("Failed to decode GIF first frame {}: {}", attachment_id, e);
+                return;
             }
-            _ => return,
         };
 
         tracing::debug!(
-            "Decoded sent GIF {} with {} frames",
-            attachment_id,
-            raw_frames.len()
+            "Decoded first frame of GIF {} immediately",
+            attachment_id
         );
 
-        // Register on UI thread
-        let att_id_for_ui = attachment_id;
+        // Register first frame on UI thread immediately (for instant display)
+        let att_id_for_ui = attachment_id.clone();
+        let window_weak_clone = window_weak.clone();
+        let first_rgba = first_frame.data.clone();
+        let first_width = first_frame.width;
+        let first_height = first_frame.height;
+
         let _ = slint::invoke_from_event_loop(move || {
-            if let Some(first_frame) = register_inline_gif_from_raw(&att_id_for_ui, raw_frames) {
-                if let Some(w) = window_weak.upgrade() {
-                    update_message_attachment_thumbnails(&w, &[(att_id_for_ui.clone(), first_frame)]);
+            // Show first frame immediately
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &first_rgba,
+                first_width,
+                first_height,
+            );
+            let first_image = slint::Image::from_rgba8(buffer);
+
+            if let Some(w) = window_weak_clone.upgrade() {
+                update_message_attachment_thumbnails(&w, &[(att_id_for_ui.clone(), first_image)]);
+            }
+            tracing::info!("Displayed sent GIF first frame: {}", att_id_for_ui);
+        });
+
+        // Now decode remaining frames progressively and start animation
+        use image::codecs::gif::GifDecoder;
+        use image::AnimationDecoder;
+        use std::io::Cursor;
+
+        let cursor = Cursor::new(&data);
+        let decoder = match GifDecoder::new(cursor) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!("Failed to create GIF decoder for {}: {}", attachment_id, e);
+                return;
+            }
+        };
+
+        let frames_iter = decoder.into_frames();
+        let mut all_buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = vec![];
+        let mut all_delays: Vec<u64> = vec![];
+        let mut animation_started = false;
+        const BATCH_SIZE: usize = 5;
+
+        for (_idx, frame_result) in frames_iter.enumerate() {
+            let frame = match frame_result {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::warn!("GIF frame {} error for {}: {}", _idx, attachment_id, e);
+                    continue;
                 }
-                tracing::info!("Registered sent GIF animation: {}", att_id_for_ui);
+            };
+
+            let delay = frame.delay();
+            let (numer, denom) = delay.numer_denom_ms();
+            let delay_ms = if denom == 0 { 100 } else { (numer as u64) / (denom as u64) };
+            let delay_ms = delay_ms.max(20);
+
+            let buffer = frame.into_buffer();
+            let (width, height) = buffer.dimensions();
+            let raw_data = buffer.into_raw();
+
+            // Convert to Slint pixel buffer IN THE BACKGROUND THREAD (Send)
+            let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &raw_data,
+                width,
+                height,
+            );
+
+            all_buffers.push(pixel_buffer);
+            all_delays.push(delay_ms);
+
+            // Start animation as soon as we have enough frames
+            if !animation_started && all_buffers.len() >= 2 {
+                animation_started = true;
+                let buffers_batch = all_buffers.clone();
+                let delays_batch = all_delays.clone();
+                let att_id_batch = attachment_id.clone();
+                let weak_batch = window_weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(first_image) = register_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch) {
+                        if let Some(w) = weak_batch.upgrade() {
+                            update_message_attachment_thumbnails(&w, &[(att_id_batch.clone(), first_image)]);
+                        }
+                        tracing::info!("Started sent GIF animation: {}", att_id_batch);
+                    }
+                });
+            }
+            // Update animation periodically with new frames
+            else if animation_started && all_buffers.len() % BATCH_SIZE == 0 {
+                let buffers_batch = all_buffers.clone();
+                let delays_batch = all_delays.clone();
+                let att_id_batch = attachment_id.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    register_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch);
+                });
+            }
+        }
+
+        // Final update with all frames
+        if all_buffers.len() > 1 {
+            let att_id_full = attachment_id.clone();
+            let weak_full = window_weak.clone();
+            let buffers_full = all_buffers.clone();
+            let delays_full = all_delays.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(first_image) = register_inline_gif_from_buffers(&att_id_full, buffers_full, delays_full) {
+                    if let Some(w) = weak_full.upgrade() {
+                        update_message_attachment_thumbnails(&w, &[(att_id_full.clone(), first_image)]);
+                    }
+                }
+                tracing::info!("Completed sent GIF animation: {}", att_id_full);
+            });
+        }
+    });
+}
+
+/// Register a GIF from a network URL for inline animation.
+pub fn register_gif_url(
+    attachment_id: String,
+    url: String,
+    window_weak: slint::Weak<crate::MainWindow>,
+) {
+    // Optimization: Check if already registered (O(1) in UI thread)
+    let already_registered = INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(&attachment_id));
+    if already_registered {
+        return;
+    }
+
+    // Spawn independent thread to avoid runtime context issues
+    std::thread::spawn(move || {
+        // Fetch from network
+        let client = reqwest::blocking::Client::new();
+        let response = match client.get(&url).send() {
+            Ok(r) if r.status().is_success() => r,
+            _ => return,
+        };
+
+        let data = match response.bytes() {
+            Ok(b) => b.to_vec(),
+            _ => return,
+        };
+
+        // Decode first frame immediately for instant display
+        use chatter_linux::media::gif::decode_first_frame_only;
+
+        let first_frame = match decode_first_frame_only(&data) {
+            Ok(Some(f)) => f,
+            _ => return,
+        };
+
+        // Register first frame on UI thread immediately
+        let att_id_for_ui = attachment_id.clone();
+        let window_weak_clone = window_weak.clone();
+        let first_rgba = first_frame.data.clone();
+        let first_width = first_frame.width;
+        let first_height = first_frame.height;
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &first_rgba,
+                first_width,
+                first_height,
+            );
+            let first_image = slint::Image::from_rgba8(buffer);
+
+            if let Some(w) = window_weak_clone.upgrade() {
+                update_message_attachment_thumbnails(&w, &[(att_id_for_ui.clone(), first_image)]);
             }
         });
+
+        // Now decode remaining frames progressively and start animation
+        use image::codecs::gif::GifDecoder;
+        use image::AnimationDecoder;
+        use std::io::Cursor;
+
+        let cursor = Cursor::new(&data);
+        let decoder = match GifDecoder::new(cursor) {
+            Ok(d) => d,
+            _ => return,
+        };
+
+        let frames_iter = decoder.into_frames();
+        let mut all_buffers: Vec<slint::SharedPixelBuffer<slint::Rgba8Pixel>> = vec![];
+        let mut all_delays: Vec<u64> = vec![];
+        let mut animation_started = false;
+        const BATCH_SIZE: usize = 5;
+
+        for (_idx, frame_result) in frames_iter.enumerate() {
+            let frame = match frame_result {
+                Ok(f) => f,
+                _ => continue,
+            };
+
+            let delay = frame.delay();
+            let (numer, denom) = delay.numer_denom_ms();
+            let delay_ms = if denom == 0 { 100 } else { (numer as u64) / (denom as u64) };
+            let delay_ms = delay_ms.max(20);
+
+            let buffer = frame.into_buffer();
+            let (width, height) = buffer.dimensions();
+            let raw_data = buffer.into_raw();
+
+            // Convert to Slint pixel buffer IN THE BACKGROUND THREAD (Send)
+            let pixel_buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &raw_data,
+                width,
+                height,
+            );
+
+            all_buffers.push(pixel_buffer);
+            all_delays.push(delay_ms);
+
+            if !animation_started && all_buffers.len() >= 2 {
+                animation_started = true;
+                let buffers_batch = all_buffers.clone();
+                let delays_batch = all_delays.clone();
+                let att_id_batch = attachment_id.clone();
+                let weak_batch = window_weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(first_image) = register_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch) {
+                        if let Some(w) = weak_batch.upgrade() {
+                            update_message_attachment_thumbnails(&w, &[(att_id_batch.clone(), first_image)]);
+                        }
+                    }
+                });
+            } else if animation_started && all_buffers.len() % BATCH_SIZE == 0 {
+                let buffers_batch = all_buffers.clone();
+                let delays_batch = all_delays.clone();
+                let att_id_batch = attachment_id.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    register_inline_gif_from_buffers(&att_id_batch, buffers_batch, delays_batch);
+                });
+            }
+        }
+
+        if all_buffers.len() > 1 {
+            let att_id_full = attachment_id.clone();
+            let weak_full = window_weak.clone();
+            let buffers_full = all_buffers.clone();
+            let delays_full = all_delays.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(first_image) = register_inline_gif_from_buffers(&att_id_full, buffers_full, delays_full) {
+                    if let Some(w) = weak_full.upgrade() {
+                        update_message_attachment_thumbnails(&w, &[(att_id_full.clone(), first_image)]);
+                    }
+                }
+            });
+        }
     });
 }
 
@@ -819,6 +1455,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
         let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
+        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new(attachment_repo));
 
         // Create a dummy window weak reference (will be None when upgraded)
         // We can't create a real MainWindow in tests, but the function handles None gracefully
@@ -829,7 +1466,7 @@ mod tests {
         // Call the function - should return immediately
         register_gif_attachment(
             "nonexistent-attachment-id".to_string(),
-            attachment_repo,
+            attachment_service,
             window_weak,
         );
 
@@ -852,13 +1489,14 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
         let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
+        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new(attachment_repo));
 
         let window_weak: slint::Weak<crate::MainWindow> = slint::Weak::default();
 
         // Call the function
         register_gif_attachment(
             "test-attachment-id".to_string(),
-            attachment_repo,
+            attachment_service,
             window_weak,
         );
 
@@ -877,6 +1515,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
         let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
+        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new(attachment_repo));
 
         let window_weak: slint::Weak<crate::MainWindow> = slint::Weak::default();
 
@@ -886,7 +1525,7 @@ mod tests {
         for i in 0..10 {
             register_gif_attachment(
                 format!("attachment-{}", i),
-                attachment_repo.clone(),
+                attachment_service.clone(),
                 window_weak.clone(),
             );
         }

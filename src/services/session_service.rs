@@ -76,6 +76,12 @@ impl SessionService {
         self.settings_repo.get(keys::CURRENT_DEVICE_ID).ok().flatten()
     }
 
+    /// Get the current user ID if logged in.
+    pub fn current_user_id(&self) -> Option<crate::domain::ids::UserId> {
+        use crate::services::current_user::CurrentUserProvider;
+        self.settings_repo.current_user_id().ok()
+    }
+
     /// List all active sessions for the current user.
     ///
     /// Returns a list of sessions with device info, timestamps, and whether
@@ -132,5 +138,27 @@ impl SessionService {
         let mut auth_client = self.auth_client();
         auth_client.revoke_all_sessions().await?;
         Ok(())
+    }
+
+    // ==================== Settings ====================
+
+    /// Save a boolean setting.
+    pub fn set_bool_setting(&self, key: &str, value: bool) -> Result<(), SessionError> {
+        self.settings_repo.set(key, &value).map_err(SessionError::from)
+    }
+
+    /// Get a boolean setting.
+    pub fn get_bool_setting(&self, key: &str) -> Result<Option<bool>, SessionError> {
+        self.settings_repo.get(key).map_err(SessionError::from)
+    }
+
+    /// Save a string setting.
+    pub fn set_string_setting(&self, key: &str, value: &str) -> Result<(), SessionError> {
+        self.settings_repo.set_string(key, value).map_err(SessionError::from)
+    }
+
+    /// Get a string setting.
+    pub fn get_string_setting(&self, key: &str) -> Result<Option<String>, SessionError> {
+        self.settings_repo.get_string(key).map_err(SessionError::from)
     }
 }

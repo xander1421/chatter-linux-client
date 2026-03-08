@@ -82,6 +82,11 @@ impl ReaderPool {
         }
     }
 
+    /// Get a copy of the passphrase for opening new connections.
+    fn get_passphrase(&self) -> String {
+        self.passphrase.lock().clone()
+    }
+
     /// Acquire a reader connection from the pool.
     ///
     /// Returns an existing connection if available, otherwise creates a new one
@@ -151,6 +156,10 @@ impl ReaderPool {
         // Set WAL mode for reads
         conn.pragma_update(None, "journal_mode", "WAL")?;
 
+        // Performance optimizations for large BLOB reads
+        conn.pragma_update(None, "cache_size", "-65536")?; // 64MB cache
+        conn.pragma_update(None, "mmap_size", "268435456")?; // 256MB mmap
+
         Ok(conn)
     }
 }
@@ -219,6 +228,15 @@ impl Database {
         // This is essential for proactive DM session establishment which opens a second connection
         conn.pragma_update(None, "journal_mode", "WAL")?;
 
+        // Performance optimizations for large BLOB reads (attachments)
+        // cache_size: negative value = KB, so -65536 = 64MB cache (default is ~2MB)
+        // This significantly speeds up reading large attachments from SQLCipher
+        conn.pragma_update(None, "cache_size", "-65536")?;
+
+        // mmap_size: memory-map up to 256MB of the database file
+        // This allows the OS to handle caching and can be faster than SQLite's cache
+        conn.pragma_update(None, "mmap_size", "268435456")?;
+
         // Create reader pool for concurrent read access
         let readers = Arc::new(ReaderPool::new(
             path.to_path_buf(),
@@ -264,6 +282,42 @@ impl Database {
     /// Get the path to the database file.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Open a fresh read-only connection for streaming BLOB access.
+    ///
+    /// Unlike `read_connection()`, this connection is NOT pooled and must be
+    /// closed by the caller. Use this for long-lived BLOB streaming where you
+    /// need to hold the connection open for an extended period.
+    ///
+    /// # Use Case
+    ///
+    /// For streaming large attachments (e.g., 200MB video), you need to hold
+    /// a connection open while reading chunks. Using a pooled connection would
+    /// block other readers, so we open a dedicated connection instead.
+    pub fn open_reader_connection(&self) -> Result<Connection, StorageError> {
+        let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+
+        let conn = Connection::open_with_flags(&self.path, flags)?;
+
+        // Set SQLCipher encryption key from the reader pool
+        // We need to get the passphrase from the pool
+        let passphrase = self.readers.get_passphrase();
+        conn.pragma_update(None, "key", &passphrase)
+            .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
+
+        // Verify the key
+        conn.execute_batch("SELECT count(*) FROM sqlite_master;")
+            .map_err(|e| StorageError::Encryption(format!("Invalid reader key: {}", e)))?;
+
+        // Set WAL mode for reads
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+
+        // Performance optimizations for large BLOB streaming
+        conn.pragma_update(None, "cache_size", "-65536")?; // 64MB cache
+        conn.pragma_update(None, "mmap_size", "268435456")?; // 256MB mmap
+
+        Ok(conn)
     }
 
     /// Explicitly close the database connection.

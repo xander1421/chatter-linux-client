@@ -13,16 +13,22 @@ use crate::network::grpc::file_client::FileClient;
 use crate::network::grpc::GrpcClientPool;
 use crate::proto::content_v1::AttachmentPointer;
 
-use super::{AttachmentError, AttachmentService, DownloadResult, CHUNK_SIZE};
+use super::{attachment_file_path, ensure_attachments_dir, AttachmentError, AttachmentService, DownloadResult, CHUNK_SIZE};
 
 impl AttachmentService {
-    /// Download a file from the server.
+    /// **DEPRECATED**: Use `download_to_filesystem` + `decrypt_to_memory` instead.
     ///
-    /// Downloads the file in chunks, verifies integrity, and saves to the specified directory.
-    /// Returns the local path and file metadata on success.
+    /// This method downloads content directly from gRPC and saves it to disk,
+    /// which bypasses the encrypted CDN flow. The secure flow is:
+    /// 1. `download_to_filesystem()` - stores encrypted content from CDN
+    /// 2. `decrypt_to_memory()` - returns SecureBuffer that auto-zeroizes
     ///
-    /// Note: Requires the attachment metadata to be cached in the repository first
-    /// (usually from receiving a message with the attachment).
+    /// This legacy method is kept only for potential debugging/testing.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use download_to_filesystem + decrypt_to_memory for secure encrypted handling"
+    )]
+    #[allow(dead_code)]
     pub async fn download_file(
         &self,
         grpc_pool: &GrpcClientPool,
@@ -177,17 +183,17 @@ impl AttachmentService {
         })
     }
 
-    /// **DEPRECATED**: Use `download_to_database` + `decrypt_to_memory` instead.
+    /// **DEPRECATED**: Use `download_to_filesystem` + `decrypt_to_memory` instead.
     ///
     /// This method saves decrypted content to the filesystem, which is insecure.
     /// The new secure flow:
-    /// 1. `download_to_database()` - stores encrypted content in DB
+    /// 1. `download_to_filesystem()` - stores encrypted content on disk
     /// 2. `decrypt_to_memory()` - returns SecureBuffer that auto-zeroizes
     ///
     /// This legacy method is kept only for backward compatibility with tests.
     #[deprecated(
         since = "0.2.0",
-        note = "Use download_to_database + decrypt_to_memory for secure in-memory handling"
+        note = "Use download_to_filesystem + decrypt_to_memory for secure in-memory handling"
     )]
     #[allow(dead_code)]
     pub async fn download_from_cdn_encrypted(
@@ -327,15 +333,19 @@ impl AttachmentService {
         })
     }
 
-    /// Download encrypted content from CDN and store in database.
+    /// Download encrypted content from CDN and store on filesystem.
     ///
-    /// Downloads the ciphertext and stores it directly in the database
+    /// Downloads the ciphertext and stores it on the filesystem
     /// WITHOUT decrypting. Decryption happens only during playback
     /// via `decrypt_to_memory()`.
     ///
-    /// This is the secure flow: encrypted content stored in SQLite,
+    /// This is the secure flow: encrypted content stored on filesystem,
     /// decrypted only to memory during playback, then zeroized.
-    pub async fn download_to_database(
+    ///
+    /// ## Storage Location
+    ///
+    /// Files are stored at: `~/.local/share/chatter/attachments/{attachment_id}.enc`
+    pub async fn download_to_filesystem(
         &self,
         grpc_pool: &GrpcClientPool,
         attachment_id: &AttachmentId,
@@ -356,7 +366,7 @@ impl AttachmentService {
         tracing::debug!(
             attachment_id = %attachment_id,
             cdn_key = %cdn_key,
-            "Downloading encrypted content to database"
+            "Downloading encrypted content to filesystem"
         );
 
         // Get presigned download URL
@@ -387,22 +397,35 @@ impl AttachmentService {
             .map_err(|e| AttachmentError::NetworkError(format!("Failed to read response: {}", e)))?
             .to_vec();
 
+        let ciphertext_size = ciphertext.len();
+
         tracing::debug!(
             attachment_id = %attachment_id,
-            ciphertext_size = ciphertext.len(),
-            "Downloaded ciphertext, storing in database"
+            ciphertext_size = ciphertext_size,
+            "Downloaded ciphertext, storing on filesystem"
         );
 
-        // Store encrypted content in database (NOT decrypted)
-        // This atomically sets status=Ready and content_location=InDatabase
+        // Ensure attachments directory exists
+        ensure_attachments_dir()
+            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {}", e)))?;
+
+        // Write encrypted content to filesystem
+        let file_path = attachment_file_path(attachment_id);
+        tokio::fs::write(&file_path, &ciphertext)
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("Failed to write attachment file: {}", e)))?;
+
+        // Store file path in database (NOT the content)
+        // This atomically sets status=Ready and content_location=OnFilesystem
         self.attachment_repo
-            .store_encrypted_content(attachment_id, &ciphertext)
+            .store_file_path(attachment_id, &file_path)
             .map_err(|e| AttachmentError::StorageError(e.to_string()))?;
 
         tracing::info!(
             attachment_id = %attachment_id,
-            ciphertext_size = ciphertext.len(),
-            "Encrypted content stored in database"
+            ciphertext_size = ciphertext_size,
+            file_path = %file_path.display(),
+            "Encrypted content stored on filesystem"
         );
 
         Ok(())

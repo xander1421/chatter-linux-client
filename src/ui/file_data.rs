@@ -70,12 +70,16 @@ pub fn flatten_code_lines(lines: &[HighlightedLine]) -> Vec<CodeLineData> {
         .iter()
         .map(|line| {
             let segments = line
-                .segments
+                .spans
                 .iter()
-                .map(|seg| {
+                .map(|span| {
                     // Convert tabs to 4 spaces and strip trailing newlines
-                    let text = seg.text.replace('\t', "    ").trim_end_matches('\n').to_string();
-                    CodeSegmentData::new(text, seg.style.foreground)
+                    let text = span.text.replace('\t', "    ").trim_end_matches('\n').to_string();
+                    // Extract RGB from ARGB u32
+                    let r = ((span.color >> 16) & 0xFF) as u8;
+                    let g = ((span.color >> 8) & 0xFF) as u8;
+                    let b = (span.color & 0xFF) as u8;
+                    CodeSegmentData::new(text, (r, g, b))
                 })
                 .collect();
             CodeLineData {
@@ -534,31 +538,46 @@ mod tests {
 
     #[test]
     fn test_flatten_code_lines() {
-        use crate::media::code_preview::{HighlightedLine, HighlightedSegment, SegmentStyle};
+        use crate::media::code_preview::{HighlightedLine, HighlightedSpan};
+
+        // Color format: 0xAARRGGBB
+        let red: u32 = 0xFF_FF_00_00;   // (255, 0, 0)
+        let green: u32 = 0xFF_00_FF_00; // (0, 255, 0)
+        let default_color: u32 = 0xFF_C0_C5_CE; // default gray (192, 197, 206)
 
         let lines = vec![
             HighlightedLine {
                 line_number: 1,
-                segments: vec![
-                    HighlightedSegment {
+                raw_text: "fn main()\n".to_string(),
+                spans: vec![
+                    HighlightedSpan {
                         text: "fn ".to_string(),
-                        style: SegmentStyle { foreground: (255, 0, 0), ..Default::default() },
+                        color: red,
+                        bold: false,
+                        italic: false,
                     },
-                    HighlightedSegment {
+                    HighlightedSpan {
                         text: "main".to_string(),
-                        style: SegmentStyle { foreground: (0, 255, 0), ..Default::default() },
+                        color: green,
+                        bold: false,
+                        italic: false,
                     },
-                    HighlightedSegment {
+                    HighlightedSpan {
                         text: "()\n".to_string(),
-                        style: SegmentStyle::default(),
+                        color: default_color,
+                        bold: false,
+                        italic: false,
                     },
                 ],
             },
             HighlightedLine {
                 line_number: 2,
-                segments: vec![HighlightedSegment {
+                raw_text: "}\n".to_string(),
+                spans: vec![HighlightedSpan {
                     text: "}\n".to_string(),
-                    style: SegmentStyle::default(),
+                    color: default_color,
+                    bold: false,
+                    italic: false,
                 }],
             },
         ];
