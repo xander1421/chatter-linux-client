@@ -12,6 +12,7 @@
 mod anon_dm_actions;
 mod anon_group_events;
 mod anon_group_handlers;
+pub mod attachment_download;
 mod channel_bootstrap;
 mod channel_handlers;
 pub mod dm;
@@ -24,6 +25,7 @@ pub use anon_dm_actions::{
     handle_anon_dm_delete,
     handle_anon_dm_edit,
     handle_anon_dm_message_deleted,
+    handle_anon_dm_message_edited,
     handle_anon_dm_pin,
     handle_anon_dm_reaction,
     handle_anon_dm_receipt,
@@ -291,7 +293,7 @@ pub async fn handle_inbox_event(
             timestamps,
             ..
         } => {
-            channel_handlers::handle_channel_receipt(weak_window, channel_id, receipt_type, timestamps);
+            channel_handlers::handle_channel_receipt(weak_window, ui_ctx, channel_id, receipt_type, timestamps);
         }
         InboxEvent::ChannelUnreadCountUpdated {
             channel_id,
@@ -726,12 +728,16 @@ pub async fn handle_inbox_event(
             group_name,
             inviter_mailbox_pk,
             timestamp,
+            profile_key,
+            encrypted_display_name,
+            encrypted_avatar,
         } => {
             tracing::info!(
                 peer_id = %peer_id,
                 group_id = ?group_id,
                 group_name = %group_name,
                 timestamp = timestamp,
+                has_profile = profile_key.is_some(),
                 "Received anonymous group invite"
             );
 
@@ -758,15 +764,48 @@ pub async fn handle_inbox_event(
                 }
             };
 
+            // Parse and decrypt profile data
+            let profile_key_arr: Option<[u8; 32]> = profile_key.as_ref().and_then(|pk| {
+                if pk.len() == 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(pk);
+                    Some(key)
+                } else {
+                    None
+                }
+            });
+
+            use chatter_linux::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
+
+            let inviter_display_name: Option<String> = match (&profile_key_arr, &encrypted_display_name) {
+                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                    decrypt_display_name(pk, encrypted).ok().filter(|n| !n.is_empty())
+                }
+                _ => None,
+            };
+
+            let inviter_avatar: Option<Vec<u8>> = match (&profile_key_arr, &encrypted_avatar) {
+                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                    decrypt_avatar(pk, encrypted).ok()
+                }
+                _ => None,
+            };
+
+            tracing::debug!(
+                peer_id = %peer_id,
+                inviter_display_name = ?inviter_display_name,
+                "Decrypted inviter profile for group invite"
+            );
+
             // Emit domain event for UI to show invite dialog
             ui_ctx.event_bus.emit_domain(DomainEvent::AnonGroupInviteReceived {
                 group_id: anon_group_id,
                 group_name: group_name.clone(),
                 inviter_id: peer_id,
                 inviter_mailbox_pk: mailbox_pk,
-                profile_key: None,
-                inviter_display_name: None,
-                inviter_avatar: None,
+                profile_key: profile_key_arr,
+                inviter_display_name,
+                inviter_avatar,
             });
             // Add to sidebar as pending private group
             if let Some(w) = weak_window.upgrade() {
@@ -786,11 +825,15 @@ pub async fn handle_inbox_event(
             group_id,
             joiner_mailbox_pk,
             timestamp,
+            profile_key,
+            encrypted_display_name,
+            encrypted_avatar,
         } => {
             tracing::info!(
                 peer_id = %peer_id,
                 group_id = ?group_id,
                 timestamp = timestamp,
+                has_profile = profile_key.is_some(),
                 "Received anonymous group join acknowledgment"
             );
 
@@ -811,6 +854,39 @@ pub async fn handle_inbox_event(
                 }
             };
 
+            // Parse and decrypt profile data
+            let profile_key_arr: Option<[u8; 32]> = profile_key.as_ref().and_then(|pk| {
+                if pk.len() == 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(pk);
+                    Some(key)
+                } else {
+                    None
+                }
+            });
+
+            use chatter_linux::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
+
+            let display_name: Option<String> = match (&profile_key_arr, &encrypted_display_name) {
+                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                    decrypt_display_name(pk, encrypted).ok().filter(|n| !n.is_empty())
+                }
+                _ => None,
+            };
+
+            let avatar: Option<Vec<u8>> = match (&profile_key_arr, &encrypted_avatar) {
+                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                    decrypt_avatar(pk, encrypted).ok()
+                }
+                _ => None,
+            };
+
+            tracing::debug!(
+                peer_id = %peer_id,
+                display_name = ?display_name,
+                "Decrypted profile for join ack"
+            );
+
             let anon_service = ui_ctx.anon_group_service.clone();
             let peer_id_clone = peer_id;
 
@@ -819,6 +895,9 @@ pub async fn handle_inbox_event(
                         anon_group_id,
                         peer_id_clone,
                         mailbox_pk,
+                        profile_key_arr,
+                        display_name,
+                        avatar,
                     ).await {
                         tracing::error!(
                             group_id = ?anon_group_id,
@@ -1105,11 +1184,15 @@ pub async fn handle_inbox_event(
                     let sent_at_for_ui = sent_at; // Capture for UI closure
 
                     // Convert attachment pointers to display data BEFORE spawn_blocking
-                    let attachment_display: Vec<_> = attachments
+                    let mut attachment_display: Vec<_> = attachments
                         .iter()
                         .filter(|p| !p.cdn_key.is_empty())
                         .map(|p| crate::bin_ui::converters::attachment_pointer_to_display_data(p))
                         .collect();
+                    // Pre-decode thumbnails before UI thread
+                    for att in &mut attachment_display {
+                        att.decode_thumbnail();
+                    }
 
                     // Spawn auto-download for attachments
                     // Create attachment records FIRST to prevent race condition

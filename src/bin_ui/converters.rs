@@ -74,7 +74,10 @@ pub struct DMListItemSendData {
     pub user_id: String,
     pub display_name: String,
     pub avatar_url: String,
+    /// Raw avatar bytes (will be decoded on UI thread if not pre-decoded)
     pub avatar_bytes: Option<Vec<u8>>,
+    /// Pre-decoded RGBA pixels (width, height, data) - use this to avoid blocking UI thread
+    pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
     pub initials: String,
     pub presence_status: String,
     pub last_message: String,
@@ -84,14 +87,38 @@ pub struct DMListItemSendData {
 }
 
 impl DMListItemSendData {
+    /// Pre-decode avatar bytes to RGBA. Call this BEFORE invoke_from_event_loop
+    /// to avoid blocking the UI thread with image decoding.
+    pub fn pre_decode_avatar(&mut self) {
+        if self.avatar_decoded.is_some() {
+            return; // Already decoded
+        }
+        if let Some(bytes) = &self.avatar_bytes {
+            if let Ok(img) = image::load_from_memory(bytes) {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                self.avatar_decoded = Some((w, h, rgba.into_raw()));
+            }
+        }
+    }
+
     /// Convert to Slint DMListItemData. Must be called inside Slint event loop.
+    /// For best performance, call pre_decode_avatar() before entering the event loop.
     pub fn to_slint(self) -> DMListItemData {
-        let (avatar_source, has_avatar) = match &self.avatar_bytes {
-            Some(bytes) => match avatar_bytes_to_image(bytes) {
+        let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
+            // Fast path: use pre-decoded pixels
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &pixels, w, h
+            );
+            (slint::Image::from_rgba8(buffer), true)
+        } else if let Some(bytes) = &self.avatar_bytes {
+            // Slow path: decode on UI thread (avoid if possible)
+            match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
                 None => (slint::Image::default(), false),
-            },
-            None => (slint::Image::default(), false),
+            }
+        } else {
+            (slint::Image::default(), false)
         };
 
         DMListItemData {
@@ -119,6 +146,7 @@ pub fn dm_to_send_data(channel: &Channel, other_user_name: &str, other_user_id: 
         display_name: other_user_name.to_string(),
         avatar_url: String::new(),
         avatar_bytes: None, // Regular DMs don't use local avatar bytes
+        avatar_decoded: None,
         initials: get_initials(other_user_name),
         presence_status: "offline".to_string(),
         last_message: String::new(),
@@ -156,18 +184,44 @@ pub struct FriendRequestSendData {
     pub username: String,
     pub avatar_url: String,
     pub avatar_bytes: Option<Vec<u8>>,
+    /// Pre-decoded RGBA pixels (width, height, data) - use this to avoid blocking UI thread
+    pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
     pub sent_at: String,
 }
 
 impl FriendRequestSendData {
+    /// Pre-decode avatar bytes to RGBA. Call this BEFORE invoke_from_event_loop
+    /// to avoid blocking the UI thread with image decoding.
+    pub fn pre_decode_avatar(&mut self) {
+        if self.avatar_decoded.is_some() {
+            return; // Already decoded
+        }
+        if let Some(bytes) = &self.avatar_bytes {
+            if let Ok(img) = image::load_from_memory(bytes) {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                self.avatar_decoded = Some((w, h, rgba.into_raw()));
+            }
+        }
+    }
+
     /// Convert to Slint FriendRequestData. Must be called inside Slint event loop.
+    /// For best performance, call pre_decode_avatar() before entering the event loop.
     pub fn to_slint(self) -> crate::FriendRequestData {
-        let (avatar_source, has_avatar) = match &self.avatar_bytes {
-            Some(bytes) => match avatar_bytes_to_image(bytes) {
+        let (avatar_source, has_avatar) = if let Some((w, h, pixels)) = self.avatar_decoded {
+            // Fast path: use pre-decoded pixels
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                &pixels, w, h
+            );
+            (slint::Image::from_rgba8(buffer), true)
+        } else if let Some(bytes) = &self.avatar_bytes {
+            // Slow path: decode on UI thread (avoid if possible)
+            match avatar_bytes_to_image(bytes) {
                 Some(img) => (img, true),
                 None => (slint::Image::default(), false),
-            },
-            None => (slint::Image::default(), false),
+            }
+        } else {
+            (slint::Image::default(), false)
         };
 
         crate::FriendRequestData {
@@ -210,23 +264,47 @@ pub struct AttachmentDisplayData {
     pub progress: f32,
     /// Thumbnail JPEG bytes from sender (for instant preview without download).
     pub thumbnail_bytes: Vec<u8>,
+    /// Pre-decoded thumbnail pixels (RGBA, width, height) - decode before UI thread.
+    pub thumbnail_pixels: Option<(Vec<u8>, u32, u32)>,
 }
 
 impl AttachmentDisplayData {
+    /// Pre-decode thumbnail bytes to RGBA pixels (call this before invoke_from_event_loop).
+    pub fn decode_thumbnail(&mut self) {
+        if self.thumbnail_pixels.is_some() {
+            return; // Already decoded
+        }
+        if !self.thumbnail_bytes.is_empty() {
+            self.thumbnail_pixels = image::load_from_memory(&self.thumbnail_bytes)
+                .ok()
+                .map(|img| {
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    (rgba.into_raw(), w, h)
+                });
+        }
+    }
+
     /// Convert to Slint MessageAttachmentData (must be called on UI thread).
     pub fn to_slint(&self) -> MessageAttachmentData {
+        // Priority 0: Use pre-decoded pixels (fastest - no decoding on UI thread)
         // Priority 1: Try to load thumbnail from sender-provided bytes (instant preview)
         // Priority 2: Load from local path after download
-        let (has_thumbnail, thumbnail, img_width, img_height) = if !self.thumbnail_bytes.is_empty() {
-            // Load thumbnail from sender-provided bytes
-            let is_webp = self.thumbnail_bytes.starts_with(b"RIFF") && self.thumbnail_bytes.get(8..12) == Some(b"WEBP");
-            eprintln!(
-                "[DEBUG] Attempting to decode thumbnail for {}: {} bytes, is_webp={}",
-                self.filename,
-                self.thumbnail_bytes.len(),
-                is_webp
+        let (has_thumbnail, thumbnail, img_width, img_height) = if let Some((ref pixels, w, h)) = self.thumbnail_pixels {
+            // Use pre-decoded pixels (fast - just wrap in Slint buffer)
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                pixels,
+                w,
+                h,
             );
-
+            let slint_img = Image::from_rgba8(buffer);
+            (true, slint_img, w as i32, h as i32)
+        } else if !self.thumbnail_bytes.is_empty() {
+            // Fallback: decode on UI thread (should be avoided - call decode_thumbnail() first)
+            tracing::warn!(
+                "Decoding thumbnail on UI thread for {} - consider calling decode_thumbnail() earlier",
+                self.filename
+            );
             match image::load_from_memory(&self.thumbnail_bytes) {
                 Ok(img) => {
                     let rgba = img.to_rgba8();
@@ -237,27 +315,9 @@ impl AttachmentDisplayData {
                         h,
                     );
                     let slint_img = Image::from_rgba8(buffer);
-                    eprintln!(
-                        "[DEBUG] Successfully decoded thumbnail for {}: {}x{}",
-                        self.filename,
-                        w,
-                        h
-                    );
-                    tracing::info!(
-                        "Loaded thumbnail from bytes for {}: {}x{}, {} bytes",
-                        self.filename,
-                        w,
-                        h,
-                        self.thumbnail_bytes.len()
-                    );
                     (true, slint_img, w as i32, h as i32)
                 }
                 Err(e) => {
-                    eprintln!(
-                        "[DEBUG] Failed to decode thumbnail for {}: {:?}",
-                        self.filename,
-                        e
-                    );
                     tracing::warn!(
                         "Failed to decode thumbnail bytes for {}: {:?}",
                         self.filename,
@@ -422,6 +482,7 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
             }
             bytes
         },
+        thumbnail_pixels: None, // Pre-decode with decode_thumbnail() before UI thread
     }
 }
 
@@ -495,6 +556,7 @@ pub fn attachment_pointer_to_display_data(pointer: &AttachmentPointer) -> Attach
         is_downloading: needs_download,
         progress: 0.0,
         thumbnail_bytes: pointer.thumbnail.clone(),
+        thumbnail_pixels: None, // Pre-decode with decode_thumbnail() before UI thread
     }
 }
 
@@ -528,6 +590,13 @@ pub struct MessageDisplayData {
 }
 
 impl MessageDisplayData {
+    /// Pre-decode all attachment thumbnails (call this before invoke_from_event_loop).
+    pub fn decode_attachment_thumbnails(&mut self) {
+        for att in &mut self.attachments {
+            att.decode_thumbnail();
+        }
+    }
+
     /// Convert to Slint MessageItemData with current user context.
     ///
     /// The `current_user_id` is used to determine call direction (outgoing vs incoming).
@@ -594,7 +663,12 @@ impl MessageDisplayData {
         reply_count_text: self.reply_count_text.clone().into(),
         is_thread_reply: self.is_thread_reply,
         show_sender: true,
-        delivery_status: self.delivery_status.clone().into(),
+        // For own messages with empty status, default to "sent"
+        delivery_status: if is_own && self.delivery_status.is_empty() {
+            "sent".into()
+        } else {
+            self.delivery_status.clone().into()
+        },
         is_pinned: false,
         is_call: self.is_call,
         call_type: call_type.into(),
@@ -678,7 +752,7 @@ pub fn message_to_display_data_with_replies(
         reply_count,
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
-        delivery_status: String::new(), // Set by caller based on receipt status
+        delivery_status: msg.delivery_status.clone(),
         is_call,
         call_message_type,
         call_initiator_id,
@@ -744,7 +818,7 @@ pub fn message_to_display_data_with_attachments(
         reply_count: 0,
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
-        delivery_status: String::new(),
+        delivery_status: msg.delivery_status.clone(),
         is_call,
         call_message_type,
         call_initiator_id,

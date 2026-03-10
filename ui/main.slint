@@ -1,10 +1,10 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser } from "app.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -224,6 +224,13 @@ export component MainWindow inherits Window {
     in-out property <[PrivateGroupFriend]> invite-private-group-friends <=> app.invite-private-group-friends;
     in-out property <int> invite-private-group-selected-count <=> app.invite-private-group-selected-count;
     in property <bool> invite-private-group-loading <=> app.invite-private-group-loading;
+
+    // Invite member to channel modal properties
+    in-out property <string> invite-member-channel-id <=> app.invite-member-channel-id;
+    in-out property <string> invite-member-channel-name <=> app.invite-member-channel-name;
+    in-out property <[InviteUser]> invite-member-users <=> app.invite-member-users;
+    in-out property <int> invite-member-selected-count <=> app.invite-member-selected-count;
+    in property <bool> invite-member-loading <=> app.invite-member-loading;
 
     // Join channel modal properties
     in-out property <string> join-channel-search-query <=> app.join-channel-search-query;
@@ -480,6 +487,9 @@ export component MainWindow inherits Window {
     callback channel-settings-change-member-role <=> app.channel-settings-change-member-role;
     callback channel-settings-remove-member <=> app.channel-settings-remove-member;
     callback channel-settings-invite-members <=> app.channel-settings-invite-members;
+    callback channel-settings-invite-channel-members <=> app.channel-settings-invite-channel-members;
+    callback invite-member-toggle-user <=> app.invite-member-toggle-user;
+    callback invite-member-confirm <=> app.invite-member-confirm;
     callback channel-settings-archive <=> app.channel-settings-archive;
     callback channel-settings-leave <=> app.channel-settings-leave;
     callback channel-settings-delete <=> app.channel-settings-delete;

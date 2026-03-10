@@ -62,6 +62,7 @@ export component ChannelSettingsModal inherits Rectangle {
     callback change-member-role(string, string);  // user-id, new-role
     callback remove-member(string);  // user-id
     callback invite-members();  // opens invite modal (private groups)
+    callback invite-channel-members();  // opens invite modal (regular channels)
     callback archive-channel();
     callback leave-channel();
     callback delete-channel();
@@ -629,6 +630,28 @@ export component ChannelSettingsModal inherits Rectangle {
                                     invite-btn-touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => { root.invite-members(); }
+                                    }
+                                }
+
+                                // Invite button for regular channels (admins/owners only)
+                                if !root.is-private-group && root.can-manage-members: Rectangle {
+                                    width: invite-ch-btn-text.width + Spacing.md * 2;
+                                    height: 28px;
+                                    background: invite-ch-btn-touch.has-hover ? Colors.primary.darker(10%) : Colors.primary;
+                                    border-radius: Spacing.radius-sm;
+
+                                    invite-ch-btn-text := Text {
+                                        text: "+ Invite";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.xs;
+                                        font-weight: Typography.medium;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    invite-ch-btn-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { root.invite-channel-members(); }
                                     }
                                 }
                             }

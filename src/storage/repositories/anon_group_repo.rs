@@ -741,7 +741,7 @@ impl AnonGroupRepository {
 
     /// Update the text content of a message by timestamp.
     ///
-    /// Used for editing messages.
+    /// Used for editing messages sent by ourselves.
     pub fn update_message_text(
         &self,
         group_id: &AnonGroupId,
@@ -759,6 +759,36 @@ impl AnonGroupRepository {
             params![
                 content_json,
                 group_id.as_bytes().as_slice(),
+                sent_timestamp as i64,
+            ],
+        )?;
+
+        Ok(rows > 0)
+    }
+
+    /// Update the text content of a message by sender and timestamp.
+    ///
+    /// Used for editing messages from peers. Only updates if sender_id matches
+    /// the message author (security: only authors can edit their messages).
+    pub fn update_message_text_by_sender(
+        &self,
+        group_id: &AnonGroupId,
+        sender_id: &UserId,
+        sent_timestamp: u64,
+        new_text: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+
+        // Build new content_json with updated text
+        let content_json = serde_json::json!({ "text": new_text }).to_string();
+
+        let rows = conn.execute(
+            "UPDATE anon_group_messages SET content_json = ?1
+             WHERE group_id = ?2 AND sender_id = ?3 AND sent_at = ?4",
+            params![
+                content_json,
+                group_id.as_bytes().as_slice(),
+                sender_id.to_string(),
                 sent_timestamp as i64,
             ],
         )?;

@@ -95,6 +95,17 @@ pub enum AnonDmError {
     InvalidFriendCode(String),
 }
 
+/// Decrypted profile data from an anonymous DM request or acceptance.
+#[derive(Debug, Clone)]
+pub struct DecryptedPeerProfile {
+    /// The decrypted display name (required).
+    pub display_name: String,
+    /// The decrypted avatar bytes (optional).
+    pub avatar: Option<Vec<u8>>,
+    /// The profile key used for decryption (for storage).
+    pub profile_key: Option<[u8; 32]>,
+}
+
 /// Anonymous DM service.
 ///
 /// Handles all anonymous DM operations following the NDSS'21 model.

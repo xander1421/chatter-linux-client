@@ -54,8 +54,8 @@ impl MessageRepository {
                 is_pinned, is_edited, is_deleted,
                 sent_at, created_at, updated_at, edited_at,
                 reaction_counts_blob, current_user_reactions_blob,
-                mentioned_integrations_blob, targets_ai_bot
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                mentioned_integrations_blob, targets_ai_bot, delivery_status
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 message.id.to_string(),
                 message.channel_id.to_string(),
@@ -76,6 +76,7 @@ impl MessageRepository {
                 current_user_reactions_blob,
                 mentioned_integrations_blob,
                 message.targets_ai_bot as i32,
+                &message.delivery_status,
             ],
         )?;
         tracing::debug!(
@@ -146,7 +147,7 @@ impl MessageRepository {
                     is_pinned, is_edited, is_deleted,
                     sent_at, created_at, updated_at, edited_at,
                     reaction_counts_blob, current_user_reactions_blob,
-                    mentioned_integrations_blob, targets_ai_bot
+                    mentioned_integrations_blob, targets_ai_bot, delivery_status
              FROM messages WHERE id = ?1",
         )?;
 
@@ -176,7 +177,7 @@ impl MessageRepository {
                     is_pinned, is_edited, is_deleted,
                     sent_at, created_at, updated_at, edited_at,
                     reaction_counts_blob, current_user_reactions_blob,
-                    mentioned_integrations_blob, targets_ai_bot
+                    mentioned_integrations_blob, targets_ai_bot, delivery_status
              FROM messages WHERE sender_id = ?1 AND sent_at = ?2",
         )?;
 
@@ -202,7 +203,7 @@ impl MessageRepository {
                     is_pinned, is_edited, is_deleted,
                     sent_at, created_at, updated_at, edited_at,
                     reaction_counts_blob, current_user_reactions_blob,
-                    mentioned_integrations_blob, targets_ai_bot
+                    mentioned_integrations_blob, targets_ai_bot, delivery_status
              FROM messages WHERE sender_id = ?1
              ORDER BY sent_at DESC LIMIT ?2",
         )?;
@@ -335,7 +336,7 @@ impl MessageRepository {
                         m.is_pinned, m.is_edited, m.is_deleted,
                         m.sent_at, m.created_at, m.updated_at, m.edited_at,
                         m.reaction_counts_blob, m.current_user_reactions_blob,
-                        m.mentioned_integrations_blob, m.targets_ai_bot
+                        m.mentioned_integrations_blob, m.targets_ai_bot, m.delivery_status
                  FROM messages m
                  WHERE m.channel_id = ?1
                    AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2)
@@ -353,7 +354,7 @@ impl MessageRepository {
                         is_pinned, is_edited, is_deleted,
                         sent_at, created_at, updated_at, edited_at,
                         reaction_counts_blob, current_user_reactions_blob,
-                        mentioned_integrations_blob, targets_ai_bot
+                        mentioned_integrations_blob, targets_ai_bot, delivery_status
                  FROM messages
                  WHERE channel_id = ?1
                  ORDER BY sent_at DESC, sender_id DESC
@@ -388,7 +389,7 @@ impl MessageRepository {
                         m.is_pinned, m.is_edited, m.is_deleted,
                         m.sent_at, m.created_at, m.updated_at, m.edited_at,
                         m.reaction_counts_blob, m.current_user_reactions_blob,
-                        m.mentioned_integrations_blob, m.targets_ai_bot
+                        m.mentioned_integrations_blob, m.targets_ai_bot, m.delivery_status
                  FROM messages m
                  WHERE m.thread_id = ?1
                    AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2)
@@ -404,7 +405,7 @@ impl MessageRepository {
                         is_pinned, is_edited, is_deleted,
                         sent_at, created_at, updated_at, edited_at,
                         reaction_counts_blob, current_user_reactions_blob,
-                        mentioned_integrations_blob, targets_ai_bot
+                        mentioned_integrations_blob, targets_ai_bot, delivery_status
                  FROM messages
                  WHERE thread_id = ?1
                  ORDER BY sent_at DESC, sender_id DESC
@@ -426,7 +427,7 @@ impl MessageRepository {
                     is_pinned, is_edited, is_deleted,
                     sent_at, created_at, updated_at, edited_at,
                     reaction_counts_blob, current_user_reactions_blob,
-                    mentioned_integrations_blob, targets_ai_bot
+                    mentioned_integrations_blob, targets_ai_bot, delivery_status
              FROM messages
              WHERE channel_id = ?1 AND is_pinned = 1
              ORDER BY sent_at DESC",
@@ -467,6 +468,29 @@ impl MessageRepository {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
+    }
+
+    /// Update delivery status for a message by sent_at timestamp.
+    ///
+    /// Used when receipts (delivered/read) are received.
+    pub fn update_delivery_status(
+        &self,
+        channel_id: &ChannelId,
+        sent_at: u64,
+        status: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE messages SET delivery_status = ?1, updated_at = ?2
+             WHERE channel_id = ?3 AND sent_at = ?4",
+            params![
+                status,
+                Utc::now().to_rfc3339(),
+                channel_id.to_string(),
+                sent_at as i64,
+            ],
+        )?;
+        Ok(rows > 0)
     }
 
     /// Insert or update thread metadata.
@@ -524,7 +548,7 @@ fn content_type_discriminant(content: &MessageContent) -> i32 {
 ///               is_pinned(7), is_edited(8), is_deleted(9),
 ///               sent_at(10), created_at(11), updated_at(12), edited_at(13),
 ///               reaction_counts_blob(14), current_user_reactions_blob(15),
-///               mentioned_integrations_blob(16), targets_ai_bot(17)
+///               mentioned_integrations_blob(16), targets_ai_bot(17), delivery_status(18)
 fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, StorageError>> {
     let content_json: String = row.get(3)?;
     // Read from BLOB columns (bincode serialized)
@@ -599,6 +623,7 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
         current_user_reactions,
         mentioned_integrations,
         targets_ai_bot: row.get::<_, i32>(17)? != 0,
+        delivery_status: row.get::<_, String>(18).unwrap_or_default(),
     }))
 }
 

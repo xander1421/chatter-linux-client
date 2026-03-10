@@ -1,8 +1,9 @@
 //! Composer callbacks.
 //!
-//! Handles message composer actions (attach, emoji, gif, mentions).
+//! Handles message composer actions (attach, emoji, gif, mentions, drag/drop).
 
 mod attachments;
+mod drag_drop;
 mod emoji;
 mod gif;
 mod mentions;
@@ -18,6 +19,7 @@ use crate::MainWindow;
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     attachments::wire_attachment_clicked(window, ui_ctx.chat_state.clone());
     attachments::wire_remove_attachment(window, ui_ctx.chat_state.clone());
+    drag_drop::wire_drag_drop(window, ui_ctx.chat_state.clone());
     emoji::wire_emoji_clicked(window);
     emoji::wire_emoji_selected(window);
     emoji::wire_emoji_category_changed(window);

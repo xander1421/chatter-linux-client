@@ -111,18 +111,52 @@ impl AnonDmService {
         // Serialize content
         let plaintext = content.encode_to_vec();
 
+        tracing::debug!(
+            peer_id = %peer_id,
+            mailbox_pk = hex::encode(&mailbox_pk[..8]),
+            plaintext_len = plaintext.len(),
+            "[ANON_DM_MAILBOX] Encrypting message for peer"
+        );
+
         // Encrypt with Signal Protocol
         let ciphertext = self
             .pairwise_service
             .encrypt(peer_id, &plaintext)
             .await
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(
+                    peer_id = %peer_id,
+                    error = %e,
+                    "[ANON_DM_MAILBOX] Failed to encrypt"
+                );
+                AnonDmError::CryptoError(e.to_string())
+            })?;
+
+        tracing::debug!(
+            peer_id = %peer_id,
+            mailbox_pk = hex::encode(&mailbox_pk[..8]),
+            ciphertext_len = ciphertext.len(),
+            "[ANON_DM_MAILBOX] Sending to mailbox"
+        );
 
         // Send to anonymous mailbox
         self.mailbox_manager
             .send_to_mailbox(mailbox_pk, ciphertext, EnvelopeType::SealedSender)
             .await
-            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
+            .map_err(|e| {
+                tracing::error!(
+                    mailbox_pk = hex::encode(&mailbox_pk[..8]),
+                    error = %e,
+                    "[ANON_DM_MAILBOX] Failed to send to mailbox"
+                );
+                AnonDmError::MessageError(e.to_string())
+            })?;
+
+        tracing::info!(
+            peer_id = %peer_id,
+            mailbox_pk = hex::encode(&mailbox_pk[..8]),
+            "[ANON_DM_MAILBOX] Successfully sent to peer mailbox"
+        );
 
         Ok(())
     }

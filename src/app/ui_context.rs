@@ -14,10 +14,10 @@ use crate::mailbox::group::{GroupCoordinator, GroupFanout, GroupMailboxManager};
 use crate::mailbox::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::ai_service::AIService;
-use crate::services::anon_dm_service::AnonDmService;
+use crate::services::anon_dm::AnonDmService;
 use crate::services::ai::LocalAIService;
 use crate::services::jarvis::JarvisService;
-use crate::services::anon_group_service::AnonGroupService;
+use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
 use crate::services::channel::ChannelService;
@@ -27,6 +27,7 @@ use crate::services::draft_service::DraftService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
 use crate::services::message_gateway::MessageGateway;
+use crate::services::pin_service::PinService;
 use crate::services::reaction_service::ReactionService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
@@ -68,6 +69,7 @@ pub struct UIContext {
     pub ai_service: Arc<AIService>,
     pub reaction_service: Arc<ReactionService>,
     pub draft_service: Arc<DraftService>,
+    pub pin_service: Arc<PinService>,
     pub anon_group_service: Arc<AnonGroupService>,
     pub anon_dm_service: Arc<AnonDmService>,
     pub local_ai_service: Arc<LocalAIService>,
@@ -135,6 +137,7 @@ impl UIContext {
             ai_service: services.ai_service.clone(),
             reaction_service: services.reaction_service.clone(),
             draft_service: services.draft_service.clone(),
+            pin_service: services.pin_service.clone(),
             anon_group_service: services.anon_group_service.clone(),
             anon_dm_service: services.anon_dm_service.clone(),
             local_ai_service: services.local_ai_service.clone(),

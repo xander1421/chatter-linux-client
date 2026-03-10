@@ -39,6 +39,14 @@ impl AnonDmService {
             .flatten()
     }
 
+    /// Get the current user's avatar bytes (if set).
+    ///
+    /// This is the raw avatar image data stored locally during registration.
+    /// Used by UI to display the user's own avatar in the sidebar.
+    pub fn get_user_avatar(&self) -> Option<Vec<u8>> {
+        self.get_my_avatar()
+    }
+
     /// Get encrypted avatar for sharing during bootstrap.
     ///
     /// Encrypts avatar with profile key for privacy-preserving sharing.

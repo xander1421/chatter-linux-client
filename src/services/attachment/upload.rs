@@ -259,9 +259,11 @@ impl AttachmentService {
             .unwrap_or("attachment")
             .to_string();
 
+        // Detect MIME type: try extension first, then fall back to magic bytes
         let mime_type = mime_guess::from_path(file_path)
-            .first_or_octet_stream()
-            .to_string();
+            .first()
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| detect_mime_from_bytes(&file_content));
 
         tracing::debug!(
             filename = %filename,
@@ -636,14 +638,21 @@ impl AttachmentService {
                     .unwrap_or(0)
             }).await.unwrap_or(0);
         } else if mime_type.starts_with("image/") {
-            // Image processing
-            let (orig_w, orig_h) = crate::media::ImageProcessor::get_dimensions(file_path)
-                .unwrap_or((0, 0));
+            // Image processing - use spawn_blocking for large images
+            let path_for_dims = file_path.to_path_buf();
+            let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                crate::media::ImageProcessor::get_dimensions(&path_for_dims)
+                    .unwrap_or((0, 0))
+            }).await.unwrap_or((0, 0));
             meta.width = if orig_w > 0 { Some(orig_w) } else { None };
             meta.height = if orig_h > 0 { Some(orig_h) } else { None };
 
-            match crate::media::ImageProcessor::generate_thumbnail_bytes(file_path) {
-                Ok((bytes, thumb_w, thumb_h)) => {
+            // Generate thumbnail in blocking thread (large images can take time/memory)
+            let path_for_thumb = file_path.to_path_buf();
+            match tokio::task::spawn_blocking(move || {
+                crate::media::ImageProcessor::generate_thumbnail_bytes(&path_for_thumb)
+            }).await {
+                Ok(Ok((bytes, thumb_w, thumb_h))) => {
                     tracing::debug!(
                         "Generated thumbnail for image: {}x{} -> {}x{}, {} bytes",
                         orig_w, orig_h, thumb_w, thumb_h, bytes.len()
@@ -652,8 +661,11 @@ impl AttachmentService {
                     meta.thumbnail_width = Some(thumb_w);
                     meta.thumbnail_height = Some(thumb_h);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::warn!("Failed to generate thumbnail: {}", e);
+                }
+                Err(e) => {
+                    tracing::warn!("Thumbnail generation task panicked: {}", e);
                 }
             }
         } else if mime_type.starts_with("video/") {
@@ -715,4 +727,82 @@ pub(crate) struct MediaMetadata {
     pub thumbnail_height: Option<u32>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+}
+
+/// Detect MIME type from file content using magic bytes.
+///
+/// Used as fallback when file has no extension or extension doesn't match content.
+fn detect_mime_from_bytes(data: &[u8]) -> String {
+    if data.len() < 12 {
+        return "application/octet-stream".to_string();
+    }
+
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return "image/png".to_string();
+    }
+
+    // JPEG: FF D8 FF
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return "image/jpeg".to_string();
+    }
+
+    // GIF: GIF87a or GIF89a
+    if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+        return "image/gif".to_string();
+    }
+
+    // WebP: RIFF....WEBP
+    if data.starts_with(b"RIFF") && data.len() >= 12 && &data[8..12] == b"WEBP" {
+        return "image/webp".to_string();
+    }
+
+    // BMP: BM
+    if data.starts_with(b"BM") {
+        return "image/bmp".to_string();
+    }
+
+    // MP4/M4A: ftyp at offset 4
+    if data.len() >= 8 && &data[4..8] == b"ftyp" {
+        // Check for audio vs video
+        if data.len() >= 12 {
+            let brand = &data[8..12];
+            if brand == b"M4A " || brand == b"M4B " {
+                return "audio/mp4".to_string();
+            }
+        }
+        return "video/mp4".to_string();
+    }
+
+    // WebM/MKV: 1A 45 DF A3
+    if data.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        return "video/webm".to_string();
+    }
+
+    // MP3: FF FB or FF FA or ID3
+    if data.starts_with(&[0xFF, 0xFB]) || data.starts_with(&[0xFF, 0xFA]) || data.starts_with(b"ID3") {
+        return "audio/mpeg".to_string();
+    }
+
+    // OGG: OggS
+    if data.starts_with(b"OggS") {
+        return "audio/ogg".to_string();
+    }
+
+    // FLAC: fLaC
+    if data.starts_with(b"fLaC") {
+        return "audio/flac".to_string();
+    }
+
+    // WAV: RIFF....WAVE
+    if data.starts_with(b"RIFF") && data.len() >= 12 && &data[8..12] == b"WAVE" {
+        return "audio/wav".to_string();
+    }
+
+    // PDF: %PDF
+    if data.starts_with(b"%PDF") {
+        return "application/pdf".to_string();
+    }
+
+    "application/octet-stream".to_string()
 }

@@ -40,7 +40,7 @@ pub fn wire_audio_seek(window: &MainWindow) {
 
         // Run seek in background thread to avoid blocking UI
         // rodio's skip_duration decodes linearly which is CPU-intensive
-        tokio::task::spawn_blocking(move || {
+        std::thread::spawn(move || {
             let player_arc = audio_state::get_audio_player();
             match player_arc.lock() {
                 Ok(mut player_guard) => {

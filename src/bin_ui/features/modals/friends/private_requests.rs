@@ -7,7 +7,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_linux::app::UIContext;
-use chatter_linux::services::anon_dm_service::AnonDmService;
+use chatter_linux::services::anon_dm::AnonDmService;
 
 use crate::bin_ui::converters::{get_initials, DMListItemSendData, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
@@ -172,11 +172,17 @@ async fn refresh_private_requests(
                     username: "Private".to_string(),
                     avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
+                    avatar_decoded: None,
                     sent_at: dm.created_at
                         .with_timezone(&chrono::Local)
                         .format("%b %d, %H:%M")
                         .to_string(),
                 });
+            }
+
+            // Pre-decode avatars before entering UI thread
+            for req in &mut private_requests {
+                req.pre_decode_avatar();
             }
 
             let request_count = private_requests.len() as i32;
@@ -203,12 +209,13 @@ fn add_anon_dm_to_sidebar(
     peer_name: &str,
 ) {
     // Use Send-safe type to pass across thread boundary
-    let dm_send_data = DMListItemSendData {
+    let mut dm_send_data = DMListItemSendData {
         channel_id: format!("anon_dm:{}", dm.id),
         user_id: dm.peer_id.to_string(),
         display_name: format!("\u{1F512} {}", peer_name), // Lock emoji for private
         avatar_url: String::new(),
         avatar_bytes: dm.peer_avatar.clone(),
+        avatar_decoded: None,
         initials: get_initials(peer_name),
         presence_status: "online".to_string(),
         last_message: String::new(),
@@ -219,6 +226,9 @@ fn add_anon_dm_to_sidebar(
         unread_count: 0,
         is_typing: false,
     };
+
+    // Pre-decode avatar before entering UI thread to avoid blocking
+    dm_send_data.pre_decode_avatar();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_window.upgrade() {

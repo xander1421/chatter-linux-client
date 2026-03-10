@@ -10,7 +10,7 @@ use prost::Message as ProstMessage;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::domain::UserId;
+use crate::domain::{ChannelId, UserId};
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 use crate::proto::content_v1::{content, receipt_message, Content, ReceiptMessage};
 
@@ -114,10 +114,17 @@ impl InboxHandler for ReceiptHandler {
                 });
             }
             receipt_message::Type::Read => {
+                // Parse channel_id from receipt if present
+                let channel_id = if receipt.channel_id.is_empty() {
+                    None
+                } else {
+                    receipt.channel_id.parse::<ChannelId>().ok()
+                };
                 ctx.emit(DomainEvent::MessagesRead {
                     reader_id: from_user_id,
                     message_timestamps: receipt.timestamps.clone(),
                     receipt_timestamp: receipt.timestamp,
+                    channel_id,
                 });
             }
             receipt_message::Type::Viewed => {

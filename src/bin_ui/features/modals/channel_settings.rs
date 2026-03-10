@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::anon_group::AnonGroupId;
@@ -12,7 +12,7 @@ use chatter_linux::domain::ChannelType;
 use chatter_linux::services::channel::ChannelService;
 use chatter_linux::services::user::UserService;
 
-use crate::{ChannelMemberData, MainWindow, PrivateGroupFriend};
+use crate::{ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
 
 /// Wire channel settings modal callbacks.
 pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
@@ -22,6 +22,7 @@ pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     wire_member_management(window, ui_ctx);
     wire_channel_actions(window, ui_ctx);
     wire_invite_members(window, ui_ctx);
+    wire_invite_channel_members(window, ui_ctx);
 }
 
 /// Open the channel settings modal with channel data.
@@ -451,6 +452,211 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     w.set_invite_private_group_friends(ModelRc::new(VecModel::from(friend_data)));
                     w.set_invite_private_group_selected_count(0);
                     w.set_active_modal("invite-private-group".into());
+                }
+            });
+        });
+    });
+}
+
+fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    // Open invite modal for regular channels
+    let weak_window = window.as_weak();
+    let channel_service = ui_ctx.channel_service.clone();
+    let user_service = ui_ctx.user_service.clone();
+
+    window.on_channel_settings_invite_channel_members(move || {
+        let weak = weak_window.clone();
+        let channel_service = channel_service.clone();
+        let user_service = user_service.clone();
+
+        tokio::spawn(async move {
+            // Get the channel ID from channel settings
+            let channel_id_str = weak
+                .upgrade()
+                .map(|w| w.get_channel_settings_id().to_string())
+                .unwrap_or_default();
+
+            if channel_id_str.is_empty() {
+                return;
+            }
+
+            let channel_id: ChannelId = match channel_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid channel ID: {}", e);
+                    return;
+                }
+            };
+
+            // Get channel name
+            let channel_name = channel_service
+                .get_channel_local(&channel_id)
+                .ok()
+                .flatten()
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+
+            // Get existing members to filter them out
+            let existing_members: HashSet<UserId> = channel_service
+                .get_channel_members(&channel_id, 100, 0)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.user_id)
+                .collect();
+
+            // Load available friends
+            let mut user_data: Vec<InviteUser> = Vec::new();
+            let mut seen_user_ids: HashSet<UserId> = HashSet::new();
+
+            // Load friends
+            let friends = user_service.list_friends(100, 0).await.unwrap_or_default();
+            for friendship in &friends {
+                if seen_user_ids.contains(&friendship.friend_id) {
+                    continue;
+                }
+
+                let is_member = existing_members.contains(&friendship.friend_id);
+                let profile = user_service.get_profile_local(&friendship.friend_id).ok().flatten();
+                let user = user_service.get_user_local(&friendship.friend_id).ok().flatten();
+
+                let display_name = profile
+                    .as_ref()
+                    .map(|p| p.display_name.clone())
+                    .unwrap_or_else(|| friendship.friend_id.to_string());
+                let username = user
+                    .as_ref()
+                    .map(|u| u.username.clone())
+                    .unwrap_or_default();
+
+                seen_user_ids.insert(friendship.friend_id);
+                user_data.push(InviteUser {
+                    id: friendship.friend_id.to_string().into(),
+                    display_name: display_name.into(),
+                    username: username.into(),
+                    avatar_url: "".into(),
+                    already_member: is_member,
+                    selected: false,
+                });
+            }
+
+            // Update UI - open invite modal
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_invite_member_channel_id(channel_id_str.into());
+                    w.set_invite_member_channel_name(channel_name.into());
+                    w.set_invite_member_users(ModelRc::new(VecModel::from(user_data)));
+                    w.set_invite_member_selected_count(0);
+                    w.set_active_modal("invite-member".into());
+                }
+            });
+        });
+    });
+
+    // Toggle user selection
+    let weak_window = window.as_weak();
+    window.on_invite_member_toggle_user(move |idx| {
+        let weak = weak_window.clone();
+        let index = idx as usize;
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                let users = w.get_invite_member_users();
+                if let Some(mut user) = users.row_data(index) {
+                    // Toggle selected state
+                    user.selected = !user.selected;
+                    users.set_row_data(index, user);
+
+                    // Recalculate selected count
+                    let count = (0..users.row_count())
+                        .filter_map(|i| users.row_data(i))
+                        .filter(|u| u.selected)
+                        .count() as i32;
+                    w.set_invite_member_selected_count(count);
+                }
+            }
+        });
+    });
+
+    // Confirm invite
+    let weak_window = window.as_weak();
+    let channel_service = ui_ctx.channel_service.clone();
+
+    window.on_invite_member_confirm(move || {
+        let weak = weak_window.clone();
+        let channel_service = channel_service.clone();
+
+        tokio::spawn(async move {
+            // Get channel ID and selected users
+            let (channel_id_str, selected_user_ids) = {
+                let Some(w) = weak.upgrade() else { return };
+                let channel_id = w.get_invite_member_channel_id().to_string();
+                let users = w.get_invite_member_users();
+                let selected_vec: Vec<String> = (0..users.row_count())
+                    .filter_map(|i| users.row_data(i))
+                    .filter(|u| u.selected && !u.already_member)
+                    .map(|u| u.id.to_string())
+                    .collect();
+                (channel_id, selected_vec)
+            };
+
+            if channel_id_str.is_empty() || selected_user_ids.is_empty() {
+                return;
+            }
+
+            let channel_id: ChannelId = match channel_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid channel ID: {}", e);
+                    return;
+                }
+            };
+
+            // Set loading state
+            {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_invite_member_loading(true);
+                    }
+                });
+            }
+
+            // Invite each user
+            let mut success_count = 0;
+            for user_id_str in &selected_user_ids {
+                let user_id: UserId = match user_id_str.parse() {
+                    Ok(id) => id,
+                    Err(_) => continue,
+                };
+
+                match channel_service.invite_user(&channel_id, &user_id, None).await {
+                    Ok(_) => {
+                        success_count += 1;
+                        tracing::info!(
+                            channel_id = %channel_id,
+                            user_id = %user_id,
+                            "Invited user to channel"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            channel_id = %channel_id,
+                            user_id = %user_id,
+                            error = %e,
+                            "Failed to invite user to channel"
+                        );
+                    }
+                }
+            }
+
+            // Close modal
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_invite_member_loading(false);
+                    if success_count > 0 {
+                        w.set_active_modal("none".into());
+                    }
                 }
             });
         });

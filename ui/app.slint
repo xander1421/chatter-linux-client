@@ -30,6 +30,7 @@ import { JoinChannelModal, SearchResultChannel } from "modals/join_channel.slint
 import { SearchModal, SearchResult } from "modals/search_modal.slint";
 import { ChannelSettingsModal, ChannelMemberData } from "modals/channel_settings.slint";
 import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
+import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
@@ -47,7 +48,7 @@ import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, Acti
 import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser }
 
 export component App inherits Rectangle {
     // ========== View routing ==========
@@ -271,6 +272,13 @@ export component App inherits Rectangle {
     in-out property <[PrivateGroupFriend]> invite-private-group-friends: [];
     in-out property <int> invite-private-group-selected-count: 0;
     in property <bool> invite-private-group-loading: false;
+
+    // Invite member to channel modal properties
+    in-out property <string> invite-member-channel-id: "";
+    in-out property <string> invite-member-channel-name: "";
+    in-out property <[InviteUser]> invite-member-users: [];
+    in-out property <int> invite-member-selected-count: 0;
+    in property <bool> invite-member-loading: false;
 
     // Join channel modal properties
     in-out property <string> join-channel-search-query: "";
@@ -545,6 +553,9 @@ export component App inherits Rectangle {
     callback channel-settings-change-member-role(string, string);  // user-id, new-role
     callback channel-settings-remove-member(string);  // user-id
     callback channel-settings-invite-members();  // opens invite modal for private groups
+    callback channel-settings-invite-channel-members();  // opens invite modal for regular channels
+    callback invite-member-toggle-user(int);  // index - toggles selection
+    callback invite-member-confirm();  // confirms invite for all selected users
     callback channel-settings-archive();
     callback channel-settings-leave();
     callback channel-settings-delete();
@@ -954,6 +965,25 @@ export component App inherits Rectangle {
         }
     }
 
+    // Invite Member to Channel Modal
+    InviteMemberModal {
+        show-modal: root.active-modal == "invite-member";
+        channel-name: root.invite-member-channel-name;
+        users <=> root.invite-member-users;
+        selected-count <=> root.invite-member-selected-count;
+        loading: root.invite-member-loading;
+
+        close => {
+            root.active-modal = "none";
+        }
+        toggle-user(idx) => {
+            root.invite-member-toggle-user(idx);
+        }
+        invite => {
+            root.invite-member-confirm();
+        }
+    }
+
     // Join Channel Modal
     JoinChannelModal {
         show-modal: root.active-modal == "join-channel";
@@ -1219,6 +1249,9 @@ export component App inherits Rectangle {
         }
         invite-members => {
             root.channel-settings-invite-members();
+        }
+        invite-channel-members => {
+            root.channel-settings-invite-channel-members();
         }
         archive-channel => {
             root.channel-settings-archive();

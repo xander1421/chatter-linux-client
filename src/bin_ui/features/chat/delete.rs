@@ -14,7 +14,25 @@ use chatter_linux::services::{
 };
 
 use super::helpers::{get_peer_id_from_dm_channel, send_channel_content, send_dm_content};
+use crate::MessageItemData;
 use crate::MainWindow;
+
+/// Unregister any GIF animations from a message's attachments.
+///
+/// Call this when a message is deleted to free GIF animation memory.
+fn unregister_message_gifs(message: &MessageItemData) {
+    if !message.has_attachments {
+        return;
+    }
+
+    let attachments = message.attachments.iter();
+    for att in attachments {
+        let mime = att.mime_type.to_string();
+        if mime.starts_with("image/gif") || mime == "image/webp" {
+            crate::bin_ui::gif_state::unregister_inline_gif(&att.id);
+        }
+    }
+}
 
 /// Wire delete-message callback for DM and channel conversations.
 /// Delete-for-me: deletes locally and syncs to own devices, does not notify peer/channel.
@@ -101,13 +119,19 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         let current_model = w.get_messages();
-                        let messages: Vec<_> = (0..current_model.row_count())
-                            .filter_map(|i| current_model.row_data(i))
-                            .filter(|m| {
-                                !(m.sender_id.as_str() == sender_for_ui.as_str()
-                                    && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
-                            })
-                            .collect();
+                        let mut messages = Vec::new();
+                        for i in 0..current_model.row_count() {
+                            if let Some(m) = current_model.row_data(i) {
+                                if m.sender_id.as_str() == sender_for_ui.as_str()
+                                    && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                {
+                                    // Unregister GIF animations from deleted message
+                                    unregister_message_gifs(&m);
+                                } else {
+                                    messages.push(m);
+                                }
+                            }
+                        }
                         w.set_messages(ModelRc::new(VecModel::from(messages)));
                     }
                 });
@@ -155,13 +179,18 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         let current_model = w.get_messages();
-                        let messages: Vec<_> = (0..current_model.row_count())
-                            .filter_map(|i| current_model.row_data(i))
-                            .filter(|m| {
-                                !(m.sender_id.as_str() == sender_for_ui.as_str()
-                                    && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
-                            })
-                            .collect();
+                        let mut messages = Vec::new();
+                        for i in 0..current_model.row_count() {
+                            if let Some(m) = current_model.row_data(i) {
+                                if m.sender_id.as_str() == sender_for_ui.as_str()
+                                    && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                {
+                                    unregister_message_gifs(&m);
+                                } else {
+                                    messages.push(m);
+                                }
+                            }
+                        }
                         w.set_messages(ModelRc::new(VecModel::from(messages)));
                     }
                 });
@@ -280,13 +309,18 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         if let Some(w) = weak.upgrade() {
                             let current_model = w.get_messages();
                             let before_count = current_model.row_count();
-                            let messages: Vec<_> = (0..current_model.row_count())
-                                .filter_map(|i| current_model.row_data(i))
-                                .filter(|m| {
-                                    !(m.sender_id.as_str() == sender_id_for_ui.as_str()
-                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
-                                })
-                                .collect();
+                            let mut messages = Vec::new();
+                            for i in 0..current_model.row_count() {
+                                if let Some(m) = current_model.row_data(i) {
+                                    if m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                    {
+                                        unregister_message_gifs(&m);
+                                    } else {
+                                        messages.push(m);
+                                    }
+                                }
+                            }
                             let after_count = messages.len();
                             tracing::info!(
                                 sender_id = %sender_id_for_ui,
@@ -408,13 +442,18 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         if let Some(w) = weak.upgrade() {
                             let current_model = w.get_messages();
                             let before_count = current_model.row_count();
-                            let messages: Vec<_> = (0..current_model.row_count())
-                                .filter_map(|i| current_model.row_data(i))
-                                .filter(|m| {
-                                    !(m.sender_id.as_str() == sender_id_for_ui.as_str()
-                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
-                                })
-                                .collect();
+                            let mut messages = Vec::new();
+                            for i in 0..current_model.row_count() {
+                                if let Some(m) = current_model.row_data(i) {
+                                    if m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                    {
+                                        unregister_message_gifs(&m);
+                                    } else {
+                                        messages.push(m);
+                                    }
+                                }
+                            }
                             let after_count = messages.len();
                             tracing::info!(
                                 sender_id = %sender_id_for_ui,
@@ -519,13 +558,18 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<UIContext>
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         let current_model = w.get_messages();
-                        let messages: Vec<_> = (0..current_model.row_count())
-                            .filter_map(|i| current_model.row_data(i))
-                            .filter(|m| {
-                                !(m.sender_id.as_str() == sender_for_ui.as_str()
-                                    && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
-                            })
-                            .collect();
+                        let mut messages = Vec::new();
+                        for i in 0..current_model.row_count() {
+                            if let Some(m) = current_model.row_data(i) {
+                                if m.sender_id.as_str() == sender_for_ui.as_str()
+                                    && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                {
+                                    unregister_message_gifs(&m);
+                                } else {
+                                    messages.push(m);
+                                }
+                            }
+                        }
                         w.set_messages(ModelRc::new(VecModel::from(messages)));
                     }
                 });
@@ -577,13 +621,18 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<UIContext>
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         let current_model = w.get_messages();
-                        let messages: Vec<_> = (0..current_model.row_count())
-                            .filter_map(|i| current_model.row_data(i))
-                            .filter(|m| {
-                                !(m.sender_id.as_str() == sender_for_ui.as_str()
-                                    && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
-                            })
-                            .collect();
+                        let mut messages = Vec::new();
+                        for i in 0..current_model.row_count() {
+                            if let Some(m) = current_model.row_data(i) {
+                                if m.sender_id.as_str() == sender_for_ui.as_str()
+                                    && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                {
+                                    unregister_message_gifs(&m);
+                                } else {
+                                    messages.push(m);
+                                }
+                            }
+                        }
                         w.set_messages(ModelRc::new(VecModel::from(messages)));
                     }
                 });
@@ -693,13 +742,18 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<UIContext>
                         if let Some(w) = weak.upgrade() {
                             let current_model = w.get_messages();
                             let before_count = current_model.row_count();
-                            let messages: Vec<_> = (0..current_model.row_count())
-                                .filter_map(|i| current_model.row_data(i))
-                                .filter(|m| {
-                                    !(m.sender_id.as_str() == sender_id_for_ui.as_str()
-                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
-                                })
-                                .collect();
+                            let mut messages = Vec::new();
+                            for i in 0..current_model.row_count() {
+                                if let Some(m) = current_model.row_data(i) {
+                                    if m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                    {
+                                        unregister_message_gifs(&m);
+                                    } else {
+                                        messages.push(m);
+                                    }
+                                }
+                            }
                             let after_count = messages.len();
                             tracing::info!(
                                 sender_id = %sender_id_for_ui,
@@ -815,13 +869,18 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<UIContext>
                         if let Some(w) = weak.upgrade() {
                             let current_model = w.get_messages();
                             let before_count = current_model.row_count();
-                            let messages: Vec<_> = (0..current_model.row_count())
-                                .filter_map(|i| current_model.row_data(i))
-                                .filter(|m| {
-                                    !(m.sender_id.as_str() == sender_id_for_ui.as_str()
-                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str())
-                                })
-                                .collect();
+                            let mut messages = Vec::new();
+                            for i in 0..current_model.row_count() {
+                                if let Some(m) = current_model.row_data(i) {
+                                    if m.sender_id.as_str() == sender_id_for_ui.as_str()
+                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                                    {
+                                        unregister_message_gifs(&m);
+                                    } else {
+                                        messages.push(m);
+                                    }
+                                }
+                            }
                             let after_count = messages.len();
                             tracing::info!(
                                 sender_id = %sender_id_for_ui,

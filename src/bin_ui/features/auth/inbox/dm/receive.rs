@@ -168,24 +168,37 @@ pub fn handle_dm_received(
                     .map(|id| id.to_string())
                     .unwrap_or_default();
 
-                let display_data = message_to_display_data_with_attachments(
+                let mut display_data = message_to_display_data_with_attachments(
                     &domain_msg,
                     &sender_name,
                     attachment_display,
                 );
+                // Pre-decode attachment thumbnails before Slint conversion
+                display_data.decode_attachment_thumbnails();
 
                 let mut new_msg = display_data.to_slint_with_user(&current_user_id);
                 new_msg.delivery_status = "delivered".into();
 
-                // Append and sort by timestamp + sender_id (Signal-style deterministic ordering)
-                messages.push(new_msg);
-                messages.sort_by(|a, b| {
-                    let ts_a = a.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
-                    let ts_b = b.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
-                    ts_a.cmp(&ts_b).then_with(|| a.sender_id.as_str().cmp(b.sender_id.as_str()))
-                });
+                // Find insert position (sorted by timestamp + sender_id)
+                let new_ts = new_msg.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
+                let new_sender = new_msg.sender_id.to_string();
+                let insert_pos = messages.iter().position(|m| {
+                    let ts = m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
+                    match ts.cmp(&new_ts) {
+                        std::cmp::Ordering::Greater => true,
+                        std::cmp::Ordering::Equal => m.sender_id.as_str() > new_sender.as_str(),
+                        std::cmp::Ordering::Less => false,
+                    }
+                }).unwrap_or(messages.len());
 
-                window.set_messages(ModelRc::new(VecModel::from(messages)));
+                // Insert directly into existing model to avoid full re-render
+                if let Some(vec_model) = current_model.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                    vec_model.insert(insert_pos, new_msg);
+                } else {
+                    // Fallback: replace entire model
+                    messages.insert(insert_pos, new_msg);
+                    window.set_messages(ModelRc::new(VecModel::from(messages)));
+                }
 
                 // Auto-register GIFs for animation
                 crate::bin_ui::gif_state::auto_register_gifs_from_messages(

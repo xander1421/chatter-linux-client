@@ -112,6 +112,11 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
             // Reverse to show oldest first (messages come from DB in DESC order)
             display_messages.reverse();
 
+            // Pre-decode attachment thumbnails before UI thread
+            for msg in &mut display_messages {
+                msg.decode_attachment_thumbnails();
+            }
+
             // Update UI to show selected group and messages
             let group_name = group.name.clone();
             let attachment_service_for_gifs = attachment_service.clone();

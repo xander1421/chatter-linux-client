@@ -278,21 +278,28 @@ async fn process_sealed_sender_group_message(
             group_id: anon_group_id,
             joiner_mailbox_pk,
             timestamp,
+            profile_key,
+            encrypted_display_name,
+            encrypted_avatar,
         }) => {
             tracing::info!(
                 sender_id = %sender_id,
                 group_id_hex = %hex::encode(&anon_group_id),
                 joiner_mailbox_pk_len = joiner_mailbox_pk.len(),
                 timestamp = timestamp,
+                has_profile = profile_key.is_some(),
                 "Received anonymous group join ack, emitting event to update member mailbox"
             );
 
-            // Emit event to update the joiner's mailbox key
+            // Emit event to update the joiner's mailbox key and profile
             let _ = event_tx.send(InboxEvent::AnonGroupJoinAck {
                 peer_id: sender_id,
                 group_id: anon_group_id,
                 joiner_mailbox_pk,
                 timestamp,
+                profile_key,
+                encrypted_display_name,
+                encrypted_avatar,
             });
         }
         Err(e) => {

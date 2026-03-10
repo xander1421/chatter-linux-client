@@ -15,39 +15,20 @@ export struct InviteUser {
     username: string,
     avatar-url: string,
     already-member: bool,
+    selected: bool,
 }
 
 export component InviteMemberModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <string> channel-name: "";
     in-out property <string> search-text: "";
-    in property <[InviteUser]> users: [];
-    in property <[string]> selected-users: [];
+    in-out property <[InviteUser]> users: [];
+    in-out property <int> selected-count: 0;
     in property <bool> loading: false;
 
     callback close();
-    callback toggle-user(string);  // user_id - toggles selection
+    callback toggle-user(int);  // index - toggles selection
     callback invite();  // confirms invite for all selected users
-
-    // Helper to check if user is selected
-    pure function is-selected(user-id: string) -> bool {
-        for selected in root.selected-users {
-            if selected == user-id {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Get display name for a user ID
-    pure function get-user-name(user-id: string) -> string {
-        for user in root.users {
-            if user.id == user-id {
-                return user.display-name;
-            }
-        }
-        return "";
-    }
 
     // Reset state when modal closes
     changed show-modal => {
@@ -81,70 +62,6 @@ export component InviteMemberModal inherits Rectangle {
                 text <=> root.search-text;
             }
 
-            // Selected users chips bar (only if there are selections)
-            if root.selected-users.length > 0: Rectangle {
-                min-height: 32px;
-                max-height: 64px;
-
-                Flickable {
-                    viewport-width: chips-row.preferred-width;
-                    viewport-height: chips-row.preferred-height;
-
-                    chips-row := HorizontalLayout {
-                        spacing: Spacing.xs;
-                        padding: Spacing.xs;
-
-                        for user-id[index] in root.selected-users: Rectangle {
-                            property <string> name: root.get-user-name(user-id);
-
-                            width: chip-text.width + 24px + Spacing.sm * 3;
-                            height: 28px;
-                            background: Colors.primary.with-alpha(0.2);
-                            border-radius: Spacing.radius-full;
-
-                            HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.xs;
-                                spacing: Spacing.xs;
-
-                                chip-text := Text {
-                                    text: name;
-                                    color: Colors.primary;
-                                    font-size: Typography.xs;
-                                    font-weight: Typography.medium;
-                                    vertical-alignment: center;
-                                }
-
-                                // Remove button
-                                Rectangle {
-                                    width: 16px;
-                                    height: 16px;
-                                    border-radius: 8px;
-                                    background: chip-remove-touch.has-hover ? Colors.primary.with-alpha(0.3) : transparent;
-
-                                    // X icon using Unicode
-                                    Text {
-                                        text: "\u{2715}";
-                                        color: Colors.primary;
-                                        font-size: 10px;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
-                                    }
-
-                                    chip-remove-touch := TouchArea {
-                                        clicked => {
-                                            root.toggle-user(user-id);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
             // User list (scrollable)
             Rectangle {
                 min-height: 200px;
@@ -163,9 +80,6 @@ export component InviteMemberModal inherits Rectangle {
                         padding: Spacing.xs;
 
                         for user[index] in root.users: Rectangle {
-                            // Note: Search filtering is done in Rust before passing to UI
-                            property <bool> is-selected: root.is-selected(user.id);
-
                             height: 52px;
                             background: user.already-member ? transparent :
                                 (user-touch.has-hover ? Colors.surface-hover : transparent);
@@ -227,12 +141,12 @@ export component InviteMemberModal inherits Rectangle {
                                     width: 20px;
                                     height: 20px;
                                     border-radius: Spacing.radius-sm;
-                                    border-width: is-selected ? 0 : 2px;
+                                    border-width: user.selected ? 0 : 2px;
                                     border-color: Colors.text-muted;
-                                    background: is-selected ? Colors.primary : transparent;
+                                    background: user.selected ? Colors.primary : transparent;
 
                                     // Checkmark (shown when selected)
-                                    if is-selected: Text {
+                                    if user.selected: Text {
                                         text: "\u{2713}";
                                         color: Colors.text-primary;
                                         font-size: 12px;
@@ -250,7 +164,7 @@ export component InviteMemberModal inherits Rectangle {
 
                                 clicked => {
                                     if !user.already-member {
-                                        root.toggle-user(user.id);
+                                        root.toggle-user(index);
                                     }
                                 }
                             }
@@ -282,15 +196,15 @@ export component InviteMemberModal inherits Rectangle {
                 // Invite button
                 Button {
                     text: root.loading ? "" :
-                        (root.selected-users.length == 0 ? "Invite" :
-                         root.selected-users.length == 1 ? "Invite 1 user" :
-                         "Invite " + root.selected-users.length + " users");
+                        (root.selected-count == 0 ? "Invite" :
+                         root.selected-count == 1 ? "Invite 1 user" :
+                         "Invite " + root.selected-count + " users");
                     variant: "primary";
-                    disabled: root.selected-users.length == 0 || root.loading;
+                    disabled: root.selected-count == 0 || root.loading;
                     loading: root.loading;
 
                     clicked => {
-                        if root.selected-users.length > 0 && !root.loading {
+                        if root.selected-count > 0 && !root.loading {
                             root.invite();
                         }
                     }

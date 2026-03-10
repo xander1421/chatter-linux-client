@@ -4,7 +4,7 @@ use crate::domain::UserId;
 use crate::proto::content_v1::{self, AnonDmAccept, Content};
 use crate::util::time::TimestampNanos;
 
-use super::{AnonDmError, AnonDmService};
+use super::{AnonDmError, AnonDmService, DecryptedPeerProfile};
 
 impl AnonDmService {
     /// Accept an incoming message request.
@@ -274,5 +274,160 @@ impl AnonDmService {
         );
 
         Ok(())
+    }
+
+    /// Handle an incoming message request with encrypted profile data.
+    ///
+    /// This method accepts encrypted profile data and handles decryption in the
+    /// service layer, keeping crypto operations out of UI code.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns the created conversation and decrypted profile.
+    /// On failure, returns an error (caller should log and ignore).
+    #[allow(clippy::too_many_arguments)]
+    pub fn handle_request_encrypted(
+        &self,
+        conversation_id: AnonDmId,
+        sender_id: UserId,
+        sender_mailbox_pk: [u8; 32],
+        intro_message: Option<&str>,
+        profile_key: Option<Vec<u8>>,
+        encrypted_display_name: Option<Vec<u8>>,
+        encrypted_avatar: Option<Vec<u8>>,
+    ) -> Result<(crate::domain::anon_dm::AnonDm, DecryptedPeerProfile), AnonDmError> {
+        use crate::crypto::profile_crypto;
+
+        // Parse profile key
+        let profile_key_arr = profile_key.and_then(|pk| {
+            if pk.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&pk);
+                Some(arr)
+            } else {
+                None
+            }
+        });
+
+        // Decrypt display name - use "Unknown" as fallback
+        let display_name = match (&profile_key_arr, &encrypted_display_name) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                match profile_crypto::decrypt_display_name(pk, encrypted) {
+                    Ok(name) if !name.is_empty() => name,
+                    _ => "Unknown".to_string(),
+                }
+            }
+            _ => "Unknown".to_string(),
+        };
+
+        // Decrypt avatar
+        let avatar = match (&profile_key_arr, &encrypted_avatar) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                profile_crypto::decrypt_avatar(pk, encrypted).ok()
+            }
+            _ => None,
+        };
+
+        tracing::info!(
+            peer_id = %sender_id,
+            display_name = %display_name,
+            has_avatar = avatar.is_some(),
+            "Decrypted sender profile from AnonDmRequest"
+        );
+
+        let profile = DecryptedPeerProfile {
+            display_name: display_name.clone(),
+            avatar: avatar.clone(),
+            profile_key: profile_key_arr,
+        };
+
+        // Store the request with decrypted data
+        let dm = self.handle_request(
+            conversation_id,
+            sender_id,
+            sender_mailbox_pk,
+            intro_message,
+            profile_key_arr,
+            Some(display_name),
+            avatar,
+        )?;
+
+        Ok((dm, profile))
+    }
+
+    /// Handle an acceptance with encrypted profile data.
+    ///
+    /// This method accepts encrypted profile data and handles decryption in the
+    /// service layer, keeping crypto operations out of UI code.
+    ///
+    /// # Returns
+    ///
+    /// On success, returns the decrypted profile.
+    /// On failure, returns an error (caller should log and ignore).
+    pub fn handle_acceptance_encrypted(
+        &self,
+        conversation_id: AnonDmId,
+        peer_id: UserId,
+        responder_mailbox_pk: [u8; 32],
+        profile_key: Option<Vec<u8>>,
+        encrypted_display_name: Option<Vec<u8>>,
+        encrypted_avatar: Option<Vec<u8>>,
+    ) -> Result<DecryptedPeerProfile, AnonDmError> {
+        use crate::crypto::profile_crypto;
+
+        // Parse profile key
+        let profile_key_arr = profile_key.and_then(|pk| {
+            if pk.len() == 32 {
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&pk);
+                Some(arr)
+            } else {
+                None
+            }
+        });
+
+        // Decrypt display name - use "Unknown" as fallback
+        let display_name = match (&profile_key_arr, &encrypted_display_name) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                match profile_crypto::decrypt_display_name(pk, encrypted) {
+                    Ok(name) if !name.is_empty() => name,
+                    _ => "Unknown".to_string(),
+                }
+            }
+            _ => "Unknown".to_string(),
+        };
+
+        // Decrypt avatar
+        let avatar = match (&profile_key_arr, &encrypted_avatar) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                profile_crypto::decrypt_avatar(pk, encrypted).ok()
+            }
+            _ => None,
+        };
+
+        tracing::info!(
+            peer_id = %peer_id,
+            display_name = %display_name,
+            has_avatar = avatar.is_some(),
+            "Decrypted responder profile from AnonDmAccept"
+        );
+
+        let profile = DecryptedPeerProfile {
+            display_name: display_name.clone(),
+            avatar: avatar.clone(),
+            profile_key: profile_key_arr,
+        };
+
+        // Store the acceptance with decrypted data
+        self.handle_acceptance(
+            conversation_id,
+            peer_id,
+            responder_mailbox_pk,
+            profile_key_arr,
+            Some(display_name),
+            avatar,
+        )?;
+
+        Ok(profile)
     }
 }

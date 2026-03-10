@@ -202,12 +202,14 @@ impl MessageGateway {
                 });
             }
 
-            // Handle AnonGroupJoinAck - joiner sending their mailbox key
+            // Handle AnonGroupJoinAck - joiner sending their mailbox key and profile
             if let Some(content::Content::AnonGroupJoinAck(ack)) = content_proto.content {
                 tracing::info!(
                     sender_id = %sender_id,
                     group_id_len = ack.group_id.len(),
                     joiner_mailbox_pk_len = ack.joiner_mailbox_pk.len(),
+                    has_profile_key = ack.profile_key.is_some(),
+                    has_display_name = ack.encrypted_display_name.is_some(),
                     "GATEWAY: Received AnonGroupJoinAck, returning for member mailbox update"
                 );
                 return Ok(SealedSenderResult::AnonGroupJoinAckReceived {
@@ -215,6 +217,9 @@ impl MessageGateway {
                     group_id: ack.group_id,
                     joiner_mailbox_pk: ack.joiner_mailbox_pk,
                     timestamp: ack.timestamp,
+                    profile_key: ack.profile_key,
+                    encrypted_display_name: ack.encrypted_display_name,
+                    encrypted_avatar: ack.encrypted_avatar,
                 });
             }
 
@@ -662,6 +667,9 @@ impl MessageGateway {
                     group_name: invite.group_name,
                     inviter_mailbox_pk: invite.inviter_mailbox_pk,
                     timestamp: invite.timestamp,
+                    profile_key: invite.profile_key,
+                    encrypted_display_name: invite.encrypted_display_name,
+                    encrypted_avatar: invite.encrypted_avatar,
                 })
             }
             Some(content::Content::AnonGroupJoinAck(ack)) => {
@@ -669,6 +677,9 @@ impl MessageGateway {
                     group_id: ack.group_id,
                     joiner_mailbox_pk: ack.joiner_mailbox_pk,
                     timestamp: ack.timestamp,
+                    profile_key: ack.profile_key,
+                    encrypted_display_name: ack.encrypted_display_name,
+                    encrypted_avatar: ack.encrypted_avatar,
                 })
             }
             Some(content::Content::AnonGroupMemberList(list)) => {

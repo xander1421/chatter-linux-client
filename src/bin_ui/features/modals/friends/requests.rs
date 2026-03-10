@@ -114,6 +114,7 @@ pub(crate) async fn refresh_sent_requests(
                     username,
                     avatar_url,
                     avatar_bytes: None, // Regular friends use avatar_url from server
+                    avatar_decoded: None,
                     sent_at: String::new(),
                 });
             }
@@ -344,6 +345,7 @@ pub(crate) async fn refresh_received_requests(
                     username,
                     avatar_url,
                     avatar_bytes: None, // Regular friends use avatar_url from server
+                    avatar_decoded: None,
                     sent_at: String::new(),
                 });
             }

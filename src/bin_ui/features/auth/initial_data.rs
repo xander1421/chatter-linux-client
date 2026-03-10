@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, ModelRc, VecModel, Weak};
+use slint::{ComponentHandle, Image, ModelRc, VecModel, Weak};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::channel::ChannelType;
@@ -140,6 +140,23 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
         .unwrap_or_default();
     let user_initials = get_initials(&user_display_name);
 
+    // Load user's own avatar from settings (stored during registration)
+    // Pre-decode before entering UI thread to avoid blocking
+    let user_avatar_decoded: Option<(Vec<u8>, u32, u32)> =
+        ui_ctx.anon_dm_service.get_user_avatar().and_then(|bytes| {
+            image::load_from_memory(&bytes).ok().map(|img| {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                tracing::info!(
+                    avatar_size = bytes.len(),
+                    width = w,
+                    height = h,
+                    "Loaded user's own avatar from settings"
+                );
+                (rgba.into_raw(), w, h)
+            })
+        });
+
     // Determine first channel to select (exclude DMs and SavedMessages)
     let first_channel_id = channels
         .iter()
@@ -209,6 +226,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
             username,
             avatar_url,
             avatar_bytes: None, // Regular friends use avatar_url from server
+            avatar_decoded: None,
             sent_at: String::new(),
         });
     }
@@ -239,6 +257,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
             username,
             avatar_url,
             avatar_bytes: None, // Regular friends use avatar_url from server
+            avatar_decoded: None,
             sent_at: String::new(),
         });
     }
@@ -289,6 +308,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
                     display_name: format!("\u{1F512} {}", peer_name), // Lock emoji prefix
                     avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
+                    avatar_decoded: None,
                     initials: get_initials(&peer_name),
                     presence_status: if dm.status == chatter_linux::domain::anon_dm::AnonDmStatus::Active {
                         "online".to_string()
@@ -333,6 +353,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
                     display_name: format!("\u{1F4E9} {}", peer_name), // Envelope emoji for pending
                     avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
+                    avatar_decoded: None,
                     initials: get_initials(&peer_name),
                     presence_status: "pending".to_string(),
                     last_message: last_message.clone(),
@@ -352,6 +373,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
                     username: "Private".to_string(),
                     avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
+                    avatar_decoded: None,
                     sent_at: last_message,
                 });
             }
@@ -400,6 +422,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
                     display_name: format!("\u{1F4EE} {} (pending)", peer_name), // Postbox emoji
                     avatar_url: String::new(),
                     avatar_bytes: dm.peer_avatar.clone(),
+                    avatar_decoded: None,
                     initials: get_initials(&peer_name),
                     presence_status: "offline".to_string(),
                     last_message,
@@ -467,6 +490,16 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
 
     tracing::info!("Loaded {} private groups", private_groups.len());
 
+    // Pre-decode avatars before entering UI thread to avoid blocking
+    let mut dm_list = dm_list;
+    for dm in &mut dm_list {
+        dm.pre_decode_avatar();
+    }
+    let mut private_requests_ui = private_requests_ui;
+    for req in &mut private_requests_ui {
+        req.pre_decode_avatar();
+    }
+
     // Update UI with channels, DMs, private groups, and friend requests
     let window_weak_ui = window_weak.clone();
     let pending_message_requests_count = private_requests_ui.len() as i32;
@@ -480,6 +513,14 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
             w.set_user_display_name(user_display_name.into());
             w.set_user_initials(user_initials.into());
             w.set_user_presence_status("online".into());
+
+            // Set user's own avatar if available
+            if let Some((pixels, width, height)) = user_avatar_decoded {
+                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                    &pixels, width, height,
+                );
+                w.set_user_avatar_source(Image::from_rgba8(buffer));
+            }
 
             // Set friend requests (including private/anonymous DM requests)
             // Convert Send-safe data to Slint types inside event loop
@@ -603,6 +644,11 @@ async fn load_channel_into_ui_from_services(
 
     // Reverse to show oldest first in chat
     display_messages.reverse();
+
+    // Pre-decode attachment thumbnails before UI thread
+    for msg in &mut display_messages {
+        msg.decode_attachment_thumbnails();
+    }
 
     // Update UI
     let channel_name = channel.name.clone();

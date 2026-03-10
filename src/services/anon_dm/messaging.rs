@@ -11,23 +11,28 @@ use super::{AnonDmError, AnonDmService};
 
 impl AnonDmService {
     /// Send a text message in an active conversation.
+    ///
+    /// Returns the message ID and the sent_at timestamp (nanoseconds).
     pub async fn send_text(
         &self,
         conversation_id: &AnonDmId,
         text: &str,
-    ) -> Result<AnonDmMessageId, AnonDmError> {
+    ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
         self.send_with_attachments(conversation_id, text, vec![]).await
     }
 
     /// Send a message with optional attachments in an active conversation.
     ///
     /// Attachments should be pre-uploaded to CDN with encryption keys included.
+    ///
+    /// Returns the message ID and the sent_at timestamp (nanoseconds).
+    /// The sent_at timestamp should be used for UI display and receipt matching.
     pub async fn send_with_attachments(
         &self,
         conversation_id: &AnonDmId,
         text: &str,
         attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
-    ) -> Result<AnonDmMessageId, AnonDmError> {
+    ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
         use crate::domain::AttachmentId;
         use crate::proto::content_v1::DataMessage;
 
@@ -81,7 +86,7 @@ impl AnonDmService {
         // Send to peer
         self.send_message(conversation_id, inner_content).await?;
 
-        Ok(message_id)
+        Ok((message_id, sent_at))
     }
 
     /// Send a typing indicator to the peer.
@@ -157,6 +162,22 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
         inner_content: Content,
     ) -> Result<(), AnonDmError> {
+        // Log what type of ephemeral message we're sending
+        let content_type = match &inner_content.content {
+            Some(content_v1::content::Content::Receipt(_)) => "Receipt",
+            Some(content_v1::content::Content::Typing(_)) => "Typing",
+            Some(content_v1::content::Content::Reaction(_)) => "Reaction",
+            _ => "Unknown",
+        };
+
+        tracing::info!(
+            conversation_id = %conversation_id,
+            peer_id = %peer_id,
+            peer_mailbox_pk = hex::encode(&peer_mailbox_pk[..8]),
+            content_type = content_type,
+            "[ANON_DM_EPHEMERAL] Sending ephemeral message"
+        );
+
         let dm_message = AnonDmMessage {
             conversation_id: conversation_id.to_vec(),
             inner_content: Some(Box::new(inner_content)),
@@ -171,7 +192,27 @@ impl AnonDmService {
             padding: Self::generate_padding(256),
         };
 
-        self.send_to_anon_mailbox(peer_id, peer_mailbox_pk, content).await
+        match self.send_to_anon_mailbox(peer_id, peer_mailbox_pk, content).await {
+            Ok(()) => {
+                tracing::info!(
+                    conversation_id = %conversation_id,
+                    peer_mailbox_pk = hex::encode(&peer_mailbox_pk[..8]),
+                    content_type = content_type,
+                    "[ANON_DM_EPHEMERAL] Successfully sent ephemeral message"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(
+                    conversation_id = %conversation_id,
+                    peer_mailbox_pk = hex::encode(&peer_mailbox_pk[..8]),
+                    content_type = content_type,
+                    error = %e,
+                    "[ANON_DM_EPHEMERAL] Failed to send ephemeral message"
+                );
+                Err(e)
+            }
+        }
     }
 
     /// Send a read receipt for messages.
@@ -182,12 +223,24 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
         message_timestamps: Vec<u64>,
     ) -> Result<(), AnonDmError> {
+        tracing::info!(
+            conversation_id = %conversation_id,
+            timestamp_count = message_timestamps.len(),
+            timestamps = ?message_timestamps,
+            "[ANON_DM_SEND_RECEIPT] Attempting to send read receipt"
+        );
+
         if message_timestamps.is_empty() {
+            tracing::debug!("[ANON_DM_SEND_RECEIPT] No timestamps - skipping");
             return Ok(());
         }
 
         // Silently ignore if blocked
         if self.check_conversation_not_blocked(conversation_id).is_err() {
+            tracing::debug!(
+                conversation_id = %conversation_id,
+                "[ANON_DM_SEND_RECEIPT] Conversation blocked - skipping"
+            );
             return Ok(());
         }
 
@@ -197,14 +250,22 @@ impl AnonDmService {
             _ => {
                 tracing::debug!(
                     conversation_id = %conversation_id,
-                    "Dropping read receipt - conversation not ready"
+                    "[ANON_DM_SEND_RECEIPT] Dropping read receipt - conversation not ready"
                 );
                 return Ok(());
             }
         };
 
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
-        let content = build_read_receipt_content(message_timestamps);
+        let content = build_read_receipt_content(message_timestamps.clone());
+
+        tracing::info!(
+            conversation_id = %conversation_id,
+            peer_id = %dm.peer_id,
+            timestamp_count = message_timestamps.len(),
+            "[ANON_DM_SEND_RECEIPT] Sending read receipt to peer"
+        );
+
         self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content).await
     }
 

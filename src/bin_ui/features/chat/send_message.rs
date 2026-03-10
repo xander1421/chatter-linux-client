@@ -146,19 +146,24 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                 // Send via anon DM service with attachments
                 match anon_dm_service.send_with_attachments(&anon_dm_id, &text, attachment_pointers).await {
-                    Ok(message_id) => {
-                        let now = chrono::Utc::now();
-                        let timestamp_str = now.with_timezone(&chrono::Local).format("%H:%M").to_string();
+                    Ok((message_id, sent_at)) => {
+                        // Use the actual sent_at from the service for timestamp display
+                        // This ensures the UI timestamp matches what was sent over the wire
+                        let sent_datetime = chrono::DateTime::from_timestamp_nanos(sent_at as i64);
+                        let timestamp_str = sent_datetime.with_timezone(&chrono::Local).format("%H:%M").to_string();
                         let message_id_str = message_id.as_str().to_string();
-                        let sent_at = now.timestamp_nanos_opt().unwrap_or(0) as u64;
                         let sent_text = text.clone();
                         let sender_name = current_user_name.clone();
                         let sender_initials = get_initials(&sender_name);
                         // Convert to display data outside the closure (these are Send-safe)
-                        let attachment_display_data: Vec<_> = uploaded_attachments
+                        let mut attachment_display_data: Vec<_> = uploaded_attachments
                             .iter()
                             .map(|a| attachment_to_display_data(a))
                             .collect();
+                        // Pre-decode thumbnails before UI thread
+                        for att in &mut attachment_display_data {
+                            att.decode_thumbnail();
+                        }
 
                         let attachment_service_for_gifs = attachment_service.clone();
                         let _ = slint::invoke_from_event_loop(move || {
@@ -199,15 +204,16 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     call_duration: "".into(),
                                 };
 
+                                // Append directly to existing model to avoid full re-render
                                 let model = w.get_messages();
-                                let mut messages: Vec<_> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
-                                messages.push(msg_item);
-                                messages.sort_by(|a, b| {
-                                    let ts_a = a.timestamp_ns.parse::<u64>().unwrap_or(0);
-                                    let ts_b = b.timestamp_ns.parse::<u64>().unwrap_or(0);
-                                    ts_a.cmp(&ts_b)
-                                });
-                                w.set_messages(ModelRc::new(VecModel::from(messages)));
+                                if let Some(vec_model) = model.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                                    vec_model.push(msg_item);
+                                } else {
+                                    // Fallback: replace entire model (causes full re-render)
+                                    let mut messages: Vec<_> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
+                                    messages.push(msg_item);
+                                    w.set_messages(ModelRc::new(VecModel::from(messages)));
+                                }
                                 w.set_composer_text("".into());
                                 w.set_message_scroll_position(-99999.0);
                                 w.set_is_at_bottom(true);
@@ -250,7 +256,11 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             
                             if !result.bootstrap_initiated {
                                 let message = result.message.unwrap();
-                                let attachments: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).map(|a| attachment_to_display_data(&a)).collect();
+                                let mut attachments: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).map(|a| attachment_to_display_data(&a)).collect();
+                                // Pre-decode thumbnails before UI thread
+                                for att in &mut attachments {
+                                    att.decode_thumbnail();
+                                }
                                 let msg_sent_at = message.sent_at;
                                 let timestamp_str = message.created_at.with_timezone(&chrono::Local).format("%H:%M").to_string();
                                 let message_id_str = message.id.to_string();
@@ -422,10 +432,14 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     let group_id_str = group_id.to_string();
                     let sender_initials = get_initials(&current_user_name);
                     let sent_text = text.clone();
-                    let attachment_display_data: Vec<_> = uploaded_attachments
+                    let mut attachment_display_data: Vec<_> = uploaded_attachments
                         .iter()
                         .map(|a| attachment_to_display_data(a))
                         .collect();
+                    // Pre-decode thumbnails before UI thread
+                    for att in &mut attachment_display_data {
+                        att.decode_thumbnail();
+                    }
 
                     let attachment_service_for_gifs = attachment_service.clone();
                     let _ = slint::invoke_from_event_loop(move || {
@@ -509,7 +523,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     }
                     if let Ok(message) = message_service.save_message(&text, uploaded).await {
                         let resolved: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
-                        let display = message_to_display_data(&message, "Me", &resolved);
+                        let mut display = message_to_display_data(&message, "Me", &resolved);
+                        // Pre-decode attachment thumbnails before UI thread
+                        display.decode_attachment_thumbnails();
                         let attachment_service_for_gifs = attachment_service.clone();
                         let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
                             let model = w.get_messages();
@@ -533,7 +549,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     match message_service.send_with_files(group_fanout.as_deref(), &channel_id, &text, paths, None, vec![], false).await {
                         Ok(message) => {
                             let resolved: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
-                            let display = message_to_display_data(&message, "Me", &resolved);
+                            let mut display = message_to_display_data(&message, "Me", &resolved);
+                            // Pre-decode attachment thumbnails before UI thread
+                            display.decode_attachment_thumbnails();
                             let sidebar_channel_id = channel_id.to_string();
                             let preview = if text.chars().count() > 50 { format!("You: {}...", text.chars().take(47).collect::<String>()) } else { format!("You: {}", text) };
                             let ts = crate::bin_ui::features::auth::inbox::utils::format_timestamp(message.sent_at);

@@ -74,6 +74,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     username: String::new(),
                                     avatar_url: String::new(),
                                     avatar_bytes: None,
+                                    avatar_decoded: None,
                                     sent_at: String::new(),
                                 })
                                 .collect();
@@ -402,6 +403,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         initials,
                         avatar_url: String::new(),
                         avatar_bytes: None, // Regular DMs fetch avatar from server
+                        avatar_decoded: None,
                         presence_status: "offline".to_string(),
                         last_message: String::new(),
                         timestamp: String::new(),

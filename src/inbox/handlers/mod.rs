@@ -291,6 +291,8 @@ pub enum DomainEvent {
         message_timestamps: Vec<u64>,
         /// When the receipt was sent (ms since epoch).
         receipt_timestamp: u64,
+        /// Optional channel context (for anon DM receipts).
+        channel_id: Option<ChannelId>,
     },
     /// Delivery receipt received.
     MessagesDelivered {
@@ -626,6 +628,26 @@ pub enum DomainEvent {
         /// The message timestamp (used as ID in Signal protocol).
         message_timestamp: u64,
     },
+
+    /// Message edited in an anonymous DM conversation.
+    AnonDmMessageEdited {
+        /// The conversation ID.
+        conversation_id: AnonDmId,
+        /// The message timestamp (used as ID in Signal protocol).
+        message_timestamp: u64,
+        /// The new message text.
+        new_text: String,
+    },
+
+    /// Message edited in an anonymous group.
+    AnonGroupMessageEdited {
+        /// The group ID.
+        group_id: AnonGroupId,
+        /// The message timestamp (used as ID in Signal protocol).
+        message_timestamp: u64,
+        /// The new message text.
+        new_text: String,
+    },
 }
 
 impl DomainEvent {
@@ -638,7 +660,7 @@ impl DomainEvent {
             DomainEvent::AttachmentReady { channel_id, .. } => Some(*channel_id),
             DomainEvent::TypingStarted { channel_id, .. } => Some(*channel_id),
             DomainEvent::TypingStopped { channel_id, .. } => Some(*channel_id),
-            DomainEvent::MessagesRead { .. } => None, // Cross-channel
+            DomainEvent::MessagesRead { channel_id, .. } => *channel_id,
             DomainEvent::MessagesDelivered { .. } => None, // Cross-channel
             DomainEvent::ViewedReceipt { .. } => None, // Cross-channel
             DomainEvent::ReactionAdded { .. } => None, // Reactions now use message lookup, not channel
@@ -667,6 +689,8 @@ impl DomainEvent {
             DomainEvent::AnonDmMessageReceived { .. } => None,
             DomainEvent::AnonDmInitReceived { .. } => None,
             DomainEvent::AnonDmMessageDeleted { .. } => None,
+            DomainEvent::AnonDmMessageEdited { .. } => None,
+            DomainEvent::AnonGroupMessageEdited { .. } => None,
         }
     }
 
@@ -893,8 +917,9 @@ mod tests {
             reader_id: user_id,
             message_timestamps: vec![123],
             receipt_timestamp: 456,
+            channel_id: Some(channel_id),
         };
-        assert_eq!(read.channel_id(), None); // Cross-channel
+        assert_eq!(read.channel_id(), Some(channel_id)); // With channel context
 
         // Test DeleteForMeSync event
         let message_id = MessageId::new();

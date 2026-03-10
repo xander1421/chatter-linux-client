@@ -81,6 +81,27 @@ impl AnonDmService {
 
         let mut events = Vec::new();
 
+        // Log the incoming content type for debugging
+        let content_type_name = match &inner_content.content {
+            Some(ContentType::DataMessage(_)) => "DataMessage",
+            Some(ContentType::Typing(_)) => "Typing",
+            Some(ContentType::Reaction(_)) => "Reaction",
+            Some(ContentType::Receipt(_)) => "Receipt",
+            Some(ContentType::Pin(_)) => "Pin",
+            Some(ContentType::Edit(_)) => "Edit",
+            Some(ContentType::AnonGroupInvite(_)) => "AnonGroupInvite",
+            Some(ContentType::AnonGroupJoinAck(_)) => "AnonGroupJoinAck",
+            Some(ContentType::AnonGroupMemberList(_)) => "AnonGroupMemberList",
+            _ => "Unknown",
+        };
+
+        tracing::info!(
+            conversation_id = %conversation_id,
+            sender_id = %sender_id,
+            content_type = content_type_name,
+            "[ANON_DM_PROCESS] Processing incoming content"
+        );
+
         // Route based on inner content type
         match &inner_content.content {
             Some(ContentType::DataMessage(data_msg)) => {
@@ -193,18 +214,48 @@ impl AnonDmService {
                 }
             }
             Some(ContentType::Receipt(receipt)) => {
+                let channel_id: crate::domain::ChannelId = (*conversation_id).into();
+                let receipt_type_name = if receipt.r#type == receipt_message::Type::Read as i32 {
+                    "Read"
+                } else if receipt.r#type == receipt_message::Type::Delivery as i32 {
+                    "Delivery"
+                } else {
+                    "Unknown"
+                };
+
+                tracing::info!(
+                    conversation_id = %conversation_id,
+                    sender_id = %sender_id,
+                    receipt_type = receipt_type_name,
+                    timestamp_count = receipt.timestamps.len(),
+                    timestamps = ?receipt.timestamps,
+                    "[ANON_DM_RECEIPT_PROCESS] Processing receipt from peer"
+                );
+
                 if receipt.r#type == receipt_message::Type::Read as i32 {
                     events.push(DomainEvent::MessagesRead {
                         reader_id: *sender_id,
                         message_timestamps: receipt.timestamps.clone(),
                         receipt_timestamp: receipt.timestamp,
+                        channel_id: Some(channel_id),
                     });
+                    tracing::info!(
+                        conversation_id = %conversation_id,
+                        channel_id = %channel_id,
+                        timestamp_count = receipt.timestamps.len(),
+                        "[ANON_DM_RECEIPT_PROCESS] Emitting MessagesRead event"
+                    );
                 } else if receipt.r#type == receipt_message::Type::Delivery as i32 {
                     events.push(DomainEvent::MessagesDelivered {
                         recipient_id: *sender_id,
                         message_timestamps: receipt.timestamps.clone(),
                         receipt_timestamp: receipt.timestamp,
                     });
+                    tracing::info!(
+                        conversation_id = %conversation_id,
+                        timestamp_count = receipt.timestamps.len(),
+                        "[ANON_DM_RECEIPT_PROCESS] Emitting MessagesDelivered event"
+                    );
                 }
             }
             Some(ContentType::Pin(pin)) => {
@@ -223,6 +274,49 @@ impl AnonDmService {
                         pinner_id: *sender_id,
                         channel_id,
                     });
+                }
+            }
+            Some(ContentType::Edit(edit)) => {
+                let target_timestamp = edit.target_sent_timestamp;
+                let new_text = edit
+                    .data_message
+                    .as_ref()
+                    .map(|dm| dm.body.clone())
+                    .unwrap_or_default();
+
+                // Update the message in the database (only if sender is the author)
+                match self.update_message_text_by_sender(conversation_id, sender_id, target_timestamp, &new_text) {
+                    Ok(true) => {
+                        tracing::info!(
+                            conversation_id = %conversation_id,
+                            sender_id = %sender_id,
+                            target_timestamp = target_timestamp,
+                            "[ANON_DM] Updated message text (edit from peer)"
+                        );
+                        events.push(DomainEvent::AnonDmMessageEdited {
+                            conversation_id: *conversation_id,
+                            message_timestamp: target_timestamp,
+                            new_text,
+                        });
+                    }
+                    Ok(false) => {
+                        // Either message not found or sender is not the author
+                        tracing::debug!(
+                            conversation_id = %conversation_id,
+                            sender_id = %sender_id,
+                            target_timestamp = target_timestamp,
+                            "[ANON_DM] Edit ignored: message not found or sender not author"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            conversation_id = %conversation_id,
+                            sender_id = %sender_id,
+                            target_timestamp = target_timestamp,
+                            error = %e,
+                            "[ANON_DM] Failed to update message text"
+                        );
+                    }
                 }
             }
             Some(ContentType::AnonGroupInvite(invite)) => {
@@ -244,6 +338,9 @@ impl AnonDmService {
                     group_name: invite.group_name.clone(),
                     inviter_id: *sender_id,
                     inviter_mailbox_pk: pk,
+                    profile_key: None,
+                    inviter_display_name: None,
+                    inviter_avatar: None,
                 });
             }
             Some(ContentType::AnonGroupJoinAck(ack)) => {
@@ -259,6 +356,9 @@ impl AnonDmService {
                 events.push(DomainEvent::AnonGroupMemberJoined {
                     group_id,
                     user_id: *sender_id,
+                    profile_key: None,
+                    display_name: None,
+                    avatar: None,
                 });
             }
             Some(ContentType::AnonGroupMemberList(list)) => {
@@ -400,5 +500,20 @@ impl AnonDmService {
     /// Mark a conversation as read.
     pub fn mark_as_read(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
         Ok(self.anon_dm_repo.mark_as_read(conversation_id)?)
+    }
+
+    /// Update message text (for handling edits from peer).
+    ///
+    /// Only updates if sender_id matches the message author (security).
+    /// Returns `Ok(true)` if a message was updated, `Ok(false)` if message not found
+    /// or sender doesn't match author.
+    pub fn update_message_text_by_sender(
+        &self,
+        conversation_id: &AnonDmId,
+        sender_id: &UserId,
+        sent_timestamp: u64,
+        new_text: &str,
+    ) -> Result<bool, AnonDmError> {
+        Ok(self.anon_dm_repo.update_message_text_by_sender(conversation_id, sender_id, sent_timestamp, new_text)?)
     }
 }

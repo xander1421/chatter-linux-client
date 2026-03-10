@@ -269,15 +269,18 @@ impl EventHandlers {
                 reader_id,
                 message_timestamps,
                 receipt_timestamp,
+                channel_id,
             } => {
-                // TODO: Services layer should update per-message read receipts
-                // For now, just log the event
+                // Log the read receipt event with channel context
                 trace!(
                     ?reader_id,
+                    ?channel_id,
                     count = message_timestamps.len(),
                     receipt_timestamp,
-                    "Read receipt received (not yet tracked in state)"
+                    "Read receipt received"
                 );
+                // Note: UI-level handling for anon DM read receipts is done
+                // in bin_ui/features/modals/anon_dm_request.rs
             }
 
             DomainEvent::MessagesDelivered {
@@ -553,6 +556,16 @@ impl EventHandlers {
             DomainEvent::AnonDmMessageDeleted { conversation_id, message_timestamp } => {
                 // Anon DM message deletion - handled by UI thread.
                 trace!(?conversation_id, ?message_timestamp, "AnonDmMessageDeleted: handled by UI thread");
+            }
+
+            DomainEvent::AnonDmMessageEdited { conversation_id, message_timestamp, .. } => {
+                // Anon DM message edit - handled by UI thread.
+                trace!(?conversation_id, ?message_timestamp, "AnonDmMessageEdited: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupMessageEdited { group_id, message_timestamp, .. } => {
+                // Anon group message edit - handled by UI thread.
+                trace!(?group_id, ?message_timestamp, "AnonGroupMessageEdited: handled by UI thread");
             }
         }
     }

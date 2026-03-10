@@ -662,6 +662,9 @@ fn dispatch_dm_content(
             group_name,
             inviter_mailbox_pk,
             timestamp,
+            profile_key,
+            encrypted_display_name,
+            encrypted_avatar,
         } => {
             tracing::info!(
                 peer_id = %peer_id,
@@ -674,6 +677,9 @@ fn dispatch_dm_content(
                 group_name,
                 inviter_mailbox_pk,
                 timestamp,
+                profile_key,
+                encrypted_display_name,
+                encrypted_avatar,
             });
         }
 
@@ -681,9 +687,13 @@ fn dispatch_dm_content(
             group_id,
             joiner_mailbox_pk,
             timestamp,
+            profile_key,
+            encrypted_display_name,
+            encrypted_avatar,
         } => {
             tracing::info!(
                 peer_id = %peer_id,
+                has_profile = profile_key.is_some(),
                 "Anonymous group join ack received"
             );
             let _ = event_tx.send(InboxEvent::AnonGroupJoinAck {
@@ -691,6 +701,9 @@ fn dispatch_dm_content(
                 group_id,
                 joiner_mailbox_pk,
                 timestamp,
+                profile_key,
+                encrypted_display_name,
+                encrypted_avatar,
             });
         }
 

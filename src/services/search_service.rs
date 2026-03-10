@@ -371,6 +371,7 @@ fn proto_to_domain_message(proto: &chat_v1::Message) -> Result<Message, SearchEr
         current_user_reactions: proto.current_user_reactions.clone(),
         mentioned_integrations,
         targets_ai_bot: proto.targets_ai_bot,
+        delivery_status: String::new(),
     })
 }
 

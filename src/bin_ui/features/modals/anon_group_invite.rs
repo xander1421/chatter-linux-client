@@ -32,9 +32,12 @@ pub fn spawn_anon_group_invite_handler(
                     group_name,
                     inviter_id,
                     inviter_mailbox_pk,
-                    ..
+                    profile_key,
+                    inviter_display_name,
+                    inviter_avatar,
                 } => {
-                    let inviter_name = user_service.get_display_name(&inviter_id);
+                    let inviter_name = inviter_display_name.clone()
+                        .unwrap_or_else(|| user_service.get_display_name(&inviter_id));
                     tracing::info!(
                         group_id = %group_id,
                         group_name = %group_name,
@@ -53,7 +56,15 @@ pub fn spawn_anon_group_invite_handler(
                     let service = anon_group_service.clone();
                     tokio::spawn(async move {
 
-                            match service.accept_invite(group_id, group_name.clone(), inviter_id, inviter_mailbox_pk).await {
+                            match service.accept_invite(
+                                group_id,
+                                group_name.clone(),
+                                inviter_id,
+                                inviter_mailbox_pk,
+                                profile_key,
+                                inviter_display_name,
+                                inviter_avatar,
+                            ).await {
                                 Ok(_group) => {
                                     tracing::info!(
                                         group_id = %group_id,

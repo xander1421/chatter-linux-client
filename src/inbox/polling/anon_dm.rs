@@ -169,6 +169,9 @@ pub async fn process_anon_dm_results(
                                         group_name: invite.group_name.clone(),
                                         inviter_mailbox_pk: invite.inviter_mailbox_pk.clone(),
                                         timestamp: invite.timestamp,
+                                        profile_key: invite.profile_key.clone(),
+                                        encrypted_display_name: invite.encrypted_display_name.clone(),
+                                        encrypted_avatar: invite.encrypted_avatar.clone(),
                                     })
                                     .await;
                                 true
@@ -177,6 +180,7 @@ pub async fn process_anon_dm_results(
                                 tracing::info!(
                                     sender_id = %sender_id,
                                     group_id = %hex::encode(&ack.group_id),
+                                    has_profile = ack.profile_key.is_some(),
                                     "Received anonymous group join ack inside anon DM"
                                 );
                                 let _ = event_tx
@@ -185,6 +189,9 @@ pub async fn process_anon_dm_results(
                                         group_id: ack.group_id.clone(),
                                         joiner_mailbox_pk: ack.joiner_mailbox_pk.clone(),
                                         timestamp: ack.timestamp,
+                                        profile_key: ack.profile_key.clone(),
+                                        encrypted_display_name: ack.encrypted_display_name.clone(),
+                                        encrypted_avatar: ack.encrypted_avatar.clone(),
                                     })
                                     .await;
                                 true
@@ -221,12 +228,58 @@ pub async fn process_anon_dm_results(
                         false
                     }
                 }
+                Some(content_v1::content::Content::Receipt(receipt)) => {
+                    // Handle read/delivery receipts
+                    tracing::info!(
+                        sender_id = %sender_id,
+                        conversation_id = %conversation_id,
+                        receipt_type = receipt.r#type,
+                        timestamp_count = receipt.timestamps.len(),
+                        timestamps = ?receipt.timestamps,
+                        "[ANON_DM_RECEIPT] Received receipt from peer"
+                    );
+
+                    // Send to inbox event handler
+                    let _ = event_tx
+                        .send(InboxEvent::AnonDmMessage {
+                            peer_id: sender_id,
+                            conversation_id: conversation_id.as_bytes().to_vec(),
+                            inner_content: Box::new(Content {
+                                content: Some(content_v1::content::Content::Receipt(receipt)),
+                                timestamp: content.timestamp,
+                                ephemeral_reply_to: content.ephemeral_reply_to,
+                                padding: content.padding,
+                            }),
+                        })
+                        .await;
+                    true
+                }
+                Some(content_v1::content::Content::Typing(typing)) => {
+                    // Handle typing indicators
+                    tracing::debug!(
+                        sender_id = %sender_id,
+                        conversation_id = %conversation_id,
+                        "[ANON_DM] Received typing indicator from peer"
+                    );
+
+                    let _ = event_tx
+                        .send(InboxEvent::AnonDmMessage {
+                            peer_id: sender_id,
+                            conversation_id: conversation_id.as_bytes().to_vec(),
+                            inner_content: Box::new(Content {
+                                content: Some(content_v1::content::Content::Typing(typing)),
+                                timestamp: content.timestamp,
+                                ephemeral_reply_to: content.ephemeral_reply_to,
+                                padding: content.padding,
+                            }),
+                        })
+                        .await;
+                    true
+                }
                 other => {
                     let content_type = match &other {
                         Some(content_v1::content::Content::DataMessage(_)) => "DataMessage",
-                        Some(content_v1::content::Content::Typing(_)) => "Typing",
                         Some(content_v1::content::Content::Reaction(_)) => "Reaction",
-                        Some(content_v1::content::Content::Receipt(_)) => "Receipt",
                         Some(content_v1::content::Content::AnonDmRequest(_)) => "AnonDmRequest",
                         None => "None",
                         _ => "Other",

@@ -227,10 +227,10 @@ export component CreateChannelModal inherits Rectangle {
                 }
             }
 
-            // Content area
+            // Content area - sized to content with reasonable bounds
             Rectangle {
-                vertical-stretch: 1;
-                min-height: 280px;
+                min-height: 350px;
+                max-height: 600px;
 
                 // Step 1: Template selection
                 if current-step == 1: ChannelTemplates {
@@ -326,6 +326,7 @@ export component CreateChannelModal inherits Rectangle {
                     // Friend list (scrollable)
                     Rectangle {
                         vertical-stretch: 1;
+                        min-height: 150px;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
                         border-width: 1px;
@@ -362,6 +363,14 @@ export component CreateChannelModal inherits Rectangle {
                                                 (friend.selected ? Colors.primary.with-alpha(0.1) : transparent);
                                     border-width: friend.selected ? 1px : 0px;
                                     border-color: Colors.primary.with-alpha(0.3);
+
+                                    // Friend selection touch area (behind content)
+                                    friend-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.toggle-friend-selection(idx);
+                                        }
+                                    }
 
                                     HorizontalLayout {
                                         padding-left: Spacing.sm;
@@ -421,7 +430,7 @@ export component CreateChannelModal inherits Rectangle {
                                             width: role-text.width + Spacing.sm * 2;
                                             height: 24px;
                                             border-radius: Spacing.radius-sm;
-                                            background: friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover;
+                                            background: role-touch.has-hover ? (friend.role == "admin" ? Colors.warning.with-alpha(0.3) : Colors.surface) : (friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover);
                                             border-width: 1px;
                                             border-color: friend.role == "admin" ? Colors.warning.with-alpha(0.5) : Colors.text-muted.with-alpha(0.3);
 
@@ -440,13 +449,6 @@ export component CreateChannelModal inherits Rectangle {
                                                     root.toggle-friend-role(idx);
                                                 }
                                             }
-                                        }
-                                    }
-
-                                    friend-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.toggle-friend-selection(idx);
                                         }
                                     }
                                 }

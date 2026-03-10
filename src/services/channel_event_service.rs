@@ -132,6 +132,7 @@ impl ChannelEventService {
             current_user_reactions: Vec::new(),
             mentioned_integrations: Vec::new(),
             targets_ai_bot: false,
+            delivery_status: String::new(),
         }
     }
 }

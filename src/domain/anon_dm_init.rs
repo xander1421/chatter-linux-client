@@ -513,6 +513,7 @@ mod tests {
             delivery_token,
             "TestUser",
             "Hello, let's chat!",
+            None,
         );
 
         let bytes = msg.to_bytes().unwrap();
@@ -542,6 +543,7 @@ mod tests {
             delivery_token,
             "",
             "",
+            None,
         );
 
         let bytes = msg.to_bytes().unwrap();
@@ -569,6 +571,7 @@ mod tests {
             delivery_token,
             "MaxIntroUser",
             &intro,
+            None,
         );
 
         let bytes = msg.to_bytes().unwrap();
@@ -593,6 +596,7 @@ mod tests {
             delivery_token,
             "TooLongUser",
             &intro,
+            None,
         );
 
         assert!(msg.to_bytes().is_err());

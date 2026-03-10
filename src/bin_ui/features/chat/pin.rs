@@ -92,24 +92,24 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let sender_for_ui = sender_id_str.clone();
             let timestamp_for_ui = timestamp_ns_str.clone();
 
-            tokio::spawn(async move {
-                // For anon DM, we need to track pin state locally
-                // First check current pin state from UI
-                let is_currently_pinned = weak.upgrade().map(|w| {
-                    let model = w.get_messages();
-                    for i in 0..model.row_count() {
-                        if let Some(m) = model.row_data(i) {
-                            if m.sender_id.as_str() == sender_for_ui.as_str()
-                                && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
-                            {
-                                return m.is_pinned;
-                            }
+            // Get pin state on UI thread BEFORE spawning (UI model access must be on UI thread)
+            let is_currently_pinned = weak.upgrade().map(|w| {
+                let model = w.get_messages();
+                for i in 0..model.row_count() {
+                    if let Some(m) = model.row_data(i) {
+                        if m.sender_id.as_str() == sender_for_ui.as_str()
+                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                        {
+                            return m.is_pinned;
                         }
                     }
-                    false
-                }).unwrap_or(false);
+                }
+                false
+            }).unwrap_or(false);
 
-                let unpin = is_currently_pinned;
+            let unpin = is_currently_pinned;
+
+            tokio::spawn(async move {
 
                 // Send pin/unpin to peer
                 if let Err(e) = service.send_pin(
@@ -169,23 +169,24 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let sender_for_ui = sender_id_str.clone();
             let timestamp_for_ui = timestamp_ns_str.clone();
 
-            tokio::spawn(async move {
-                // Check current pin state from UI
-                let is_currently_pinned = weak.upgrade().map(|w| {
-                    let model = w.get_messages();
-                    for i in 0..model.row_count() {
-                        if let Some(m) = model.row_data(i) {
-                            if m.sender_id.as_str() == sender_for_ui.as_str()
-                                && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
-                            {
-                                return m.is_pinned;
-                            }
+            // Get pin state on UI thread BEFORE spawning (UI model access must be on UI thread)
+            let is_currently_pinned = weak.upgrade().map(|w| {
+                let model = w.get_messages();
+                for i in 0..model.row_count() {
+                    if let Some(m) = model.row_data(i) {
+                        if m.sender_id.as_str() == sender_for_ui.as_str()
+                            && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
+                        {
+                            return m.is_pinned;
                         }
                     }
-                    false
-                }).unwrap_or(false);
+                }
+                false
+            }).unwrap_or(false);
 
-                let unpin = is_currently_pinned;
+            let unpin = is_currently_pinned;
+
+            tokio::spawn(async move {
 
                 // Send pin/unpin to group
                 if let Err(e) = service.send_pin(

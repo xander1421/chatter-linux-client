@@ -308,6 +308,42 @@ impl MessageService {
         self.message_repo.update(message).map_err(MessageError::from)
     }
 
+    /// Get pinned messages for a channel from local storage.
+    pub fn get_pinned_messages_local(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<Vec<Message>, MessageError> {
+        self.message_repo.list_pinned(channel_id).map_err(MessageError::from)
+    }
+
+    /// Set the pinned status of a message in local storage.
+    pub fn set_message_pinned(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+        is_pinned: bool,
+    ) -> Result<(), MessageError> {
+        if let Some(mut message) = self.message_repo.get(message_id)? {
+            message.is_pinned = is_pinned;
+            message.updated_at = chrono::Utc::now();
+            self.message_repo.update(&message)?;
+        }
+        Ok(())
+    }
+
+    /// Update delivery status for a message by sent_at timestamp.
+    ///
+    /// Used when receipts (delivered/read) are received.
+    pub fn update_delivery_status(
+        &self,
+        channel_id: &ChannelId,
+        sent_at: u64,
+        status: &str,
+    ) -> Result<bool, MessageError> {
+        self.message_repo
+            .update_delivery_status(channel_id, sent_at, status)
+            .map_err(MessageError::from)
+    }
+
     /// Delete a message from local storage.
     pub fn delete_message_local(&self, message_id: &crate::domain::ids::MessageId) -> Result<(), MessageError> {
         self.message_repo.delete(message_id).map_err(MessageError::from)

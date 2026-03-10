@@ -78,6 +78,7 @@ pub fn create_call_history_message(
         current_user_reactions: vec![],
         mentioned_integrations: vec![],
         targets_ai_bot: false,
+        delivery_status: String::new(),
     };
 
     // Save to database via service

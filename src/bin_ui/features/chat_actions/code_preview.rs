@@ -67,14 +67,17 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
     window.on_copy_code(move || {
         if let Some(w) = weak_window.upgrade() {
             let content = w.get_code_preview_plain_text().to_string();
-            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                if let Err(e) = clipboard.set_text(&content) {
-                    tracing::error!("Failed to copy to clipboard: {}", e);
-                } else {
-                    let line_count = w.get_code_preview_line_count();
-                    tracing::info!("Copied {} lines to clipboard", line_count);
+            let line_count = w.get_code_preview_line_count();
+            // Move clipboard operation to background thread
+            std::thread::spawn(move || {
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                    if let Err(e) = clipboard.set_text(&content) {
+                        tracing::error!("Failed to copy to clipboard: {}", e);
+                    } else {
+                        tracing::info!("Copied {} lines to clipboard", line_count);
+                    }
                 }
-            }
+            });
         }
     });
 
@@ -84,13 +87,16 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
         if let Some(w) = weak_window.upgrade() {
             let content = w.get_code_preview_selected_text().to_string();
             if !content.is_empty() {
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Err(e) = clipboard.set_text(&content) {
-                        tracing::error!("Failed to copy selection to clipboard: {}", e);
-                    } else {
-                        tracing::info!("Copied selection to clipboard");
+                // Move clipboard operation to background thread
+                std::thread::spawn(move || {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        if let Err(e) = clipboard.set_text(&content) {
+                            tracing::error!("Failed to copy selection to clipboard: {}", e);
+                        } else {
+                            tracing::info!("Copied selection to clipboard");
+                        }
                     }
-                }
+                });
             }
         }
     });

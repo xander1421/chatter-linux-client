@@ -26,6 +26,8 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let mailbox_manager = ui_ctx.mailbox_manager.clone();
     let runtime_handle = ui_ctx.runtime_handle.clone();
     let anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let pin_service = ui_ctx.pin_service.clone();
+    let pinned_state = ui_ctx.pinned_state.clone();
 
     let weak_window = window.as_weak();
 
@@ -41,6 +43,8 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let mailbox_manager = mailbox_manager.clone();
         let runtime_handle = runtime_handle.clone();
         let anon_dm_service = anon_dm_service.clone();
+        let pin_service = pin_service.clone();
+        let pinned_state = pinned_state.clone();
 
         // Stop any playing audio when switching channels
         stop_audio_playback();
@@ -104,6 +108,38 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             // Get current user ID for is_own detection
             let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string());
 
+            // Load pinned messages for this DM channel
+            if let Ok(pinned_messages) = pin_service.load_pinned_for_channel(&channel_id).await {
+                if !pinned_messages.is_empty() {
+                    let message_ids: Vec<_> = pinned_messages.iter().map(|p| p.message_id).collect();
+                    pinned_state.set_pinned_messages(channel_id, message_ids);
+                    
+                    if let Some(first) = pinned_messages.first() {
+                        let preview = first.preview.clone();
+                        let total_count = pinned_messages.len() as i32;
+                        let should_show = pinned_state.should_show();
+                        
+                        let weak_pinned = weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak_pinned.upgrade() {
+                                w.set_has_pinned_messages(should_show);
+                                w.set_pinned_message_preview(preview.into());
+                                w.set_pinned_current_index(1);
+                                w.set_pinned_total_count(total_count);
+                            }
+                        });
+                    }
+                } else {
+                    pinned_state.clear();
+                    let weak_pinned = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_pinned.upgrade() {
+                            w.set_has_pinned_messages(false);
+                        }
+                    });
+                }
+            }
+
             // Load channel and messages
             load_channel_into_ui(
                 weak.clone(),
@@ -162,7 +198,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 async fn load_anon_dm_into_ui(
     window_weak: slint::Weak<MainWindow>,
     dm_id: AnonDmId,
-    anon_dm_service: Arc<chatter_linux::services::anon_dm_service::AnonDmService>,
+    anon_dm_service: Arc<chatter_linux::services::anon_dm::AnonDmService>,
     user_service: Arc<UserService>,
     attachment_service: Arc<chatter_linux::services::attachment::AttachmentService>,
     auth_state: chatter_linux::state::AuthState,
@@ -245,6 +281,11 @@ async fn load_anon_dm_into_ui(
     // Reverse to show oldest first
     display_messages.reverse();
 
+    // Pre-decode attachment thumbnails before UI thread
+    for msg in &mut display_messages {
+        msg.decode_attachment_thumbnails();
+    }
+
     // Mark conversation as read locally
     if let Err(e) = anon_dm_service.mark_as_read(&dm_id) {
         tracing::warn!("Failed to mark anon DM as read: {}", e);
@@ -258,19 +299,37 @@ async fn load_anon_dm_into_ui(
         .map(|m| m.sent_at)
         .collect();
 
+    tracing::info!(
+        dm_id = %dm_id,
+        message_count = messages.len(),
+        unread_count = unread_timestamps.len(),
+        timestamps = ?unread_timestamps,
+        "[ANON_DM_UI] Preparing read receipts for anon DM"
+    );
+
     if !unread_timestamps.is_empty() {
         let service = anon_dm_service.clone();
         let dm_id_for_receipt = dm_id;
         tokio::spawn(async move {
+            tracing::info!(
+                dm_id = %dm_id_for_receipt,
+                count = unread_timestamps.len(),
+                "[ANON_DM_UI] Spawned task to send read receipts"
+            );
             if let Err(e) = service.send_read_receipt(&dm_id_for_receipt, unread_timestamps).await {
                 tracing::warn!("Failed to send anon DM read receipts: {}", e);
             } else {
-                tracing::debug!(
-                    "Sent read receipts for anon DM {} messages",
-                    dm_id_for_receipt
+                tracing::info!(
+                    dm_id = %dm_id_for_receipt,
+                    "[ANON_DM_UI] Successfully sent read receipts"
                 );
             }
         });
+    } else {
+        tracing::debug!(
+            dm_id = %dm_id,
+            "[ANON_DM_UI] No unread timestamps to send"
+        );
     }
 
     // Update UI
@@ -325,6 +384,16 @@ pub fn add_anon_dm_to_sidebar(
     let peer_name = peer_name.to_string();
     let last_message = last_message.to_string();
     let timestamp = timestamp.to_string();
+    let initials = crate::bin_ui::converters::get_initials(&peer_name);
+
+    // Decode avatar image BEFORE invoke_from_event_loop to avoid blocking UI thread
+    let decoded_avatar: Option<(Vec<u8>, u32, u32)> = avatar_bytes.as_ref().and_then(|bytes| {
+        image::load_from_memory(bytes).ok().map(|img| {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            (rgba.into_raw(), w, h)
+        })
+    });
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_window.upgrade() {
@@ -340,13 +409,13 @@ pub fn add_anon_dm_to_sidebar(
                 return;
             }
 
-            // Convert avatar bytes to Slint Image
-            let (avatar_source, has_avatar) = match &avatar_bytes {
-                Some(bytes) => {
-                    match crate::bin_ui::converters::avatar_bytes_to_image(bytes) {
-                        Some(img) => (img, true),
-                        None => (slint::Image::default(), false),
-                    }
+            // Create Slint Image from pre-decoded pixels (fast, on UI thread)
+            let (avatar_source, has_avatar) = match decoded_avatar {
+                Some((pixels, width, height)) => {
+                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                        &pixels, width, height,
+                    );
+                    (slint::Image::from_rgba8(buffer), true)
                 }
                 None => (slint::Image::default(), false),
             };
@@ -366,7 +435,7 @@ pub fn add_anon_dm_to_sidebar(
                 avatar_url: "".into(),
                 avatar_source,
                 has_avatar,
-                initials: crate::bin_ui::converters::get_initials(&peer_name).into(),
+                initials: initials.into(),
                 presence_status: if is_pending { "pending".into() } else { "offline".into() },
                 last_message: last_message.into(),
                 timestamp: timestamp.into(),

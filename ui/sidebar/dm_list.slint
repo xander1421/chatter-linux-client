@@ -62,8 +62,10 @@ export component DMList inherits Rectangle {
         // Scrollable DM list
         flickable := Flickable {
             viewport-height: dm-layout.preferred-height;
+            viewport-width: self.width;
 
             dm-layout := VerticalLayout {
+                width: 100%;
                 padding-left: Spacing.xs;
                 padding-right: Spacing.xs;
                 spacing: 2px;

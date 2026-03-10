@@ -26,6 +26,8 @@ path = "src/lib.rs"
 # UI Framework - Slint (cross-platform, mobile-friendly)
 # ============================================================================
 slint = { version = "1.13", default-features = false, features = ["backend-winit", "renderer-femtovg", "compat-1-2", "accessibility"] }
+i-slint-backend-winit = "1.13"
+winit = "0.30"
 
 # ============================================================================
 # Async Runtime

@@ -50,8 +50,8 @@ pub mod dm_bootstrap_service;
 pub mod pairwise;
 pub mod sealed_sender;
 pub mod fanout;
-pub mod anon_group_service;
-pub mod anon_dm_service;
+pub mod anon_group;
+pub mod anon_dm;
 pub mod jarvis;
 
 // Re-exports for DM bootstrap service
@@ -139,10 +139,10 @@ pub use sealed_sender::{SealedSenderService, SealedSenderError};
 pub use fanout::{fanout, fanout_simple, FanoutOptions, FanoutResult};
 
 // Re-exports for anon group service
-pub use anon_group_service::{AnonGroupError, AnonGroupService};
+pub use anon_group::{AnonGroupError, AnonGroupService};
 
 // Re-exports for anon DM service
-pub use anon_dm_service::{AnonDmError, AnonDmService};
+pub use anon_dm::{AnonDmError, AnonDmService};
 
 // Re-exports for Jarvis AI assistant
 pub use jarvis::{JarvisError, JarvisService, JarvisBackground, JarvisBackgroundBuilder};

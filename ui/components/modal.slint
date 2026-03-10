@@ -27,11 +27,12 @@ export component Modal inherits Rectangle {
         }
     }
 
-    // Modal container - centered
-    Rectangle {
+    // Modal container - centered, sized to content
+    modal-container := Rectangle {
         width: root.modal-width;
+        // Use min/max constraints instead of explicit height to allow sizing to content
         min-height: 200px;
-        max-height: parent.height * 80%;
+        max-height: min(parent.height * 80%, modal-layout.preferred-height + 1px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Colors.surface;
@@ -43,7 +44,7 @@ export component Modal inherits Rectangle {
             height: 100%;
         }
 
-        VerticalLayout {
+        modal-layout := VerticalLayout {
             padding: Spacing.lg;
             spacing: Spacing.md;
 
@@ -90,9 +91,8 @@ export component Modal inherits Rectangle {
                 }
             }
 
-            // Content area - flexible height with @children slot
+            // Content area - sized to content
             Rectangle {
-                vertical-stretch: 1;
                 @children
             }
         }

@@ -26,6 +26,8 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
     let attachment_service = ui_ctx.attachment_service.clone();
     let group_coordinator = ui_ctx.group_coordinator.clone();
     let runtime_handle = ui_ctx.runtime_handle.clone();
+    let pin_service = ui_ctx.pin_service.clone();
+    let pinned_state = ui_ctx.pinned_state.clone();
 
     let weak_window = window.as_weak();
 
@@ -43,6 +45,8 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
         let attachment_service = attachment_service.clone();
         let group_coordinator = group_coordinator.clone();
         let runtime_handle = runtime_handle.clone();
+        let pin_service = pin_service.clone();
+        let pinned_state = pinned_state.clone();
 
         // Stop any playing audio when switching channels
         stop_audio_playback();
@@ -80,6 +84,38 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
                 current_user_id = ?current_user_id,
                 "[CHANNEL_SELECTED] current_user_id for is_own check"
             );
+
+            // Load pinned messages for this channel
+            if let Ok(pinned_messages) = pin_service.load_pinned_for_channel(&channel_id).await {
+                if !pinned_messages.is_empty() {
+                    let message_ids: Vec<_> = pinned_messages.iter().map(|p| p.message_id).collect();
+                    pinned_state.set_pinned_messages(channel_id, message_ids);
+                    
+                    if let Some(first) = pinned_messages.first() {
+                        let preview = first.preview.clone();
+                        let total_count = pinned_messages.len() as i32;
+                        let should_show = pinned_state.should_show();
+                        
+                        let weak_pinned = weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak_pinned.upgrade() {
+                                w.set_has_pinned_messages(should_show);
+                                w.set_pinned_message_preview(preview.into());
+                                w.set_pinned_current_index(1); // 1-based for display
+                                w.set_pinned_total_count(total_count);
+                            }
+                        });
+                    }
+                } else {
+                    pinned_state.clear();
+                    let weak_pinned = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_pinned.upgrade() {
+                            w.set_has_pinned_messages(false);
+                        }
+                    });
+                }
+            }
 
             // Load channel and messages
             let message_timestamps = load_channel_into_ui(
@@ -222,6 +258,11 @@ pub async fn load_channel_into_ui(
 
     // Reverse to show oldest first (newest at bottom, like chat apps)
     display_messages.reverse();
+
+    // Pre-decode attachment thumbnails before UI thread
+    for msg in &mut display_messages {
+        msg.decode_attachment_thumbnails();
+    }
 
     // Update UI - special handling for SavedMessages and DMs
     let is_saved_messages = channel.channel_type == ChannelType::SavedMessages;

@@ -411,6 +411,12 @@ pub enum InboxEvent {
         inviter_mailbox_pk: Vec<u8>,
         /// Timestamp.
         timestamp: u64,
+        /// Inviter's profile key (32 bytes).
+        profile_key: Option<Vec<u8>>,
+        /// Inviter's encrypted display name.
+        encrypted_display_name: Option<Vec<u8>>,
+        /// Inviter's encrypted avatar.
+        encrypted_avatar: Option<Vec<u8>>,
     },
     /// Anonymous group join acknowledgment received.
     AnonGroupJoinAck {
@@ -422,6 +428,12 @@ pub enum InboxEvent {
         joiner_mailbox_pk: Vec<u8>,
         /// Timestamp.
         timestamp: u64,
+        /// Joiner's profile key (32 bytes).
+        profile_key: Option<Vec<u8>>,
+        /// Joiner's encrypted display name.
+        encrypted_display_name: Option<Vec<u8>>,
+        /// Joiner's encrypted avatar.
+        encrypted_avatar: Option<Vec<u8>>,
     },
     /// Anonymous group member list received.
     AnonGroupMemberList {

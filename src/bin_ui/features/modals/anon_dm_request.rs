@@ -70,15 +70,28 @@ pub fn spawn_anon_dm_request_handler(
                     let intro = intro_message.unwrap_or_default();
                     let weak = weak_window.clone();
 
+                    // Decode avatar OUTSIDE UI thread - image decoding is expensive
+                    // Only raw pixels are Send, so decode to RGBA bytes here
+                    let avatar_pixels: Option<(Vec<u8>, u32, u32)> = sender_avatar.as_ref().and_then(|bytes| {
+                        if bytes.is_empty() {
+                            return None;
+                        }
+                        image::load_from_memory(bytes).ok().map(|img| {
+                            let rgba = img.to_rgba8();
+                            let (w, h) = rgba.dimensions();
+                            (rgba.into_raw(), w, h)
+                        })
+                    });
+
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            // Convert avatar bytes to Slint Image (must be done in UI thread)
-                            let (avatar_source, has_avatar) = match &sender_avatar {
-                                Some(bytes) => {
-                                    match crate::bin_ui::converters::avatar_bytes_to_image(bytes) {
-                                        Some(img) => (img, true),
-                                        None => (slint::Image::default(), false),
-                                    }
+                            // Create slint::Image on UI thread from pre-decoded pixels
+                            let (avatar_source, has_avatar) = match avatar_pixels {
+                                Some((pixels, width, height)) => {
+                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                        &pixels, width, height,
+                                    );
+                                    (slint::Image::from_rgba8(buffer), true)
                                 }
                                 None => (slint::Image::default(), false),
                             };
@@ -170,17 +183,25 @@ pub fn spawn_anon_dm_request_handler(
                     let weak = weak_window.clone();
                     let peer_name_for_ui = peer_name.clone();
 
+                    // Decode avatar BEFORE invoke_from_event_loop to avoid blocking UI thread
+                    let avatar_bytes = peer_avatar.as_ref().or(dm.peer_avatar.as_ref());
+                    let avatar_pixels: Option<(Vec<u8>, u32, u32)> = avatar_bytes.and_then(|bytes| {
+                        image::load_from_memory(bytes).ok().map(|img| {
+                            let rgba = img.to_rgba8();
+                            let (w, h) = rgba.dimensions();
+                            (rgba.into_raw(), w, h)
+                        })
+                    });
+
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            // Convert avatar bytes to Slint Image (must be done in UI thread)
-                            // Use avatar from event (freshly received) or fall back to stored dm.peer_avatar
-                            let avatar_bytes = peer_avatar.as_ref().or(dm.peer_avatar.as_ref());
-                            let (avatar_source, has_avatar) = match avatar_bytes {
-                                Some(bytes) => {
-                                    match crate::bin_ui::converters::avatar_bytes_to_image(bytes) {
-                                        Some(img) => (img, true),
-                                        None => (slint::Image::default(), false),
-                                    }
+                            // Create Slint Image from pre-decoded pixels (fast)
+                            let (avatar_source, has_avatar) = match avatar_pixels {
+                                Some((pixels, width, height)) => {
+                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                        &pixels, width, height,
+                                    );
+                                    (slint::Image::from_rgba8(buffer), true)
                                 }
                                 None => (slint::Image::default(), false),
                             };
@@ -258,11 +279,15 @@ pub fn spawn_anon_dm_request_handler(
                     };
 
                     // Convert attachment pointers to display data (before closure)
-                    let attachment_display: Vec<_> = attachment_pointers
+                    let mut attachment_display: Vec<_> = attachment_pointers
                         .iter()
                         .filter(|p| !p.cdn_key.is_empty())
                         .map(|p| crate::bin_ui::converters::attachment_pointer_to_display_data(p))
                         .collect();
+                    // Pre-decode thumbnails before UI thread
+                    for att in &mut attachment_display {
+                        att.decode_thumbnail();
+                    }
                     let attachment_count = attachment_display.len();
                     let has_attachments = attachment_count > 0;
 
@@ -279,6 +304,58 @@ pub fn spawn_anon_dm_request_handler(
                     let timestamp_ns_str = sent_at.to_string();
                     let weak = weak_window.clone();
                     let attachment_service_for_gifs = attachment_service.clone();
+
+                    // Send read receipt immediately if conversation is currently selected
+                    // Move the check inside invoke_from_event_loop to ensure proper UI thread access
+                    let receipt_service = anon_dm_service.clone();
+                    let receipt_conv_id = conversation_id;
+                    let receipt_msg_ts = sent_at;
+                    let receipt_channel_id_str = channel_id_str.clone();
+                    let receipt_weak = weak_window.clone();
+
+                    // Spawn a task that will check UI state in event loop then send receipt
+                    tokio::spawn(async move {
+                        // Use a oneshot channel to get the result from the UI thread
+                        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+
+                        let _ = slint::invoke_from_event_loop(move || {
+                            let is_selected = if let Some(w) = receipt_weak.upgrade() {
+                                let selected = w.get_selected_dm_id().to_string();
+                                let matches = selected == receipt_channel_id_str;
+                                tracing::info!(
+                                    selected_dm = %selected,
+                                    expected = %receipt_channel_id_str,
+                                    matches = matches,
+                                    "[ANON_DM_RECEIPT] Checking if conversation is selected for immediate receipt"
+                                );
+                                matches
+                            } else {
+                                tracing::warn!("[ANON_DM_RECEIPT] Window upgrade failed for selection check");
+                                false
+                            };
+                            let _ = tx.send(is_selected);
+                        });
+
+                        // Wait for the result from UI thread
+                        if let Ok(true) = rx.await {
+                            tracing::info!(
+                                conversation_id = %receipt_conv_id,
+                                sent_at = receipt_msg_ts,
+                                "[ANON_DM_RECEIPT] Sending immediate read receipt for incoming message"
+                            );
+                            if let Err(e) = receipt_service.send_read_receipt(&receipt_conv_id, vec![receipt_msg_ts]).await {
+                                tracing::warn!(
+                                    error = %e,
+                                    "[ANON_DM_RECEIPT] Failed to send read receipt"
+                                );
+                            } else {
+                                tracing::info!(
+                                    conversation_id = %receipt_conv_id,
+                                    "[ANON_DM_RECEIPT] Successfully sent immediate read receipt"
+                                );
+                            }
+                        }
+                    });
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -312,6 +389,9 @@ pub fn spawn_anon_dm_request_handler(
                             // If this conversation is currently selected, append message to the list
                             let selected_dm = w.get_selected_dm_id().to_string();
                             if selected_dm == channel_id_str {
+                                // Check if user is at bottom before updating (for auto-scroll)
+                                let was_at_bottom = w.get_is_at_bottom();
+
                                 // Create message display data and append to list
                                 let current_messages = w.get_messages();
                                 let mut messages: Vec<MessageItemData> = (0..current_messages.row_count())
@@ -357,11 +437,17 @@ pub fn spawn_anon_dm_request_handler(
 
                                 // Insert in sorted position (by timestamp_ns ascending)
                                 let new_ts: u64 = timestamp_ns_str.parse().unwrap_or(0);
-                                let msg_count = messages.len();
-                                let insert_pos = messages.iter().position(|m| {
-                                    let existing_ts: u64 = m.timestamp_ns.to_string().parse().unwrap_or(0);
-                                    existing_ts > new_ts
-                                }).unwrap_or(messages.len());
+                                let msg_count = current_messages.row_count();
+
+                                // Find insert position
+                                let insert_pos = (0..msg_count).find(|&i| {
+                                    if let Some(m) = current_messages.row_data(i) {
+                                        let existing_ts: u64 = m.timestamp_ns.to_string().parse().unwrap_or(0);
+                                        existing_ts > new_ts
+                                    } else {
+                                        false
+                                    }
+                                }).unwrap_or(msg_count);
 
                                 tracing::info!(
                                     channel_id = %channel_id_str,
@@ -372,14 +458,26 @@ pub fn spawn_anon_dm_request_handler(
                                     "[ANON_DM_UI] Inserting message at position"
                                 );
 
-                                messages.insert(insert_pos, new_message);
-                                w.set_messages(ModelRc::new(VecModel::from(messages)));
+                                // Insert directly into existing model to avoid full re-render
+                                if let Some(model) = current_messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                                    model.insert(insert_pos, new_message);
+                                } else {
+                                    // Fallback: replace entire model (causes full re-render)
+                                    messages.insert(insert_pos, new_message);
+                                    w.set_messages(ModelRc::new(VecModel::from(messages)));
+                                }
 
                                 // Auto-register GIF animations for inline playback
                                 crate::bin_ui::gif_state::auto_register_gifs_from_messages(
                                     w.as_weak(),
                                     attachment_service_for_gifs,
                                 );
+
+                                // Auto-scroll to bottom if user was at bottom before new message
+                                if was_at_bottom {
+                                    w.set_message_scroll_position(-99999.0);
+                                    w.set_is_at_bottom(true);
+                                }
                             }
                         }
                     });
@@ -410,7 +508,8 @@ pub fn spawn_anon_dm_request_handler(
                         sender_name = %sender_name,
                         intro_len = intro_message.len(),
                         has_avatar = sender_avatar.is_some(),
-                        "Received ECIES init message - creating anon DM conversation"
+                        avatar_size = sender_avatar.as_ref().map(|v| v.len()).unwrap_or(0),
+                        "[ANON_DM_INIT] Received ECIES init message - creating anon DM conversation"
                     );
 
                     // Create the conversation in the database with display name and avatar
@@ -445,15 +544,24 @@ pub fn spawn_anon_dm_request_handler(
                     };
                     let weak = weak_window.clone();
 
+                    // Decode avatar BEFORE invoke_from_event_loop to avoid blocking UI thread
+                    let avatar_pixels: Option<(Vec<u8>, u32, u32)> = sender_avatar.as_ref().and_then(|bytes| {
+                        image::load_from_memory(bytes).ok().map(|img| {
+                            let rgba = img.to_rgba8();
+                            let (w, h) = rgba.dimensions();
+                            (rgba.into_raw(), w, h)
+                        })
+                    });
+
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            // Convert avatar bytes to Slint Image
-                            let (avatar_source, has_avatar) = match &sender_avatar {
-                                Some(bytes) => {
-                                    match crate::bin_ui::converters::avatar_bytes_to_image(bytes) {
-                                        Some(img) => (img, true),
-                                        None => (slint::Image::default(), false),
-                                    }
+                            // Create Slint Image from pre-decoded pixels (fast)
+                            let (avatar_source, has_avatar) = match avatar_pixels {
+                                Some((pixels, width, height)) => {
+                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                        &pixels, width, height,
+                                    );
+                                    (slint::Image::from_rgba8(buffer), true)
                                 }
                                 None => (slint::Image::default(), false),
                             };
@@ -625,24 +733,47 @@ pub fn spawn_anon_dm_request_handler(
                         message_timestamp,
                     );
                 }
+                DomainEvent::AnonDmMessageEdited {
+                    conversation_id,
+                    message_timestamp,
+                    new_text,
+                } => {
+                    crate::bin_ui::features::auth::inbox::handle_anon_dm_message_edited(
+                        &weak_window,
+                        conversation_id,
+                        message_timestamp,
+                        new_text,
+                    );
+                }
                 DomainEvent::MessagesRead {
                     message_timestamps,
+                    channel_id,
                     ..
                 } => {
-                    // For anon DM receipts, check if we're viewing an anon DM
+                    // Use channel_id from event if present, otherwise try to determine from UI
                     let weak = weak_window.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let selected_dm = w.get_selected_dm_id().to_string();
-                            if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
-                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_linux::domain::ChannelId>() {
-                                    crate::bin_ui::features::auth::inbox::handle_anon_dm_receipt(
-                                        &weak,
-                                        channel_id,
-                                        2, // read
-                                        message_timestamps.clone(),
-                                    );
+                            // Use channel_id from event if available
+                            let ch_id = if let Some(id) = channel_id {
+                                Some(id)
+                            } else {
+                                // Fallback: try to determine from selected DM
+                                let selected_dm = w.get_selected_dm_id().to_string();
+                                if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
+                                    anon_dm_id_str.parse::<chatter_linux::domain::ChannelId>().ok()
+                                } else {
+                                    None
                                 }
+                            };
+
+                            if let Some(channel_id) = ch_id {
+                                crate::bin_ui::features::auth::inbox::handle_anon_dm_receipt(
+                                    &weak,
+                                    channel_id,
+                                    2, // read
+                                    message_timestamps.clone(),
+                                );
                             }
                         }
                     });

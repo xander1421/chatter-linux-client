@@ -28,6 +28,7 @@ use super::transfer_status::update_attachment_transfer_status;
 pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let attachment_service = ui_ctx.attachment_service.clone();
     let grpc_pool = ui_ctx.grpc_pool.clone();
+    let tokio_handle = ui_ctx.runtime_handle.clone();
     let weak_window = window.as_weak();
 
     window.on_view_attachment(move |attachment_id: SharedString| {
@@ -36,102 +37,123 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let attachment_service_for_download = attachment_service.clone();
         let grpc_pool = grpc_pool.clone();
         let weak = weak_window.clone();
+        let handle = tokio_handle.clone();
 
         tracing::debug!("View attachment clicked: {}", attachment_id_str);
 
-        // Try to parse as UUID first, then try as cdn_key-derived ID
-        let att_id: AttachmentId = match attachment_id_str.parse() {
-            Ok(id) => id,
-            Err(_) => {
-                // Not a UUID - try as cdn_key
-                AttachmentId::from_cdn_key(&attachment_id_str)
-            }
-        };
-
-        // Look up attachment from service
-        let attachment = match attachment_service.get(&att_id) {
-            Ok(Some(att)) => att,
-            Ok(None) => {
-                tracing::warn!("Attachment {} not found in local repository", att_id);
-                return;
-            }
-            Err(e) => {
-                tracing::error!("Failed to lookup attachment {}: {}", att_id, e);
-                return;
-            }
-        };
-
-        // Check content location for secure in-memory flow
-        let content_available = attachment.content_location == ContentLocation::OnFilesystem;
-        let needs_download = attachment.content_location == ContentLocation::NotDownloaded
-            && attachment.remote_url.is_some()
-            && attachment.encryption_key.is_some();
-
-        // Skip if already downloading
-        if attachment.status == AttachmentStatus::Downloading {
-            tracing::debug!("Attachment {} already downloading, skipping", att_id);
-            return;
-        }
-
-        // SECURE IN-MEMORY PLAYBACK: Content is available locally, decrypt to memory
-        if content_available && attachment.status == AttachmentStatus::Ready {
-            handle_local_attachment(
-                weak,
-                attachment_service,
-                att_id,
-                attachment_id,
-                &attachment.metadata.name,
-                attachment.metadata.size,
-                &attachment.metadata.mime_type,
-            );
-            return;
-        }
-
-        // SECURE DOWNLOAD: Download encrypted content to database (no disk)
-        if needs_download {
-            handle_download_attachment(
-                weak,
-                attachment_service_for_download,
-                grpc_pool,
-                attachment,
-                att_id,
-            );
-            return;
-        }
-
-        // Legacy fallback: Handle old attachments that have local_path (pre-migration)
-        let has_legacy_local_path = attachment.local_path.is_some()
-            && attachment.local_path.as_ref().is_some_and(|p| std::path::Path::new(p).exists());
-
-        if has_legacy_local_path && attachment.status == AttachmentStatus::Ready {
-            tracing::warn!("Using legacy filesystem path for attachment {} - consider re-downloading", att_id);
-            if let Some(ref local_path) = attachment.local_path {
-                let path = std::path::PathBuf::from(local_path);
-                let filename = attachment.metadata.name.clone();
-                let mime_type = attachment.metadata.mime_type.clone();
-
-                // Legacy: open file with system handler
-                let opener = ExternalOpener;
-                if let Err(e) = opener.open_file(&path) {
-                    tracing::error!("Failed to open legacy file {:?}: {}", path, e);
-                } else {
-                    tracing::info!("Opened legacy file: {} ({})", filename, mime_type);
+        // Move database lookup off UI thread
+        std::thread::spawn(move || {
+            // Try to parse as UUID first, then try as cdn_key-derived ID
+            let att_id: AttachmentId = match attachment_id_str.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    // Not a UUID - try as cdn_key
+                    AttachmentId::from_cdn_key(&attachment_id_str)
                 }
-            }
-            return;
-        }
+            };
 
-        // No valid content source - show warning
-        tracing::warn!(
-            "Attachment {} has no accessible content (location={:?}, status={:?})",
-            att_id,
-            attachment.content_location,
-            attachment.status
-        );
+            // Look up attachment from service (now in background thread)
+            let attachment = match attachment_service.get(&att_id) {
+                Ok(Some(att)) => att,
+                Ok(None) => {
+                    tracing::warn!("Attachment {} not found in local repository", att_id);
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to lookup attachment {}: {}", att_id, e);
+                    return;
+                }
+            };
+
+            // Check content location for secure in-memory flow
+            let content_available = attachment.content_location == ContentLocation::OnFilesystem;
+            let needs_download = attachment.content_location == ContentLocation::NotDownloaded
+                && attachment.remote_url.is_some()
+                && attachment.encryption_key.is_some();
+
+            // Debug: Log attachment state for troubleshooting
+            tracing::info!(
+                attachment_id = %att_id,
+                content_location = ?attachment.content_location,
+                status = ?attachment.status,
+                content_available = content_available,
+                needs_download = needs_download,
+                has_remote_url = attachment.remote_url.is_some(),
+                has_encryption_key = attachment.encryption_key.is_some(),
+                mime_type = %attachment.metadata.mime_type,
+                "CLICK: Attachment lookup result"
+            );
+
+            // Skip if already downloading
+            if attachment.status == AttachmentStatus::Downloading {
+                tracing::debug!("Attachment {} already downloading, skipping", att_id);
+                return;
+            }
+
+            // SECURE IN-MEMORY PLAYBACK: Content is available locally, decrypt to memory
+            if content_available && attachment.status == AttachmentStatus::Ready {
+                handle_local_attachment(
+                    weak,
+                    attachment_service,
+                    att_id,
+                    attachment_id,
+                    &attachment.metadata.name,
+                    attachment.metadata.size,
+                    &attachment.metadata.mime_type,
+                );
+                return;
+            }
+
+            // SECURE DOWNLOAD: Download encrypted content to database (no disk)
+            if needs_download {
+                handle_download_attachment(
+                    handle,
+                    weak,
+                    attachment_service_for_download,
+                    grpc_pool,
+                    attachment,
+                    att_id,
+                );
+                return;
+            }
+
+            // Legacy fallback: Handle old attachments that have local_path (pre-migration)
+            let has_legacy_local_path = attachment.local_path.is_some()
+                && attachment.local_path.as_ref().is_some_and(|p| std::path::Path::new(p).exists());
+
+            if has_legacy_local_path && attachment.status == AttachmentStatus::Ready {
+                tracing::warn!("Using legacy filesystem path for attachment {} - consider re-downloading", att_id);
+                if let Some(ref local_path) = attachment.local_path {
+                    let path = std::path::PathBuf::from(local_path);
+                    let filename = attachment.metadata.name.clone();
+                    let mime_type = attachment.metadata.mime_type.clone();
+
+                    // Legacy: open file with system handler
+                    let opener = ExternalOpener;
+                    if let Err(e) = opener.open_file(&path) {
+                        tracing::error!("Failed to open legacy file {:?}: {}", path, e);
+                    } else {
+                        tracing::info!("Opened legacy file: {} ({})", filename, mime_type);
+                    }
+                }
+                return;
+            }
+
+            // No valid content source - show warning
+            tracing::warn!(
+                "Attachment {} has no accessible content (location={:?}, status={:?})",
+                att_id,
+                attachment.content_location,
+                attachment.status
+            );
+        });
     });
 }
 
 /// Handle locally available attachment (decrypt and display).
+///
+/// NOTE: This function is called from a background thread (std::thread::spawn),
+/// so we can do synchronous decryption here without blocking the UI.
 fn handle_local_attachment(
     weak: slint::Weak<MainWindow>,
     attachment_service: Arc<chatter_linux::services::attachment::AttachmentService>,
@@ -141,7 +163,7 @@ fn handle_local_attachment(
     file_size: u64,
     mime_type: &str,
 ) {
-    tracing::debug!("Attachment {} ready, spawning async decryption", att_id);
+    tracing::debug!("Attachment {} ready, decrypting in background thread", att_id);
 
     let filename = filename.to_string();
     let mime_type = mime_type.to_string();
@@ -165,43 +187,28 @@ fn handle_local_attachment(
         show_image_preview(&weak, &attachment_service, &att_id, &filename, file_size);
     }
 
-    // Spawn async task - don't block UI thread
-    let weak_for_task = weak.clone();
-    let attachment_id_for_task = attachment_id.clone();
-    let filename_for_task = filename.clone();
-    let mime_type_for_task = mime_type.clone();
+    // Decrypt synchronously (we're already in a background thread)
+    let secure_buffer = match attachment_service.decrypt_auto(&att_id) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            tracing::error!("Failed to decrypt attachment: {}", e);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_image_viewer_visible(false);
+                }
+            });
+            return;
+        }
+    };
 
-    tokio::spawn(async move {
-        // Decrypt in blocking task (CPU-bound)
-        let secure_buffer = match tokio::task::spawn_blocking({
-            let attachment_service = attachment_service.clone();
-            move || attachment_service.decrypt_auto(&att_id)
-        }).await {
-            Ok(Ok(buffer)) => buffer,
-            Ok(Err(e)) => {
-                tracing::error!("Failed to decrypt attachment: {}", e);
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak_for_task.upgrade() {
-                        w.set_image_viewer_visible(false);
-                    }
-                });
-                return;
-            }
-            Err(e) => {
-                tracing::error!("Decrypt task panicked: {}", e);
-                return;
-            }
-        };
-
-        display_decrypted_content(
-            weak_for_task,
-            secure_buffer,
-            &attachment_id_for_task.to_string(),
-            &filename_for_task,
-            file_size,
-            &mime_type_for_task,
-        );
-    });
+    display_decrypted_content(
+        weak,
+        secure_buffer,
+        &attachment_id.to_string(),
+        &filename,
+        file_size,
+        &mime_type,
+    );
 }
 
 /// Toggle audio playback (pause/resume).
@@ -360,16 +367,25 @@ fn display_image_from_buffer(
     // Check if it's a GIF first (quick header check)
     let is_gif = data.len() >= 6 && (&data[0..6] == b"GIF89a" || &data[0..6] == b"GIF87a");
 
+    tracing::info!(
+        attachment_id = %att_id_for_inline,
+        is_gif = is_gif,
+        data_len = data.len(),
+        "CLICK: display_image_from_buffer called"
+    );
+
     if is_gif {
         // GIF: Handle on UI thread
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 let weak_for_gif = w.as_weak();
+                tracing::info!("CLICK: Calling start_gif_animation_and_inline for {}", att_id_for_inline);
                 if let Some(first_frame) = crate::bin_ui::gif_state::start_gif_animation_and_inline(
                     &data,
                     &weak_for_gif,
                     &att_id_for_inline,
                 ) {
+                    tracing::info!("CLICK: Got first frame, setting viewer source");
                     w.set_image_viewer_source(first_frame);
                     w.set_image_viewer_filename(filename_for_ui.into());
                     w.set_image_viewer_size(size_display.into());
@@ -377,6 +393,7 @@ fn display_image_from_buffer(
                     crate::bin_ui::gif_state::resume();
                     tracing::info!("Opened animated GIF in viewer");
                 } else {
+                    tracing::warn!("CLICK: start_gif_animation_and_inline returned None, trying static");
                     // Not animated, decode as static image
                     match ImageProcessor::memory_to_slint_image(&data) {
                         Ok(img) => {
@@ -384,6 +401,7 @@ fn display_image_from_buffer(
                             w.set_image_viewer_filename(filename_for_ui.into());
                             w.set_image_viewer_size(size_display.into());
                             w.set_image_viewer_visible(true);
+                            tracing::info!("CLICK: Loaded GIF as static image");
                         }
                         Err(e) => tracing::error!("Failed to load GIF as static: {:?}", e),
                     }
@@ -391,35 +409,33 @@ fn display_image_from_buffer(
             }
         });
     } else {
-        // Static image: Decode in background thread
-        tokio::task::spawn_blocking(move || {
-            let decode_start = std::time::Instant::now();
-            match ImageProcessor::load_from_memory(&data) {
-                Ok(image) => {
-                    let rgba = image.to_rgba8();
-                    let width = rgba.width();
-                    let height = rgba.height();
-                    let rgba_data = rgba.into_raw();
-                    tracing::debug!("Image decoded in {:?}: {}x{}", decode_start.elapsed(), width, height);
+        // Static image: Decode synchronously (we're already in a background thread)
+        let decode_start = std::time::Instant::now();
+        match ImageProcessor::load_from_memory(&data) {
+            Ok(image) => {
+                let rgba = image.to_rgba8();
+                let width = rgba.width();
+                let height = rgba.height();
+                let rgba_data = rgba.into_raw();
+                tracing::debug!("Image decoded in {:?}: {}x{}", decode_start.elapsed(), width, height);
 
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            let img = slint::Image::from_rgba8(
-                                slint::SharedPixelBuffer::clone_from_slice(&rgba_data, width, height)
-                            );
-                            w.set_image_viewer_source(img);
-                            w.set_image_viewer_filename(filename_for_ui.into());
-                            w.set_image_viewer_size(size_display.into());
-                            w.set_image_viewer_visible(true);
-                            tracing::info!("Opened image from memory in viewer");
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Failed to load image from memory: {:?}", e);
-                }
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        let img = slint::Image::from_rgba8(
+                            slint::SharedPixelBuffer::clone_from_slice(&rgba_data, width, height)
+                        );
+                        w.set_image_viewer_source(img);
+                        w.set_image_viewer_filename(filename_for_ui.into());
+                        w.set_image_viewer_size(size_display.into());
+                        w.set_image_viewer_visible(true);
+                        tracing::info!("Opened image from memory in viewer");
+                    }
+                });
             }
-        });
+            Err(e) => {
+                tracing::error!("Failed to load image from memory: {:?}", e);
+            }
+        }
     }
 }
 
@@ -462,6 +478,12 @@ fn play_video_from_buffer(
 }
 
 /// Display code with syntax highlighting from decrypted buffer.
+/// Display code file from decrypted buffer with syntax highlighting.
+///
+/// TODO: CodeViewState::render() returns slint::Image which is not Send,
+/// so syntax highlighting currently happens on UI thread. To fix this,
+/// CodeViewState would need to be refactored to return raw pixel data
+/// that can be converted to slint::Image on the UI thread.
 fn display_code_from_buffer(
     weak: slint::Weak<MainWindow>,
     secure_buffer: chatter_linux::crypto::SecureBuffer,
@@ -478,7 +500,7 @@ fn display_code_from_buffer(
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            // Create CodeViewState and render
+            // Create CodeViewState and render (on UI thread due to slint::Image not being Send)
             let mut state = CodeViewState::new();
             state.set_code_from_file(&text, &filename_for_code);
             let image = state.render();
@@ -526,6 +548,9 @@ fn display_pdf_from_buffer(
 }
 
 /// Save file to user-selected location.
+///
+/// NOTE: This may be called from a background thread, so we use block_on
+/// for the async file picker.
 fn save_file_from_buffer(
     secure_buffer: chatter_linux::crypto::SecureBuffer,
     filename: &str,
@@ -533,36 +558,48 @@ fn save_file_from_buffer(
     let data = secure_buffer.as_slice().to_vec();
     let filename_for_save = filename.to_string();
 
-    tokio::spawn(async move {
-        let config = FilePickerConfig::new()
-            .with_title("Save Attachment As")
-            .with_default_path(
-                dirs::download_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-                    .join(&filename_for_save),
-            );
+    // We're already in a background thread, so we can block
+    let config = FilePickerConfig::new()
+        .with_title("Save Attachment As")
+        .with_default_path(
+            dirs::download_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join(&filename_for_save),
+        );
 
-        if let Some(destination) = FilePicker::save_file(config).await {
-            match std::fs::write(&destination, &data) {
-                Ok(()) => {
-                    tracing::info!("Exported attachment to {}", destination.display());
-                    let opener = ExternalOpener;
-                    if let Err(e) = opener.open_file(&destination) {
-                        tracing::warn!("Could not open exported file: {}", e);
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to save attachment: {}", e);
+    // Use block_on since FilePicker::save_file is async but we're in a sync context
+    let destination = tokio::runtime::Handle::try_current()
+        .map(|h| h.block_on(FilePicker::save_file(config.clone())))
+        .unwrap_or_else(|_| {
+            // No tokio runtime, create a minimal one for the file picker
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok()
+                .and_then(|rt| rt.block_on(FilePicker::save_file(config)))
+        });
+
+    if let Some(destination) = destination {
+        match std::fs::write(&destination, &data) {
+            Ok(()) => {
+                tracing::info!("Exported attachment to {}", destination.display());
+                let opener = ExternalOpener;
+                if let Err(e) = opener.open_file(&destination) {
+                    tracing::warn!("Could not open exported file: {}", e);
                 }
             }
-        } else {
-            tracing::debug!("Save As dialog cancelled");
+            Err(e) => {
+                tracing::error!("Failed to save attachment: {}", e);
+            }
         }
-    });
+    } else {
+        tracing::debug!("Save As dialog cancelled");
+    }
 }
 
 /// Handle attachment that needs to be downloaded first.
 fn handle_download_attachment(
+    handle: tokio::runtime::Handle,
     weak: slint::Weak<MainWindow>,
     attachment_service: Arc<chatter_linux::services::attachment::AttachmentService>,
     grpc_pool: Arc<chatter_linux::network::grpc::client_pool::GrpcClientPool>,
@@ -597,12 +634,12 @@ fn handle_download_attachment(
         }
     });
 
-    // Spawn async download task
+    // Spawn async download task using provided runtime handle
     let weak_for_completion = weak.clone();
     let att_id_str_for_task = att_id_str.clone();
     let attachment_service_for_task = attachment_service.clone();
 
-    tokio::spawn(async move {
+    handle.spawn(async move {
         match attachment_service_for_task.download_to_filesystem(&grpc_pool, &att_id).await {
             Ok(()) => {
                 tracing::info!(

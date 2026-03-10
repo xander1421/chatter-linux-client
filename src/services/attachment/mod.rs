@@ -4,7 +4,10 @@
 
 mod crypto;
 mod download;
+mod media;
 mod upload;
+
+pub use media::{GifDecodeResult, GifFullDecodeResult, ImageDecodeResult};
 
 use std::path::PathBuf;
 use std::sync::Arc;

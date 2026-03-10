@@ -21,7 +21,16 @@ fn format_anon_dm_id(channel_id: &chatter_linux::domain::ChannelId) -> String {
 fn is_active_anon_dm(window: &MainWindow, channel_id: &chatter_linux::domain::ChannelId) -> bool {
     let selected_dm = window.get_selected_dm_id().to_string();
     let expected = format_anon_dm_id(channel_id);
-    selected_dm == expected
+    let is_active = selected_dm == expected;
+
+    tracing::debug!(
+        selected_dm = %selected_dm,
+        expected = %expected,
+        is_active = is_active,
+        "[ANON_DM_RECEIPT] Checking if active conversation"
+    );
+
+    is_active
 }
 
 /// Handle anonymous DM typing indicator.
@@ -122,8 +131,25 @@ pub fn handle_anon_dm_receipt(
         let msg_count = messages.row_count();
         let mut matched_count = 0;
 
+        // Debug: log all receipt timestamps
+        tracing::info!(
+            timestamps = ?timestamps,
+            "[ANON_DM_RECEIPT] Receipt timestamps to match"
+        );
+
         for i in 0..msg_count {
             if let Some(msg) = messages.row_data(i) {
+                // Debug: log each own message's timestamp
+                if msg.is_own {
+                    tracing::info!(
+                        msg_id = %msg.message_id,
+                        msg_ts_ns = %msg.timestamp_ns,
+                        is_own = msg.is_own,
+                        current_status = %msg.delivery_status,
+                        "[ANON_DM_RECEIPT] Own message in UI"
+                    );
+                }
+
                 if !msg.is_own {
                     continue;
                 }
@@ -133,7 +159,15 @@ pub fn handle_anon_dm_receipt(
                 // Try exact string match (both should be nanoseconds)
                 let matching = timestamps.iter().any(|&ts| {
                     let ts_str = ts.to_string();
-                    ts_str == msg_ts_ns
+                    let matches = ts_str == msg_ts_ns;
+                    if !matches {
+                        tracing::debug!(
+                            receipt_ts = %ts_str,
+                            msg_ts = %msg_ts_ns,
+                            "[ANON_DM_RECEIPT] Timestamp comparison (no match)"
+                        );
+                    }
+                    matches
                 });
 
                 if matching {
@@ -448,6 +482,60 @@ pub fn handle_anon_dm_message_deleted(
                     tracing::info!(
                         message_timestamp,
                         "[ANON_DM_DELETE] Marked message as deleted via AnonDmMessageDeleted"
+                    );
+                    return;
+                }
+            }
+        }
+    });
+}
+
+/// Handle anonymous DM message edited event.
+///
+/// Called when `DomainEvent::AnonDmMessageEdited` is received.
+pub fn handle_anon_dm_message_edited(
+    weak_window: &slint::Weak<MainWindow>,
+    conversation_id: chatter_linux::domain::anon_dm::AnonDmId,
+    message_timestamp: u64,
+    new_text: String,
+) {
+    tracing::debug!(
+        conversation_id = %conversation_id,
+        message_timestamp,
+        "[ANON_DM_EDIT] Received AnonDmMessageEdited event"
+    );
+
+    let channel_id: chatter_linux::domain::ChannelId = conversation_id.into();
+    let weak = weak_window.clone();
+
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(window) = weak.upgrade() else {
+            return;
+        };
+
+        // Check if this is the active conversation
+        if !is_active_anon_dm(&window, &channel_id) {
+            return;
+        }
+
+        let messages = window.get_messages();
+        let target_ts_ns = message_timestamp.to_string();
+
+        for i in 0..messages.row_count() {
+            if let Some(msg) = messages.row_data(i) {
+                if msg.timestamp_ns.as_str() == target_ts_ns {
+                    let mut updated_msg = msg.clone();
+                    updated_msg.content = new_text.clone().into();
+                    updated_msg.is_edited = true;
+
+                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>()
+                    {
+                        model.set_row_data(i, updated_msg);
+                    }
+
+                    tracing::info!(
+                        message_timestamp,
+                        "[ANON_DM_EDIT] Updated message content via AnonDmMessageEdited"
                     );
                     return;
                 }

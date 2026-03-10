@@ -8,8 +8,8 @@ use std::sync::Arc;
 use crate::services::ai::{LocalAIActorHandle, LocalAIService};
 use crate::services::jarvis::JarvisService;
 use crate::services::ai_service::AIService;
-use crate::services::anon_dm_service::AnonDmService;
-use crate::services::anon_group_service::AnonGroupService;
+use crate::services::anon_dm::AnonDmService;
+use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
 use crate::services::channel::ChannelService;
@@ -20,6 +20,7 @@ use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
 use crate::services::message_gateway::MessageGateway;
 use crate::services::pairwise::PairwiseService;
+use crate::services::pin_service::PinService;
 use crate::services::reaction_service::ReactionService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
@@ -68,6 +69,8 @@ pub struct ServiceContainer {
     pub reaction_service: Arc<ReactionService>,
     /// Draft service for message drafts.
     pub draft_service: Arc<DraftService>,
+    /// Pin service for pinned messages.
+    pub pin_service: Arc<PinService>,
     /// Pairwise encryption service (reusable Signal Protocol).
     pub pairwise_service: Arc<PairwiseService>,
     /// Anonymous group service for server-oblivious groups.
@@ -192,7 +195,14 @@ impl ServiceContainer {
             infra.draft_repo.clone(),
         ));
 
-        // 15. Pairwise encryption service (reusable Signal Protocol for DM/groups)
+        // 15. Pin service for pinned messages
+        let pin_service = Arc::new(PinService::new(
+            infra.database.clone(),
+            message_service.clone(),
+            attachment_service.clone(),
+        ));
+
+        // 16. Pairwise encryption service (reusable Signal Protocol for DM/groups)
         let pairwise_service = Arc::new(PairwiseService::new(
             signal_service.clone(),
             infra.grpc_pool.clone(),
@@ -256,6 +266,7 @@ impl ServiceContainer {
             ai_service,
             reaction_service,
             draft_service,
+            pin_service,
             pairwise_service,
             anon_group_service,
             anon_dm_service,

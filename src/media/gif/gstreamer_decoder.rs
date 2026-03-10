@@ -293,19 +293,28 @@ impl GStreamerGifDecoder {
                         .map_err(|e| e.to_string())?,
                 );
 
+                // Force RGBA output format with capsfilter
+                let rgba_caps = gst::Caps::builder("video/x-raw")
+                    .field("format", "RGBA")
+                    .build();
+
                 // If GL available, use it
                 if let Ok(_glupload) = convert {
                     let glupload = gst::ElementFactory::make("glupload").build().unwrap();
                     let glcolorconvert = gst::ElementFactory::make("glcolorconvert").build().unwrap();
                     let gldownload = gst::ElementFactory::make("gldownload").build().unwrap();
-
-                    pipeline.add_many([&queue, &glupload, &glcolorconvert, &gldownload, video_sink_clone.upcast_ref()])
+                    let capsfilter = gst::ElementFactory::make("capsfilter")
+                        .property("caps", &rgba_caps)
+                        .build()
                         .map_err(|e| e.to_string())?;
 
-                    gst::Element::link_many([&queue, &glupload, &glcolorconvert, &gldownload, video_sink_clone.upcast_ref()])
+                    pipeline.add_many([&queue, &glupload, &glcolorconvert, &gldownload, &capsfilter, video_sink_clone.upcast_ref()])
+                        .map_err(|e| e.to_string())?;
+
+                    gst::Element::link_many([&queue, &glupload, &glcolorconvert, &gldownload, &capsfilter, video_sink_clone.upcast_ref()])
                         .map_err(|e| format!("GL link failed: {:?}", e))?;
 
-                    for e in [&queue, &glupload, &glcolorconvert, &gldownload, video_sink_clone.upcast_ref()] {
+                    for e in [&queue, &glupload, &glcolorconvert, &gldownload, &capsfilter, video_sink_clone.upcast_ref()] {
                         e.sync_state_with_parent().map_err(|e| e.to_string())?;
                     }
 
@@ -314,19 +323,23 @@ impl GStreamerGifDecoder {
 
                     tracing::info!("GIF GL pipeline linked successfully (GPU accelerated)");
                 } else {
-                    // Fallback to CPU
+                    // Fallback to CPU with explicit format conversion
                     let videoconvert = gst::ElementFactory::make("videoconvert")
                         .build().map_err(|e| e.to_string())?;
                     let videoscale = gst::ElementFactory::make("videoscale")
                         .build().map_err(|e| e.to_string())?;
-
-                    pipeline.add_many([&queue, &videoconvert, &videoscale, video_sink_clone.upcast_ref()])
+                    let capsfilter = gst::ElementFactory::make("capsfilter")
+                        .property("caps", &rgba_caps)
+                        .build()
                         .map_err(|e| e.to_string())?;
 
-                    gst::Element::link_many([&queue, &videoconvert, &videoscale, video_sink_clone.upcast_ref()])
+                    pipeline.add_many([&queue, &videoconvert, &videoscale, &capsfilter, video_sink_clone.upcast_ref()])
+                        .map_err(|e| e.to_string())?;
+
+                    gst::Element::link_many([&queue, &videoconvert, &videoscale, &capsfilter, video_sink_clone.upcast_ref()])
                         .map_err(|e| format!("{:?}", e))?;
 
-                    for e in [&queue, &videoconvert, &videoscale, video_sink_clone.upcast_ref()] {
+                    for e in [&queue, &videoconvert, &videoscale, &capsfilter, video_sink_clone.upcast_ref()] {
                         e.sync_state_with_parent().map_err(|e| e.to_string())?;
                     }
 
@@ -389,6 +402,11 @@ impl GStreamerGifDecoder {
             let Some(pipeline) = pipeline_weak.upgrade() else { return };
 
             let create_elements = || -> Result<(), String> {
+                // Force RGBA output format with capsfilter
+                let rgba_caps = gst::Caps::builder("video/x-raw")
+                    .field("format", "RGBA")
+                    .build();
+
                 let queue = gst::ElementFactory::make("queue")
                     .property("max-size-buffers", 10u32)
                     .build()
@@ -399,14 +417,18 @@ impl GStreamerGifDecoder {
                 let videoscale = gst::ElementFactory::make("videoscale")
                     .build()
                     .map_err(|e| e.to_string())?;
-
-                pipeline.add_many([&queue, &videoconvert, &videoscale, video_sink_clone.upcast_ref()])
+                let capsfilter = gst::ElementFactory::make("capsfilter")
+                    .property("caps", &rgba_caps)
+                    .build()
                     .map_err(|e| e.to_string())?;
 
-                gst::Element::link_many([&queue, &videoconvert, &videoscale, video_sink_clone.upcast_ref()])
+                pipeline.add_many([&queue, &videoconvert, &videoscale, &capsfilter, video_sink_clone.upcast_ref()])
+                    .map_err(|e| e.to_string())?;
+
+                gst::Element::link_many([&queue, &videoconvert, &videoscale, &capsfilter, video_sink_clone.upcast_ref()])
                     .map_err(|e| format!("{:?}", e))?;
 
-                for e in [&queue, &videoconvert, &videoscale, video_sink_clone.upcast_ref()] {
+                for e in [&queue, &videoconvert, &videoscale, &capsfilter, video_sink_clone.upcast_ref()] {
                     e.sync_state_with_parent().map_err(|e| e.to_string())?;
                 }
 
@@ -536,9 +558,92 @@ impl GStreamerGifDecoder {
                 }
                 rgba
             }
+            gst_video::VideoFormat::Abgr => {
+                // Convert ABGR to RGBA: [A,B,G,R] -> [R,G,B,A]
+                let mut rgba = Vec::with_capacity(raw_data.len());
+                for chunk in raw_data.chunks_exact(4) {
+                    rgba.push(chunk[3]); // R
+                    rgba.push(chunk[2]); // G
+                    rgba.push(chunk[1]); // B
+                    rgba.push(chunk[0]); // A
+                }
+                rgba
+            }
+            gst_video::VideoFormat::Rgbx => {
+                // Convert RGBx to RGBA: [R,G,B,x] -> [R,G,B,255]
+                let mut rgba = raw_data.to_vec();
+                for chunk in rgba.chunks_exact_mut(4) {
+                    chunk[3] = 255; // Set alpha to opaque
+                }
+                rgba
+            }
+            gst_video::VideoFormat::Xrgb => {
+                // Convert xRGB to RGBA: [x,R,G,B] -> [R,G,B,255]
+                let mut rgba = Vec::with_capacity(raw_data.len());
+                for chunk in raw_data.chunks_exact(4) {
+                    rgba.push(chunk[1]); // R
+                    rgba.push(chunk[2]); // G
+                    rgba.push(chunk[3]); // B
+                    rgba.push(255);      // A (opaque)
+                }
+                rgba
+            }
+            gst_video::VideoFormat::Bgrx => {
+                // Convert BGRx to RGBA: [B,G,R,x] -> [R,G,B,255]
+                let mut rgba = Vec::with_capacity(raw_data.len());
+                for chunk in raw_data.chunks_exact(4) {
+                    rgba.push(chunk[2]); // R
+                    rgba.push(chunk[1]); // G
+                    rgba.push(chunk[0]); // B
+                    rgba.push(255);      // A (opaque)
+                }
+                rgba
+            }
+            gst_video::VideoFormat::Xbgr => {
+                // Convert xBGR to RGBA: [x,B,G,R] -> [R,G,B,255]
+                let mut rgba = Vec::with_capacity(raw_data.len());
+                for chunk in raw_data.chunks_exact(4) {
+                    rgba.push(chunk[3]); // R
+                    rgba.push(chunk[2]); // G
+                    rgba.push(chunk[1]); // B
+                    rgba.push(255);      // A (opaque)
+                }
+                rgba
+            }
+            gst_video::VideoFormat::Rgb => {
+                // Convert RGB (24-bit) to RGBA: [R,G,B] -> [R,G,B,255]
+                let mut rgba = Vec::with_capacity((raw_data.len() / 3) * 4);
+                for chunk in raw_data.chunks_exact(3) {
+                    rgba.push(chunk[0]); // R
+                    rgba.push(chunk[1]); // G
+                    rgba.push(chunk[2]); // B
+                    rgba.push(255);      // A (opaque)
+                }
+                rgba
+            }
+            gst_video::VideoFormat::Bgr => {
+                // Convert BGR (24-bit) to RGBA: [B,G,R] -> [R,G,B,255]
+                let mut rgba = Vec::with_capacity((raw_data.len() / 3) * 4);
+                for chunk in raw_data.chunks_exact(3) {
+                    rgba.push(chunk[2]); // R
+                    rgba.push(chunk[1]); // G
+                    rgba.push(chunk[0]); // B
+                    rgba.push(255);      // A (opaque)
+                }
+                rgba
+            }
             _ => {
-                tracing::warn!("Unexpected video format: {:?}, using raw data", format);
-                raw_data.to_vec()
+                tracing::error!(
+                    "Unhandled video format: {:?} - GIF may display incorrectly. \
+                    Please report this issue with your GPU/driver info.",
+                    format
+                );
+                // Last resort: assume BGRA (common on Linux) and swap
+                let mut rgba = raw_data.to_vec();
+                for chunk in rgba.chunks_exact_mut(4) {
+                    chunk.swap(0, 2);
+                }
+                rgba
             }
         };
 

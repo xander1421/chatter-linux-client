@@ -17,7 +17,7 @@ use crate::domain::UserId;
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 use crate::domain::ids::ChannelId;
 use crate::proto::content_v1::{self, typing_message, receipt_message, Content};
-use crate::services::anon_dm_service::AnonDmService;
+use crate::services::anon_dm::AnonDmService;
 
 use super::{DomainEvent, HandlerContext, HandlerError, HandlerOutcome, HandlerResult, InboxHandler};
 
@@ -349,6 +349,9 @@ impl AnonDmHandler {
             Some(content_v1::content::Content::Pin(pin)) => {
                 self.handle_pin(conversation_id, sender_id, pin, ctx)
             }
+            Some(content_v1::content::Content::Edit(edit)) => {
+                self.handle_edit(conversation_id, sender_id, edit, ctx)
+            }
             Some(content_v1::content::Content::DataMessage(data_msg)) => {
                 // Check for Delete first
                 if let Some(delete) = &data_msg.delete {
@@ -449,10 +452,12 @@ impl AnonDmHandler {
         ctx: &HandlerContext,
     ) -> HandlerResult {
         if receipt.r#type == receipt_message::Type::Read as i32 {
+            let channel_id: ChannelId = conversation_id.into();
             ctx.emit(DomainEvent::MessagesRead {
                 reader_id: sender_id,
                 message_timestamps: receipt.timestamps.clone(),
                 receipt_timestamp: receipt.timestamp,
+                channel_id: Some(channel_id),
             });
 
             tracing::debug!(
@@ -557,6 +562,63 @@ impl AnonDmHandler {
             pin.target_sent_timestamp,
             conversation_id
         );
+
+        Ok(HandlerOutcome::Processed)
+    }
+
+    /// Handle an edit message.
+    ///
+    /// Only updates the message if sender_id matches the message author.
+    /// This ensures users can only edit their own messages.
+    fn handle_edit(
+        &self,
+        conversation_id: AnonDmId,
+        sender_id: UserId,
+        edit: &content_v1::EditMessage,
+        ctx: &HandlerContext,
+    ) -> HandlerResult {
+        let target_timestamp = edit.target_sent_timestamp;
+        let new_text = edit
+            .data_message
+            .as_ref()
+            .map(|dm| dm.body.clone())
+            .unwrap_or_default();
+
+        // Update the message in the database (only if sender is the author)
+        match self.service.update_message_text_by_sender(&conversation_id, &sender_id, target_timestamp, &new_text) {
+            Ok(true) => {
+                tracing::info!(
+                    sender_id = %sender_id,
+                    conversation_id = %conversation_id,
+                    target_timestamp = target_timestamp,
+                    "Updated message text (edit from peer)"
+                );
+                // Emit event for UI to update
+                ctx.emit(DomainEvent::AnonDmMessageEdited {
+                    conversation_id,
+                    message_timestamp: target_timestamp,
+                    new_text,
+                });
+            }
+            Ok(false) => {
+                // Either message not found or sender is not the author (security check)
+                tracing::debug!(
+                    sender_id = %sender_id,
+                    conversation_id = %conversation_id,
+                    target_timestamp = target_timestamp,
+                    "Edit ignored: message not found or sender not author"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    conversation_id = %conversation_id,
+                    target_timestamp = target_timestamp,
+                    error = %e,
+                    "Failed to update message text"
+                );
+            }
+        }
 
         Ok(HandlerOutcome::Processed)
     }

@@ -81,13 +81,11 @@ fn wire_search_clicked(window: &MainWindow) {
     let weak_window = window.as_weak();
 
     window.on_search_clicked(move || {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_active_modal("search".into());
-                tracing::debug!("Search modal opened");
-            }
-        });
+        // Already on UI thread - no need for invoke_from_event_loop
+        if let Some(w) = weak_window.upgrade() {
+            w.set_active_modal("search".into());
+            tracing::debug!("Search modal opened");
+        }
     });
 }
 
@@ -102,14 +100,12 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     window.on_search_messages(move |query: slint::SharedString| {
         let query_str = query.to_string();
         if query_str.trim().is_empty() {
-            let weak = weak_window.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_search_results(ModelRc::new(VecModel::default()));
-                    w.set_search_result_count(0);
-                    w.set_search_searching(false);
-                }
-            });
+            // Already on UI thread - no need for invoke_from_event_loop
+            if let Some(w) = weak_window.upgrade() {
+                w.set_search_results(ModelRc::new(VecModel::default()));
+                w.set_search_result_count(0);
+                w.set_search_searching(false);
+            }
             return;
         }
 
@@ -119,23 +115,17 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let user_service = user_service.clone();
         let chat_state = chat_state.clone();
 
-        // Set searching state
-        {
-            let weak = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_search_searching(true);
-                }
-            });
-        }
+        // Get search scope and set searching state - already on UI thread
+        let search_all = weak
+            .upgrade()
+            .map(|w| {
+                w.set_search_searching(true);
+                w.get_search_all_channels()
+            })
+            .unwrap_or(false);
 
-        tokio::spawn(async move {
-            // Get search scope
-            let search_all = weak
-                .upgrade()
-                .map(|w| w.get_search_all_channels())
-                .unwrap_or(false);
-
+        // Search in background thread (DB queries are sync)
+        std::thread::spawn(move || {
             let channel_id = if search_all {
                 None
             } else {
@@ -233,26 +223,22 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         // 1. Switch to the message's channel
         // 2. Load messages around that message
         // 3. Scroll to the message
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_active_modal("none".into());
-            }
-        });
+        // Already on UI thread - no need for invoke_from_event_loop
+        if let Some(w) = weak_window.upgrade() {
+            w.set_active_modal("none".into());
+        }
     });
 
     // Toggle search scope
     let weak_window = window.as_weak();
 
     window.on_search_toggle_scope(move || {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                let current = w.get_search_all_channels();
-                w.set_search_all_channels(!current);
-                tracing::debug!("Search scope toggled to: {}", if !current { "all channels" } else { "current channel" });
-            }
-        });
+        // Already on UI thread - no need for invoke_from_event_loop
+        if let Some(w) = weak_window.upgrade() {
+            let current = w.get_search_all_channels();
+            w.set_search_all_channels(!current);
+            tracing::debug!("Search scope toggled to: {}", if !current { "all channels" } else { "current channel" });
+        }
     });
 }
 
@@ -265,7 +251,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     window.on_pinned_prev_clicked(move || {
         pinned_state.navigate_prev();
-        update_pinned_ui(&weak_window, &pinned_state, &message_service, &attachment_service);
+        update_pinned_ui_async(weak_window.clone(), pinned_state.clone(), message_service.clone(), attachment_service.clone());
     });
 
     // Next pinned message
@@ -276,7 +262,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     window.on_pinned_next_clicked(move || {
         pinned_state.navigate_next();
-        update_pinned_ui(&weak_window, &pinned_state, &message_service, &attachment_service);
+        update_pinned_ui_async(weak_window.clone(), pinned_state.clone(), message_service.clone(), attachment_service.clone());
     });
 
     // Dismiss pinned bar
@@ -285,12 +271,10 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     window.on_pinned_dismiss_clicked(move || {
         pinned_state.dismiss();
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_has_pinned_messages(false);
-            }
-        });
+        // Already on UI thread - no need for invoke_from_event_loop
+        if let Some(w) = weak_window.upgrade() {
+            w.set_has_pinned_messages(false);
+        }
         tracing::debug!("Pinned bar dismissed");
     });
 
@@ -301,84 +285,86 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     window.on_pinned_go_to_message(move || {
         if let Some(message_id) = pinned_state.current_message_id() {
             let message_id_str = message_id.to_string();
-            let weak = weak_window.clone();
 
-            // Find the message index in the current message list and scroll to it
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    let messages = w.get_messages();
-                    let message_count = messages.row_count();
+            // Already on UI thread - no need for invoke_from_event_loop
+            if let Some(w) = weak_window.upgrade() {
+                let messages = w.get_messages();
+                let message_count = messages.row_count();
 
-                    // Find the index of the pinned message
-                    for i in 0..message_count {
-                        if let Some(msg) = messages.row_data(i) {
-                            if msg.message_id.as_str() == message_id_str.as_str() {
-                                // Calculate scroll position: negative offset from top
-                                // Estimated message height: 80px, plus some padding
-                                let estimated_height = 80.0f32;
-                                let padding = 16.0f32; // Spacing.md
-                                let scroll_pos = -((i as f32 * estimated_height) + padding);
+                // Find the index of the pinned message
+                for i in 0..message_count {
+                    if let Some(msg) = messages.row_data(i) {
+                        if msg.message_id.as_str() == message_id_str.as_str() {
+                            // Calculate scroll position: negative offset from top
+                            // Estimated message height: 80px, plus some padding
+                            let estimated_height = 80.0f32;
+                            let padding = 16.0f32; // Spacing.md
+                            let scroll_pos = -((i as f32 * estimated_height) + padding);
 
-                                // Set scroll position directly
-                                w.set_message_scroll_position(scroll_pos);
-                                // Mark as not at bottom since we're scrolling to a specific message
-                                w.set_is_at_bottom(false);
+                            // Set scroll position directly
+                            w.set_message_scroll_position(scroll_pos);
+                            // Mark as not at bottom since we're scrolling to a specific message
+                            w.set_is_at_bottom(false);
 
-                                tracing::info!(
-                                    message_id = %message_id_str,
-                                    index = i,
-                                    scroll_position = scroll_pos,
-                                    "Scrolling to pinned message"
-                                );
-                                return;
-                            }
+                            tracing::info!(
+                                message_id = %message_id_str,
+                                index = i,
+                                scroll_position = scroll_pos,
+                                "Scrolling to pinned message"
+                            );
+                            return;
                         }
                     }
-
-                    tracing::warn!(
-                        message_id = %message_id_str,
-                        "Pinned message not found in current message list"
-                    );
                 }
-            });
+
+                tracing::warn!(
+                    message_id = %message_id_str,
+                    "Pinned message not found in current message list"
+                );
+            }
         }
     });
 }
 
-fn update_pinned_ui(
-    weak_window: &slint::Weak<MainWindow>,
-    pinned_state: &chatter_linux::state::PinnedState,
-    message_service: &Arc<MessageService>,
-    attachment_service: &Arc<AttachmentService>,
+/// Update pinned UI asynchronously to avoid blocking the UI thread with database queries.
+fn update_pinned_ui_async(
+    weak_window: slint::Weak<MainWindow>,
+    pinned_state: chatter_linux::state::PinnedState,
+    message_service: Arc<MessageService>,
+    attachment_service: Arc<AttachmentService>,
 ) {
+    // Get state data that doesn't require DB access
     let state = pinned_state.get();
     let current_index = state.current_index as i32;
     let total_count = state.pinned_message_ids.len() as i32;
+    let current_msg_id = pinned_state.current_message_id();
 
-    // Get preview text for current pinned message (with attachment support)
-    let preview = if let Some(msg_id) = pinned_state.current_message_id() {
-        if let Ok(Some(msg)) = message_service.get_message_local(&msg_id) {
-            let attachments: Vec<Attachment> = msg
-                .attachments
-                .iter()
-                .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
-                .collect();
-            generate_pinned_preview(&msg, &attachments)
+    // Move database queries to background thread
+    std::thread::spawn(move || {
+        // Get preview text for current pinned message (with attachment support)
+        let preview = if let Some(msg_id) = current_msg_id {
+            if let Ok(Some(msg)) = message_service.get_message_local(&msg_id) {
+                let attachments: Vec<Attachment> = msg
+                    .attachments
+                    .iter()
+                    .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
+                    .collect();
+                generate_pinned_preview(&msg, &attachments)
+            } else {
+                "[Pinned message]".to_string()
+            }
         } else {
-            "[Pinned message]".to_string()
-        }
-    } else {
-        String::new()
-    };
+            String::new()
+        };
 
-    let weak = weak_window.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak.upgrade() {
-            w.set_pinned_current_index(current_index + 1); // 1-based for display
-            w.set_pinned_total_count(total_count);
-            w.set_pinned_message_preview(preview.into());
-            w.set_has_pinned_messages(total_count > 0);
-        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak_window.upgrade() {
+                w.set_pinned_current_index(current_index + 1); // 1-based for display
+                w.set_pinned_total_count(total_count);
+                w.set_pinned_message_preview(preview.into());
+                w.set_has_pinned_messages(total_count > 0);
+            }
+        });
     });
 }
 
@@ -397,48 +383,51 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             .unwrap_or_default();
 
         if !selected_private_group_id.is_empty() {
-            // Private group settings
-            let group_id: chatter_linux::domain::anon_group::AnonGroupId =
-                match selected_private_group_id.parse() {
-                    Ok(id) => id,
+            // Private group settings - move DB queries to background thread
+            let anon_group_service = anon_group_service.clone();
+            let weak = weak_window.clone();
+
+            std::thread::spawn(move || {
+                let group_id: chatter_linux::domain::anon_group::AnonGroupId =
+                    match selected_private_group_id.parse() {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::error!("Invalid private group ID: {}", e);
+                            return;
+                        }
+                    };
+
+                // Get group info for settings modal (DB query in background)
+                let group = match anon_group_service.get_group(&group_id) {
+                    Ok(Some(g)) => g,
+                    Ok(None) => {
+                        tracing::error!("Private group not found: {}", group_id);
+                        return;
+                    }
                     Err(e) => {
-                        tracing::error!("Invalid private group ID: {}", e);
+                        tracing::error!("Failed to get private group: {}", e);
                         return;
                     }
                 };
 
-            // Get group info for settings modal
-            let group = match anon_group_service.get_group(&group_id) {
-                Ok(Some(g)) => g,
-                Ok(None) => {
-                    tracing::error!("Private group not found: {}", group_id);
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to get private group: {}", e);
-                    return;
-                }
-            };
+                let members = anon_group_service.get_members(&group_id).unwrap_or_default();
+                let member_count = members.len() as i32;
+                let group_name = group.name.clone();
 
-            let members = anon_group_service.get_members(&group_id).unwrap_or_default();
-            let member_count = members.len() as i32;
-
-            // Open private group settings modal
-            // For now, show channel settings modal with adapted data
-            // TODO: Create dedicated PrivateGroupSettings modal
-            let weak = weak_window.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_channel_settings_name(group.name.into());
-                    w.set_channel_settings_type("private-group".into());
-                    w.set_channel_settings_member_count(member_count);
-                    w.set_active_modal("channel_settings".into());
-                    tracing::debug!(
-                        "Opened settings for private group {} with {} members",
-                        group_id,
-                        member_count
-                    );
-                }
+                // Open private group settings modal
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_channel_settings_name(group_name.into());
+                        w.set_channel_settings_type("private-group".into());
+                        w.set_channel_settings_member_count(member_count);
+                        w.set_active_modal("channel-settings".into());
+                        tracing::debug!(
+                            "Opened settings for private group {} with {} members",
+                            group_id,
+                            member_count
+                        );
+                    }
+                });
             });
             return;
         }
@@ -477,7 +466,8 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let user_service = user_service.clone();
         let attachment_service = attachment_service.clone();
 
-        tokio::spawn(async move {
+        // Load messages in background thread (DB queries are sync)
+        std::thread::spawn(move || {
             let channel_id = match chat_state.get().active_channel_id {
                 Some(id) => id,
                 None => {
@@ -545,6 +535,11 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
             // Reverse to get chronological order (oldest first)
             display_messages.reverse();
+
+            // Pre-decode attachment thumbnails before UI thread
+            for msg in &mut display_messages {
+                msg.decode_attachment_thumbnails();
+            }
 
             let msg_count = older_messages.len();
             // Get current user ID for is_own calculation

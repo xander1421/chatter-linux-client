@@ -77,32 +77,33 @@ fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
         match result {
             Ok(png_bytes) => {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        // Load PNG bytes into Slint image
-                        match slint::Image::load_from_path(std::path::Path::new("")) {
-                            // Fallback: create image from raw pixel data
-                            _ => {
-                                // Decode PNG to get raw pixels
-                                if let Ok(img) = image::load_from_memory(&png_bytes) {
-                                    let rgba = img.to_rgba8();
-                                    let (width, height) = rgba.dimensions();
-                                    let pixels = rgba.into_raw();
+                // Decode PNG outside UI thread - this is image processing work
+                let decoded = image::load_from_memory(&png_bytes)
+                    .map(|img| {
+                        let rgba = img.to_rgba8();
+                        let (width, height) = rgba.dimensions();
+                        let pixels = rgba.into_raw();
+                        (pixels, width, height)
+                    });
 
-                                    // Create Slint SharedPixelBuffer
-                                    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
-                                    buffer.make_mut_bytes().copy_from_slice(&pixels);
+                match decoded {
+                    Ok((pixels, width, height)) => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                // UI thread only: create Slint buffer from pre-decoded pixels
+                                let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
+                                buffer.make_mut_bytes().copy_from_slice(&pixels);
 
-                                    let image = slint::Image::from_rgba8(buffer);
-                                    w.set_friends_qr_code_image(image);
-                                    tracing::debug!("Generated QR code image");
-                                } else {
-                                    tracing::error!("Failed to decode QR code PNG");
-                                }
+                                let image = slint::Image::from_rgba8(buffer);
+                                w.set_friends_qr_code_image(image);
+                                tracing::debug!("Generated QR code image");
                             }
-                        }
+                        });
                     }
-                });
+                    Err(e) => {
+                        tracing::error!("Failed to decode QR code PNG: {}", e);
+                    }
+                }
             }
             Err(e) => {
                 tracing::error!("Failed to generate QR code: {}", e);

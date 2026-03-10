@@ -34,6 +34,7 @@ pub mod v031_jarvis_memory;
 pub mod v032_jarvis_graph;
 pub mod v033_anon_dm_reactions_receipts;
 pub mod v034_anon_group_member_profiles;
+pub mod v035_message_delivery_status;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -71,6 +72,7 @@ pub use v031_jarvis_memory::V031JarvisMemory;
 pub use v032_jarvis_graph::V032JarvisGraph;
 pub use v033_anon_dm_reactions_receipts::V033AnonDmReactionsReceipts;
 pub use v034_anon_group_member_profiles::V034AnonGroupMemberProfiles;
+pub use v035_message_delivery_status::V035MessageDeliveryStatus;
 
 /// Trait for database migrations.
 ///
@@ -223,4 +225,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V032JarvisGraph)
         .register(V033AnonDmReactionsReceipts)
         .register(V034AnonGroupMemberProfiles)
+        .register(V035MessageDeliveryStatus)
 }

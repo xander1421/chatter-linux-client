@@ -39,6 +39,8 @@ pub struct Message {
     /// AI integrations mentioned in message.
     pub mentioned_integrations: Vec<IntegrationId>,
     pub targets_ai_bot: bool,
+    /// Delivery status: "", "sent", "delivered", "read".
+    pub delivery_status: String,
 }
 
 impl Message {
@@ -82,6 +84,7 @@ impl Message {
             current_user_reactions: Vec::new(),
             mentioned_integrations: Vec::new(),
             targets_ai_bot: false,
+            delivery_status: String::new(),
         }
     }
 

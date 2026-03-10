@@ -42,27 +42,30 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     *guard = Some(bytes.clone());
                 }
 
-                if let Some(w) = weak.upgrade() {
-                    w.set_register_has_avatar(true);
-                    w.set_register_selected_default_idx(idx as i32);
+                let weak = weak.clone();
+                // Move image decoding to background thread
+                std::thread::spawn(move || {
+                    // Decode image off UI thread
+                    let decoded = image::load_from_memory(&bytes).ok().map(|img| {
+                        let rgba = img.to_rgba8();
+                        let (w_img, h_img) = rgba.dimensions();
+                        (rgba.into_raw(), w_img, h_img)
+                    });
 
-                    // Load bytes into preview
-                    match image::load_from_memory(&bytes) {
-                        Ok(img) => {
-                            let rgba = img.to_rgba8();
-                            let (w_img, h_img) = rgba.dimensions();
-                            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                rgba.as_raw(),
-                                w_img,
-                                h_img,
-                            );
-                            w.set_register_avatar_source(Image::from_rgba8(buffer));
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_register_has_avatar(true);
+                            w.set_register_selected_default_idx(idx as i32);
+
+                            if let Some((pixels, width, height)) = decoded {
+                                let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                    &pixels, width, height,
+                                );
+                                w.set_register_avatar_source(Image::from_rgba8(buffer));
+                            }
                         }
-                        Err(e) => {
-                            tracing::error!("Failed to decode default avatar for preview: {}", e);
-                        }
-                    }
-                }
+                    });
+                });
             }
         }
     });
@@ -89,21 +92,28 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 *guard = Some(bytes.clone());
                             }
 
+                            // Decode image BEFORE invoke_from_event_loop (already in tokio::spawn)
+                            let decoded = image::load_from_memory(&bytes).ok().map(|img| {
+                                let rgba = img.to_rgba8();
+                                let (w_img, h_img) = rgba.dimensions();
+                                (rgba.into_raw(), w_img, h_img)
+                            });
+
                             // Update UI preview
                             let _ = slint::invoke_from_event_loop(move || {
                                 if let Some(w) = weak.upgrade() {
                                     // Reset default index
                                     w.set_register_selected_default_idx(-1);
 
-                                    // Try to load as image for preview
-                                    match Image::load_from_path(&path) {
-                                        Ok(img) => {
-                                            w.set_register_avatar_source(img);
-                                            w.set_register_has_avatar(true);
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Failed to load selected avatar for preview: {}", e);
-                                        }
+                                    // Create slint::Image from pre-decoded pixels
+                                    if let Some((pixels, width, height)) = decoded {
+                                        let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                            &pixels, width, height,
+                                        );
+                                        w.set_register_avatar_source(Image::from_rgba8(buffer));
+                                        w.set_register_has_avatar(true);
+                                    } else {
+                                        tracing::error!("Failed to decode selected avatar for preview");
                                     }
                                 }
                             });

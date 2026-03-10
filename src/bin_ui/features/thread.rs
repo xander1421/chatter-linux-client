@@ -81,6 +81,10 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
                 // Get current user ID for is_own calculation
                 let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
+                // Pre-decode attachment thumbnails before UI thread
+                for msg in &mut display {
+                    msg.decode_attachment_thumbnails();
+                }
                 let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
                     let slint_messages: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                     w.set_thread_replies(ModelRc::new(VecModel::from(slint_messages)));
@@ -114,6 +118,10 @@ pub fn load_thread_data(
             }
             // Get current user ID for is_own calculation
             let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
+            // Pre-decode attachment thumbnails before UI thread
+            for msg in &mut display {
+                msg.decode_attachment_thumbnails();
+            }
             let _ = slint::invoke_from_event_loop(move || { if let Some(w) = window.upgrade() {
                 w.set_thread_panel_visible(true);
                 w.set_thread_root_message_id(root_message_id.to_string().into());
