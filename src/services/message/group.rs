@@ -791,10 +791,8 @@ impl MessageService {
         }
 
         // Encrypt pairwise for each member using sealed sender (Double Ratchet)
-        // TODO: Multi-device support for groups would require encrypting to all
-        // devices of all members. Current implementation sends to primary device.
-        // For full multi-device, need: encrypt_message_all_devices per member.
-        let mut member_ciphertexts: HashMap<UserId, Vec<u8>> = HashMap::new();
+        // Multi-device: encrypt for ALL devices of each member
+        let mut member_ciphertexts: HashMap<UserId, HashMap<u32, Vec<u8>>> = HashMap::new();
         let mut success_count = 0;
         let mut error_count = 0;
 
@@ -802,24 +800,25 @@ impl MessageService {
             let member_id: UserId = member_id;
             match self
                 .signal_service
-                .encrypt_message(
+                .encrypt_message_all_devices(
                     auth_client,
                     &member_id.to_string(),
-                    1, // Primary device - group multi-device not yet implemented
                     plaintext,
                 )
                 .await
             {
-                Ok(sealed_ciphertext) => {
-                    member_ciphertexts.insert(member_id, sealed_ciphertext);
-                    success_count += 1;
+                Ok(device_ciphertexts) => {
+                    // device_ciphertexts: HashMap<u32, Vec<u8>> (device_id -> ciphertext)
+                    let device_count = device_ciphertexts.len();
+                    member_ciphertexts.insert(member_id, device_ciphertexts);
+                    success_count += device_count;
                 }
                 Err(e) => {
                     tracing::warn!(
                         channel_id = %channel_id,
                         member_id = %member_id,
                         error = %e,
-                        "Failed to encrypt pairwise for member"
+                        "Failed to encrypt for member's devices"
                     );
                     error_count += 1;
                 }
@@ -836,9 +835,9 @@ impl MessageService {
             ));
         }
 
-        // Fan-out pairwise ciphertexts to member mailboxes
+        // Fan-out pairwise ciphertexts to member mailboxes (multi-device)
         match group_fanout
-            .send_to_group_pairwise(channel_id, member_ciphertexts, EnvelopeType::Message)
+            .send_to_group_pairwise_multidevice(channel_id, member_ciphertexts, EnvelopeType::Message)
             .await
         {
             Ok(result) => {

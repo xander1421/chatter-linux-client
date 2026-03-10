@@ -291,6 +291,82 @@ impl GroupFanout {
         })
     }
 
+    /// Send pairwise-encrypted messages to group member mailboxes with multi-device support.
+    ///
+    /// Each member can have multiple devices, each with its own ciphertext.
+    /// Per NDSS '21, each device gets a separate message encrypted with its
+    /// pairwise Double Ratchet session.
+    ///
+    /// # Arguments
+    ///
+    /// * `group_id` - The group channel ID
+    /// * `member_device_ciphertexts` - Map of member UserId to (device_id -> ciphertext)
+    /// * `envelope_type` - Type of message (Message, KeyExchange, etc.)
+    ///
+    /// # Returns
+    ///
+    /// GroupFanoutResult with per-member delivery results.
+    /// Note: Success count reflects total device deliveries, not unique members.
+    pub async fn send_to_group_pairwise_multidevice(
+        &self,
+        group_id: &ChannelId,
+        member_device_ciphertexts: std::collections::HashMap<UserId, std::collections::HashMap<u32, Vec<u8>>>,
+        envelope_type: EnvelopeType,
+    ) -> Result<GroupFanoutResult, MailboxError> {
+        // Load group state to get member mailboxes
+        let group_state = self
+            .mailbox_manager
+            .load_group_state(group_id)?
+            .ok_or(MailboxError::GroupNotFound)?;
+
+        // Check we have member mailboxes
+        if group_state.member_mailboxes.is_empty() {
+            return Err(MailboxError::GroupNotReady);
+        }
+
+        let total_members = member_device_ciphertexts.len();
+        let envelope_type_i32 = envelope_type as i32;
+
+        // Flatten to (user_id, device_id, ciphertext) tuples and create futures
+        let futures: Vec<_> = member_device_ciphertexts
+            .into_iter()
+            .flat_map(|(user_id, device_ciphertexts)| {
+                // Look up member's mailbox
+                group_state.member_mailboxes.get(&user_id).map(|member| {
+                    // For each device, create a delivery future
+                    device_ciphertexts.into_iter().map(|(device_id, ciphertext)| {
+                        let member = member.clone();
+                        let client = Arc::clone(&self.mailbox_client);
+                        async move {
+                            tracing::debug!(
+                                member_id = %member.user_id,
+                                device_id,
+                                "Sending to member device"
+                            );
+                            Self::send_to_member_internal(client, &member, &ciphertext, envelope_type_i32).await
+                        }
+                    }).collect::<Vec<_>>()
+                })
+            })
+            .flatten()
+            .collect();
+
+        // Execute all deliveries in parallel
+        let results = join_all(futures).await;
+
+        // Count successes and failures (per device, not per member)
+        let successful = results.iter().filter(|r| r.success).count();
+        let failed = results.iter().filter(|r| !r.success).count();
+
+        Ok(GroupFanoutResult {
+            group_id: *group_id,
+            total_members,
+            successful,
+            failed,
+            results,
+        })
+    }
+
     /// Send to a single member's mailbox.
     ///
     /// # Arguments
