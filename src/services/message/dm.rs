@@ -588,6 +588,51 @@ impl MessageService {
         Ok(())
     }
 
+    /// Reset sessions with ALL devices of a peer and re-establish.
+    ///
+    /// Used for convergence failure recovery in multi-device scenarios.
+    /// Archives existing sessions and establishes fresh ones for all known devices.
+    pub async fn reset_and_establish_sessions_all_devices(
+        &self,
+        auth_client: &mut AuthClient,
+        peer_id: &UserId,
+    ) -> Result<Vec<u32>, MessageError> {
+        tracing::info!(
+            peer_id = %peer_id,
+            "Resetting sessions for all peer devices"
+        );
+
+        // Mark peer as stale (affects all devices)
+        if let Err(e) = self.sesame_manager.mark_user_stale(peer_id) {
+            tracing::warn!(
+                peer_id = %peer_id,
+                error = %e,
+                "Failed to mark peer as stale (continuing anyway)"
+            );
+        }
+
+        // Establish fresh sessions for ALL devices
+        let device_ids = self.signal_service
+            .ensure_sessions_all_devices(auth_client, &peer_id.to_string())
+            .await
+            .map_err(|e| {
+                tracing::error!(
+                    peer_id = %peer_id,
+                    error = %e,
+                    "Failed to establish sessions for peer devices"
+                );
+                MessageError::EncryptionFailed(format!("Multi-device session establishment failed: {}", e))
+            })?;
+
+        tracing::info!(
+            peer_id = %peer_id,
+            device_count = device_ids.len(),
+            "Reset sessions for all peer devices"
+        );
+
+        Ok(device_ids)
+    }
+
     /// Inject our profile key into the Content if profile sharing is enabled.
     ///
     /// If this is a DM to a friend, auto-enables profile sharing on first message

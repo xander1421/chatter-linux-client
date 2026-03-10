@@ -51,7 +51,9 @@ impl DmBootstrapService {
         }
     }
 
-    /// Handle session convergence failure by resetting and re-establishing session.
+    /// Handle session convergence failure by resetting and re-establishing sessions.
+    ///
+    /// Multi-device: resets sessions for ALL peer devices, not just primary.
     pub fn handle_convergence_failure(&self, peer_id: UserId) {
         let message_service = self.message_service.clone();
         let grpc_pool = self.grpc_pool.clone();
@@ -62,22 +64,23 @@ impl DmBootstrapService {
                 grpc_pool.auth_clone(),
             );
 
-            // Reset session and establish fresh one (device_id = 1 for primary)
+            // Reset sessions and establish fresh ones for ALL peer devices
             match message_service
-                .reset_and_establish_session(&mut auth_client, &peer_id, 1)
+                .reset_and_establish_sessions_all_devices(&mut auth_client, &peer_id)
                 .await
             {
-                Ok(()) => {
+                Ok(device_ids) => {
                     tracing::info!(
                         peer_id = %peer_id,
-                        "Session reset complete - ready for fresh messages"
+                        device_count = device_ids.len(),
+                        "Session reset complete for all devices - ready for fresh messages"
                     );
                 }
                 Err(e) => {
                     tracing::error!(
                         peer_id = %peer_id,
                         error = %e,
-                        "Failed to reset session after convergence failure"
+                        "Failed to reset sessions after convergence failure"
                     );
                 }
             }
