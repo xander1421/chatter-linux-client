@@ -611,31 +611,45 @@ impl MessageService {
         require_encryption: bool,
     ) -> (chat_v1::message::Content, Option<crate::proto::content_v1::SenderKeyDistribution>) {
         // DM: Use sealed sender (pairwise encryption)
-        // TODO: Multi-device support - server-based DM channels rely on server
-        // for device fanout. Primary mailbox-based DM flow (dm.rs) handles
-        // multi-device directly. This path may need update for consistency.
+        // Multi-device: encrypt for ALL recipient devices, send primary ciphertext
+        // Server handles device routing via channel subscription
         if is_dm {
             if let Ok(recipient_id) = channel_id.to_string().parse::<uuid::Uuid>() {
-                match self.signal_service.encrypt_message(
+                // Encrypt for ALL recipient devices (Signal multi-device)
+                match self.signal_service.encrypt_message_all_devices(
                     auth_client,
                     &recipient_id.to_string(),
-                    1, // Primary device - server handles fanout for channel DMs
                     plaintext
                 ).await {
-                    Ok(ciphertext) => {
-                        let encrypted_content = chat_v1::message::Content {
-                            r#type: Some(chat_v1::message::content::Type::SealedSender(
-                                chat_v1::SealedSenderMessage {
-                                    sealed_body: ciphertext,
-                                    ..Default::default()
-                                }
-                            )),
-                        };
-                        return (encrypted_content, None);
+                    Ok(device_ciphertexts) => {
+                        // For channel DMs, server handles device addressing
+                        // Use primary device (1) ciphertext, fallback to first available
+                        let primary_ciphertext = device_ciphertexts.get(&1)
+                            .or_else(|| device_ciphertexts.values().next())
+                            .cloned();
+
+                        if let Some(ciphertext) = primary_ciphertext {
+                            tracing::debug!(
+                                recipient = %recipient_id,
+                                device_count = device_ciphertexts.len(),
+                                "Channel DM encrypted for devices"
+                            );
+
+                            let encrypted_content = chat_v1::message::Content {
+                                r#type: Some(chat_v1::message::content::Type::SealedSender(
+                                    chat_v1::SealedSenderMessage {
+                                        sealed_body: ciphertext,
+                                        ..Default::default()
+                                    }
+                                )),
+                            };
+                            return (encrypted_content, None);
+                        }
+                        // No ciphertexts available - fall through to cleartext
+                        tracing::warn!("DM encryption produced no ciphertexts");
                     },
                     Err(e) => {
                         tracing::warn!("DM encryption failed: {}, sending cleartext", e);
-                        return (original_content, None);
                     }
                 }
             }
