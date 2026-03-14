@@ -40,5 +40,11 @@ pub mod signal_v1 {
     include!("signal.v1.rs");
 }
 
+/// Device provisioning types and services (QR code device linking)
+/// Note: chat.v1.provisioning.rs already includes chat.v1.provisioning.tonic.rs via include!
+pub mod provisioning_v1 {
+    include!("chat.v1.provisioning.rs");
+}
+
 // Re-export commonly used types at the proto level
 pub use chat_v1::*;

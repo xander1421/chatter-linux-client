@@ -19,7 +19,7 @@ use crate::util::time::TimestampNanos;
 
 // Re-export all content builders
 pub use builders::{
-    build_text_content, build_data_message_content,
+    build_text_content, build_data_message_content, build_reply_content,
     build_typing_content, build_typing_content_with_channel,
     build_read_receipt_content, build_read_receipt_content_with_channel,
     build_delivery_receipt_content, build_delivery_receipt_content_with_channel,

@@ -2,6 +2,8 @@
 //!
 //! Uses UserService for all profile operations - no direct network calls.
 
+use std::cell::RefCell;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -12,6 +14,10 @@ use chatter_linux::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{get_initials, DMListItemSendData, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
+
+thread_local! {
+    static PENDING_AVATAR_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
 
 pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let user_service = ui_ctx.user_service.clone();
@@ -455,4 +461,224 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             }
         });
     });
+
+    // Edit profile actions
+    let weak_window = window.as_weak();
+    window.on_profile_edit_profile(move || {
+        let weak = weak_window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_edit_profile_display_name(w.get_profile_display_name());
+                w.set_edit_profile_bio(w.get_profile_bio());
+                w.set_edit_profile_avatar(w.get_user_avatar_source());
+                
+                // Clear any pending avatar
+                PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = None);
+                
+                w.set_active_modal("edit-profile".into());
+            }
+        });
+    });
+
+    let weak_window = window.as_weak();
+    let user_service_save = user_service.clone();
+    let attachment_service = ui_ctx.attachment_service.clone();
+    let grpc_pool = ui_ctx.grpc_pool.clone();
+    let ui_ctx_save = ui_ctx.clone();
+    window.on_edit_profile_save(move |display_name: slint::SharedString, bio: slint::SharedString| {
+        let weak = weak_window.clone();
+        let user_service = user_service_save.clone();
+        let attachment_service = attachment_service.clone();
+        let grpc_pool = grpc_pool.clone();
+        let ui_ctx = ui_ctx_save.clone();
+        let display_name = display_name.to_string();
+        let bio = bio.to_string();
+
+        // Check for pending avatar path
+        let pending_avatar = PENDING_AVATAR_PATH.with(|p| p.borrow().clone());
+
+        tokio::spawn(async move {
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_edit_profile_loading(true);
+                    w.set_edit_profile_error("".into());
+                }
+            });
+
+            // 1. Upload avatar if needed
+            let mut avatar_url = None;
+            if let Some(path) = pending_avatar {
+                match attachment_service.upload_to_cdn_encrypted(&grpc_pool, &path).await {
+                    Ok(result) => {
+                        avatar_url = Some(result.cdn_key);
+                        tracing::info!("Uploaded new avatar to CDN: {}", avatar_url.as_ref().unwrap());
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to upload avatar: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_edit_profile_loading(false);
+                                w.set_edit_profile_error(error_msg.into());
+                            }
+                        });
+                        return;
+                    }
+                }
+            } else {
+                // No new avatar, but we should get the existing avatar_url if any
+                // Get current profile to preserve avatar_url
+                if let Ok(current_user_id) = user_service.current_user_id() {
+                    if let Ok(Some(current_profile)) = user_service.get_profile_local(&current_user_id) {
+                        avatar_url = current_profile.avatar_url;
+                        if avatar_url.is_some() {
+                            tracing::debug!("Using existing avatar_url: {:?}", avatar_url);
+                        }
+                    }
+                }
+            }
+
+            // 2. Map bio to status message
+            let status_msg = if !bio.is_empty() {
+                Some(chatter_linux::domain::user::StatusMessage::new(bio))
+            } else {
+                None
+            };
+
+            // 3. Update profile
+            tracing::info!(
+                "Updating user profile - display_name: {}, avatar_url: {:?}, bio: {:?}",
+                display_name, avatar_url, status_msg.as_ref().map(|m| &m.text)
+            );
+            
+            match user_service
+                .update_user_profile(Some(&display_name), avatar_url.as_deref(), status_msg.as_ref())
+                .await
+            {
+                Ok(profile) => {
+                    tracing::info!(
+                        "Profile updated - display_name: {}, avatar_url: {:?}, bio: {:?}",
+                        profile.display_name, profile.avatar_url, profile.status_message.as_ref().map(|m| &m.text)
+                    );
+                    
+                    // Broadcast profile update to all anon DM conversations
+                    broadcast_profile_update(&ui_ctx, &profile).await;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_edit_profile_loading(false);
+                            w.set_active_modal("none".into());
+
+                            // Update UI with new profile info
+                            w.set_profile_display_name(profile.display_name.clone().into());
+                            if let Some(msg) = &profile.status_message {
+                                w.set_profile_bio(msg.text.clone().into());
+                            } else {
+                                w.set_profile_bio("".into());
+                            }
+
+                            // Update sidebar name too
+                            w.set_user_display_name(profile.display_name.into());
+                            
+                            // Clear pending avatar
+                            PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = None);
+                        }
+                    });
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_edit_profile_loading(false);
+                            w.set_edit_profile_error(error_msg.into());
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // Change avatar with file picker
+    let weak_window = window.as_weak();
+    window.on_edit_profile_change_avatar(move || {
+        let weak = weak_window.clone();
+        
+        tokio::spawn(async move {
+            let config = chatter_linux::media::FilePickerConfig::new()
+                .with_title("Select Profile Picture")
+                .with_filter(chatter_linux::media::FileFilter::images());
+            
+            if let Some(path) = chatter_linux::media::FilePicker::pick_file(config).await {
+                match std::fs::read(&path) {
+                    Ok(data) => {
+                        // Store the path for later use
+                        PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = Some(path.clone()));
+                        
+                        // Create the image on the UI thread
+                        let _ = slint::invoke_from_event_loop(move || {
+                            // Process image on UI thread where it's safe
+                            match chatter_linux::media::ImageProcessor::memory_to_slint_image(&data) {
+                                Ok(slint_img) => {
+                                    if let Some(w) = weak.upgrade() {
+                                        w.set_edit_profile_avatar(slint_img);
+                                    }
+                                }
+                                Err(e) => tracing::error!("Failed to decode avatar image: {}", e),
+                            }
+                        });
+                    }
+                    Err(e) => tracing::error!("Failed to read avatar file: {}", e),
+                }
+            }
+        });
+    });
+}
+
+/// Broadcast profile update to all anon DM conversations and anon groups
+async fn broadcast_profile_update(ui_ctx: &Arc<UIContext>, profile: &chatter_linux::domain::user::Profile) {
+    let display_name = Some(profile.display_name.clone());
+    let avatar_url = profile.avatar_url.clone();
+    let bio = profile.status_message.as_ref().map(|m| m.text.clone());
+    
+    tracing::info!(
+        "Broadcasting profile update - display_name: {:?}, avatar_url: {:?}, bio: {:?}",
+        display_name, avatar_url, bio
+    );
+    
+    // Broadcast to all anon DM conversations
+    let conversations = match ui_ctx.anon_dm_service.list_conversations() {
+        Ok(convs) => convs,
+        Err(e) => {
+            tracing::warn!("Failed to list anon DM conversations for profile broadcast: {}", e);
+            return;
+        }
+    };
+    
+    for conv in &conversations {
+        if !conv.is_ready() {
+            continue;
+        }
+        
+        let conv_id = conv.id;
+        let service = ui_ctx.anon_dm_service.clone();
+        let display_name = display_name.clone();
+        let avatar_url = avatar_url.clone();
+        let bio = bio.clone();
+        
+        tokio::spawn(async move {
+            if let Err(e) = service.send_profile_update(&conv_id, display_name, avatar_url, bio).await {
+                tracing::debug!("Failed to send profile update to anon DM: {}", e);
+            }
+        });
+    }
+    
+    // Broadcast to anon groups where user is owner
+    let anon_group_service = ui_ctx.anon_group_service.clone();
+    tokio::spawn(async move {
+        if let Err(e) = anon_group_service.broadcast_profile_to_owned_groups().await {
+            tracing::warn!("Failed to broadcast profile to owned groups: {}", e);
+        }
+    });
+    
+    tracing::info!("Broadcasted profile update to {} anon DM conversations", conversations.len());
 }

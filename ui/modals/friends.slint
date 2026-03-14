@@ -109,6 +109,7 @@ export component FriendsModal inherits Rectangle {
     // Private (anon DM) request actions
     callback accept-private-request(string);   // conversation_id
     callback decline-private-request(string);  // conversation_id
+    callback block-private-request(string);    // conversation_id
 
     // Blocked actions
     callback unblock-user(string);    // user_id
@@ -985,6 +986,15 @@ export component FriendsModal inherits Rectangle {
 
                                                 clicked => {
                                                     root.decline-private-request(request.user-id);
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Block";
+                                                variant: "destructive";
+
+                                                clicked => {
+                                                    root.block-private-request(request.user-id);
                                                 }
                                             }
                                         }

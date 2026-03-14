@@ -26,11 +26,18 @@ use crate::error::CallError;
 /// Frame data: (RGBA buffer, width, height, stride)
 type FrameData = (Vec<u8>, i32, i32, u32);
 
-/// Check if we're running on Wayland.
+/// Check if we're running on Wayland (Linux only, always false on other platforms).
 fn is_wayland() -> bool {
-    std::env::var("XDG_SESSION_TYPE")
-        .map(|s| s.to_lowercase() == "wayland")
-        .unwrap_or(false)
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var("XDG_SESSION_TYPE")
+            .map(|s| s.to_lowercase() == "wayland")
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
 }
 
 /// Information about a capturable screen/monitor or window.

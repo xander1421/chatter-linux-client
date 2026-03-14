@@ -147,12 +147,14 @@ impl InboxHandler for PinHandler {
                 message_id,
                 unpinner_id: pinner_id,
                 channel_id,
+                target_sent_timestamp: pin.target_sent_timestamp,
             });
         } else {
             ctx.emit(DomainEvent::MessagePinned {
                 message_id,
                 pinner_id,
                 channel_id,
+                target_sent_timestamp: pin.target_sent_timestamp,
             });
         }
 

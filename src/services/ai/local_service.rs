@@ -9,6 +9,10 @@ use crate::storage::repositories::settings_repo::SettingsRepository;
 
 use super::{LocalAIActorHandle, LocalAIError, ModelInfo, SampleParams};
 
+/// Default model to use when none is configured.
+/// Qwen2.5-7B-Instruct is a good balance of quality and speed on consumer GPUs.
+pub const DEFAULT_MODEL_ID: &str = "Qwen/Qwen2.5-7B-Instruct-GGUF";
+
 /// High-level service for local AI operations.
 ///
 /// Wraps the LocalAIActorHandle and provides convenience methods for common
@@ -29,28 +33,42 @@ impl LocalAIService {
     ///
     /// This checks both the compile-time feature flag and the user's preference.
     pub fn is_available(&self) -> bool {
-        self.settings_repo.get_local_ai_enabled().unwrap_or(false)
+        #[cfg(not(feature = "local-ai"))]
+        return false;
+
+        #[cfg(feature = "local-ai")]
+        self.settings_repo.get_local_ai_enabled().unwrap_or(true)
     }
 
-    /// Load the user's preferred model from settings.
+    /// Load the user's preferred model from settings, or default model.
     ///
-    /// Returns `None` if local AI is disabled or no model is configured.
+    /// Local AI is enabled by default. Uses DEFAULT_MODEL_ID if no model configured.
     pub async fn load_preferred_model(&self) -> Result<Option<ModelInfo>, LocalAIError> {
-        if !self.settings_repo.get_local_ai_enabled().unwrap_or(false) {
-            return Ok(None);
+        // Check if user explicitly disabled local AI
+        if let Ok(false) = self.settings_repo.get_local_ai_enabled() {
+            // Only skip if explicitly set to false
+            if self.settings_repo.get_string("local_ai.enabled").ok().flatten().is_some() {
+                tracing::debug!("Local AI explicitly disabled by user");
+                return Ok(None);
+            }
         }
 
-        match self.settings_repo.get_local_ai_model() {
-            Ok(Some((model_id, quantized))) => {
-                let info = self.actor.load_model(model_id, quantized).await?;
-                Ok(Some(info))
+        // Get configured model or use default
+        let (model_id, quantized) = match self.settings_repo.get_local_ai_model() {
+            Ok(Some((id, q))) => (id, q),
+            Ok(None) => {
+                tracing::info!("No model configured, using default: {}", DEFAULT_MODEL_ID);
+                (DEFAULT_MODEL_ID.to_string(), None)
             }
-            Ok(None) => Ok(None),
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to load local AI model settings");
-                Ok(None)
+                tracing::warn!(error = %e, "Failed to read model settings, using default");
+                (DEFAULT_MODEL_ID.to_string(), None)
             }
-        }
+        };
+
+        // Load the model
+        let info = self.actor.load_model(model_id, quantized).await?;
+        Ok(Some(info))
     }
 
     /// Summarize a conversation.

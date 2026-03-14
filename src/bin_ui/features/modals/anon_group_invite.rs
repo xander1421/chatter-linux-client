@@ -59,6 +59,7 @@ pub fn spawn_anon_group_invite_handler(
                             match service.accept_invite(
                                 group_id,
                                 group_name.clone(),
+                                inviter_id, // Pass as owner_id
                                 inviter_id,
                                 inviter_mailbox_pk,
                                 profile_key,

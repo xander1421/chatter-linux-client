@@ -19,14 +19,14 @@ use chatter_linux::app::UIContext;
 use crate::MainWindow;
 
 mod active;
-mod call_history;
+pub mod call_history;
 mod device_picker;
 mod event_handlers;
 mod incoming;
-mod key_exchange;
+pub mod key_exchange;
 mod outgoing;
 mod room_events;
-mod timers;
+pub mod timers;
 
 // Re-export for external use (cleanup_call_ui_state is used by auth/inbox)
 

@@ -18,8 +18,8 @@ pub mod interceptors;
 pub mod mailbox_client;
 pub mod message_client;
 pub mod notification_client;
+pub mod provisioning_client;
 pub mod user_client;
-// saved_messages_client removed - saved messages uses channel type=4 with regular Channel/Message APIs
 
 pub use anonymous_client::{AnonymousAuthClient, AnonymousMessageClient};
 pub use anonymous_mailbox_client::AnonymousMailboxClient;
@@ -34,4 +34,5 @@ pub use interceptors::{AuthInterceptor, AuthMode};
 pub use mailbox_client::MailboxClient;
 pub use message_client::MessageClient;
 pub use notification_client::NotificationClient;
+pub use provisioning_client::{ProvisioningClient, ProvisioningPollResult};
 pub use user_client::UserClient;

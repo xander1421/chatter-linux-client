@@ -241,6 +241,83 @@ pub fn derive_call_key_ephemeral(
 }
 
 // =============================================================================
+// Anonymous DM Call Key Derivation (Hybrid)
+// =============================================================================
+
+/// HKDF salt for anonymous call key derivation.
+const ANON_CALL_KEY_SALT: &[u8] = b"ChatterAnonCallKey-v1";
+
+/// Derive the final call encryption key for anonymous DM calls.
+///
+/// Mixes the Signal session ECDH shared secret with a per-call random
+/// contribution, producing a key that is:
+/// - Bound to the Signal identity keys (MITM protection)
+/// - Unique per call (random contribution)
+/// - Deterministic given the same inputs (both sides derive same key)
+///
+/// Final key = HKDF(
+///     salt: "ChatterAnonCallKey-v1",
+///     ikm: signal_shared_secret || random_contribution,
+///     info: "anon-call:" || room_name
+/// )
+///
+/// # Arguments
+/// * `signal_shared` - 32-byte ECDH shared secret from Signal identity keys
+/// * `random_contribution` - 32-byte random value from the call offer
+/// * `room_name` - The call room name (deterministic context binding)
+///
+/// # Returns
+/// 32-byte AES-256 key for LiveKit E2EE.
+pub fn derive_anon_call_key(
+    signal_shared: &[u8; 32],
+    random_contribution: &[u8; 32],
+    room_name: &str,
+) -> Result<[u8; 32], CryptoError> {
+    // Concatenate both key materials
+    let mut ikm = [0u8; 64];
+    ikm[..32].copy_from_slice(signal_shared);
+    ikm[32..].copy_from_slice(random_contribution);
+
+    let hkdf = Hkdf::<Sha256>::new(Some(ANON_CALL_KEY_SALT), &ikm);
+
+    let info = format!("anon-call:{}", room_name);
+    let mut call_key = [0u8; 32];
+    hkdf.expand(info.as_bytes(), &mut call_key)
+        .map_err(|_| CryptoError::KeyDerivationFailed("Anon call HKDF expand failed".into()))?;
+
+    Ok(call_key)
+}
+
+/// Derive the final call encryption key with optional post-quantum contribution.
+///
+/// Extends `derive_anon_call_key` with an optional Kyber shared secret.
+/// When PQ is available: HKDF(signal || random || kyber, room_name)
+/// When PQ is not available: falls back to HKDF(signal || random, room_name)
+pub fn derive_anon_call_key_hybrid(
+    signal_shared: &[u8; 32],
+    random_contribution: &[u8; 32],
+    pq_shared: Option<&[u8]>,
+    room_name: &str,
+) -> Result<[u8; 32], CryptoError> {
+    // Concatenate all key materials
+    let mut ikm = Vec::with_capacity(64 + pq_shared.map(|s| s.len()).unwrap_or(0));
+    ikm.extend_from_slice(signal_shared);
+    ikm.extend_from_slice(random_contribution);
+    if let Some(pq) = pq_shared {
+        ikm.extend_from_slice(pq);
+    }
+
+    let hkdf = Hkdf::<Sha256>::new(Some(ANON_CALL_KEY_SALT), &ikm);
+
+    let info = format!("anon-call:{}", room_name);
+    let mut call_key = [0u8; 32];
+    hkdf.expand(info.as_bytes(), &mut call_key)
+        .map_err(|_| CryptoError::KeyDerivationFailed("Hybrid anon call HKDF expand failed".into()))?;
+
+    Ok(call_key)
+}
+
+// =============================================================================
 // Group Call Key Generation
 // =============================================================================
 

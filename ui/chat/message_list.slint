@@ -38,7 +38,7 @@ export component MessageList inherits Rectangle {
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string);  // (sender_id, timestamp_ns)
     callback thread-clicked(string);
-    callback more-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback load-more();
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
@@ -182,6 +182,8 @@ export component MessageList inherits Rectangle {
                 sender-name: item.sender-name;
                 sender-initials: item.sender-initials;
                 sender-avatar-url: item.sender-avatar-url;
+                sender-avatar-source: item.sender-avatar-source;
+                has-avatar: item.has-avatar;
                 content: item.content;
                 timestamp: item.timestamp;
                 is-own: item.is-own;
@@ -224,8 +226,8 @@ export component MessageList inherits Rectangle {
                     root.thread-clicked(id);
                 }
 
-                more-clicked(sender-id, timestamp-ns) => {
-                    root.more-clicked(sender-id, timestamp-ns);
+                more-clicked(sender-id, timestamp-ns, x, y) => {
+                    root.more-clicked(sender-id, timestamp-ns, x, y);
                 }
 
                 attachment-clicked(id) => {

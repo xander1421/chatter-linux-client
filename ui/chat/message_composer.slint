@@ -28,6 +28,11 @@ export component MessageComposer inherits Rectangle {
     in-out property <bool> is-editing: false;
     in-out property <string> edit-message-id: "";
 
+    // Reply mode properties
+    in property <bool> is-replying: false;
+    in property <string> reply-to-sender: "";
+    in property <string> reply-to-preview: "";
+
     // Computed properties
     property <bool> can-send: text != "" || pending-attachments.length > 0;
     property <bool> has-attachments: pending-attachments.length > 0;
@@ -51,11 +56,15 @@ export component MessageComposer inherits Rectangle {
 
     // Edit bar height
     property <length> edit-bar-height: is-editing ? 36px : 0px;
+    
+    // Reply bar height
+    property <length> reply-bar-height: is-replying ? 48px : 0px;
 
     // Callbacks
     callback send(string);
     callback send-edit(string, string);  // (message_id, new_text)
     callback cancel-edit();
+    callback cancel-reply();
     callback attachment-clicked();
     callback emoji-clicked();
     callback gif-clicked();
@@ -68,7 +77,7 @@ export component MessageComposer inherits Rectangle {
     forward-focus: text-input;
 
     // Layout - dynamic height based on content
-    height: content-height + attachment-tray-height + edit-bar-height + Spacing.sm * 2 + 1px;  // +1px for top border
+    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + Spacing.sm * 2 + 1px;  // +1px for top border
     background: Colors.surface;
 
     // Count newlines in string
@@ -143,6 +152,77 @@ export component MessageComposer inherits Rectangle {
                         mouse-cursor: pointer;
                         clicked => {
                             root.cancel-edit();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Reply mode indicator bar
+        if root.is-replying: Rectangle {
+            width: 100%;
+            height: 48px;
+            background: Colors.primary.transparentize(0.95);
+
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                spacing: Spacing.sm;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    alignment: start;
+
+                    // Reply icon
+                    Rectangle {
+                        width: 4px;
+                        height: parent.height - Spacing.sm * 2;
+                        y: Spacing.sm;
+                        background: Colors.primary;
+                        border-radius: 2px;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+
+                        Text {
+                            text: "Reply to " + root.reply-to-sender;
+                            color: Colors.primary;
+                            font-size: Typography.sm;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: root.reply-to-preview;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                // Cancel reply button
+                Rectangle {
+                    width: 24px;
+                    height: 24px;
+                    background: cancel-reply-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+                    border-radius: Spacing.radius-sm;
+
+                    Text {
+                        text: "\u{2715}";  // X mark
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    cancel-reply-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.cancel-reply();
                         }
                     }
                 }

@@ -7,58 +7,9 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_linux::app::UIContext;
-use chatter_linux::domain::{Attachment, FileCategory, Message};
-use chatter_linux::services::attachment::AttachmentService;
-use chatter_linux::services::message::MessageService;
 
 use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
 use crate::MainWindow;
-
-/// Generate a preview text for a pinned message (with attachment support).
-fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> String {
-    // First try to get text content
-    if let Some(text) = message.as_text() {
-        if !text.is_empty() {
-            return if text.chars().count() > 80 {
-                let truncated: String = text.chars().take(77).collect();
-                format!("{}...", truncated)
-            } else {
-                text.to_string()
-            };
-        }
-    }
-
-    // If no text, describe attachments
-    if !attachments.is_empty() {
-        if attachments.len() == 1 {
-            let att = &attachments[0];
-            let category = att.metadata.category();
-            let (emoji, type_name) = match category {
-                FileCategory::Image => ("📷", "Photo"),
-                FileCategory::Video => ("🎬", "Video"),
-                FileCategory::Audio => ("🎵", "Voice message"),
-                FileCategory::Document => ("📄", "Document"),
-                FileCategory::Code => ("📝", "Code"),
-                FileCategory::Archive => ("📦", "Archive"),
-                FileCategory::Other => ("📎", "File"),
-            };
-            return format!("{} {}", emoji, type_name);
-        } else {
-            return format!("📎 {} attachments", attachments.len());
-        }
-    }
-
-    // Fallback for unresolved attachment IDs
-    if !message.attachments.is_empty() {
-        if message.attachments.len() == 1 {
-            "📎 Attachment".to_string()
-        } else {
-            format!("📎 {} attachments", message.attachments.len())
-        }
-    } else {
-        "[Pinned message]".to_string()
-    }
-}
 
 /// Wire header callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
@@ -246,23 +197,21 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     // Previous pinned message
     let pinned_state = ui_ctx.pinned_state.clone();
     let weak_window = window.as_weak();
-    let message_service = ui_ctx.message_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
+    let pin_service = ui_ctx.pin_service.clone();
 
     window.on_pinned_prev_clicked(move || {
         pinned_state.navigate_prev();
-        update_pinned_ui_async(weak_window.clone(), pinned_state.clone(), message_service.clone(), attachment_service.clone());
+        update_pinned_ui_with_service(weak_window.clone(), pinned_state.clone(), pin_service.clone());
     });
 
     // Next pinned message
     let pinned_state = ui_ctx.pinned_state.clone();
     let weak_window = window.as_weak();
-    let message_service = ui_ctx.message_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
+    let pin_service = ui_ctx.pin_service.clone();
 
     window.on_pinned_next_clicked(move || {
         pinned_state.navigate_next();
-        update_pinned_ui_async(weak_window.clone(), pinned_state.clone(), message_service.clone(), attachment_service.clone());
+        update_pinned_ui_with_service(weak_window.clone(), pinned_state.clone(), pin_service.clone());
     });
 
     // Dismiss pinned bar
@@ -326,12 +275,11 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-/// Update pinned UI asynchronously to avoid blocking the UI thread with database queries.
-fn update_pinned_ui_async(
+/// Update pinned UI using PinService.
+fn update_pinned_ui_with_service(
     weak_window: slint::Weak<MainWindow>,
     pinned_state: chatter_linux::state::PinnedState,
-    message_service: Arc<MessageService>,
-    attachment_service: Arc<AttachmentService>,
+    pin_service: Arc<chatter_linux::services::pin_service::PinService>,
 ) {
     // Get state data that doesn't require DB access
     let state = pinned_state.get();
@@ -341,15 +289,10 @@ fn update_pinned_ui_async(
 
     // Move database queries to background thread
     std::thread::spawn(move || {
-        // Get preview text for current pinned message (with attachment support)
+        // Get preview text for current pinned message using PinService
         let preview = if let Some(msg_id) = current_msg_id {
-            if let Ok(Some(msg)) = message_service.get_message_local(&msg_id) {
-                let attachments: Vec<Attachment> = msg
-                    .attachments
-                    .iter()
-                    .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
-                    .collect();
-                generate_pinned_preview(&msg, &attachments)
+            if let Ok(Some(pinned_data)) = pin_service.get_pinned_message(&msg_id) {
+                pinned_data.preview
             } else {
                 "[Pinned message]".to_string()
             }
@@ -385,6 +328,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         if !selected_private_group_id.is_empty() {
             // Private group settings - move DB queries to background thread
             let anon_group_service = anon_group_service.clone();
+            let user_service = user_service.clone();
             let weak = weak_window.clone();
 
             std::thread::spawn(move || {
@@ -414,12 +358,48 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 let member_count = members.len() as i32;
                 let group_name = group.name.clone();
 
+                // Get current user ID to check if owner
+                let current_user_id = match anon_group_service.current_user_id() {
+                    Ok(id) => id,
+                    _ => return,
+                };
+                let is_owner = group.owner_id == current_user_id || group.my_role == chatter_linux::domain::anon_group::AnonGroupRole::Owner;
+                let is_admin = group.my_role == chatter_linux::domain::anon_group::AnonGroupRole::Admin;
+
+                // Convert members to Slint data
+                let mut slint_members = Vec::with_capacity(members.len());
+                for member in members {
+                    let display_name = if let Some(ref name) = member.display_name {
+                        name.clone()
+                    } else {
+                        user_service.get_display_name(&member.user_id)
+                    };
+
+                    let role = match member.role {
+                        chatter_linux::domain::anon_group::AnonGroupRole::Owner => "owner",
+                        chatter_linux::domain::anon_group::AnonGroupRole::Admin => "admin",
+                        chatter_linux::domain::anon_group::AnonGroupRole::Member => "member",
+                    };
+
+                    slint_members.push(crate::ChannelMemberData {
+                        user_id: member.user_id.to_string().into(),
+                        display_name: display_name.into(),
+                        username: "".into(),
+                        role: role.into(),
+                        joined_at: "".into(),
+                    });
+                }
+
                 // Open private group settings modal
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
+                        w.set_channel_settings_id(group_id.to_string().into());
                         w.set_channel_settings_name(group_name.into());
                         w.set_channel_settings_type("private-group".into());
                         w.set_channel_settings_member_count(member_count);
+                        w.set_channel_settings_is_owner(is_owner);
+                        w.set_channel_settings_can_manage_members(is_owner || is_admin);
+                        w.set_channel_settings_members(ModelRc::new(VecModel::from(slint_members)));
                         w.set_active_modal("channel-settings".into());
                         tracing::debug!(
                             "Opened settings for private group {} with {} members",

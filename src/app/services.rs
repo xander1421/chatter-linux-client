@@ -13,6 +13,7 @@ use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
 use crate::services::channel::ChannelService;
+use crate::services::channel_bootstrap_service::ChannelBootstrapService;
 use crate::services::channel_event_service::ChannelEventService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::draft_service::DraftService;
@@ -24,6 +25,7 @@ use crate::services::pin_service::PinService;
 use crate::services::reaction_service::ReactionService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
+use crate::services::typing_service::TypingService;
 use crate::services::user::UserService;
 
 use super::infrastructure::InfrastructureContainer;
@@ -71,6 +73,10 @@ pub struct ServiceContainer {
     pub draft_service: Arc<DraftService>,
     /// Pin service for pinned messages.
     pub pin_service: Arc<PinService>,
+    /// Typing service for typing indicators.
+    pub typing_service: Arc<TypingService>,
+    /// Channel bootstrap service for pending message flush.
+    pub channel_bootstrap_service: Arc<ChannelBootstrapService>,
     /// Pairwise encryption service (reusable Signal Protocol).
     pub pairwise_service: Arc<PairwiseService>,
     /// Anonymous group service for server-oblivious groups.
@@ -174,6 +180,8 @@ impl ServiceContainer {
             infra.message_repo.clone(),
             infra.channel_repo.clone(),
             infra.user_repo.clone(),
+            infra.grpc_pool.clone(),
+            infra.event_bus.clone(),
         ));
 
         // 12. AI service for AI integrations
@@ -249,6 +257,20 @@ impl ServiceContainer {
             local_ai.clone(),
         ));
 
+        // 21. Typing service for typing indicators
+        let typing_service = Arc::new(TypingService::new(
+            infra.settings_repo.clone(),
+            infra.typing_aggregator.clone(),
+        ));
+
+        // 22. Channel bootstrap service for pending message flush
+        let channel_bootstrap_service = Arc::new(ChannelBootstrapService::new(
+            infra.grpc_pool.clone(),
+            signal_service.clone(),
+            infra.group_fanout.clone(),
+            infra.group_mailbox_manager.clone(),
+        ));
+
         tracing::info!("Services initialized");
 
         Ok(Self {
@@ -273,6 +295,8 @@ impl ServiceContainer {
             local_ai,
             local_ai_service,
             jarvis_service,
+            typing_service,
+            channel_bootstrap_service,
         })
     }
 }

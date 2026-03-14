@@ -46,7 +46,6 @@ export component Sidebar inherits Rectangle {
     callback join-channel-clicked();
 
     // Callbacks - Profile
-    callback settings-clicked();
     callback friends-clicked();
     callback profile-clicked();
 
@@ -62,9 +61,6 @@ export component Sidebar inherits Rectangle {
     // Callback - Toggle collapsed
     callback toggle-collapsed();
 
-    // Callbacks - Jarvis AI
-    callback toggle-jarvis();
-    in property <bool> jarvis-active: false;
 
     // Callbacks - Tooltip (bubble up to App for global rendering)
     callback show-tooltip(string, length, length);
@@ -90,7 +86,6 @@ export component Sidebar inherits Rectangle {
             collapsed: root.collapsed;
             pending-friend-requests: root.pending-friend-requests;
 
-            settings-clicked => { root.settings-clicked(); }
             friends-clicked => { root.friends-clicked(); }
             profile-clicked => { root.profile-clicked(); }
             show-tooltip(text) => {
@@ -351,80 +346,6 @@ export component Sidebar inherits Rectangle {
                 root.show-tooltip(text, root.width + 8px, dm-list.y + local-y);
             }
             hide-tooltip => { root.hide-tooltip(); }
-        }
-
-        // Separator before Jarvis
-        Rectangle {
-            height: 1px;
-            background: Colors.surface-hover;
-        }
-
-        // Jarvis AI toggle
-        jarvis-entry := Rectangle {
-            height: 44px;
-            border-radius: Spacing.radius-sm;
-            background: root.jarvis-active ? Colors.primary.with-alpha(0.15) : (jarvis-touch.has-hover ? Colors.surface-hover : Colors.surface);
-
-            // Internal state for tracking if tooltip is currently shown
-            property <bool> tooltip-shown: false;
-
-            HorizontalLayout {
-                padding-left: root.collapsed ? 0px : Spacing.sm;
-                padding-right: root.collapsed ? 0px : Spacing.sm;
-                spacing: root.collapsed ? 0px : Spacing.sm;
-                alignment: root.collapsed ? center : start;
-
-                // Jarvis AI icon (24px circle with J)
-                Rectangle {
-                    width: 24px;
-                    height: 24px;
-                    border-radius: 12px;
-                    background: root.jarvis-active ? Colors.primary : Colors.surface-hover;
-
-                    Text {
-                        text: "J";
-                        font-size: 12px;
-                        font-weight: 700;
-                        color: root.jarvis-active ? Colors.text-primary : Colors.text-muted;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                // Text (hidden when collapsed)
-                if !root.collapsed: Text {
-                    text: "Jarvis AI";
-                    color: root.jarvis-active ? Colors.primary : Colors.text-secondary;
-                    font-size: 14px;
-                    font-weight: root.jarvis-active ? 600 : 400;
-                    vertical-alignment: center;
-                }
-            }
-
-            jarvis-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => { root.toggle-jarvis(); }
-            }
-
-            // Show tooltip when hovering in collapsed mode
-            if root.collapsed && jarvis-touch.has-hover && !tooltip-shown: Rectangle {
-                width: 0;
-                height: 0;
-                init => {
-                    jarvis-entry.tooltip-shown = true;
-                    root.show-tooltip("Jarvis AI", root.width + 8px, jarvis-entry.y + jarvis-entry.height / 2 - 14px);
-                }
-            }
-
-            // Hide tooltip when hover ends
-            if tooltip-shown && !jarvis-touch.has-hover: Rectangle {
-                width: 0;
-                height: 0;
-                init => {
-                    jarvis-entry.tooltip-shown = false;
-                    root.hide-tooltip();
-                }
-            }
         }
 
         // Separator before toggle

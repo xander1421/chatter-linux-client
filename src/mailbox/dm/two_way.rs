@@ -154,12 +154,14 @@ impl TwoWayAnonymity {
     /// Poll all active mailboxes.
     ///
     /// Polls each conversation's mailbox that is active and not recently polled.
+    /// Returns a tuple of (successful results, failed mailbox errors).
     pub async fn poll_all_mailboxes(
         &self,
         mailbox_client: &mut MailboxClient,
-    ) -> Result<Vec<PollResult>, MailboxError> {
+    ) -> Result<(Vec<PollResult>, Vec<(UserId, MailboxError)>), MailboxError> {
         let active_keys = self.conversation_manager.get_active_mailbox_keys()?;
         let mut results = Vec::new();
+        let mut failures = Vec::new();
 
         for (peer_id, public_key, private_key, mailbox_id) in active_keys {
             match self
@@ -169,12 +171,12 @@ impl TwoWayAnonymity {
                 Ok(result) => results.push(result),
                 Err(e) => {
                     tracing::warn!(peer_id = %peer_id, error = %e, "Failed to poll mailbox");
-                    // Continue with other mailboxes
+                    failures.push((peer_id, e));
                 }
             }
         }
 
-        Ok(results)
+        Ok((results, failures))
     }
 
     /// Poll a single mailbox by key.
@@ -201,15 +203,19 @@ impl TwoWayAnonymity {
         // Paginate through all messages
         loop {
             // Get a fresh challenge for each poll (challenges are single-use)
-            let challenge_response = mailbox_client
+            let challenge_response = match mailbox_client
                 .get_mailbox_challenge(public_key.to_vec())
                 .await
-                .map_err(|e| MailboxError::Network(e.to_string()))?;
+            {
+                Ok(resp) => resp,
+                Err(crate::error::NetworkError::NotFound(_)) => return Err(MailboxError::MailboxNotFound),
+                Err(e) => return Err(MailboxError::Network(e.to_string())),
+            };
 
             let signature = signing_key.sign(&challenge_response.challenge);
 
             // Poll with cursor
-            let poll_response = mailbox_client
+            let poll_response = match mailbox_client
                 .poll_ephemeral_mailbox(
                     public_key.to_vec(),
                     signature.to_bytes().to_vec(),
@@ -218,7 +224,11 @@ impl TwoWayAnonymity {
                     DEFAULT_POLL_LIMIT,
                 )
                 .await
-                .map_err(|e| MailboxError::Network(e.to_string()))?;
+            {
+                Ok(resp) => resp,
+                Err(crate::error::NetworkError::NotFound(_)) => return Err(MailboxError::MailboxNotFound),
+                Err(e) => return Err(MailboxError::Network(e.to_string())),
+            };
 
             let page_count = poll_response.messages.len();
             let has_more = page_count == DEFAULT_POLL_LIMIT as usize;

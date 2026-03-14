@@ -1,6 +1,7 @@
 //! Typing timer management for inbox events.
 //!
 //! Signal-style per-peer typing timers with 15-second auto-clear.
+//! Handles both header typing indicator and sidebar typing state.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -8,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use slint::{ComponentHandle, Timer, TimerMode};
 
 use crate::MainWindow;
+use super::super::initial_data::{update_dm_typing_indicator, update_group_typing_indicator};
 
 /// Typing timer state per peer.
 /// Signal uses 15-second auto-clear timers that reset on each STARTED message.
@@ -33,7 +35,8 @@ pub const TYPING_TIMEOUT_MS: u64 = 15_000;
 ///
 /// When STARTED is received:
 /// 1. Show typing indicator ("is typing ..." since header shows peer name)
-/// 2. Start/restart 15-second timer to auto-clear (reuses existing timer to avoid calloop warnings)
+/// 2. Update sidebar typing state
+/// 3. Start/restart 15-second timer to auto-clear both header and sidebar
 pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
     // Show typing indicator (peer name already shown in header for DMs)
     let indicator_text = "is typing ...";
@@ -45,6 +48,10 @@ pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
         "TYPING_SET: ===> Setting typing indicator on window <==="
     );
     window.set_typing_indicator(indicator_text.into());
+
+    // Also update sidebar typing state
+    update_dm_typing_indicator(window, peer_id, true);
+
     let after = window.get_typing_indicator().to_string();
     tracing::info!(
         peer_id = %peer_id,
@@ -96,9 +103,10 @@ pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
                         peer_id = %peer_id_owned,
                         "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
                     );
-                    // Clear typing indicator
+                    // Clear typing indicator (header and sidebar)
                     if let Some(w) = weak_window.upgrade() {
                         w.set_typing_indicator("".into());
+                        update_dm_typing_indicator(&w, &peer_id_owned, false);
                     }
                 }
 
@@ -146,8 +154,10 @@ pub fn set_typing_with_timer(window: &MainWindow, peer_id: &str) {
                                 peer_id = %peer_id_owned,
                                 "TYPING_TIMER: 15s timeout FIRED - clearing indicator"
                             );
+                            // Clear typing indicator (header and sidebar)
                             if let Some(w) = weak_window.upgrade() {
                                 w.set_typing_indicator("".into());
+                                update_dm_typing_indicator(&w, &peer_id_owned, false);
                             }
                         }
 
@@ -185,13 +195,240 @@ pub fn clear_typing_timer(peer_id: &str) {
 }
 
 /// Clear typing indicator for a peer (called when message received or STOPPED).
+/// Clears both header and sidebar typing state.
 pub fn clear_typing_for_peer(window: &MainWindow, peer_id: &str) {
     let current = window.get_typing_indicator().to_string();
     tracing::info!(
         peer_id = %peer_id,
         current_value = %current,
-        "TYPING_UI: Clearing typing indicator"
+        "TYPING_UI: Clearing typing indicator (header + sidebar)"
     );
     clear_typing_timer(peer_id);
     window.set_typing_indicator("".into());
+    // Also clear sidebar typing state
+    update_dm_typing_indicator(window, peer_id, false);
+}
+
+// ============================================================================
+// Sidebar-only typing timers (for domain events without active conversation)
+// ============================================================================
+
+thread_local! {
+    /// Thread-local map of sidebar typing timers per user/channel ID.
+    /// These are separate from header timers and only update sidebar state.
+    pub(crate) static SIDEBAR_TYPING_TIMERS: RefCell<HashMap<String, TypingTimerEntry>> = RefCell::new(HashMap::new());
+
+    /// Set of cancelled sidebar timer IDs.
+    pub(crate) static CANCELLED_SIDEBAR_TIMERS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
+
+/// Set sidebar typing indicator with auto-clear timer.
+/// Only updates sidebar, not header - use this for domain events.
+#[allow(dead_code)]
+pub fn set_sidebar_typing_with_timer(window: &MainWindow, user_id: &str) {
+    // Update sidebar typing state
+    update_dm_typing_indicator(window, user_id, true);
+
+    // Clear from cancelled set if it was there
+    CANCELLED_SIDEBAR_TIMERS.with(|cancelled| {
+        cancelled.borrow_mut().remove(user_id);
+    });
+
+    // Check if we have an existing timer - if so, restart it
+    let needs_new_timer = SIDEBAR_TYPING_TIMERS.with(|timers| {
+        !timers.borrow().contains_key(user_id)
+    });
+
+    if needs_new_timer {
+        let timer = Timer::default();
+        let weak_window = window.as_weak();
+        let user_id_owned = user_id.to_string();
+        let user_id_for_cleanup = user_id.to_string();
+
+        timer.start(
+            TimerMode::SingleShot,
+            std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
+            move || {
+                let was_cancelled = CANCELLED_SIDEBAR_TIMERS.with(|cancelled| {
+                    cancelled.borrow_mut().remove(&user_id_owned)
+                });
+
+                if !was_cancelled {
+                    if let Some(w) = weak_window.upgrade() {
+                        update_dm_typing_indicator(&w, &user_id_owned, false);
+                    }
+                }
+
+                SIDEBAR_TYPING_TIMERS.with(|timers| {
+                    timers.borrow_mut().remove(&user_id_owned);
+                });
+            },
+        );
+
+        SIDEBAR_TYPING_TIMERS.with(|timers| {
+            timers.borrow_mut().insert(user_id_for_cleanup, TypingTimerEntry { timer });
+        });
+    } else {
+        // Restart existing timer
+        SIDEBAR_TYPING_TIMERS.with(|timers| {
+            let map = timers.borrow();
+            if let Some(entry) = map.get(user_id) {
+                let weak_window = window.as_weak();
+                let user_id_owned = user_id.to_string();
+
+                entry.timer.start(
+                    TimerMode::SingleShot,
+                    std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
+                    move || {
+                        let was_cancelled = CANCELLED_SIDEBAR_TIMERS.with(|cancelled| {
+                            cancelled.borrow_mut().remove(&user_id_owned)
+                        });
+
+                        if !was_cancelled {
+                            if let Some(w) = weak_window.upgrade() {
+                                update_dm_typing_indicator(&w, &user_id_owned, false);
+                            }
+                        }
+
+                        SIDEBAR_TYPING_TIMERS.with(|timers| {
+                            timers.borrow_mut().remove(&user_id_owned);
+                        });
+                    },
+                );
+            }
+        });
+    }
+}
+
+/// Clear sidebar typing indicator for a user.
+#[allow(dead_code)]
+pub fn clear_sidebar_typing(window: &MainWindow, user_id: &str) {
+    // Mark timer as cancelled
+    let has_timer = SIDEBAR_TYPING_TIMERS.with(|timers| {
+        timers.borrow().contains_key(user_id)
+    });
+
+    if has_timer {
+        CANCELLED_SIDEBAR_TIMERS.with(|cancelled| {
+            cancelled.borrow_mut().insert(user_id.to_string());
+        });
+    }
+
+    // Clear sidebar state
+    update_dm_typing_indicator(window, user_id, false);
+}
+
+// ============================================================================
+// Group typing timers
+// ============================================================================
+
+thread_local! {
+    /// Thread-local map of group typing timers per group:user key.
+    pub(crate) static GROUP_TYPING_TIMERS: RefCell<HashMap<String, TypingTimerEntry>> = RefCell::new(HashMap::new());
+
+    /// Set of cancelled group timer keys.
+    pub(crate) static CANCELLED_GROUP_TIMERS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
+
+/// Set group typing indicator with auto-clear timer.
+#[allow(dead_code)]
+pub fn set_group_typing_with_timer(window: &MainWindow, group_id: &str, user_id: &str) {
+    // Update group typing state
+    update_group_typing_indicator(window, group_id, user_id, true);
+
+    let key = format!("{}:{}", group_id, user_id);
+
+    // Clear from cancelled set if it was there
+    CANCELLED_GROUP_TIMERS.with(|cancelled| {
+        cancelled.borrow_mut().remove(&key);
+    });
+
+    // Check if we have an existing timer - if so, restart it
+    let needs_new_timer = GROUP_TYPING_TIMERS.with(|timers| {
+        !timers.borrow().contains_key(&key)
+    });
+
+    if needs_new_timer {
+        let timer = Timer::default();
+        let weak_window = window.as_weak();
+        let group_id_owned = group_id.to_string();
+        let user_id_owned = user_id.to_string();
+        let key_owned = key.clone();
+        let key_for_cleanup = key.clone();
+
+        timer.start(
+            TimerMode::SingleShot,
+            std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
+            move || {
+                let was_cancelled = CANCELLED_GROUP_TIMERS.with(|cancelled| {
+                    cancelled.borrow_mut().remove(&key_owned)
+                });
+
+                if !was_cancelled {
+                    if let Some(w) = weak_window.upgrade() {
+                        update_group_typing_indicator(&w, &group_id_owned, &user_id_owned, false);
+                    }
+                }
+
+                GROUP_TYPING_TIMERS.with(|timers| {
+                    timers.borrow_mut().remove(&key_owned);
+                });
+            },
+        );
+
+        GROUP_TYPING_TIMERS.with(|timers| {
+            timers.borrow_mut().insert(key_for_cleanup, TypingTimerEntry { timer });
+        });
+    } else {
+        // Restart existing timer
+        GROUP_TYPING_TIMERS.with(|timers| {
+            let map = timers.borrow();
+            if let Some(entry) = map.get(&key) {
+                let weak_window = window.as_weak();
+                let group_id_owned = group_id.to_string();
+                let user_id_owned = user_id.to_string();
+                let key_owned = key.clone();
+
+                entry.timer.start(
+                    TimerMode::SingleShot,
+                    std::time::Duration::from_millis(TYPING_TIMEOUT_MS),
+                    move || {
+                        let was_cancelled = CANCELLED_GROUP_TIMERS.with(|cancelled| {
+                            cancelled.borrow_mut().remove(&key_owned)
+                        });
+
+                        if !was_cancelled {
+                            if let Some(w) = weak_window.upgrade() {
+                                update_group_typing_indicator(&w, &group_id_owned, &user_id_owned, false);
+                            }
+                        }
+
+                        GROUP_TYPING_TIMERS.with(|timers| {
+                            timers.borrow_mut().remove(&key_owned);
+                        });
+                    },
+                );
+            }
+        });
+    }
+}
+
+/// Clear group typing indicator for a user.
+#[allow(dead_code)]
+pub fn clear_group_typing(window: &MainWindow, group_id: &str, user_id: &str) {
+    let key = format!("{}:{}", group_id, user_id);
+
+    // Mark timer as cancelled
+    let has_timer = GROUP_TYPING_TIMERS.with(|timers| {
+        timers.borrow().contains_key(&key)
+    });
+
+    if has_timer {
+        CANCELLED_GROUP_TIMERS.with(|cancelled| {
+            cancelled.borrow_mut().insert(key);
+        });
+    }
+
+    // Clear group state
+    update_group_typing_indicator(window, group_id, user_id, false);
 }

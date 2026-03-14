@@ -27,6 +27,7 @@ pub fn spawn_anon_dm_request_handler(
 ) -> tokio::task::JoinHandle<()> {
     let anon_dm_service = ui_ctx.anon_dm_service.clone();
     let attachment_service = ui_ctx.attachment_service.clone();
+    let pinned_state = ui_ctx.pinned_state.clone();
     let mut event_rx = ui_ctx.event_bus.subscribe_domain();
 
     tokio::spawn(async move {
@@ -411,6 +412,8 @@ pub fn spawn_anon_dm_request_handler(
                                     sender_name: sender_name.clone().into(),
                                     sender_initials: sender_initials.clone().into(),
                                     sender_avatar_url: "".into(),
+                                    sender_avatar_source: slint::Image::default(),
+                                    has_avatar: false,
                                     content: text.clone().into(),
                                     timestamp: timestamp.clone().into(),
                                     timestamp_ns: timestamp_ns_str.clone().into(),
@@ -686,6 +689,7 @@ pub fn spawn_anon_dm_request_handler(
                     crate::bin_ui::features::auth::inbox::handle_anon_dm_pin(
                         &weak_window,
                         channel_id,
+                        pinned_state.clone(),
                         target_sent_timestamp,
                         false, // pin
                     );
@@ -703,6 +707,7 @@ pub fn spawn_anon_dm_request_handler(
                     crate::bin_ui::features::auth::inbox::handle_anon_dm_pin(
                         &weak_window,
                         channel_id,
+                        pinned_state.clone(),
                         target_sent_timestamp,
                         true, // unpin
                     );

@@ -63,7 +63,7 @@ aes-gcm = "0.10"
 aes = "0.8"                                       # AES-256 block cipher (for CBC mode)
 cbc = "0.1"                                       # CBC mode wrapper (Signal-compatible attachments)
 block-padding = "0.3"                             # PKCS7/NoPadding support
-openssl = "0.10"                                  # Hardware-accelerated AES-CBC (uses system OpenSSL to avoid conflict with webrtc-sys BoringSSL)
+openssl = { version = "0.10", features = ["vendored"] }  # Hardware-accelerated AES-CBC (vendored for cross-platform builds)
 chacha20poly1305 = "0.10"
 hpke = "0.12"                                     # RFC 9180 HPKE for NDSS'21 initial contact
 x25519-dalek = { version = "2", features = ["static_secrets"] }
@@ -85,7 +85,7 @@ memmap2 = "0.9"                           # Memory-mapped file I/O for large att
 # ============================================================================
 # System Integration (cross-platform)
 # ============================================================================
-keyring = { version = "3", features = ["sync-secret-service"] }  # Secret Service (KeePassXC/GNOME Keyring) on Linux
+keyring = { version = "3", features = ["sync-secret-service", "windows-native"] }  # Secret Service on Linux, Credential Manager on Windows
 notify-rust = "4"                     # Desktop notifications (works on Windows too)
 directories = "6"                     # XDG directories (cross-platform)
 dirs = "5"                            # Home directory detection
@@ -164,6 +164,7 @@ slint-code-view = { path = "../slint-code-view" }
 # ============================================================================
 mistralrs = { version = "0.7", optional = true, features = ["cuda", "flash-attn"] }
 unicode-segmentation = "1.12.0"
+argon2 = "0.5.3"
 
 # ============================================================================
 # Platform-specific: Linux
@@ -186,6 +187,9 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",         # GetCurrentProcess for debug detection
     "Win32_System_Diagnostics_Debug", # IsDebuggerPresent, CheckRemoteDebuggerPresent
 ] }
+winreg = "0.55"                       # Windows Registry for autostart
+tray-icon = "0.21"                    # Cross-platform system tray
+muda = "0.17"                         # Menu for tray icon
 
 # ============================================================================
 # Platform-specific: Android
@@ -229,7 +233,7 @@ debug = false
 # Release Profile - Optimized for size and speed
 # =============================================================================
 [features]
-default = []
+default = ["local-ai"]
 # Local AI - requires CUDA/cuDNN for GPU acceleration
 local-ai = ["mistralrs"]
 

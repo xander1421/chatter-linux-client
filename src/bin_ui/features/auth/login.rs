@@ -6,7 +6,6 @@ use slint::ComponentHandle;
 
 use chatter_linux::app::UIContext;
 
-use super::channel_events::spawn_channel_events_handler;
 use super::initial_data::load_initial_data;
 use crate::MainWindow;
 
@@ -35,7 +34,7 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
             // Attempt login
             match auth_service
-                .do_login(&username, &password, "linux-client")
+                .do_login(&username, &password, "linux-client", None)
                 .await
             {
                 Ok(result) => {
@@ -57,13 +56,10 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     );
                     tracing::debug!("DM bootstrap handler spawned");
 
-                    // Spawn channel events handler for member join/leave notifications
-                    let _channel_events_handle = spawn_channel_events_handler(
-                        weak.clone(),
-                        &ui_ctx,
-                        ui_ctx.channel_event_service.clone(),
-                    );
-                    tracing::debug!("Channel events handler spawned");
+                    // Restart channel event stream to use new authentication credentials
+                    // The old stream may fail to authenticate with expired credentials
+                    let _channel_events = ui_ctx.channel_event_service.clone().start_event_stream();
+                    tracing::debug!("Channel event stream restarted for new login session");
 
                     // Spawn anon group invite handler for processing incoming invites
                     let _anon_invite_handle = crate::bin_ui::features::modals::spawn_anon_group_invite_handler(
@@ -78,6 +74,13 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         &ui_ctx,
                     );
                     tracing::debug!("Anon group event handler spawned");
+                    
+                    // Spawn pin persistence handler to save pin events to database
+                    let _pin_persistence_handle = crate::bin_ui::features::auth::inbox::spawn_pin_persistence_handler(
+                        ui_ctx.event_bus.clone(),
+                        ui_ctx.message_service.clone(),
+                    );
+                    tracing::debug!("Pin persistence handler spawned");
 
                     // Spawn anon DM request handler for processing incoming message requests
                     let _anon_dm_handle = crate::bin_ui::features::modals::spawn_anon_dm_request_handler(
@@ -112,11 +115,46 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         });
                     }
 
-                    // NOW start inbox provider - handlers are already subscribed
+                    // Start inbox provider with InboxEventProcessor
+                    // The processor handles protocol concerns (receipts, convergence, sender keys)
+                    // and emits DomainEvent for UI updates
                     {
                         let weak_for_inbox = weak.clone();
                         let ui_ctx_for_inbox = ui_ctx.clone();
                         tokio::spawn(async move {
+                            // Start the inbox provider with the processor
+                            // This handles InboxEvent → DomainEvent conversion
+                            if !ui_ctx_for_inbox.start_inbox_with_processor().await {
+                                tracing::warn!("Failed to start inbox with processor");
+                            }
+
+                            // Subscribe to DomainEvent for UI updates
+                            let mut domain_rx = ui_ctx_for_inbox.event_bus.subscribe_domain();
+                            let weak_for_domain = weak_for_inbox.clone();
+                            let ui_ctx_for_domain = ui_ctx_for_inbox.clone();
+                            tokio::spawn(async move {
+                                loop {
+                                    match domain_rx.recv().await {
+                                        Ok(event) => {
+                                            super::inbox::domain_handler::handle_domain_event(event, &weak_for_domain, &ui_ctx_for_domain).await;
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                            tracing::warn!(
+                                                dropped_count = n,
+                                                "Domain event receiver lagged - {} events dropped",
+                                                n
+                                            );
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                            tracing::info!("Domain event channel closed");
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
+
+                            // Also subscribe to raw InboxEvent for events not yet migrated
+                            // TODO: Remove this once all events are handled via DomainEvent
                             if let Some(mut event_rx) = ui_ctx_for_inbox.start_inbox_provider().await {
                                 tokio::spawn(async move {
                                     loop {
@@ -125,16 +163,13 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                                 super::handle_inbox_event(event, &weak_for_inbox, &ui_ctx_for_inbox).await;
                                             }
                                             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                                // Channel buffer overflow - some events were dropped
-                                                // Log and continue receiving new events
                                                 tracing::warn!(
                                                     dropped_count = n,
-                                                    "Inbox event receiver lagged - {} events dropped due to slow processing",
+                                                    "Inbox event receiver lagged - {} events dropped",
                                                     n
                                                 );
                                             }
                                             Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                                // Channel closed, exit the loop
                                                 tracing::info!("Inbox event channel closed");
                                                 break;
                                             }
@@ -155,7 +190,10 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     });
 
                     // Load initial data
-                    load_initial_data(weak, &ui_ctx).await;
+                    load_initial_data(weak.clone(), &ui_ctx).await;
+                    
+                    // Initialize presence (send online status)
+                    super::presence_integration::initialize_presence(&ui_ctx).await;
                 }
                 Err(e) => {
                     let error_msg = e.to_string();

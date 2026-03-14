@@ -85,6 +85,11 @@ impl MessageGateway {
                 Some(content::Content::AnonDmAccept(_)) => "AnonDmAccept",
                 Some(content::Content::AnonDmMessage(_)) => "AnonDmMessage",
                 Some(content::Content::AnonGroupProfileShare(_)) => "AnonGroupProfileShare",
+                Some(content::Content::AnonCallOffer(_)) => "AnonCallOffer",
+                Some(content::Content::AnonCallAnswer(_)) => "AnonCallAnswer",
+                Some(content::Content::AnonCallHangup(_)) => "AnonCallHangup",
+                Some(content::Content::AnonDmPresence(_)) => "AnonDmPresence",
+                Some(content::Content::AnonDmProfileUpdate(_)) => "AnonDmProfileUpdate",
                 None => "None",
             };
 

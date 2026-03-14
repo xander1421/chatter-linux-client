@@ -188,6 +188,40 @@ impl AuthClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
+    /// Request a registration challenge nonce from the server.
+    ///
+    /// # Arguments
+    ///
+    /// * `username` - Hashed username
+    /// * `identity_public_key` - Identity public key (Curve25519)
+    pub async fn request_registration_challenge(
+        &mut self,
+        username: &str,
+        identity_public_key: &[u8],
+    ) -> Result<crate::proto::chat_v1::RequestRegistrationChallengeResponse, NetworkError> {
+        use crate::proto::chat_v1::RequestRegistrationChallengeRequest;
+
+        tracing::debug!(
+            "Requesting registration challenge - username: {}, identity_key_len: {}",
+            username,
+            identity_public_key.len()
+        );
+
+        let request = RequestRegistrationChallengeRequest {
+            username: username.to_string(),
+            identity_public_key: identity_public_key.to_vec(),
+        };
+
+        self.inner
+            .request_registration_challenge(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| {
+                tracing::error!("Registration challenge failed: {}", s);
+                NetworkError::from_status(&s)
+            })
+    }
+
     /// Register a new user, returning stream of progress events.
     ///
     /// The stream yields AuthEvent messages with status updates:
@@ -202,6 +236,8 @@ impl AuthClient {
     /// * `unidentified_access_key` - 16-byte UAK derived client-side from profile_key
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
+    /// * `challenge_id` - Challenge ID from request_registration_challenge
+    /// * `challenge_response` - Signature of challenge nonce
     ///
     /// # Security Note
     ///
@@ -220,6 +256,8 @@ impl AuthClient {
         _unidentified_access_key: &[u8; 16],
         prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
+        challenge_id: &str,
+        challenge_response: &[u8],
     ) -> Result<impl Stream<Item = Result<AuthEvent, NetworkError>>, NetworkError> {
         use base64::Engine;
 
@@ -240,8 +278,8 @@ impl AuthClient {
             // NOTE: profile_key field removed from proto - UAK is sent via prekey_bundle.unidentified_access_key
             prekey_bundle,
             initial_one_time_prekeys,
-            challenge_response: Vec::new(),
-            challenge_id: String::new(),
+            challenge_response: challenge_response.to_vec(),
+            challenge_id: challenge_id.to_string(),
         };
 
         let response = self
@@ -267,6 +305,8 @@ impl AuthClient {
     /// * `unidentified_access_key` - 16-byte UAK derived client-side from profile_key
     /// * `prekey_bundle` - Optional Signal Protocol prekey bundle for sealed sender
     /// * `initial_one_time_prekeys` - Initial batch of one-time prekeys (Signal sends 100)
+    /// * `challenge_id` - Challenge ID from request_registration_challenge
+    /// * `challenge_response` - Signature of challenge nonce
     ///
     /// # Security Note
     ///
@@ -285,6 +325,8 @@ impl AuthClient {
         unidentified_access_key: &[u8; 16],
         prekey_bundle: Option<crate::proto::chat_v1::SignalPreKeyBundle>,
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
+        challenge_id: &str,
+        challenge_response: &[u8],
     ) -> Result<RegistrationResult, NetworkError> {
         let stream = self
             .register(
@@ -297,6 +339,8 @@ impl AuthClient {
                 unidentified_access_key,
                 prekey_bundle,
                 initial_one_time_prekeys,
+                challenge_id,
+                challenge_response,
             )
             .await?;
 

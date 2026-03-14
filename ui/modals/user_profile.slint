@@ -23,6 +23,7 @@ export component UserProfileModal inherits Rectangle {
 
     callback close();
     callback send-message();  // open DM
+    callback edit-profile();   // open edit profile modal
     callback add-friend();
     callback remove-friend();
     callback block-user();
@@ -176,8 +177,7 @@ export component UserProfileModal inherits Rectangle {
                     variant: "primary";
 
                     clicked => {
-                        // Edit profile action would be handled by parent
-                        root.close();
+                        root.edit-profile();
                     }
                 }
 

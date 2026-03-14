@@ -21,8 +21,8 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     let weak_window = window.as_weak();
 
-    // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
-    window.on_more_clicked(move |sender_id: SharedString, timestamp_ns: SharedString| {
+    // Callback signature: (sender_id, timestamp_ns, x, y) - Signal-style identification with click position
+    window.on_more_clicked(move |sender_id: SharedString, timestamp_ns: SharedString, click_x: f32, click_y: f32| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         let message_service = message_service.clone();
@@ -30,6 +30,9 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let anon_group_service = anon_group_service.clone();
         let auth_state = auth_state.clone();
         let weak = weak_window.clone();
+        // Store click position for context menu placement
+        let menu_x = click_x;
+        let menu_y = click_y;
 
         // Get selected DM ID and private group ID to check conversation type (quick UI reads)
         let selected_dm_id = weak.upgrade()
@@ -92,32 +95,35 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 let current_user_id = auth_state.get().current_user_id;
                 let is_own_message = Some(message.sender_id) == current_user_id;
 
-                // Show context menu - pin state check happens on UI thread
+                // Show context menu - pin state and attachments check happens on UI thread
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        // Check pin state from UI model (must be on UI thread)
-                        let is_pinned = {
+                        // Check pin state and attachments from UI model (must be on UI thread)
+                        let (is_pinned, has_attachments) = {
                             let model = w.get_messages();
-                            let mut found = false;
+                            let mut pinned = false;
+                            let mut attachments = false;
                             for i in 0..model.row_count() {
                                 if let Some(m) = model.row_data(i) {
                                     if m.sender_id.as_str() == sender_id_str.as_str()
                                         && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
                                     {
-                                        found = m.is_pinned;
+                                        pinned = m.is_pinned;
+                                        attachments = m.has_attachments;
                                         break;
                                     }
                                 }
                             }
-                            found
+                            (pinned, attachments)
                         };
 
                         w.set_context_menu_sender_id(sender_id_str.into());
                         w.set_context_menu_timestamp_ns(timestamp_ns_str.into());
                         w.set_context_menu_is_own_message(is_own_message);
                         w.set_context_menu_is_pinned(is_pinned);
-                        w.set_context_menu_x(400.0);
-                        w.set_context_menu_y(300.0);
+                        w.set_context_menu_has_attachments(has_attachments);
+                        w.set_context_menu_x(menu_x);
+                        w.set_context_menu_y(menu_y);
                         w.set_context_menu_visible(true);
                     }
                 });
@@ -160,32 +166,35 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 let current_user_id = auth_state.get().current_user_id;
                 let is_own_message = Some(message.sender_id) == current_user_id;
 
-                // Show context menu - pin state check happens on UI thread
+                // Show context menu - pin state and attachments check happens on UI thread
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        // Check pin state from UI model (must be on UI thread)
-                        let is_pinned = {
+                        // Check pin state and attachments from UI model (must be on UI thread)
+                        let (is_pinned, has_attachments) = {
                             let model = w.get_messages();
-                            let mut found = false;
+                            let mut pinned = false;
+                            let mut attachments = false;
                             for i in 0..model.row_count() {
                                 if let Some(m) = model.row_data(i) {
                                     if m.sender_id.as_str() == sender_id_str.as_str()
                                         && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
                                     {
-                                        found = m.is_pinned;
+                                        pinned = m.is_pinned;
+                                        attachments = m.has_attachments;
                                         break;
                                     }
                                 }
                             }
-                            found
+                            (pinned, attachments)
                         };
 
                         w.set_context_menu_sender_id(sender_id_str.into());
                         w.set_context_menu_timestamp_ns(timestamp_ns_str.into());
                         w.set_context_menu_is_own_message(is_own_message);
                         w.set_context_menu_is_pinned(is_pinned);
-                        w.set_context_menu_x(400.0);
-                        w.set_context_menu_y(300.0);
+                        w.set_context_menu_has_attachments(has_attachments);
+                        w.set_context_menu_x(menu_x);
+                        w.set_context_menu_y(menu_y);
                         w.set_context_menu_visible(true);
                     }
                 });
@@ -213,8 +222,9 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let current_user_id = auth_state.get().current_user_id.clone();
             let is_own_message = message.sender_id == current_user_id;
 
-            // Check if message is pinned (from service data)
+            // Check if message is pinned and has attachments (from service data)
             let is_pinned = message.is_pinned;
+            let has_attachments = !message.attachments.is_empty();
 
             // Show context menu with Signal-style IDs
             let _ = slint::invoke_from_event_loop(move || {
@@ -223,8 +233,9 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     w.set_context_menu_timestamp_ns(timestamp_ns_str.into());
                     w.set_context_menu_is_own_message(is_own_message);
                     w.set_context_menu_is_pinned(is_pinned);
-                    w.set_context_menu_x(400.0);
-                    w.set_context_menu_y(300.0);
+                    w.set_context_menu_has_attachments(has_attachments);
+                    w.set_context_menu_x(menu_x);
+                    w.set_context_menu_y(menu_y);
                     w.set_context_menu_visible(true);
                 }
             });

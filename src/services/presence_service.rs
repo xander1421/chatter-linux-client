@@ -13,12 +13,18 @@ use tokio::sync::broadcast;
 
 use crate::domain::ids::UserId;
 use crate::domain::user::PresenceStatus;
+use crate::domain::anon_dm::AnonDmId;
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::user_client::UserClient;
 use crate::network::streaming::presence_stream::PresenceRouter;
 use crate::proto::chat_v1::{PresenceUpdate, UserPresence};
+use crate::proto::UserPresence as ProtoUserPresence;
 use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
+use crate::services::anon_dm::AnonDmService;
 use crate::storage::repositories::settings_repo::SettingsRepository;
+use std::time::{Duration, Instant};
+use tokio::sync::RwLock;
+use tokio::time::interval;
 
 /// Presence service errors.
 #[derive(Debug, thiserror::Error)]
@@ -67,9 +73,16 @@ impl From<CurrentUserError> for PresenceError {
 ///     println!("Friend is online!");
 /// }
 /// ```
+#[derive(Clone)]
 pub struct PresenceService {
     settings_repo: Arc<SettingsRepository>,
     presence_router: Arc<PresenceRouter>,
+    /// Anonymous DM service for presence updates (optional)
+    anon_dm_service: Option<Arc<AnonDmService>>,
+    /// Current user presence for anon DMs
+    anon_dm_presence: Arc<RwLock<ProtoUserPresence>>,
+    /// Last activity timestamp for idle detection
+    last_activity: Arc<RwLock<Instant>>,
 }
 
 impl PresenceService {
@@ -81,7 +94,16 @@ impl PresenceService {
         Self {
             settings_repo,
             presence_router,
+            anon_dm_service: None,
+            anon_dm_presence: Arc::new(RwLock::new(ProtoUserPresence::Offline)),
+            last_activity: Arc::new(RwLock::new(Instant::now())),
         }
+    }
+    
+    /// Set the anonymous DM service for presence updates.
+    pub fn with_anon_dm_service(mut self, service: Arc<AnonDmService>) -> Self {
+        self.anon_dm_service = Some(service);
+        self
     }
 
     // ========================================================================
@@ -278,6 +300,146 @@ impl PresenceService {
     /// Call when disconnecting or logging out.
     pub fn clear_presence(&self) {
         self.presence_router.clear_cache();
+    }
+    
+    // ========================================================================
+    // Anonymous DM Presence Management
+    // ========================================================================
+    
+    /// Initialize presence for anonymous DMs (send online status).
+    pub async fn initialize_anon_dm_presence(&self) {
+        self.set_anon_dm_presence(ProtoUserPresence::Online).await;
+    }
+    
+    /// Shutdown presence for anonymous DMs (send offline status).
+    pub async fn shutdown_anon_dm_presence(&self) {
+        self.set_anon_dm_presence(ProtoUserPresence::Offline).await;
+    }
+    
+    /// Set presence for anonymous DMs and broadcast to all conversations.
+    pub async fn set_anon_dm_presence(&self, presence: ProtoUserPresence) {
+        // Update local state
+        {
+            let mut current = self.anon_dm_presence.write().await;
+            if *current == presence {
+                return; // No change
+            }
+            *current = presence;
+        }
+        
+        tracing::info!("Setting anon DM presence to {:?}", presence);
+        
+        // Broadcast to all conversations
+        self.broadcast_anon_dm_presence(presence).await;
+        
+        // Reset activity tracking if going online
+        if presence == ProtoUserPresence::Online {
+            *self.last_activity.write().await = Instant::now();
+        }
+    }
+    
+    /// Get current anonymous DM presence.
+    pub async fn get_anon_dm_presence(&self) -> ProtoUserPresence {
+        *self.anon_dm_presence.read().await
+    }
+    
+    /// Track user activity for idle detection.
+    pub async fn track_activity(&self) {
+        let mut last = self.last_activity.write().await;
+        *last = Instant::now();
+        
+        // If user was away, bring them back online
+        let current = *self.anon_dm_presence.read().await;
+        if current == ProtoUserPresence::Away {
+            drop(last); // Release lock before calling set_presence
+            tracing::debug!("User activity detected, going online");
+            self.set_anon_dm_presence(ProtoUserPresence::Online).await;
+        }
+    }
+    
+    /// Start idle detection background task.
+    /// 
+    /// Returns a JoinHandle for the spawned task.
+    pub fn start_idle_detection(&self, idle_timeout: Duration) -> tokio::task::JoinHandle<()> {
+        let anon_dm_presence = self.anon_dm_presence.clone();
+        let last_activity = self.last_activity.clone();
+        let service = self.clone();
+        
+        tokio::spawn(async move {
+            let mut ticker = interval(Duration::from_secs(30));
+            
+            loop {
+                ticker.tick().await;
+                
+                let last = *last_activity.read().await;
+                let current = *anon_dm_presence.read().await;
+                
+                if current == ProtoUserPresence::Online && last.elapsed() > idle_timeout {
+                    tracing::debug!("User idle for {:?}, setting away status", idle_timeout);
+                    service.set_anon_dm_presence(ProtoUserPresence::Away).await;
+                }
+            }
+        })
+    }
+    
+    /// Send presence update when opening a specific anon DM chat.
+    pub async fn notify_anon_dm_opened(&self, conversation_id: &AnonDmId) {
+        let current = self.get_anon_dm_presence().await;
+        if current == ProtoUserPresence::Offline {
+            return;
+        }
+        
+        if let Some(service) = &self.anon_dm_service {
+            if let Err(e) = service.send_presence_update(conversation_id, current).await {
+                tracing::debug!(
+                    conversation_id = %conversation_id,
+                    error = %e,
+                    "Failed to send presence update for anon DM open"
+                );
+            }
+        }
+    }
+    
+    /// Broadcast presence to all anonymous DM conversations.
+    async fn broadcast_anon_dm_presence(&self, presence: ProtoUserPresence) {
+        let Some(service) = &self.anon_dm_service else {
+            tracing::debug!("No anon DM service configured, skipping presence broadcast");
+            return;
+        };
+        
+        let conversations = match service.list_conversations() {
+            Ok(convs) => convs,
+            Err(e) => {
+                tracing::warn!("Failed to list anon DM conversations: {}", e);
+                return;
+            }
+        };
+        
+        let ready_count = conversations.iter().filter(|c| c.is_ready()).count();
+        tracing::info!(
+            "Broadcasting anon DM presence {:?} to {} ready conversations",
+            presence,
+            ready_count
+        );
+        
+        for conv in &conversations {
+            if !conv.is_ready() {
+                continue;
+            }
+            
+            let conv_id = conv.id;
+            let service = service.clone();
+            
+            tokio::spawn(async move {
+                if let Err(e) = service.send_presence_update(&conv_id, presence).await {
+                    tracing::debug!(
+                        conversation_id = %conv_id,
+                        error = %e,
+                        "Failed to send anon DM presence update"
+                    );
+                }
+            });
+        }
     }
 }
 

@@ -111,6 +111,22 @@ pub struct ChatStateData {
     pub active_thread_index: Option<usize>,
     /// Pending attachments for the current message being composed.
     pub pending_attachments: Vec<PendingAttachment>,
+    
+    // Call-related state
+    /// Incoming call ID.
+    pub incoming_call_id: Option<String>,
+    /// Call state (ringing, connected, etc).
+    pub call_state: Option<String>,
+    /// Show call modal.
+    pub show_call_modal: bool,
+    /// Incoming call ephemeral public key.
+    pub incoming_call_ephemeral_pk: Option<Vec<u8>>,
+    /// Outgoing call ephemeral secret key.
+    pub outgoing_call_ephemeral_sk: Option<Vec<u8>>,
+    /// Current call key.
+    pub current_call_key: Option<Vec<u8>>,
+    /// Group call key.
+    pub group_call_key: Option<Vec<u8>>,
 }
 
 /// Reactive chat navigation state manager.
@@ -307,6 +323,72 @@ impl ChatState {
     pub fn remove_pending_attachment(&self, attachment_id: AttachmentId) {
         self.store.update(|state| {
             state.pending_attachments.retain(|a| a.id != attachment_id);
+        });
+    }
+    
+    // Call-related methods
+    
+    /// Set incoming call ID.
+    pub fn set_incoming_call_id(&self, call_id: Option<String>) {
+        self.store.update(|state| {
+            state.incoming_call_id = call_id;
+        });
+    }
+    
+    /// Set call state.
+    pub fn set_call_state(&self, call_state: Option<String>) {
+        self.store.update(|state| {
+            state.call_state = call_state;
+        });
+    }
+    
+    /// Set show call modal.
+    pub fn set_show_call_modal(&self, show: bool) {
+        self.store.update(|state| {
+            state.show_call_modal = show;
+        });
+    }
+    
+    /// Set incoming call ephemeral public key.
+    pub fn set_incoming_call_ephemeral_pk(&self, pk: Option<Vec<u8>>) {
+        self.store.update(|state| {
+            state.incoming_call_ephemeral_pk = pk;
+        });
+    }
+    
+    /// Take and clear outgoing call ephemeral secret key.
+    pub fn take_outgoing_call_ephemeral_sk(&self) -> Option<Vec<u8>> {
+        let mut result = None;
+        self.store.update(|state| {
+            result = state.outgoing_call_ephemeral_sk.take();
+        });
+        result
+    }
+    
+    /// Set current call key.
+    pub fn set_current_call_key(&self, key: Option<Vec<u8>>) {
+        self.store.update(|state| {
+            state.current_call_key = key;
+        });
+    }
+    
+    /// Set group call key.
+    pub fn set_group_call_key(&self, key: Option<Vec<u8>>) {
+        self.store.update(|state| {
+            state.group_call_key = key;
+        });
+    }
+    
+    /// Clear all call-related state.
+    pub fn clear_call_state(&self) {
+        self.store.update(|state| {
+            state.incoming_call_id = None;
+            state.call_state = None;
+            state.show_call_modal = false;
+            state.incoming_call_ephemeral_pk = None;
+            state.outgoing_call_ephemeral_sk = None;
+            state.current_call_key = None;
+            state.group_call_key = None;
         });
     }
 }

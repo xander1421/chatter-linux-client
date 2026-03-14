@@ -1,6 +1,6 @@
 //! Leave and kick operations for anonymous groups.
 
-use crate::domain::anon_group::{AnonGroupId, AnonGroupRole};
+use crate::domain::anon_group::AnonGroupId;
 use crate::domain::UserId;
 use crate::proto::content_v1::{self, AnonGroupKick, AnonGroupLeave, Content};
 use crate::util::time::TimestampNanos;
@@ -86,12 +86,7 @@ impl AnonGroupService {
         }
 
         // Can't kick the owner
-        let target_role = self
-            .anon_group_repo
-            .get_member_role(group_id, target_user_id)?
-            .ok_or(AnonGroupError::MemberNotFound(*target_user_id))?;
-
-        if target_role == AnonGroupRole::Owner {
+        if *target_user_id == group.owner_id {
             return Err(AnonGroupError::CannotKickOwner);
         }
 

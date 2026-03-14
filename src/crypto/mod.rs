@@ -25,6 +25,7 @@ pub mod secret_string;
 pub mod secure_buffer;
 pub mod signal;
 pub mod streaming_decrypt;
+pub mod svr;
 
 pub use attachment_crypto::{AttachmentCrypto, EncryptedAttachment, KEY_SET_LENGTH};
 pub use call_key_provider::{

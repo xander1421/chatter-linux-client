@@ -35,6 +35,8 @@ export struct MessageItemData {
     sender-name: string,
     sender-initials: string,
     sender-avatar-url: string,
+    sender-avatar-source: image,
+    has-avatar: bool,
     content: string,
     timestamp: string,
     timestamp-ns: string,  // Nanosecond timestamp as string for event matching (reactions, edits, pins)

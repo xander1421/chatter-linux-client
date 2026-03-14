@@ -38,7 +38,11 @@ pub use blind_signature::{
     ServerPublicKey, UnblindedToken,
 };
 pub use token_manager::{
+    // Mailbox tokens
     MailboxToken, QuotaStatus, TokenManager, DEFAULT_TOKEN_REQUEST_COUNT, MIN_TOKEN_THRESHOLD,
+    // Call room tokens (integrated into TokenManager)
+    CallRoomToken, CallRoomQuotaStatus,
+    DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT, MIN_CALL_ROOM_TOKEN_THRESHOLD,
 };
 
 // Re-export DM types

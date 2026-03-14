@@ -18,7 +18,6 @@ pub mod user;
 pub mod status_service;
 pub mod attachment;
 pub mod attachment_service;
-pub mod call_service;
 pub mod call_worker;
 pub mod call_verification;
 pub mod notification_service;
@@ -35,6 +34,7 @@ pub mod pin_service;
 pub mod thread_service;
 pub mod reaction_service;
 pub mod typing_service;
+pub mod typing_cleanup;
 pub mod read_receipt_service;
 pub mod presence_service;
 pub mod ephemeral_message;
@@ -43,7 +43,7 @@ pub mod saved_message_service;
 pub mod forward_service;
 pub mod mention_service;
 pub mod embed_service;
-pub mod gif_service;
+// Removed - gif_service.rs file was deleted
 pub mod signal;
 pub mod channel_event_service;
 pub mod dm_bootstrap_service;
@@ -100,15 +100,18 @@ pub use saved_message_service::{DecryptedSavedMessage, SavedMessageError, SavedM
 pub use crate::crypto::SavedMessageSource;
 pub mod signal_service;
 pub mod mailbox_manager;
+pub mod inbox_processor;
+pub mod channel_bootstrap_service;
 
 // Re-exports for user service
 pub use user::{FriendResponseResult, UserError, UserService};
 
 pub use signal_service::SignalService;
 pub use mailbox_manager::{MailboxManager, MailboxError, ActiveMailbox};
+pub use inbox_processor::InboxEventProcessor;
 pub use message_gateway::{
     DmContent, MessageGateway, RouteResult,
-    build_text_content, build_data_message_content, build_typing_content, build_typing_content_with_channel,
+    build_text_content, build_data_message_content, build_reply_content, build_typing_content, build_typing_content_with_channel,
     build_read_receipt_content, build_read_receipt_content_with_channel,
     build_delivery_receipt_content, build_delivery_receipt_content_with_channel,
     build_reaction_content, build_reaction_content_with_channel,
@@ -126,7 +129,6 @@ pub use message_gateway::{
 pub use message::{MessageService, MessageError, SendDmContentParams, SendDmMsgParams};
 pub use message::core::{proto_to_domain_message, proto_to_domain_message_with_sender, proto_content_to_domain};
 pub use attachment_service::{AttachmentService, AttachmentError, UploadResult, CdnUploadResult};
-pub use call_service::CallService;
 pub use call_worker::CallWorkerHandle;
 
 // Re-exports for pairwise encryption service

@@ -19,6 +19,12 @@ impl AnonGroupService {
             .get_group(&group_id)?
             .ok_or(AnonGroupError::GroupNotFound(group_id))?;
 
+        // SECURITY: A member can only leave for themselves.
+        // If sender_id != current_member_leaving, it's an invalid leave message.
+        // (For anonymous groups, the leave message doesn't contain a target ID, 
+        // it implicitly means the sender is leaving).
+        // Since sender_id is authenticated via Sealed Sender, this is safe.
+
         // Verify sender is a member
         if !self.anon_group_repo.is_member(&group_id, &sender_id)? {
             tracing::debug!("Leave from non-member {} in group {}", sender_id, group_id);
@@ -57,38 +63,49 @@ impl AnonGroupService {
 
         if !sender_role.can_kick() {
             tracing::warn!(
-                "Kick from non-admin {} in group {} - ignoring",
+                "Kick from unauthorized member {} in group {} - ignoring",
                 sender_id,
                 group_id
             );
             return Ok(());
         }
 
+        // SECURITY: The owner can never be kicked.
+        if kicked_user_id == _group.owner_id {
+            tracing::warn!(
+                sender_id = %sender_id,
+                group_id = %group_id,
+                "Rejected attempt to kick the group owner"
+            );
+            return Ok(());
+        }
+
         // Verify the signature using sender's mailbox public key
-        if !admin_signature.is_empty() {
-            match self.verify_kick_signature(
-                &group_id,
-                &kicked_user_id,
-                timestamp,
-                &sender_id,
-                admin_signature,
-            ) {
-                Ok(true) => {
-                    tracing::debug!("Kick signature verified for group {}", group_id);
-                }
-                Ok(false) => {
-                    tracing::warn!(
-                        "Invalid kick signature from {} in group {} - ignoring",
-                        sender_id,
-                        group_id
-                    );
-                    return Ok(());
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to verify kick signature: {} - processing anyway", e);
-                    // Continue processing - signature verification failure shouldn't block kick
-                    // This allows graceful degradation for older clients
-                }
+        // SECURITY: Signature verification is MANDATORY for kicks to prevent spoofing.
+        match self.verify_kick_signature(
+            &group_id,
+            &kicked_user_id,
+            timestamp,
+            &sender_id,
+            admin_signature,
+        ) {
+            Ok(true) => {
+                tracing::debug!("Kick signature verified for group {}", group_id);
+            }
+            Ok(false) => {
+                tracing::warn!(
+                    "Invalid kick signature from {} in group {} - ignoring",
+                    sender_id,
+                    group_id
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::error!("Failed to verify kick signature: {} - rejecting kick", e);
+                return Err(AnonGroupError::CryptoError(format!(
+                    "Kick signature verification failed: {}",
+                    e
+                )));
             }
         }
 
@@ -155,11 +172,14 @@ impl AnonGroupService {
                 );
             }
             Some(anon_group_update::Update::RoleChange(role_change)) => {
-                // Only owners can change roles
-                if !group.is_owner() {
-                    tracing::debug!(
-                        "Role change from non-owner in group {} - ignoring",
-                        group_id
+                // SECURITY: Only the group owner can change roles.
+                // We must check if the SENDER is the owner, not if WE are the owner.
+                if sender_id != group.owner_id {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        owner_id = %group.owner_id,
+                        group_id = %group_id,
+                        "Rejected role change from non-owner"
                     );
                     return Ok(());
                 }
@@ -169,6 +189,18 @@ impl AnonGroupService {
                 })?;
 
                 let new_role = AnonGroupRole::from_i32(role_change.new_role);
+
+                // If we are the owner, we shouldn't be receiving role changes from others
+                // except potentially from our own other devices (sync).
+                let current_user = self.current_user_id()?;
+                if group.is_owner() && sender_id != current_user {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        group_id = %group_id,
+                        "Owner received role change from another member - ignoring"
+                    );
+                    return Ok(());
+                }
 
                 self.anon_group_repo
                     .update_member_role(&group_id, &target_user_id, new_role)?;

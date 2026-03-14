@@ -24,6 +24,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let ctx_mailbox_manager = ui_ctx.mailbox_manager.clone();
     let ctx_identity_manager = ui_ctx.identity_manager.clone();
     let ctx_key_store = ui_ctx.key_store.clone();
+    let ctx_anon_dm_service = ui_ctx.anon_dm_service.clone();
 
     // Accept call callback
     window.on_accept_incoming_call({
@@ -34,10 +35,263 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let mailbox_manager = ctx_mailbox_manager.clone();
         let identity_manager = ctx_identity_manager.clone();
         let key_store = ctx_key_store.clone();
+        let anon_dm_service = ctx_anon_dm_service.clone();
 
         move |call_id| {
             let call_id_str = call_id.to_string();
             tracing::info!("Accept call: {}", call_id_str);
+
+            // Read the is_anonymous_call flag from the incoming call data
+            let is_anonymous = weak.upgrade()
+                .map(|w| w.get_incoming_call_data().is_anonymous_call)
+                .unwrap_or(false);
+
+            if is_anonymous {
+                // Handle anonymous call acceptance
+                let weak = weak.clone();
+                let anon_dm_service = anon_dm_service.clone();
+                let call_service = call_service.clone();
+                
+                slint::spawn_local(async move {
+                    tracing::info!("Accepting anonymous call: {}", call_id_str);
+
+                    // Hide UI immediately to prevent double-click
+                    if let Some(w) = weak.upgrade() {
+                        w.set_incoming_call_visible(false);
+                    }
+
+                    tracing::info!("Accept: UI hidden, getting pending call state");
+                    // Get stored pending call details from the service (consume to prevent re-accept)
+                    let pending = match anon_dm_service.take_pending_anon_call(&call_id_str) {
+                        Some(p) => p,
+                        None => {
+                            tracing::error!("No pending anonymous call state found for {}", call_id_str);
+                            if let Some(w) = weak.upgrade() {
+                                w.set_incoming_call_visible(false);
+                            }
+                            return;
+                        }
+                    };
+                    
+                    // Get a token for accepting the call
+                    tracing::info!("Getting call room token for accept");
+                    let token = match anon_dm_service.get_available_call_room_token() {
+                        Ok(Some(t)) => {
+                            tracing::info!("Got existing call room token, marking used");
+                            let _ = anon_dm_service.mark_call_room_token_used(&t.id);
+                            t
+                        }
+                        Ok(None) => {
+                            tracing::info!("No call room tokens available, requesting more");
+                            match tokio::time::timeout(
+                                std::time::Duration::from_secs(5),
+                                anon_dm_service.request_call_room_tokens(5),
+                            ).await {
+                                Ok(Ok(count)) => {
+                                    tracing::info!("Requested {} call room tokens", count);
+                                    match anon_dm_service.get_available_call_room_token() {
+                                        Ok(Some(t)) => {
+                                            let _ = anon_dm_service.mark_call_room_token_used(&t.id);
+                                            t
+                                        }
+                                        _ => {
+                                            tracing::error!("No tokens available after request");
+                                            return;
+                                        }
+                                    }
+                                }
+                                Ok(Err(e)) => {
+                                    tracing::error!("Failed to request tokens: {}", e);
+                                    return;
+                                }
+                                Err(_) => {
+                                    tracing::error!("Timed out requesting call room tokens");
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to get token: {}", e);
+                            return;
+                        }
+                    };
+                    
+                    // Use our own display name (not the caller's)
+                    let my_display_name = anon_dm_service.get_my_display_name().unwrap_or_else(|| "Anonymous".to_string());
+
+                    // Send accept answer
+                    if let Err(e) = anon_dm_service.send_call_answer(
+                        &pending.conversation_id,
+                        &pending.call_room_id,
+                        true,  // accepted = true
+                        Some(&token),
+                        None,  // decline_reason (not applicable for accept)
+                        Some(&my_display_name), // Our display name, not the caller's
+                    ).await {
+                        tracing::error!("Failed to send call accept: {}", e);
+                        if let Some(w) = weak.upgrade() {
+                            w.set_incoming_call_visible(false);
+                        }
+                        return;
+                    }
+
+                    tracing::info!("Anonymous call accept sent, joining LiveKit room");
+
+                    // Join the LiveKit room
+                    match anon_dm_service.join_anon_call_room(
+                        &pending.room_name,
+                        &token,
+                        &my_display_name,
+                        pending.is_video_call,
+                    ).await {
+                        Ok(room_info) => {
+                            tracing::info!(
+                                "Joined anonymous call room with LiveKit token"
+                            );
+                            
+                            // Connect to LiveKit using the room info
+                            let service = match call_service.get() {
+                                Some(svc) => svc.clone(),
+                                None => {
+                                    tracing::error!("CallService not initialized");
+                                    if let Some(w) = weak.upgrade() {
+                                        w.set_incoming_call_visible(false);
+                                    }
+                                    // Clear pending state
+                                    anon_dm_service.clear_pending_anon_call(&call_id_str);
+                                    return;
+                                }
+                            };
+                            
+                            // Create a dummy call ID and channel ID for anonymous calls
+                            let call_id = chatter_linux::domain::ids::CallId::new();
+                            let channel_id = chatter_linux::domain::ids::ChannelId::new();
+                            
+                            // Connect to LiveKit with the access token and E2EE key
+                            match service.connect_with_token(
+                                &room_info.livekit_token,
+                                &room_info.livekit_url,
+                                pending.encryption_key.clone(),
+                                &pending.room_name,
+                                call_id,
+                                channel_id,
+                            ).await {
+                                Ok(()) => {
+                                    tracing::info!("Connected to LiveKit for anonymous call");
+                                    
+                                    // Publish microphone immediately after joining
+                                    if let Err(e) = service.publish_microphone(None).await {
+                                        tracing::error!("Failed to publish microphone: {}", e);
+                                    } else {
+                                        tracing::info!("Microphone published successfully");
+                                    }
+                                    
+                                    // Update UI
+                                    if let Some(w) = weak.upgrade() {
+                                        w.set_incoming_call_visible(false);
+                                        
+                                        // Create participant data for UI
+                                        let local_participant = CallParticipantData {
+                                            user_id: "You".into(),
+                                            display_name: "You".into(),
+                                            avatar_url: "".into(),
+                                            is_muted: false,
+                                            is_video_enabled: pending.is_video_call,
+                                            is_screen_sharing: false,
+                                            is_speaking: false,
+                                        };
+                                        
+                                        let remote_participant = CallParticipantData {
+                                            user_id: "Anonymous".into(),
+                                            display_name: pending.display_name.clone().into(),
+                                            avatar_url: "".into(),
+                                            is_muted: false,
+                                            is_video_enabled: pending.is_video_call,
+                                            is_screen_sharing: false,
+                                            is_speaking: false,
+                                        };
+                                        
+                                        // Derive verification emojis from shared E2EE key + room name
+                                        let mut e2ee_key = [0u8; 32];
+                                        if pending.encryption_key.len() >= 32 { e2ee_key.copy_from_slice(&pending.encryption_key[..32]); }
+                                        let verification = chatter_linux::services::CallVerification::derive_verification_emojis(
+                                            &e2ee_key,
+                                            &pending.room_name,
+                                        );
+                                        let (e1, e2, e3, e4) = chatter_linux::services::CallVerification::to_slint_tuple(&verification);
+
+                                        // Create call data for UI (use room_name as call_id so "anon-" prefix is preserved for cleanup)
+                                        let call_data = ActiveCallData {
+                                            call_id: pending.room_name.clone().into(),
+                                            channel_id: channel_id.to_string().into(),
+                                            title: "Anonymous Call".into(),
+                                            is_video_call: pending.is_video_call,
+                                            is_anonymous_call: true,
+                                            is_encrypted: true,
+                                            is_identity_verified: true,
+                                            identity_warning: "".into(),
+                                            participant_count: 2,
+                                            duration_seconds: 0,
+                                            participants: ModelRc::new(VecModel::from(vec![
+                                                remote_participant,
+                                                local_participant,
+                                            ])),
+                                            verification_emoji_1: e1.into(),
+                                            verification_emoji_2: e2.into(),
+                                            verification_emoji_3: e3.into(),
+                                            verification_emoji_4: e4.into(),
+                                        };
+                                        
+                                        w.set_active_call_data(call_data);
+                                        w.set_call_is_muted(false);
+                                        w.set_call_is_video_enabled(pending.is_video_call);
+                                        w.set_call_is_screen_sharing(false);
+                                        w.set_active_call_visible(true);
+                                        
+                                        // Start call duration timer
+                                        super::timers::start_call_timer(&w, None);
+                                        
+                                        // Start video frame polling timer
+                                        super::timers::start_video_frame_timer(&w, &service);
+                                        
+                                        // Publish camera if video call
+                                        if pending.is_video_call {
+                                            let service = service.clone();
+                                            slint::spawn_local(async move {
+                                                if let Err(e) = service.publish_camera(None).await {
+                                                    tracing::error!("Failed to publish camera: {}", e);
+                                                } else {
+                                                    tracing::info!("Camera published successfully");
+                                                }
+                                            }).unwrap();
+                                        }
+                                    }
+                                    
+                                    // Clear pending state on successful connection
+                                    anon_dm_service.clear_pending_anon_call(&call_id_str);
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to connect to LiveKit: {}", e);
+                                    if let Some(w) = weak.upgrade() {
+                                        w.set_incoming_call_visible(false);
+                                    }
+                                    // Clear pending state
+                                    anon_dm_service.clear_pending_anon_call(&call_id_str);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to join anonymous call room: {}", e);
+                            if let Some(w) = weak.upgrade() {
+                                w.set_incoming_call_visible(false);
+                            }
+                            // Clear pending state
+                            anon_dm_service.clear_pending_anon_call(&call_id_str);
+                        }
+                    }
+                }).unwrap();
+                return;
+            }
 
             let weak = weak.clone();
             let call_service = call_service.clone();
@@ -270,6 +524,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 channel_id: call.channel_id.to_string().into(),
                                 title: "Call".into(),
                                 is_video_call,
+                                is_anonymous_call: false,
                                 is_encrypted: true,
                                 is_identity_verified: false,
                                 identity_warning: "".into(),
@@ -325,6 +580,42 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     window.on_decline_incoming_call(move |call_id| {
         let call_id_str = call_id.to_string();
         tracing::info!("Decline call: {}", call_id_str);
+
+        let is_anonymous = weak.upgrade()
+            .map(|w| w.get_incoming_call_data().is_anonymous_call)
+            .unwrap_or(false);
+
+        if is_anonymous {
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx_decline.clone();
+            
+            // Hide the modal immediately
+            if let Some(w) = weak.upgrade() {
+                w.set_incoming_call_visible(false);
+            }
+            
+            slint::spawn_local(async move {
+                // Get stored offer details from pending state (consume it since we're declining)
+                if let Some(pending) = ui_ctx.anon_dm_service.take_pending_anon_call(&call_id_str) {
+                    // Send decline answer using the conversation ID from the pending call
+                    if let Err(e) = ui_ctx.anon_dm_service.send_call_answer(
+                        &pending.conversation_id,
+                        &pending.call_room_id,
+                        false, // accepted = false for decline
+                        None,  // No token needed for decline
+                        None,  // decline_reason (use default)
+                        Some(&pending.display_name), // display_name
+                    ).await {
+                        tracing::error!("Failed to send anonymous call decline: {}", e);
+                    } else {
+                        tracing::info!("Anonymous call decline sent for {}", call_id_str);
+                    }
+                } else {
+                    tracing::warn!("No pending anonymous call state found for decline: {}", call_id_str);
+                }
+            }).unwrap();
+            return;
+        }
 
         let weak = weak.clone();
         let ui_ctx = ui_ctx_decline.clone();

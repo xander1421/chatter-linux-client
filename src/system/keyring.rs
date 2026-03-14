@@ -10,8 +10,10 @@ use std::path::PathBuf;
 
 use crate::error::SystemError;
 
-/// Service name for keyring entries.
-const SERVICE: &str = "chatter-linux";
+use super::platform::APP_ID;
+
+/// Service name for keyring entries (platform-specific).
+const SERVICE: &str = APP_ID;
 
 /// Secure credential storage using the system keyring.
 ///

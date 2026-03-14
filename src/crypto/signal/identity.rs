@@ -95,4 +95,17 @@ impl IdentityKeyManager {
 
         Ok(registration_id)
     }
+
+    /// Sign data using the local identity private key.
+    ///
+    /// Returns the 64-byte Ed25519 signature.
+    pub fn sign(&self, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        let (_, key_pair) = self
+            .get_identity()?
+            .ok_or(CryptoError::NoIdentity)?;
+
+        key_pair.private_key().calculate_signature(data, &mut rand::rng())
+            .map(|sig| sig.into_vec())
+            .map_err(|e| CryptoError::Protocol(e.to_string()))
+    }
 }

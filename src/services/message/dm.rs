@@ -316,6 +316,101 @@ impl MessageService {
     /// * `text` - Message text
     /// * `file_paths` - Local file paths to upload as attachments
     /// * `mailbox_manager` - For sending to peer's mailbox
+    pub async fn send_dm_with_reply(
+        &self,
+        peer_id: &UserId,
+        dm_channel_id: &ChannelId,
+        text: &str,
+        file_paths: Vec<&Path>,
+        quote_author_id: &UserId,
+        quote_timestamp: u64,
+        quote_text: &str,
+        mailbox_manager: &MailboxManager,
+    ) -> Result<DmSendResult, MessageError> {
+        // Upload attachments with encryption
+        let attachment_service = AttachmentService::new(self.attachment_repo.clone());
+        let mut attachment_ids = Vec::with_capacity(file_paths.len());
+        let mut attachment_pointers = Vec::with_capacity(file_paths.len());
+        let mut gif_attachment_ids = Vec::new();
+        
+        for path in file_paths {
+            match attachment_service.upload_to_cdn_encrypted(&self.grpc_pool, path).await {
+                Ok(result) => {
+                    attachment_ids.push(result.attachment_id);
+                    
+                    // Track GIF attachments for animation
+                    if result.content_type.starts_with("image/gif") {
+                        gif_attachment_ids.push(result.attachment_id);
+                    }
+                    
+                    // Build AttachmentPointer proto with all required fields
+                    let pointer = crate::proto::content_v1::AttachmentPointer {
+                        cdn_key: result.cdn_key,
+                        encryption_key: result.encryption_key.to_vec(),
+                        digest: result.digest.to_vec(),
+                        plaintext_size: result.plaintext_size,
+                        content_type: result.content_type,
+                        file_name: result.file_name,
+                        thumbnail: result.thumbnail,
+                        thumbnail_width: 0,
+                        thumbnail_height: 0,
+                        blur_hash: String::new(),
+                        width: 0,
+                        height: 0,
+                        duration_ms: result.duration_ms,
+                        voice_note: false,
+                        incremental_mac: vec![],
+                        chunk_size: 0,
+                        ciphertext_size: 0,
+                        plaintext_hash: String::new(),
+                        waveform: result.waveform,
+                    };
+                    attachment_pointers.push(pointer);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to upload attachment: {}", e);
+                    return Err(MessageError::AttachmentError(e.to_string()));
+                }
+            }
+        }
+        
+        // Build reply content with Quote proto
+        let sent_at = TimestampNanos::now().as_u64();
+        let content = crate::services::build_reply_content(
+            text,
+            attachment_pointers,
+            &quote_author_id.to_string(),
+            quote_timestamp,
+            quote_text,
+            sent_at,
+        );
+        
+        // Send the message
+        self.send_dm(peer_id, content, mailbox_manager).await?;
+        
+        // Store the message locally
+        let our_user_id = self.settings_repo.current_user_id()?;
+        let mut message = Message::new_text(*dm_channel_id, Some(our_user_id), text.to_string(), sent_at);
+        message.attachments = attachment_ids.clone();
+        
+        // Store in database
+        if let Err(e) = self.message_repo.insert(&message) {
+            tracing::warn!(
+                peer_id = %peer_id,
+                error = %e,
+                "Failed to store sent reply DM"
+            );
+        }
+        
+        Ok(DmSendResult {
+            message: Some(message),
+            attachment_ids,
+            gif_attachment_ids,
+            sent_at,
+            bootstrap_initiated: false,
+        })
+    }
+    
     pub async fn send_dm_with_files(
         &self,
         peer_id: &UserId,

@@ -587,12 +587,9 @@ impl RoomManager {
     pub fn ratchet_key(&self) -> Option<u32> {
         let kp = self.key_provider.read();
         if let Some(ref key_provider) = *kp {
-            // Get current epoch for key index
-            let current_epoch = *self.key_epoch.read();
-
             // LiveKit's ratchet_shared_key derives the next key from the current one
-            // key_index 0 is the shared key slot
-            if let Some(_new_key) = key_provider.ratchet_shared_key(current_epoch as i32) {
+            // key_index 0 is the shared key slot - always ratchet at index 0
+            if let Some(_new_key) = key_provider.ratchet_shared_key(0) {
                 // Track our epoch
                 let mut epoch = self.key_epoch.write();
                 *epoch += 1;
@@ -791,7 +788,7 @@ impl RoomManager {
             }
             livekit::RoomEvent::E2eeStateChanged { participant, state: enc_state } => {
                 use livekit::webrtc::native::frame_cryptor::EncryptionState;
-                let is_encrypted = matches!(enc_state, EncryptionState::Ok);
+                let is_encrypted = matches!(enc_state, EncryptionState::Ok | EncryptionState::KeyRatcheted);
                 let _ = event_tx.send(RoomEvent::EncryptionStateChanged {
                     participant_identity: participant.identity().to_string(),
                     is_encrypted,

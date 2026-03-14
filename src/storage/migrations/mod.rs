@@ -35,6 +35,9 @@ pub mod v032_jarvis_graph;
 pub mod v033_anon_dm_reactions_receipts;
 pub mod v034_anon_group_member_profiles;
 pub mod v035_message_delivery_status;
+pub mod v036_call_room_tokens;
+pub mod v037_sender_key_rotation;
+pub mod v038_anon_group_owner_id;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -73,6 +76,9 @@ pub use v032_jarvis_graph::V032JarvisGraph;
 pub use v033_anon_dm_reactions_receipts::V033AnonDmReactionsReceipts;
 pub use v034_anon_group_member_profiles::V034AnonGroupMemberProfiles;
 pub use v035_message_delivery_status::V035MessageDeliveryStatus;
+pub use v036_call_room_tokens::V036CallRoomTokens;
+pub use v037_sender_key_rotation::V037SenderKeyRotation;
+pub use v038_anon_group_owner_id::V038AnonGroupOwnerId;
 
 /// Trait for database migrations.
 ///
@@ -226,4 +232,7 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V033AnonDmReactionsReceipts)
         .register(V034AnonGroupMemberProfiles)
         .register(V035MessageDeliveryStatus)
+        .register(V036CallRoomTokens)
+        .register(V037SenderKeyRotation)
+        .register(V038AnonGroupOwnerId)
 }

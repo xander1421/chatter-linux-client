@@ -8,4 +8,3 @@
 //! - `inbox/dm_handlers.rs` - DM event handlers
 //! - `inbox/channel_handlers.rs` - Channel event handlers
 
-pub use super::inbox::*;

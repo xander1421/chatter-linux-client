@@ -54,6 +54,9 @@ impl From<CurrentUserError> for TypingError {
 /// // Start typing in a channel
 /// service.start_typing(&mut message_client, "channel-123").await?;
 ///
+/// // Set typing indicator with auto-clear
+/// service.set_typing_indicator("user-123", "channel-123", TypingIndicatorType::DirectMessage);
+///
 /// // Check who's typing (local cache, no network)
 /// let typing_users = service.get_typing_users("channel-123");
 /// ```
@@ -198,6 +201,14 @@ impl TypingService {
     /// Returns the number of entries removed.
     pub fn cleanup_expired(&self) -> usize {
         self.typing_aggregator.cleanup_expired()
+    }
+    
+    /// Start background cleanup task for expired typing indicators.
+    ///
+    /// This prevents typing indicators from getting stuck by periodically
+    /// removing expired entries. Returns a JoinHandle for the background task.
+    pub fn start_cleanup_task(&self) -> tokio::task::JoinHandle<()> {
+        crate::services::typing_cleanup::start_typing_cleanup(self.typing_aggregator.clone())
     }
 }
 

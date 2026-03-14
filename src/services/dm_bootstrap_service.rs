@@ -1,6 +1,8 @@
 //! DM Bootstrap service for managing DM channel establishment and session recovery.
 
 use std::sync::Arc;
+use std::collections::HashMap;
+use tokio::sync::Mutex;
 
 use crate::domain::channel::Channel;
 use crate::domain::ids::UserId;
@@ -34,6 +36,8 @@ pub struct DmBootstrapService {
     channel_repo: Arc<ChannelRepository>,
     grpc_pool: Arc<GrpcClientPool>,
     mailbox_manager: Arc<MailboxManager>,
+    /// Temporary storage for messages that need to be shown in UI during bootstrap
+    pending_ui_messages: Arc<Mutex<HashMap<UserId, Vec<String>>>>,
 }
 
 impl DmBootstrapService {
@@ -48,7 +52,20 @@ impl DmBootstrapService {
             channel_repo,
             grpc_pool,
             mailbox_manager,
+            pending_ui_messages: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+    
+    /// Store a message to be shown in UI during bootstrap
+    pub async fn store_pending_ui_message(&self, peer_id: &UserId, message: String) {
+        let mut pending = self.pending_ui_messages.lock().await;
+        pending.entry(*peer_id).or_insert_with(Vec::new).push(message);
+    }
+    
+    /// Take and clear pending UI messages for a peer
+    pub async fn take_pending_messages(&self, peer_id: &UserId) -> Vec<String> {
+        let mut pending = self.pending_ui_messages.lock().await;
+        pending.remove(peer_id).unwrap_or_default()
     }
 
     /// Handle session convergence failure by resetting and re-establishing sessions.
@@ -81,6 +98,64 @@ impl DmBootstrapService {
                         peer_id = %peer_id,
                         error = %e,
                         "Failed to reset sessions after convergence failure"
+                    );
+                }
+            }
+        });
+    }
+
+    /// Handle mailbox expiration by triggering a re-bootstrap.
+    ///
+    /// This is part of the NDSS '21 healing path. If our mailbox is gone
+    /// or expired, we must establish a new one and inform the peer.
+    pub fn handle_mailbox_expired(&self, peer_id: UserId) {
+        let message_service = self.message_service.clone();
+        let mailbox_manager = self.mailbox_manager.clone();
+        let grpc_pool = self.grpc_pool.clone();
+
+        tracing::info!(
+            peer_id = %peer_id,
+            "HEALING: DM mailbox expired, triggering re-bootstrap"
+        );
+
+        tokio::spawn(async move {
+            let mut auth_client = AuthClient::new(
+                grpc_pool.channel(),
+                grpc_pool.auth_clone(),
+            );
+
+            // Initiate bootstrap - this will create a new mailbox and tell the peer.
+            // We send an empty content proto which just triggers the bootstrap flow.
+            let dummy_content = crate::proto::content_v1::Content {
+                content: None,
+                timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+                ephemeral_reply_to: None,
+                padding: vec![],
+            };
+
+            match message_service
+                .send_dm_content(crate::services::message::SendDmContentParams {
+                    auth_client: &mut auth_client,
+                    peer_id: &peer_id,
+                    content: dummy_content,
+                    mailbox_manager: &mailbox_manager,
+                    grpc_pool: Some(&grpc_pool),
+                    attachment_ids: None,
+                    channel_id: None,
+                })
+                .await
+            {
+                Ok(_) => {
+                    tracing::info!(peer_id = %peer_id, "HEALING: Re-bootstrap triggered successfully");
+                }
+                Err(crate::services::message::MessageError::BootstrapInitiated) => {
+                    tracing::info!(peer_id = %peer_id, "HEALING: Re-bootstrap initiated (message queued)");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "HEALING: Failed to trigger re-bootstrap for expired mailbox"
                     );
                 }
             }

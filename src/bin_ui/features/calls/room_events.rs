@@ -55,6 +55,34 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             let mut data = w.get_active_call_data();
+
+                            // Check if participant already exists (e.g. pre-populated placeholder)
+                            let existing: Vec<CallParticipantData> =
+                                (0..data.participants.row_count())
+                                    .map(|i| data.participants.row_data(i).unwrap())
+                                    .collect();
+                            let already_has_remote = existing.iter().any(|p| {
+                                let uid = p.user_id.as_str();
+                                uid == identity.as_str() || (uid != "You" && uid != identity.as_str())
+                            });
+                            if already_has_remote {
+                                // Update the existing placeholder with the real identity
+                                let mut participants = existing;
+                                for p in &mut participants {
+                                    let uid = p.user_id.as_str();
+                                    if uid != "You" && uid != identity.as_str() {
+                                        // Replace placeholder (e.g. "Anonymous") with real identity
+                                        p.user_id = identity.clone().into();
+                                        p.display_name = display.clone().into();
+                                        break;
+                                    }
+                                }
+                                data.participants = ModelRc::new(VecModel::from(participants));
+                                w.set_active_call_data(data);
+                                tracing::debug!("UI updated existing participant placeholder");
+                                return;
+                            }
+
                             data.participant_count += 1;
 
                             // Add participant to list
@@ -68,10 +96,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 is_speaking: false,
                             };
 
-                            let mut participants: Vec<CallParticipantData> =
-                                (0..data.participants.row_count())
-                                    .map(|i| data.participants.row_data(i).unwrap())
-                                    .collect();
+                            let mut participants = existing;
                             // Insert remote participants at the beginning, keeping local participant last
                             // This matches the Slint layout which assumes remote participants come first
                             participants.insert(0, new_participant);
@@ -158,6 +183,13 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         "Encryption state changed: {} - encrypted: {}",
                         participant_identity, is_encrypted
                     );
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            let mut data = w.get_active_call_data();
+                            data.is_encrypted = is_encrypted;
+                            w.set_active_call_data(data);
+                        }
+                    });
                 }
             }
         }

@@ -25,6 +25,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let ctx_message_service = ui_ctx.message_service.clone();
     let ctx_mailbox_manager = ui_ctx.mailbox_manager.clone();
     let ctx_channel_service = ui_ctx.channel_service.clone();
+    let ctx_anon_dm_service = ui_ctx.anon_dm_service.clone();
 
     // Start voice call
     window.on_start_voice_call({
@@ -34,6 +35,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let message_service = ctx_message_service.clone();
         let mailbox_manager = ctx_mailbox_manager.clone();
         let channel_service = ctx_channel_service.clone();
+        let anon_dm_service = ctx_anon_dm_service.clone();
 
         move || {
             let weak = weak.clone();
@@ -41,6 +43,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let message_service = message_service.clone();
             let mailbox_manager = mailbox_manager.clone();
             let channel_service = channel_service.clone();
+            let anon_dm_service = anon_dm_service.clone();
 
             // Get the call service from OnceLock
             let call_service = match call_service.get() {
@@ -60,6 +63,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     message_service,
                     mailbox_manager,
                     channel_service,
+                    anon_dm_service,
                 ).await;
             }).unwrap();
         }
@@ -73,6 +77,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let message_service = ctx_message_service.clone();
         let mailbox_manager = ctx_mailbox_manager.clone();
         let channel_service = ctx_channel_service.clone();
+        let anon_dm_service = ctx_anon_dm_service.clone();
 
         move || {
             let weak = weak.clone();
@@ -80,6 +85,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let message_service = message_service.clone();
             let mailbox_manager = mailbox_manager.clone();
             let channel_service = channel_service.clone();
+            let anon_dm_service = anon_dm_service.clone();
 
             // Get the call service from OnceLock
             let call_service = match call_service.get() {
@@ -99,6 +105,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     message_service,
                     mailbox_manager,
                     channel_service,
+                    anon_dm_service,
                 ).await;
             }).unwrap();
         }
@@ -114,6 +121,7 @@ async fn start_call_impl(
     message_service: Arc<chatter_linux::services::message::MessageService>,
     mailbox_manager: Arc<chatter_linux::services::mailbox_manager::MailboxManager>,
     channel_service: Arc<chatter_linux::services::channel::ChannelService>,
+    anon_dm_service: Arc<chatter_linux::services::anon_dm::AnonDmService>,
 ) {
     // Get current channel ID and name from the window
     // Check both selected-channel-id (for channels) and selected-dm-id (for DMs)
@@ -138,7 +146,15 @@ async fn start_call_impl(
         return;
     }
 
-    let channel_id = match ChannelId::from_str(&channel_id_str) {
+    // Handle anonymous DM IDs (prefixed with "anon_dm:")
+    // Strip the prefix to get the actual UUID
+    let channel_id_to_parse = channel_id_str
+        .strip_prefix("anon_dm:")
+        .unwrap_or(&channel_id_str);
+
+    let is_anon_dm = channel_id_str.starts_with("anon_dm:");
+
+    let channel_id = match ChannelId::from_str(channel_id_to_parse) {
         Ok(id) => id,
         Err(e) => {
             tracing::error!("Invalid channel ID: {}", e);
@@ -155,8 +171,8 @@ async fn start_call_impl(
         }
     };
 
-    // Display name shown as "You" for local participant
-    let display_name = "You".to_string();
+    // Get our real display name for the call offer (shown to remote peer)
+    let display_name = anon_dm_service.get_my_display_name().unwrap_or_else(|| "Anonymous".to_string());
 
     let is_video_call = matches!(call_type, CallType::Video);
     let call_type_str = match call_type {
@@ -178,117 +194,330 @@ async fn start_call_impl(
         // 5. When answer arrives → derive key → connect
         // =================================================================
 
-        // Get peer ID first
-        let peer_id = match channel_service.get_dm_peer_local(&channel_id) {
-            Ok(Some(id)) => id,
-            Ok(None) => {
-                tracing::error!("Could not determine peer ID for DM call");
-                return;
+        // Get peer ID - different lookup for anon DMs vs regular DMs
+        let peer_id = if is_anon_dm {
+            // For anon DMs, look up the conversation to get peer_id
+            use chatter_linux::domain::anon_dm::AnonDmId;
+            let anon_dm_id: AnonDmId = match channel_id_to_parse.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid anon DM ID: {}", e);
+                    return;
+                }
+            };
+            match anon_dm_service.get_conversation(&anon_dm_id) {
+                Ok(Some(dm)) => dm.peer_id,
+                Ok(None) => {
+                    tracing::error!("Anon DM conversation not found: {}", anon_dm_id);
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to get anon DM conversation: {}", e);
+                    return;
+                }
             }
-            Err(e) => {
-                tracing::error!("Failed to get peer ID: {}", e);
-                return;
+        } else {
+            // Regular DM - look up from channel membership
+            match channel_service.get_dm_peer_local(&channel_id) {
+                Ok(Some(id)) => id,
+                Ok(None) => {
+                    tracing::error!("Could not determine peer ID for DM call");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to get peer ID: {}", e);
+                    return;
+                }
             }
         };
 
-        // Generate ephemeral keypair for PFS
-        let ephemeral_key = EphemeralCallKey::generate();
-        let ephemeral_public = ephemeral_key.public_key_bytes();
-
-        tracing::info!(
-            peer_id = %peer_id,
-            "Generated ephemeral key for DM call, sending offer"
-        );
-
-        // Create call on server (temporary placeholder key - will update when answer arrives)
-        let placeholder_key = [0u8; 32];
-        match call_service.initiate_call(
-            channel_id,
-            call_type_str,
-            call_type,
-            &placeholder_key,
-            user_id,
-        ).await {
-            Ok(call) => {
-                tracing::info!("Created call on server: {:?}, waiting for peer's ephemeral key", call.id);
-
-                // Build and send offer with our ephemeral public key
-                let content = chatter_linux::services::build_call_key_offer(
-                    &call.id.to_string(),
-                    ephemeral_public,
-                    call_type_str,
-                    &channel_id_str,
-                );
-
-                if let Err(e) = message_service
-                    .send_dm(&peer_id, content, &mailbox_manager)
-                    .await
-                {
-                    tracing::error!(
-                        peer_id = %peer_id,
-                        error = %e,
-                        "Failed to send call offer"
-                    );
-                    // Clean up the call on server
-                    let _ = call_service.leave_call().await;
+        // Handle anonymous DM calls differently
+        if is_anon_dm {
+            use chatter_linux::domain::anon_dm::AnonDmId;
+            let anon_dm_id: AnonDmId = channel_id_to_parse.parse().unwrap(); // Already validated above
+            
+            // Get a blind signature token for the call (request more if needed)
+            let token = match anon_dm_service.get_available_call_room_token() {
+                Ok(Some(token)) => token,
+                Ok(None) => {
+                    tracing::info!("No call room tokens available - requesting more");
+                    
+                    // Request 5 call room tokens
+                    match anon_dm_service.request_call_room_tokens(5).await {
+                        Ok(count) => {
+                            tracing::info!("Successfully requested {} call room tokens", count);
+                            
+                            // Try again to get a token
+                            match anon_dm_service.get_available_call_room_token() {
+                                Ok(Some(token)) => token,
+                                _ => {
+                                    tracing::error!("Still no tokens available after request");
+                                    
+                                    // Create failed call history entry
+                                    let channel_id_str = format!("anon-dm-{}", anon_dm_id);
+                                    if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
+                                        use crate::bin_ui::features::calls::call_history::create_call_history_message;
+                                        let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                                        create_call_history_message(
+                                            message_service.clone(),
+                                            &channel_id,
+                                            "no-tokens-available",
+                                            &anonymous_user_id,
+                                            &display_name,
+                                            true, // This was an outgoing call
+                                            0, // Failed call, no duration
+                                            true, // Mark as missed/failed
+                                        );
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to request call room tokens: {}", e);
+                            
+                            // Create failed call history entry
+                            let channel_id_str = format!("anon-dm-{}", anon_dm_id);
+                            if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
+                                use crate::bin_ui::features::calls::call_history::create_call_history_message;
+                                let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                                create_call_history_message(
+                                    message_service.clone(),
+                                    &channel_id,
+                                    "token-request-failed",
+                                    &anonymous_user_id,
+                                    &display_name,
+                                    true, // This was an outgoing call
+                                    0, // Failed call, no duration
+                                    true, // Mark as missed/failed
+                                );
+                            }
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to get call room token: {}", e);
+                    
+                    // Create failed call history entry
+                    let channel_id_str = format!("anon-dm-{}", anon_dm_id);
+                    if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
+                        use crate::bin_ui::features::calls::call_history::create_call_history_message;
+                        let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                        create_call_history_message(
+                            message_service.clone(),
+                            &channel_id,
+                            "get-token-failed",
+                            &anonymous_user_id,
+                            &display_name,
+                            true, // This was an outgoing call
+                            0, // Failed call, no duration
+                            true, // Mark as missed/failed
+                        );
+                    }
                     return;
                 }
-
-                tracing::info!(
-                    peer_id = %peer_id,
-                    call_id = %call.id,
-                    "Call offer sent, storing pending state"
-                );
-
-                // Store pending call state (ephemeral key kept until answer)
-                set_pending_call(PendingOutgoingCall {
-                    call_id: call.id,
-                    channel_id,
-                    ephemeral_key,
-                    peer_id,
-                    call_type: call_type_str.to_string(),
-                    is_video_call,
-                });
-
-                // Show "Calling..." UI (not connected yet)
-                if let Some(w) = weak.upgrade() {
-                    let local_participant = CallParticipantData {
-                        user_id: user_id.to_string().into(),
-                        display_name: display_name.into(),
-                        avatar_url: "".into(),
-                        is_muted: false,
-                        is_video_enabled: is_video_call,
-                        is_screen_sharing: false,
-                        is_speaking: false,
-                    };
-
-                    // Placeholder verification (will update when connected)
-                    let call_data = ActiveCallData {
-                        call_id: call.id.to_string().into(),
-                        channel_id: channel_id_str.clone().into(),
-                        title: if channel_name.is_empty() { format!("Calling...").into() } else { channel_name.into() },
-                        is_video_call,
-                        is_encrypted: true,
-                        is_identity_verified: false,
-                        identity_warning: "".into(),
-                        participant_count: 1,
-                        duration_seconds: 0,
-                        participants: ModelRc::new(VecModel::from(vec![local_participant])),
-                        verification_emoji_1: "⏳".into(),
-                        verification_emoji_2: "".into(),
-                        verification_emoji_3: "".into(),
-                        verification_emoji_4: "".into(),
-                    };
-
-                    w.set_active_call_data(call_data);
-                    w.set_call_is_muted(false);
-                    w.set_call_is_video_enabled(is_video_call);
-                    w.set_call_is_screen_sharing(false);
-                    w.set_active_call_visible(true);
+            };
+            
+            // Send anonymous call offer
+            match anon_dm_service.send_call_offer(
+                &anon_dm_id,
+                &token,
+                is_video_call,
+                Some(&display_name),
+            ).await {
+                Ok(offer_result) => {
+                    tracing::info!(
+                        room_name = %offer_result.room_name,
+                        "Sent anonymous call offer"
+                    );
+                    
+                    // Mark token as used
+                    let _ = anon_dm_service.mark_call_room_token_used(&token.id);
+                    
+                    // Store pending anonymous call state in the service
+                    anon_dm_service.store_pending_anon_call(
+                        offer_result.room_name.clone(),
+                        chatter_linux::services::anon_dm::PendingAnonCall {
+                            call_room_id: offer_result.call_room_id,
+                            room_name: offer_result.room_name.clone(),
+                            conversation_id: anon_dm_id,
+                            token,
+                            is_video_call,
+                            is_outgoing: true,
+                            display_name: display_name.clone(),
+                            encryption_key: offer_result.call_encryption_key,
+                            sender_id: None,
+                            started_at: None, // Will be set when call is accepted
+                        },
+                    );
+                    
+                    // Show "Calling..." UI
+                    if let Some(w) = weak.upgrade() {
+                        let local_participant = CallParticipantData {
+                            user_id: user_id.to_string().into(),
+                            display_name: display_name.into(),
+                            avatar_url: "".into(),
+                            is_muted: false,
+                            is_video_enabled: is_video_call,
+                            is_screen_sharing: false,
+                            is_speaking: false,
+                        };
+                        
+                        let call_data = ActiveCallData {
+                            call_id: offer_result.room_name.clone().into(),
+                            channel_id: channel_id_str.clone().into(),
+                            title: format!("Calling...").into(),
+                            is_video_call,
+                            is_anonymous_call: true,
+                            is_encrypted: true,
+                            is_identity_verified: true, // Anonymous calls are always verified
+                            identity_warning: "".into(),
+                            participant_count: 1,
+                            duration_seconds: 0,
+                            participants: ModelRc::new(VecModel::from(vec![local_participant])),
+                            verification_emoji_1: "🔒".into(),
+                            verification_emoji_2: "".into(),
+                            verification_emoji_3: "".into(),
+                            verification_emoji_4: "".into(),
+                        };
+                        
+                        w.set_active_call_data(call_data);
+                        w.set_call_is_muted(false);
+                        w.set_call_is_video_enabled(is_video_call);
+                        w.set_call_is_screen_sharing(false);
+                        w.set_active_call_visible(true);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to send anonymous call offer: {}", e);
+                    
+                    // Create failed call history entry
+                    let channel_id_str = format!("anon-dm-{}", anon_dm_id);
+                    if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
+                        use crate::bin_ui::features::calls::call_history::create_call_history_message;
+                        let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                        create_call_history_message(
+                            message_service.clone(),
+                            &channel_id,
+                            "failed-call",
+                            &anonymous_user_id,
+                            &display_name,
+                            true, // This was an outgoing call
+                            0, // Failed call, no duration
+                            true, // Mark as missed/failed
+                        );
+                    }
+                    
+                    // No pending state to clear - we only store it after successful offer
+                    if let Some(w) = weak.upgrade() {
+                        w.set_active_call_visible(false);
+                    }
                 }
             }
-            Err(e) => {
-                tracing::error!("Failed to create call on server: {}", e);
+        } else {
+            // Regular DM call with ephemeral key exchange
+            // Generate ephemeral keypair for PFS
+            let ephemeral_key = EphemeralCallKey::generate();
+            let ephemeral_public = ephemeral_key.public_key_bytes();
+
+            tracing::info!(
+                peer_id = %peer_id,
+                "Generated ephemeral key for DM call, sending offer"
+            );
+
+            // Create call on server (temporary placeholder key - will update when answer arrives)
+            let placeholder_key = [0u8; 32];
+            match call_service.initiate_call(
+                channel_id,
+                call_type_str,
+                call_type,
+                &placeholder_key,
+                user_id,
+            ).await {
+                Ok(call) => {
+                    tracing::info!("Created call on server: {:?}, waiting for peer's ephemeral key", call.id);
+
+                    // Build and send offer with our ephemeral public key
+                    let content = chatter_linux::services::build_call_key_offer(
+                        &call.id.to_string(),
+                        ephemeral_public,
+                        call_type_str,
+                        &channel_id_str,
+                    );
+
+                    // Send via regular DM
+                    let send_result = message_service.send_dm(&peer_id, content, &mailbox_manager).await
+                        .map_err(|e| format!("{}", e));
+
+                    if let Err(e) = send_result {
+                        tracing::error!(
+                            peer_id = %peer_id,
+                            error = %e,
+                            "Failed to send call offer"
+                        );
+                        // Clean up the call on server
+                        let _ = call_service.leave_call().await;
+                        return;
+                    }
+
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        call_id = %call.id,
+                        "Call offer sent, storing pending state"
+                    );
+
+                    // Store pending call state (ephemeral key kept until answer)
+                    set_pending_call(PendingOutgoingCall {
+                        call_id: call.id,
+                        channel_id,
+                        ephemeral_key,
+                        peer_id,
+                        call_type: call_type_str.to_string(),
+                        is_video_call,
+                    });
+
+                    // Show "Calling..." UI (not connected yet)
+                    if let Some(w) = weak.upgrade() {
+                        let local_participant = CallParticipantData {
+                            user_id: user_id.to_string().into(),
+                            display_name: display_name.into(),
+                            avatar_url: "".into(),
+                            is_muted: false,
+                            is_video_enabled: is_video_call,
+                            is_screen_sharing: false,
+                            is_speaking: false,
+                        };
+
+                        // Placeholder verification (will update when connected)
+                        let call_data = ActiveCallData {
+                            call_id: call.id.to_string().into(),
+                            channel_id: channel_id_str.clone().into(),
+                            title: if channel_name.is_empty() { format!("Calling...").into() } else { channel_name.into() },
+                            is_video_call,
+                            is_anonymous_call: false,
+                            is_encrypted: true,
+                            is_identity_verified: false,
+                            identity_warning: "".into(),
+                            participant_count: 1,
+                            duration_seconds: 0,
+                            participants: ModelRc::new(VecModel::from(vec![local_participant])),
+                            verification_emoji_1: "⏳".into(),
+                            verification_emoji_2: "".into(),
+                            verification_emoji_3: "".into(),
+                            verification_emoji_4: "".into(),
+                        };
+
+                        w.set_active_call_data(call_data);
+                        w.set_call_is_muted(false);
+                        w.set_call_is_video_enabled(is_video_call);
+                        w.set_call_is_screen_sharing(false);
+                        w.set_active_call_visible(true);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create call on server: {}", e);
+                }
             }
         }
     } else {
@@ -402,6 +631,7 @@ async fn start_call_impl(
                         channel_id: channel_id_str.into(),
                         title: if channel_name.is_empty() { call_type_str.into() } else { channel_name.into() },
                         is_video_call,
+                        is_anonymous_call: false,
                         is_encrypted: true,
                         is_identity_verified: false,
                         identity_warning: "".into(),

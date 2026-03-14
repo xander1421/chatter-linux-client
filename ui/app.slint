@@ -3,6 +3,7 @@
 
 import { Colors } from "theme/colors.slint";
 import { Spacing } from "theme/spacing.slint";
+import { Icons } from "theme/icons.slint";
 
 // Import auth screens
 import { LoginPage } from "pages/login.slint";
@@ -21,7 +22,7 @@ import { MentionAutocomplete, MentionSuggestion } from "components/mention_autoc
 
 // Import modals
 import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
-import { UserProfileModal } from "modals/user_profile.slint";
+import { UserProfileModal, EditProfileModal } from "modals/mod.slint";
 import { FriendRequestsModal, FriendRequest } from "modals/friend_requests.slint";
 import { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "modals/friends.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
@@ -69,6 +70,7 @@ export component App inherits Rectangle {
     in-out property <string> register-username: "";
     in-out property <string> register-password: "";
     in-out property <string> register-confirm-password: "";
+    in-out property <string> register-pin: "";
     in property <bool> register-loading: false;
     in property <string> register-error: "";
     in property <image> register-avatar-source;
@@ -118,6 +120,12 @@ export component App inherits Rectangle {
     in property <[PendingAttachmentData]> pending-attachments: [];
     in-out property <bool> composer-is-editing: false;
     in-out property <string> composer-edit-message-id: "";
+
+    // ========== Reply-to state (Signal-style: sender_id + timestamp) ==========
+    in-out property <bool> composer-is-replying: false;
+    in-out property <string> composer-reply-to-sender: "";
+    in-out property <string> composer-reply-to-timestamp: "";
+    in-out property <string> composer-reply-preview: "";
 
     // ========== Audio playback state ==========
     in-out property <string> current-playing-attachment-id: "";
@@ -214,6 +222,7 @@ export component App inherits Rectangle {
     in-out property <length> context-menu-y: 0px;
     in property <bool> context-menu-is-own-message: false;
     in property <bool> context-menu-is-pinned: false;
+    in property <bool> context-menu-has-attachments: false;
     // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
     callback reply-message(string, string);
     callback edit-message(string, string);
@@ -222,6 +231,7 @@ export component App inherits Rectangle {
     callback pin-message(string, string);
     callback forward-message-action(string, string);
     callback copy-message(string, string);
+    callback download-message(string, string);       // Download attachments
 
     // ========== Pinned bar state ==========
     in property <bool> has-pinned-messages: false;
@@ -300,6 +310,13 @@ export component App inherits Rectangle {
     in property <bool> profile-is-blocked: false;
     in property <bool> profile-is-self: false;
     in property <bool> profile-loading: false;
+
+    // Edit Profile data
+    in-out property <string> edit-profile-display-name: "";
+    in-out property <string> edit-profile-bio: "";
+    in property <image> edit-profile-avatar;
+    in property <bool> edit-profile-loading: false;
+    in property <string> edit-profile-error: "";
 
     // Friend requests modal properties (legacy)
     in property <string> friend-requests-tab: "received";
@@ -420,7 +437,7 @@ export component App inherits Rectangle {
 
     // ========== Auth callbacks ==========
     callback login(string, string);
-    callback register(string, string, string);
+    callback register(string, string, string, string);  // username, password, display_name, pin
     callback go-to-register();
     callback go-to-login();
 
@@ -431,6 +448,8 @@ export component App inherits Rectangle {
     callback saved-messages-clicked();
     callback settings-clicked();
     callback profile-clicked();
+    callback change-user-status(string /* status */);
+    pure callback get-user-status() -> string;
     callback open-create-channel();
     callback open-join-channel();
     callback toggle-sidebar();
@@ -444,13 +463,14 @@ export component App inherits Rectangle {
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string);  // (sender_id, timestamp_ns)
     callback thread-clicked(string);
-    callback more-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback view-attachment(string);  // attachment ID - for viewing/opening attachments
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
     callback send(string);
     callback send-edit(string, string);  // (message_id, new_text)
     callback cancel-edit();
+    callback cancel-reply();
     callback attachment-clicked();
     callback emoji-clicked();
     callback gif-clicked();
@@ -486,6 +506,9 @@ export component App inherits Rectangle {
     callback profile-remove-friend();
     callback profile-block-user();
     callback profile-unblock-user();
+    callback profile-edit-profile();
+    callback edit-profile-save(string, string);
+    callback edit-profile-change-avatar();
 
     // Friend requests (legacy)
     callback friend-requests-switch-tab(string);
@@ -513,6 +536,7 @@ export component App inherits Rectangle {
     callback friends-connect-private(string);  // Private anon DM (no server)
     callback friends-accept-private-request(string);   // Accept anon DM request
     callback friends-decline-private-request(string);  // Decline anon DM request
+    callback friends-block-private-request(string);    // Block anon DM request
     // Message requests (anon DM)
     callback message-requests-clicked();
 
@@ -582,6 +606,17 @@ export component App inherits Rectangle {
 
     background: Colors.background;
 
+    // ========== Responsive sidebar auto-collapse ==========
+    // Auto-collapse sidebar on smaller screens (< 800px width)
+    property <bool> is-small-screen: root.width < 800px;
+
+    // Update sidebar collapsed state when screen size changes
+    changed is-small-screen => {
+        if (root.is-small-screen && !root.sidebar-collapsed) {
+            root.sidebar-collapsed = true;
+        }
+    }
+
     // ========== Global keyboard shortcuts ==========
     FocusScope {
         width: 0;
@@ -631,14 +666,15 @@ export component App inherits Rectangle {
             username <=> root.register-username;
             password <=> root.register-password;
             confirm-password <=> root.register-confirm-password;
+            pin <=> root.register-pin;
             loading: root.register-loading;
             error: root.register-error;
             avatar-source: root.register-avatar-source;
             has-avatar: root.register-has-avatar;
             selected-default-idx <=> root.register-selected-default-idx;
 
-            register(u, p, d) => {
-                root.register(u, p, d);
+            register(u, p, d, pin) => {
+                root.register(u, p, d, pin);
             }
             select-avatar => {
                 root.register-select-avatar();
@@ -672,7 +708,6 @@ export component App inherits Rectangle {
                 collapsed <=> root.sidebar-collapsed;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
-                jarvis-active: root.jarvis-panel-visible;
 
                 channel-selected(id) => {
                     root.channel-selected(id);
@@ -685,10 +720,6 @@ export component App inherits Rectangle {
                 }
                 saved-messages-clicked => {
                     root.saved-messages-clicked();
-                }
-                settings-clicked => {
-                    root.active-modal = "settings";
-                    root.settings-clicked();
                 }
                 friends-clicked => {
                     root.active-modal = "friends";
@@ -713,9 +744,6 @@ export component App inherits Rectangle {
                 }
                 toggle-collapsed => {
                     root.toggle-sidebar();
-                }
-                toggle-jarvis => {
-                    root.jarvis-panel-visible = !root.jarvis-panel-visible;
                 }
                 show-tooltip(text, x, y) => {
                     root.tooltip-text = text;
@@ -799,7 +827,7 @@ export component App inherits Rectangle {
                         root.react-clicked(sender-id, timestamp-ns);
                     }
                     thread-clicked(id) => { root.thread-clicked(id); }
-                    more-clicked(sender-id, timestamp-ns) => { root.more-clicked(sender-id, timestamp-ns); }
+                    more-clicked(sender-id, timestamp-ns, x, y) => { root.more-clicked(sender-id, timestamp-ns, x, y); }
                     view-attachment(id) => { root.view-attachment(id); }
                     audio-seek(id, pos) => { root.audio-seek(id, pos); }
                     load-more => { root.load-more(); }
@@ -890,6 +918,76 @@ export component App inherits Rectangle {
             }
             send(text) => { root.jarvis-send(text); }
             clear => { root.jarvis-clear(); }
+        }
+    }
+
+    // ========== Bottom-left floating buttons ==========
+    // Only show in main view
+    if root.current-view == "main": Rectangle {
+        // Vertical stack of buttons (bottom-left)
+        VerticalLayout {
+            x: Spacing.md;
+            y: parent.height - 108px - Spacing.md;
+            spacing: 12px;
+
+            // Jarvis button (top)
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: 24px;
+                background: root.jarvis-panel-visible ? Colors.primary : (jarvis-btn-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                drop-shadow-blur: 8px;
+                drop-shadow-color: Colors.background.with-alpha(0.4);
+                drop-shadow-offset-y: 2px;
+
+                // Jarvis AI icon
+                Image {
+                    source: Icons.jarvis;
+                    width: 24px;
+                    height: 24px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: root.jarvis-panel-visible ? Colors.text-primary : Colors.text-secondary;
+                }
+
+                jarvis-btn-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.jarvis-panel-visible = !root.jarvis-panel-visible;
+                        if !root.jarvis-panel-visible {
+                            root.jarvis-panel-close();
+                        }
+                    }
+                }
+            }
+
+            // Settings button (bottom)
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: 24px;
+                background: settings-btn-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                drop-shadow-blur: 8px;
+                drop-shadow-color: Colors.background.with-alpha(0.4);
+                drop-shadow-offset-y: 2px;
+
+                Image {
+                    source: Icons.settings;
+                    width: 22px;
+                    height: 22px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: settings-btn-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                }
+
+                settings-btn-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.active-modal = "settings";
+                        root.settings-clicked();
+                    }
+                }
+            }
         }
     }
 
@@ -1038,6 +1136,29 @@ export component App inherits Rectangle {
         unblock-user => {
             root.profile-unblock-user();
         }
+        edit-profile => {
+            root.profile-edit-profile();
+        }
+    }
+
+    // Edit Profile Modal
+    EditProfileModal {
+        show-modal: root.active-modal == "edit-profile";
+        display-name <=> root.edit-profile-display-name;
+        bio <=> root.edit-profile-bio;
+        avatar: root.edit-profile-avatar;
+        loading: root.edit-profile-loading;
+        error-message: root.edit-profile-error;
+
+        close => {
+            root.active-modal = "none";
+        }
+        save(display-name, bio) => {
+            root.edit-profile-save(display-name, bio);
+        }
+        change-avatar => {
+            root.edit-profile-change-avatar();
+        }
     }
 
     // Friend Requests Modal (legacy)
@@ -1142,6 +1263,9 @@ export component App inherits Rectangle {
         }
         decline-private-request(conversation-id) => {
             root.friends-decline-private-request(conversation-id);
+        }
+        block-private-request(conversation-id) => {
+            root.friends-block-private-request(conversation-id);
         }
     }
 
@@ -1624,6 +1748,7 @@ export component App inherits Rectangle {
         position-y: root.context-menu-y;
         is-own-message: root.context-menu-is-own-message;
         is-pinned: root.context-menu-is-pinned;
+        has-attachments: root.context-menu-has-attachments;
 
         close => {
             root.context-menu-visible = false;
@@ -1655,6 +1780,10 @@ export component App inherits Rectangle {
         copy-clicked(sender-id, timestamp-ns) => {
             root.context-menu-visible = false;
             root.copy-message(sender-id, timestamp-ns);
+        }
+        download-clicked(sender-id, timestamp-ns) => {
+            root.context-menu-visible = false;
+            root.download-message(sender-id, timestamp-ns);
         }
     }
 

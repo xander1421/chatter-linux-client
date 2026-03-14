@@ -16,7 +16,7 @@ use crate::domain::anon_dm::AnonDmId;
 use crate::domain::UserId;
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 use crate::domain::ids::ChannelId;
-use crate::proto::content_v1::{self, typing_message, receipt_message, Content};
+use crate::proto::content_v1::{self, typing_message, receipt_message, anon_dm_presence, Content};
 use crate::services::anon_dm::AnonDmService;
 
 use super::{DomainEvent, HandlerContext, HandlerError, HandlerOutcome, HandlerResult, InboxHandler};
@@ -360,6 +360,15 @@ impl AnonDmHandler {
                 // Regular data message
                 self.handle_data_message(conversation_id, sender_id, &inner_content, ctx)
             }
+            Some(content_v1::content::Content::AnonCallOffer(offer)) => {
+                self.handle_call_offer(conversation_id, sender_id, offer, ctx)
+            }
+            Some(content_v1::content::Content::AnonCallAnswer(answer)) => {
+                self.handle_call_answer(conversation_id, sender_id, answer, ctx)
+            }
+            Some(content_v1::content::Content::AnonCallHangup(hangup)) => {
+                self.handle_call_hangup(conversation_id, sender_id, hangup, ctx)
+            }
             _ => {
                 // Unknown or other content types - treat as data message
                 self.handle_data_message(conversation_id, sender_id, &inner_content, ctx)
@@ -396,6 +405,127 @@ impl AnonDmHandler {
             sender_id,
             conversation_id
         );
+
+        Ok(HandlerOutcome::Processed)
+    }
+
+    /// Handle a presence update.
+    fn handle_presence(
+        &self,
+        presence: content_v1::AnonDmPresence,
+        sender_id: UserId,
+        ctx: &HandlerContext,
+    ) -> HandlerResult {
+        let conversation_id = AnonDmId::try_from_slice(&presence.conversation_id)
+            .ok_or_else(|| HandlerError::parse_failed("Invalid conversation ID in presence"))?;
+
+        // Check if sender is globally blocked
+        if self.service.is_user_blocked(&sender_id).unwrap_or(false) {
+            tracing::debug!("Dropped presence update from blocked user {}", sender_id);
+            return Ok(HandlerOutcome::Ignored);
+        }
+
+        // Check if conversation is blocked
+        if self.service.is_conversation_blocked(&conversation_id).unwrap_or(false) {
+            tracing::debug!("Dropped presence update for blocked conversation {}", conversation_id);
+            return Ok(HandlerOutcome::Ignored);
+        }
+
+        // Map anon_dm_presence::Status to UserPresence
+        use std::convert::TryFrom;
+        let user_presence = match anon_dm_presence::Status::try_from(presence.status).ok() {
+            Some(anon_dm_presence::Status::Online) => crate::proto::UserPresence::Online,
+            Some(anon_dm_presence::Status::Away) => crate::proto::UserPresence::Away,
+            Some(anon_dm_presence::Status::DoNotDisturb) => crate::proto::UserPresence::DoNotDisturb,
+            Some(anon_dm_presence::Status::Offline) | _ => crate::proto::UserPresence::Offline,
+        };
+
+        // Emit presence update event
+        ctx.emit(DomainEvent::UserPresenceChanged {
+            user_id: sender_id,
+            presence: user_presence,
+            timestamp: presence.timestamp,
+        });
+
+        tracing::info!(
+            "Received presence update from {} in anon DM {}: {:?}",
+            sender_id,
+            conversation_id,
+            user_presence
+        );
+
+        Ok(HandlerOutcome::Processed)
+    }
+
+    fn handle_profile_update(
+        &self,
+        profile_update: content_v1::AnonDmProfileUpdate,
+        sender_id: UserId,
+        ctx: &HandlerContext,
+    ) -> HandlerResult {
+        let conversation_id = AnonDmId::try_from_slice(&profile_update.conversation_id)
+            .ok_or_else(|| HandlerError::parse_failed("Invalid conversation ID in profile update"))?;
+
+        // Check if sender is globally blocked
+        if self.service.is_user_blocked(&sender_id).unwrap_or(false) {
+            tracing::debug!("Dropped profile update from blocked user {}", sender_id);
+            return Ok(HandlerOutcome::Ignored);
+        }
+
+        // Check if conversation is blocked
+        if self.service.is_conversation_blocked(&conversation_id).unwrap_or(false) {
+            tracing::debug!("Dropped profile update for blocked conversation {}", conversation_id);
+            return Ok(HandlerOutcome::Ignored);
+        }
+
+        // Validate sender is part of the conversation
+        let conv = self.service.anon_dm_repo.get_conversation(&conversation_id)
+            .map_err(|e| HandlerError::parse_failed(format!("Failed to get conversation: {}", e)))?
+            .ok_or_else(|| HandlerError::parse_failed("Unknown conversation for profile update"))?;
+        
+        if conv.peer_id != sender_id {
+            tracing::warn!(
+                "Received profile update from {} but peer is {} in conversation {}",
+                sender_id, conv.peer_id, conversation_id
+            );
+            return Ok(HandlerOutcome::Ignored);
+        }
+
+        tracing::info!(
+            "Received profile update from {} in anon DM {}",
+            sender_id, conversation_id
+        );
+
+        // Update the cached conversation with new profile info
+        if let Ok(Some(mut conv)) = self.service.anon_dm_repo.get_conversation(&conversation_id) {
+            // Update peer display name if provided
+            if let Some(name) = &profile_update.display_name {
+                conv.peer_display_name = Some(name.clone());
+            }
+            
+            // Note: Avatar URL is provided but we don't have a field for URL storage
+            // We would need to download and store the avatar bytes in conv.peer_avatar
+            // For now, just log that an avatar update was received
+            if let Some(avatar_url) = &profile_update.avatar_url {
+                tracing::debug!("Received avatar URL update: {}", avatar_url);
+                // TODO: Download avatar and store in conv.peer_avatar
+            }
+            
+            // Store the updated conversation
+            if let Err(e) = self.service.anon_dm_repo.update_conversation(&conv) {
+                tracing::warn!("Failed to update anon DM conversation with new profile: {}", e);
+            }
+        }
+
+        // Emit event for UI update
+        ctx.emit(DomainEvent::AnonDmProfileUpdated {
+            conversation_id,
+            user_id: sender_id,
+            display_name: profile_update.display_name,
+            avatar_url: profile_update.avatar_url,
+            bio: profile_update.bio,
+            timestamp: profile_update.timestamp,
+        });
 
         Ok(HandlerOutcome::Processed)
     }
@@ -546,12 +676,14 @@ impl AnonDmHandler {
                 message_id,
                 unpinner_id: sender_id,
                 channel_id,
+                target_sent_timestamp: pin.target_sent_timestamp,
             }
         } else {
             DomainEvent::MessagePinned {
                 message_id,
                 pinner_id: sender_id,
                 channel_id,
+                target_sent_timestamp: pin.target_sent_timestamp,
             }
         };
         ctx.emit(event);
@@ -671,6 +803,92 @@ impl AnonDmHandler {
         Ok(HandlerOutcome::Processed)
     }
 
+    /// Handle an anonymous call offer.
+    fn handle_call_offer(
+        &self,
+        conversation_id: AnonDmId,
+        sender_id: UserId,
+        offer: &content_v1::AnonCallOffer,
+        ctx: &HandlerContext,
+    ) -> HandlerResult {
+        tracing::info!(
+            conversation_id = %conversation_id,
+            sender_id = %sender_id,
+            room_name = %offer.room_name,
+            call_type = ?offer.call_type,
+            "Received anonymous call offer"
+        );
+
+        // Emit event for UI to show incoming call
+        ctx.emit(DomainEvent::AnonCallOfferReceived {
+            conversation_id,
+            sender_id,
+            call_room_id: offer.call_room_id.clone(),
+            room_name: offer.room_name.clone(),
+            call_type: offer.call_type,
+            caller_display_name: offer.caller_display_name.clone(),
+            call_encryption_key: offer.call_encryption_key.clone(),
+            timestamp: offer.timestamp,
+        });
+
+        Ok(HandlerOutcome::Processed)
+    }
+
+    /// Handle an anonymous call answer.
+    fn handle_call_answer(
+        &self,
+        conversation_id: AnonDmId,
+        sender_id: UserId,
+        answer: &content_v1::AnonCallAnswer,
+        ctx: &HandlerContext,
+    ) -> HandlerResult {
+        tracing::info!(
+            conversation_id = %conversation_id,
+            sender_id = %sender_id,
+            accepted = answer.accepted,
+            "Received anonymous call answer"
+        );
+
+        // Emit event for UI to handle answer
+        ctx.emit(DomainEvent::AnonCallAnswerReceived {
+            conversation_id,
+            sender_id,
+            call_room_id: answer.call_room_id.clone(),
+            accepted: answer.accepted,
+            callee_display_name: answer.callee_display_name.clone(),
+            timestamp: answer.timestamp,
+        });
+
+        Ok(HandlerOutcome::Processed)
+    }
+
+    /// Handle an anonymous call hangup.
+    fn handle_call_hangup(
+        &self,
+        conversation_id: AnonDmId,
+        sender_id: UserId,
+        hangup: &content_v1::AnonCallHangup,
+        ctx: &HandlerContext,
+    ) -> HandlerResult {
+        tracing::info!(
+            conversation_id = %conversation_id,
+            sender_id = %sender_id,
+            reason = ?hangup.reason,
+            "Received anonymous call hangup"
+        );
+
+        // Emit event for UI to end call
+        ctx.emit(DomainEvent::AnonCallHangupReceived {
+            conversation_id,
+            sender_id,
+            call_room_id: hangup.call_room_id.clone(),
+            reason: hangup.reason,
+            timestamp: hangup.timestamp,
+        });
+
+        Ok(HandlerOutcome::Processed)
+    }
+
     /// Convert Content proto to storage format (content_type, content_json).
     fn content_to_storage(content: &Content) -> (i32, String) {
         match &content.content {
@@ -721,6 +939,12 @@ impl InboxHandler for AnonDmHandler {
             }
             Some(content_v1::content::Content::AnonDmMessage(msg)) => {
                 self.handle_message(msg, sender_id, ctx)
+            }
+            Some(content_v1::content::Content::AnonDmPresence(presence)) => {
+                self.handle_presence(presence, sender_id, ctx)
+            }
+            Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)) => {
+                self.handle_profile_update(profile_update, sender_id, ctx)
             }
             _ => Ok(HandlerOutcome::Ignored),
         }

@@ -1,6 +1,6 @@
 use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
 use crate::domain::UserId;
-use crate::proto::content_v1::{self, AnonDmMessage, Content};
+use crate::proto::content_v1::{self, AnonDmMessage, AnonDmPresence, AnonDmProfileUpdate, Content, anon_dm_presence};
 use crate::services::gateway::builders::{
     build_typing_content, build_reaction_content, build_read_receipt_content,
     build_delete_for_everyone_content, build_pin_content, build_edit_content,
@@ -33,6 +33,58 @@ impl AnonDmService {
         text: &str,
         attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
     ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
+        self.send_with_attachments_and_quote(conversation_id, text, attachments, None).await
+    }
+
+    /// Send a reply message with optional attachments in an active conversation.
+    ///
+    /// The quote contains the reply target info (author_id, timestamp, preview text).
+    pub async fn send_reply(
+        &self,
+        conversation_id: &AnonDmId,
+        text: &str,
+        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        reply_to_sender: &UserId,
+        reply_to_timestamp: u64,
+    ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
+        // Look up the original message to get preview text
+        let preview_text = self.get_message_by_sender_timestamp(
+            conversation_id,
+            reply_to_sender,
+            reply_to_timestamp,
+        )
+        .ok()
+        .flatten()
+        .map(|msg| {
+            let text = msg.as_text().unwrap_or_default();
+            if text.chars().count() > 100 {
+                format!("{}...", text.chars().take(97).collect::<String>())
+            } else {
+                text
+            }
+        })
+        .unwrap_or_default();
+
+        let quote = crate::proto::content_v1::Quote {
+            id: reply_to_timestamp,
+            author_aci: reply_to_sender.to_string(),
+            text: preview_text,
+            attachments: vec![],
+            r#type: 0, // NORMAL
+            author_aci_binary: vec![],
+        };
+
+        self.send_with_attachments_and_quote(conversation_id, text, attachments, Some(quote)).await
+    }
+
+    /// Internal: Send a message with optional attachments and optional quote.
+    async fn send_with_attachments_and_quote(
+        &self,
+        conversation_id: &AnonDmId,
+        text: &str,
+        attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
+        quote: Option<crate::proto::content_v1::Quote>,
+    ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
         use crate::domain::AttachmentId;
         use crate::proto::content_v1::DataMessage;
 
@@ -60,11 +112,12 @@ impl AnonDmService {
             })
             .collect();
 
-        // Create DataMessage content with attachments
+        // Create DataMessage content with attachments and optional quote
         let sent_at = TimestampNanos::now().as_u64();
         let data_message = DataMessage {
             body: text.to_string(),
             attachments,
+            quote,
             ..Default::default()
         };
         let inner_content = Content {
@@ -89,6 +142,152 @@ impl AnonDmService {
         Ok((message_id, sent_at))
     }
 
+    /// Send a presence update to the peer.
+    ///
+    /// Presence updates are ephemeral - they're silently dropped if:
+    /// - Conversation is blocked
+    /// - Conversation is not ready (bootstrap not complete)
+    pub async fn send_presence_update(
+        &self,
+        conversation_id: &AnonDmId,
+        presence: crate::proto::UserPresence,
+    ) -> Result<(), AnonDmError> {
+        // Silently ignore if blocked
+        if self.check_conversation_not_blocked(conversation_id).is_err() {
+            return Ok(());
+        }
+
+        // Get conversation - silently ignore if not found or not ready
+        let dm = match self.anon_dm_repo.get_conversation(conversation_id)? {
+            Some(dm) if dm.is_ready() => dm,
+            _ => {
+                tracing::debug!(
+                    conversation_id = %conversation_id,
+                    "Dropping presence update - conversation not ready"
+                );
+                return Ok(());
+            }
+        };
+
+        // Map UserPresence to anon_dm_presence::Status
+        let status = match presence {
+            crate::proto::UserPresence::Online => anon_dm_presence::Status::Online,
+            crate::proto::UserPresence::Away => anon_dm_presence::Status::Away,
+            crate::proto::UserPresence::DoNotDisturb => anon_dm_presence::Status::DoNotDisturb,
+            crate::proto::UserPresence::Offline => anon_dm_presence::Status::Offline,
+            _ => anon_dm_presence::Status::Offline,
+        };
+
+        // Create AnonDmPresence message
+        let presence_msg = AnonDmPresence {
+            conversation_id: conversation_id.to_vec(),
+            status: status as i32,
+            timestamp: TimestampNanos::now().as_u64(),
+        };
+
+        // Send via mailbox
+        let content = Content {
+            content: Some(content_v1::content::Content::AnonDmPresence(presence_msg)),
+            ephemeral_reply_to: None,
+            timestamp: TimestampNanos::now().as_u64(),
+            padding: Self::generate_padding(256),
+        };
+
+        let peer_id = dm.peer_id;
+        let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
+        
+        match self.send_to_anon_mailbox(&peer_id, &peer_mailbox_pk, content).await {
+            Ok(()) => {
+                tracing::info!(
+                    conversation_id = %conversation_id,
+                    status = ?status,
+                    "[ANON_DM_PRESENCE] Sent presence update"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::warn!(
+                    conversation_id = %conversation_id,
+                    error = %e,
+                    "[ANON_DM_PRESENCE] Failed to send presence update (ephemeral, ignoring)"
+                );
+                Ok(()) // Still return Ok for ephemeral messages
+            }
+        }
+    }
+
+    /// Send a profile update to the peer.
+    ///
+    /// Profile updates are ephemeral - silently dropped if conversation not ready.
+    pub async fn send_profile_update(
+        &self,
+        conversation_id: &AnonDmId,
+        display_name: Option<String>,
+        avatar_url: Option<String>,
+        bio: Option<String>,
+    ) -> Result<(), AnonDmError> {
+        // Silently ignore if blocked
+        if self.check_conversation_not_blocked(conversation_id).is_err() {
+            return Ok(());
+        }
+
+        // Get conversation - silently ignore if not found or not ready
+        let dm = match self.anon_dm_repo.get_conversation(conversation_id)? {
+            Some(dm) if dm.is_ready() => dm,
+            _ => {
+                tracing::debug!(
+                    conversation_id = %conversation_id,
+                    "Dropping profile update - conversation not ready"
+                );
+                return Ok(());
+            }
+        };
+
+        let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
+        
+        // Build profile update message
+        let profile_update = AnonDmProfileUpdate {
+            conversation_id: conversation_id.as_bytes().to_vec(),
+            display_name,
+            avatar_url,
+            bio,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
+        };
+
+        let content = Content {
+            ephemeral_reply_to: None,
+            timestamp: profile_update.timestamp,
+            padding: Self::generate_padding(512), // Larger padding for profile updates
+            content: Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)),
+        };
+
+        let peer_id = dm.peer_id;
+        
+        // Send via mailbox
+        let message = self.send_to_anon_mailbox(&peer_id, &peer_mailbox_pk, content).await;
+
+        match message {
+            Ok(()) => {
+                tracing::info!(
+                    conversation_id = %conversation_id,
+                    "[ANON_DM_PROFILE] Sent profile update"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::warn!(
+                    conversation_id = %conversation_id,
+                    error = %e,
+                    "[ANON_DM_PROFILE] Failed to send profile update (ephemeral, ignoring)"
+                );
+                Ok(()) // Still return Ok for ephemeral messages
+            }
+        }
+    }
+    
     /// Send a typing indicator to the peer.
     ///
     /// Typing indicators are ephemeral - they're silently dropped if:

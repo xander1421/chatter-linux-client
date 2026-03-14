@@ -12,7 +12,7 @@ use chatter_linux::services::attachment::AttachmentService;
 use chatter_linux::services::{build_pin_content, build_pin_content_with_channel};
 
 use super::helpers::{get_peer_id_from_dm_channel, send_channel_content, send_dm_content};
-use crate::MainWindow;
+use crate::{MainWindow, MessageItemData};
 
 /// Generate a preview text for a pinned message.
 fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> String {
@@ -39,6 +39,11 @@ fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> Str
 
 fn resolve_attachments(message: &Message, attachment_service: &AttachmentService) -> Vec<Attachment> {
     message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect()
+}
+
+/// Generate preview from Slint UI message model (used for anon DM/group sender-side).
+fn generate_pinned_preview_from_ui(msg: &MessageItemData) -> String {
+    crate::bin_ui::features::auth::inbox::utils::generate_preview_from_ui_message(msg)
 }
 
 pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
@@ -92,22 +97,24 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let sender_for_ui = sender_id_str.clone();
             let timestamp_for_ui = timestamp_ns_str.clone();
 
-            // Get pin state on UI thread BEFORE spawning (UI model access must be on UI thread)
-            let is_currently_pinned = weak.upgrade().map(|w| {
+            // Get pin state and preview on UI thread BEFORE spawning
+            let (is_currently_pinned, preview_text, msg_id_str) = weak.upgrade().map(|w| {
                 let model = w.get_messages();
                 for i in 0..model.row_count() {
                     if let Some(m) = model.row_data(i) {
                         if m.sender_id.as_str() == sender_for_ui.as_str()
                             && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
                         {
-                            return m.is_pinned;
+                            let preview = generate_pinned_preview_from_ui(&m);
+                            return (m.is_pinned, preview, m.message_id.to_string());
                         }
                     }
                 }
-                false
-            }).unwrap_or(false);
+                (false, String::new(), String::new())
+            }).unwrap_or((false, String::new(), String::new()));
 
             let unpin = is_currently_pinned;
+            let pinned_state = pinned_state_global.clone();
 
             tokio::spawn(async move {
 
@@ -123,6 +130,16 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
 
                 let new_pinned_state = !unpin;
+
+                // Update pinned_state
+                if let Ok(msg_id) = msg_id_str.parse::<chatter_linux::domain::ids::MessageId>() {
+                    if new_pinned_state {
+                        pinned_state.add_pinned_message(msg_id);
+                    } else {
+                        pinned_state.remove_pinned_message(&msg_id);
+                    }
+                }
+                let pinned_count = pinned_state.get().pinned_message_ids.len();
 
                 // Update UI
                 let _ = slint::invoke_from_event_loop(move || {
@@ -140,6 +157,17 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             })
                             .collect();
                         w.set_messages(ModelRc::new(VecModel::from(messages)));
+                        w.set_has_pinned_messages(pinned_count > 0);
+                        if new_pinned_state {
+                            w.set_pinned_message_preview(preview_text.into());
+                            w.set_pinned_current_index(pinned_count as i32);
+                            w.set_pinned_total_count(pinned_count as i32);
+                        } else {
+                            w.set_pinned_total_count(pinned_count as i32);
+                            if pinned_count == 0 {
+                                w.set_pinned_message_preview("".into());
+                            }
+                        }
 
                         tracing::info!(
                             anon_dm = %anon_dm_id,
@@ -169,22 +197,24 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let sender_for_ui = sender_id_str.clone();
             let timestamp_for_ui = timestamp_ns_str.clone();
 
-            // Get pin state on UI thread BEFORE spawning (UI model access must be on UI thread)
-            let is_currently_pinned = weak.upgrade().map(|w| {
+            // Get pin state and preview on UI thread BEFORE spawning
+            let (is_currently_pinned, preview_text, msg_id_str) = weak.upgrade().map(|w| {
                 let model = w.get_messages();
                 for i in 0..model.row_count() {
                     if let Some(m) = model.row_data(i) {
                         if m.sender_id.as_str() == sender_for_ui.as_str()
                             && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
                         {
-                            return m.is_pinned;
+                            let preview = generate_pinned_preview_from_ui(&m);
+                            return (m.is_pinned, preview, m.message_id.to_string());
                         }
                     }
                 }
-                false
-            }).unwrap_or(false);
+                (false, String::new(), String::new())
+            }).unwrap_or((false, String::new(), String::new()));
 
             let unpin = is_currently_pinned;
+            let pinned_state = pinned_state_global.clone();
 
             tokio::spawn(async move {
 
@@ -200,6 +230,16 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
 
                 let new_pinned_state = !unpin;
+
+                // Update pinned_state
+                if let Ok(msg_id) = msg_id_str.parse::<chatter_linux::domain::ids::MessageId>() {
+                    if new_pinned_state {
+                        pinned_state.add_pinned_message(msg_id);
+                    } else {
+                        pinned_state.remove_pinned_message(&msg_id);
+                    }
+                }
+                let pinned_count = pinned_state.get().pinned_message_ids.len();
 
                 // Update UI
                 let _ = slint::invoke_from_event_loop(move || {
@@ -217,6 +257,17 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             })
                             .collect();
                         w.set_messages(ModelRc::new(VecModel::from(messages)));
+                        w.set_has_pinned_messages(pinned_count > 0);
+                        if new_pinned_state {
+                            w.set_pinned_message_preview(preview_text.into());
+                            w.set_pinned_current_index(pinned_count as i32);
+                            w.set_pinned_total_count(pinned_count as i32);
+                        } else {
+                            w.set_pinned_total_count(pinned_count as i32);
+                            if pinned_count == 0 {
+                                w.set_pinned_message_preview("".into());
+                            }
+                        }
 
                         tracing::info!(
                             anon_group = %anon_group_id,

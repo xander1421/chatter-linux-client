@@ -1127,6 +1127,62 @@ Local AI enables offline summarization, smart replies, and content analysis with
 - `ui/jarvis/trigger_selector.slint` - Trigger picker
 - `ui/jarvis/action_selector.slint` - Action picker
 
+### Phase 91: Multi-Device Support
+**Goal**: Enable messages to reach all linked devices (phones, tablets, secondary desktops) per Signal Protocol spec
+**Depends on**: Phase 90
+**Research**: Unlikely (infrastructure exists, needs wiring)
+**Status**: Not started
+**Plans**: 2 plans
+
+Plans:
+- [ ] 91-01: Multi-Device Encryption for Groups and DMs (group.rs, core.rs, dm_bootstrap_service.rs)
+- [ ] 91-02: SentTranscript Sync for Saved Messages (proto, saved.rs, sync handler)
+
+**Current State:**
+- ✅ `encrypt_message_all_devices()` implemented in `signal/session.rs:374` and `pairwise.rs:161`
+- ✅ DM mailbox flow uses multi-device (`dm.rs:115`)
+- ❌ Group messages hardcode `device_id = 1` (`group.rs:808`)
+- ❌ Saved messages don't sync to other devices (`saved.rs:78-97`)
+- ❌ Channel DMs hardcode `device_id = 1` (`core.rs:622`)
+- ❌ Bootstrap messages hardcode `device_id = 1` (`dm_bootstrap.rs:251,322`)
+
+**Scope (~15 files):**
+
+Priority 1 (Groups - most visible):
+- `src/services/message/group.rs:794-827` - Replace single encrypt with `encrypt_message_all_devices()` per member
+- Need to handle partial failures (some devices succeed, some fail)
+
+Priority 2 (Channel DMs):
+- `src/services/message/core.rs:614-642` - Use `encrypt_message_all_devices()` for channel-based DMs
+- Server may handle fanout, verify behavior
+
+Priority 3 (Saved Messages Sync):
+- `src/services/message/saved.rs:68-98` - Implement SentTranscript sync
+- Create `SyncMessage` proto with SentTranscript variant
+- Encrypt for each linked device using Signal Protocol
+- Requires server support for device-specific queues
+
+Priority 4 (Bootstrap):
+- `src/services/message/dm_bootstrap.rs:251,322` - Multi-device bootstrap
+- `src/inbox/streaming/dm_bootstrap_handler.rs:353,731` - Handle bootstrap for all devices
+
+**Key changes:**
+```rust
+// Before (group.rs:808):
+.encrypt_message(auth_client, &member_id.to_string(), 1, plaintext)
+
+// After:
+.encrypt_message_all_devices(auth_client, &member_id.to_string(), plaintext)
+```
+
+**Server requirements:**
+- Device list API (already exists: `list_devices()`)
+- Per-device message queues (verify exists)
+- SentTranscript handling for saved messages (may need server work)
+
+**Details:**
+Multi-device is critical for users with phones + desktops. Current implementation only sends to primary device (device_id=1), causing messages to appear missing on secondary devices.
+
 ---
 
 ## Jarvis Progress
@@ -1143,3 +1199,4 @@ Local AI enables offline summarization, smart replies, and content analysis with
 | 88 | Knowledge Graph Visualization | 2 | Not started | - |
 | 89 | Communication Analytics | 2 | Not started | - |
 | 90 | Jarvis Automation | 3 | Not started | - |
+| 91 | Multi-Device Support | 0 | Not started | - |

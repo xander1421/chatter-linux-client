@@ -19,7 +19,6 @@ const DEFAULT_AVATARS: &[&[u8]] = &[
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/avatars/wojak.jpg")),
 ];
 
-use super::channel_events::spawn_channel_events_handler;
 use super::initial_data::load_initial_data;
 use crate::MainWindow;
 
@@ -128,14 +127,26 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     window.on_register(
-        move |username: slint::SharedString, password: slint::SharedString, display_name: slint::SharedString| {
+        move |username: slint::SharedString, password: slint::SharedString, display_name: slint::SharedString, pin: slint::SharedString| {
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
             let username = username.to_string();
             let password = password.to_string();
             let display_name = display_name.to_string();
+            let pin = pin.to_string();
 
             tokio::spawn(async move {
+                // Validate PIN is exactly 6 digits
+                if pin.len() != 6 || !pin.chars().all(|c: char| c.is_ascii_digit()) {
+                    let weak_for_error = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_for_error.upgrade() {
+                            w.set_register_error("PIN must be exactly 6 digits".into());
+                        }
+                    });
+                    return;
+                }
+                
                 // Set loading state
                 let weak_for_loading = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
@@ -164,7 +175,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                 // Attempt registration using simplified method
                 match auth_service
-                    .do_register(&username, &password, &display_name, "linux-client", Some(avatar_bytes))
+                    .do_register(&username, &password, &display_name, "linux-client", Some(avatar_bytes), Some(&pin))
                     .await
                 {
                     Ok(result) => {
@@ -191,13 +202,9 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         );
                         tracing::debug!("DM bootstrap handler spawned");
 
-                        // Spawn channel events handler for member join/leave notifications
-                        let _channel_events_handle = spawn_channel_events_handler(
-                            weak.clone(),
-                            &ui_ctx,
-                            ui_ctx.channel_event_service.clone(),
-                        );
-                        tracing::debug!("Channel events handler spawned");
+                        // Channel event stream is now started centrally in main.rs via AppContext
+                        // It owns the gRPC stream and handles reconnection automatically
+                        tracing::debug!("Channel events handled by service layer");
 
                         // Spawn anon group invite handler for processing incoming invites
                         let _anon_invite_handle = crate::bin_ui::features::modals::spawn_anon_group_invite_handler(
@@ -212,6 +219,13 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             &ui_ctx,
                         );
                         tracing::debug!("Anon group event handler spawned");
+                        
+                        // Spawn pin persistence handler to save pin events to database
+                        let _pin_persistence_handle = crate::bin_ui::features::auth::inbox::spawn_pin_persistence_handler(
+                            ui_ctx.event_bus.clone(),
+                            ui_ctx.message_service.clone(),
+                        );
+                        tracing::debug!("Pin persistence handler spawned");
 
                         // Spawn anon DM request handler for processing incoming message requests
                         let _anon_dm_handle = crate::bin_ui::features::modals::spawn_anon_dm_request_handler(
@@ -220,11 +234,44 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         );
                         tracing::debug!("Anon DM request handler spawned");
 
-                        // NOW start inbox provider - handlers are already subscribed
+                        // Start inbox provider with InboxEventProcessor
+                        // The processor handles protocol concerns and emits DomainEvent
                         {
                             let weak_for_inbox = weak.clone();
                             let ui_ctx_for_inbox = ui_ctx.clone();
                             tokio::spawn(async move {
+                                // Start the inbox provider with the processor
+                                if !ui_ctx_for_inbox.start_inbox_with_processor().await {
+                                    tracing::warn!("Failed to start inbox with processor");
+                                }
+
+                                // Subscribe to DomainEvent for UI updates
+                                let mut domain_rx = ui_ctx_for_inbox.event_bus.subscribe_domain();
+                                let weak_for_domain = weak_for_inbox.clone();
+                                let ui_ctx_for_domain = ui_ctx_for_inbox.clone();
+                                tokio::spawn(async move {
+                                    loop {
+                                        match domain_rx.recv().await {
+                                            Ok(event) => {
+                                                super::inbox::domain_handler::handle_domain_event(event, &weak_for_domain, &ui_ctx_for_domain).await;
+                                            }
+                                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                                tracing::warn!(
+                                                    dropped_count = n,
+                                                    "Domain event receiver lagged - {} events dropped",
+                                                    n
+                                                );
+                                            }
+                                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                                tracing::info!("Domain event channel closed");
+                                                break;
+                                            }
+                                        }
+                                    }
+                                });
+
+                                // Also subscribe to raw InboxEvent for events not yet migrated
+                                // TODO: Remove this once all events are handled via DomainEvent
                                 if let Some(mut event_rx) = ui_ctx_for_inbox.start_inbox_provider().await {
                                     tokio::spawn(async move {
                                         loop {

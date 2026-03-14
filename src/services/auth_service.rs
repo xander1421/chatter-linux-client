@@ -158,8 +158,11 @@ impl AuthService {
     }
 
     /// Create an auth client for making gRPC calls.
-    pub fn auth_client(&self) -> AuthClient {
-        AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+    /// Returns None if not connected to server.
+    pub fn try_auth_client(&self) -> Option<AuthClient> {
+        self.grpc_pool.try_channel().map(|channel| {
+            AuthClient::new(channel, self.grpc_pool.auth_clone())
+        })
     }
 
     /// Check if a user is currently logged in.
@@ -192,6 +195,67 @@ impl AuthService {
         Some((user_id, device_id))
     }
 
+    /// Restore the authentication session from saved credentials.
+    ///
+    /// Loads the user ID, device ID, profile key, and auth token from encrypted settings
+    /// and configures the auth interceptor. This must be called on application startup.
+    ///
+    /// Returns true if a session was successfully restored.
+    pub fn restore_session(&self) -> bool {
+        let user_id_str = match self.settings_repo.get_string(keys::CURRENT_USER_ID) {
+            Ok(Some(id)) => id,
+            _ => return false,
+        };
+
+        let device_id: u32 = match self.settings_repo.get(keys::CURRENT_DEVICE_ID) {
+            Ok(Some(id)) => id,
+            _ => return false,
+        };
+
+        let profile_key_bytes = match self.settings_repo.get_bytes(keys::PROFILE_KEY) {
+            Ok(Some(bytes)) => bytes,
+            _ => return false,
+        };
+
+        let auth_token_bytes = match self.settings_repo.get_bytes(keys::DEVICE_AUTH_TOKEN) {
+            Ok(Some(bytes)) => bytes,
+            _ => return false,
+        };
+
+        if profile_key_bytes.len() != 32 || auth_token_bytes.len() != 32 {
+            tracing::warn!("Saved auth credentials have invalid length");
+            return false;
+        }
+
+        let mut profile_key = [0u8; 32];
+        profile_key.copy_from_slice(&profile_key_bytes);
+
+        let mut auth_token_arr = [0u8; 32];
+        auth_token_arr.copy_from_slice(&auth_token_bytes);
+
+        // Reconstruct credentials
+        let uak = crate::crypto::device_credentials::derive_uak(&profile_key);
+        let credentials = crate::crypto::device_credentials::DeviceCredentials::from_stored(
+            device_id,
+            auth_token_arr,
+            uak,
+        );
+
+        // Configure auth interceptor
+        self.auth_interceptor.set_basic(
+            credentials.auth_username(&user_id_str),
+            credentials.auth_token_base64(),
+        );
+
+        tracing::info!(
+            user_id = %user_id_str,
+            device_id = %device_id,
+            "Restored authentication session"
+        );
+
+        true
+    }
+
     /// Login with username and password.
     ///
     /// Orchestrates:
@@ -207,6 +271,7 @@ impl AuthService {
         username: &str,
         password: &str,
         device_info: &str,
+        pin: Option<&str>,
     ) -> Result<LoginResult, AuthError> {
         // Check not already logged in
         if self.is_logged_in() {
@@ -222,6 +287,18 @@ impl AuthService {
 
         // PRIVACY: Hash username with profile key - server never sees actual username
         let username_hash = hash_username_with_profile_key(username, &profile_key);
+
+        // Derive SVR public key - required for registration
+        let svr_public_key = if let Some(p) = pin {
+            // Validate PIN is exactly 6 digits
+            if p.len() != 6 || !p.chars().all(|c| c.is_ascii_digit()) {
+                return Err(AuthError::RegistrationFailed("PIN must be exactly 6 digits".to_string()));
+            }
+            let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(p, username)?;
+            keypair.public_key_bytes().to_vec()
+        } else {
+            return Err(AuthError::RegistrationFailed("PIN is required for account recovery".to_string()));
+        };
 
         // Get or generate identity key pair
         let (_registration_id, identity_key_pair) = if self.identity_manager.has_identity()? {
@@ -241,13 +318,12 @@ impl AuthService {
         let credentials = DeviceCredentials::generate(device_id_for_creds, &profile_key);
 
         // Call server login with hashed username
-        let identity_public_key = identity_key_pair.identity_key().serialize();
         let response = auth_client
             .login(
                 &username_hash, // PRIVACY: Send hash, not plaintext username
                 password_hash.as_slice(),
                 device_info,
-                identity_public_key.as_ref(),
+                &svr_public_key, // Derived from PIN or empty
                 credentials.auth_token().as_bytes(),
                 credentials.unidentified_access_key(),
                 stored_device_id,
@@ -257,6 +333,8 @@ impl AuthService {
                 NetworkError::Unauthenticated => AuthError::InvalidCredentials,
                 _ => AuthError::Network(e),
             })?;
+
+        let identity_public_key = identity_key_pair.identity_key().serialize();
 
         // Extract session and user profile
         let session = response.session.ok_or_else(|| {
@@ -286,6 +364,10 @@ impl AuthService {
         self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
         self.settings_repo.set(keys::CURRENT_DEVICE_ID, &device_id)?;
         self.settings_repo.set_string(keys::DISPLAY_NAME, &display_name)?;
+        
+        // SECURITY: Store profile key and auth token in encrypted settings
+        self.settings_repo.set_bytes(keys::PROFILE_KEY, &profile_key)?;
+        self.settings_repo.set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
 
         // Store identity public key for NDSS'21 private friend codes
         // This allows generating friend codes without accessing the SignalStore
@@ -352,6 +434,7 @@ impl AuthService {
         display_name: &str,
         device_info: &str,
         avatar: Option<&[u8]>,
+        pin: Option<&str>,
     ) -> Result<LoginResult, AuthError> {
         // Check not already logged in
         if self.is_logged_in() {
@@ -368,6 +451,18 @@ impl AuthService {
 
         // PRIVACY: Hash username with profile key - server never sees actual username
         let username_hash = hash_username_with_profile_key(username, &profile_key);
+
+        // Derive SVR public key - required for registration
+        let svr_public_key = if let Some(p) = pin {
+            // Validate PIN is exactly 6 digits
+            if p.len() != 6 || !p.chars().all(|c| c.is_ascii_digit()) {
+                return Err(AuthError::RegistrationFailed("PIN must be exactly 6 digits".to_string()));
+            }
+            let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(p, username)?;
+            keypair.public_key_bytes().to_vec()
+        } else {
+            return Err(AuthError::RegistrationFailed("PIN is required for account recovery".to_string()));
+        };
 
         // Generate new identity (always fresh for registration)
         let (registration_id, identity_key_pair) =
@@ -409,6 +504,31 @@ impl AuthService {
         let device_id = 1u32;
         let credentials = DeviceCredentials::generate(device_id, &profile_key);
 
+        // SECURITY: Request registration challenge from server  
+        // This prevents spoofing identity keys during registration
+        let identity_public_key_full = identity_key_pair.identity_key().serialize();
+        // Skip the first byte (type prefix) to get the raw 32-byte Curve25519 key
+        let identity_public_key = &identity_public_key_full[1..];
+        tracing::info!(
+            "Requesting registration challenge - username_hash: {}, identity_key_len: {}",
+            username_hash,
+            identity_public_key.len()
+        );
+        let challenge = auth_client
+            .request_registration_challenge(&username_hash, identity_public_key)
+            .await
+            .map_err(|e| {
+                tracing::error!("Challenge request failed: {}", e);
+                AuthError::RegistrationFailed(format!("challenge request failed: {}", e))
+            })?;
+
+        // SECURITY: Sign the challenge nonce with our identity private key using XEdDSA
+        // This proves we actually possess the private key for the public key we're uploading
+        let challenge_response = self
+            .identity_manager
+            .sign(&challenge.challenge_nonce)
+            .map_err(|e| AuthError::Crypto(e))?;
+
         // Build Signal Protocol prekey bundle for server
         use crate::proto::chat_v1::signal_pre_key_bundle::{
             KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord as ProtoPreKey,
@@ -416,8 +536,6 @@ impl AuthService {
         };
         use crate::proto::chat_v1::SignalPreKeyBundle;
         use libsignal_protocol::GenericSignedPreKey;
-
-        let identity_public_key = identity_key_pair.identity_key().serialize();
 
         // Extract values from signed prekey (these are infallible for freshly generated keys)
         let signed_prekey_id: u32 = signed_prekey.id().map_err(|e| CryptoError::Protocol(e.to_string()))?.into();
@@ -431,7 +549,7 @@ impl AuthService {
         let kyber_sig = kyber_prekey.signature().map_err(|e| CryptoError::Protocol(e.to_string()))?;
 
         let prekey_bundle = SignalPreKeyBundle {
-            identity_key: identity_public_key.as_ref().to_vec(),
+            identity_key: identity_public_key_full.to_vec(),
             registration_id,
             device_id,
             signed_prekey: Some(ProtoSignedPreKey {
@@ -482,17 +600,20 @@ impl AuthService {
         // SECURITY: Send UAK (16 bytes), NOT profile_key (32 bytes)
         // Profile key stays client-side for profile encryption
         // SECURITY: display_name is encrypted with profile key (server sees only ciphertext)
+        // SECURITY: challenge_id and response prove identity key possession
         let result = auth_client
             .register_and_wait(
                 &username_hash, // PRIVACY: Send hash, not plaintext username
                 password_hash.as_slice(),
                 &encrypted_display_name,
-                identity_public_key.as_ref(),
+                &svr_public_key, // Derived from PIN or empty
                 device_info,
                 credentials.auth_token().as_bytes(),
                 &uak,
                 Some(prekey_bundle),
                 initial_prekeys,
+                &challenge.challenge_id,
+                &challenge_response,
             )
             .await
             .map_err(|e| AuthError::RegistrationFailed(e.to_string()))?;
@@ -506,10 +627,14 @@ impl AuthService {
         self.settings_repo.set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
         self.settings_repo.set(keys::CURRENT_DEVICE_ID, &result.device_id)?;
         self.settings_repo.set_string(keys::DISPLAY_NAME, display_name)?;
+        
+        // SECURITY: Store auth token in encrypted settings
+        self.settings_repo.set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
 
         // Store identity public key for NDSS'21 private friend codes
         // This allows generating friend codes without accessing the SignalStore
-        self.settings_repo.set_bytes(keys::IDENTITY_KEY_PUBLIC, identity_public_key.as_ref())?;
+        // Store the full serialized key (33 bytes) as it's used for Signal Protocol
+        self.settings_repo.set_bytes(keys::IDENTITY_KEY_PUBLIC, identity_public_key_full.as_ref())?;
 
         // Configure auth interceptor for Basic auth
         // Client already has device_auth_token and UAK (generated locally)
@@ -583,6 +708,7 @@ impl AuthService {
         // Clear auth state from settings (but keep identity keys)
         self.settings_repo.delete(keys::CURRENT_USER_ID)?;
         self.settings_repo.delete(keys::CURRENT_DEVICE_ID)?;
+        self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN)?;
 
         Ok(())
     }
@@ -595,9 +721,11 @@ impl AuthService {
         username: &str,
         password: &str,
         device_name: &str,
+        pin: Option<&str>,
     ) -> Result<LoginResult, AuthError> {
-        let mut auth_client = self.auth_client();
-        self.login(&mut auth_client, username, password, device_name)
+        let mut auth_client = self.try_auth_client()
+            .ok_or_else(|| AuthError::Network(NetworkError::ConnectionFailed("Not connected to server".to_string())))?;
+        self.login(&mut auth_client, username, password, device_name, pin)
             .await
     }
 
@@ -613,15 +741,18 @@ impl AuthService {
         display_name: &str,
         device_name: &str,
         avatar: Option<&[u8]>,
+        pin: Option<&str>,
     ) -> Result<LoginResult, AuthError> {
-        let mut auth_client = self.auth_client();
-        self.register(&mut auth_client, username, password, display_name, device_name, avatar)
+        let mut auth_client = self.try_auth_client()
+            .ok_or_else(|| AuthError::RegistrationFailed("Not connected to server".to_string()))?;
+        self.register(&mut auth_client, username, password, display_name, device_name, avatar, pin)
             .await
     }
 
     /// Simplified wrapper for logout that creates the client internally.
     pub async fn do_logout(&self) -> Result<(), AuthError> {
-        let mut auth_client = self.auth_client();
+        let mut auth_client = self.try_auth_client()
+            .ok_or_else(|| AuthError::Network(NetworkError::ConnectionFailed("Not connected to server".to_string())))?;
         self.logout(&mut auth_client).await
     }
 
@@ -642,7 +773,8 @@ impl AuthService {
         let current_hash = Sha256::digest(current_password.as_bytes());
         let new_hash = Sha256::digest(new_password.as_bytes());
 
-        let mut auth_client = self.auth_client();
+        let mut auth_client = self.try_auth_client()
+            .ok_or_else(|| AuthError::Network(NetworkError::ConnectionFailed("Not connected to server".to_string())))?;
         auth_client
             .change_password(&current_hash, &new_hash)
             .await?;
@@ -669,6 +801,7 @@ impl AuthService {
         // Remove any partial auth state
         let _ = self.settings_repo.delete(keys::CURRENT_USER_ID);
         let _ = self.settings_repo.delete(keys::CURRENT_DEVICE_ID);
+        let _ = self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN);
 
         // Remove sender certificate if any
         let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE);

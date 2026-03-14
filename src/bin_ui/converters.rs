@@ -582,6 +582,10 @@ pub struct MessageDisplayData {
     pub reply_count_text: String,
     pub is_thread_reply: bool,
     pub delivery_status: String,
+    /// Raw avatar bytes for anonymous group members.
+    pub sender_avatar_bytes: Option<Vec<u8>>,
+    /// Pre-decoded avatar pixels (RGBA, width, height).
+    pub sender_avatar_decoded: Option<(Vec<u8>, u32, u32)>,
     // Call message fields
     pub is_call: bool,
     pub call_message_type: String,  // "started", "ended", "missed" (raw from domain)
@@ -594,6 +598,19 @@ impl MessageDisplayData {
     pub fn decode_attachment_thumbnails(&mut self) {
         for att in &mut self.attachments {
             att.decode_thumbnail();
+        }
+
+        // Also decode sender avatar if available
+        if let Some(bytes) = &self.sender_avatar_bytes {
+            if !bytes.is_empty() {
+                self.sender_avatar_decoded = image::load_from_memory(bytes)
+                    .ok()
+                    .map(|img| {
+                        let rgba = img.to_rgba8();
+                        let (w, h) = rgba.dimensions();
+                        (rgba.into_raw(), w, h)
+                    });
+            }
         }
     }
 
@@ -640,12 +657,28 @@ impl MessageDisplayData {
             matches
         };
 
+        let (sender_avatar_source, has_avatar) = if let Some((ref pixels, w, h)) = self.sender_avatar_decoded {
+            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                pixels, w, h
+            );
+            (slint::Image::from_rgba8(buffer), true)
+        } else if let Some(bytes) = &self.sender_avatar_bytes {
+            match avatar_bytes_to_image(bytes) {
+                Some(img) => (img, true),
+                None => (slint::Image::default(), false),
+            }
+        } else {
+            (slint::Image::default(), false)
+        };
+
     MessageItemData {
         message_id: self.message_id.clone().into(),
         sender_id: self.sender_id.clone().into(),
         sender_name: self.sender_name.clone().into(),
         sender_initials: self.sender_initials.clone().into(),
         sender_avatar_url: SharedString::default(),
+        sender_avatar_source,
+        has_avatar,
         content: insert_word_breaks(self.content.trim()).into(),
         timestamp: self.timestamp.clone().into(),
         timestamp_ns: self.timestamp_ns.clone().into(),
@@ -749,6 +782,8 @@ pub fn message_to_display_data_with_replies(
             .map(|r| format!("{} {}", r.emoji, r.count))
             .collect::<Vec<_>>()
             .join(" "),
+        sender_avatar_bytes: None,  // TODO: Add avatar support for anonymous groups
+        sender_avatar_decoded: None,  // TODO: Add avatar support for anonymous groups
         reply_count,
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
@@ -819,6 +854,8 @@ pub fn message_to_display_data_with_attachments(
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
         delivery_status: msg.delivery_status.clone(),
+        sender_avatar_bytes: None,
+        sender_avatar_decoded: None,
         is_call,
         call_message_type,
         call_initiator_id,
@@ -970,6 +1007,7 @@ fn format_count(count: i32, singular: &str, plural: &str) -> String {
 pub fn anon_group_message_to_display_data(
     msg: &AnonGroupMessage,
     sender_name: &str,
+    sender_avatar: Option<Vec<u8>>,
     resolved_attachments: &[Attachment],
 ) -> MessageDisplayData {
     use chrono::Local;
@@ -1006,6 +1044,8 @@ pub fn anon_group_message_to_display_data(
         reply_count_text: String::new(),
         is_thread_reply: false,
         delivery_status: msg.delivery_status.clone(),
+        sender_avatar_bytes: sender_avatar,
+        sender_avatar_decoded: None,
         is_call: false,
         call_message_type: String::new(),
         call_initiator_id: String::new(),
@@ -1019,6 +1059,7 @@ pub fn anon_group_message_to_display_data(
 pub fn anon_dm_message_to_display_data(
     msg: &AnonDmMessage,
     sender_name: &str,
+    sender_avatar: Option<Vec<u8>>,
     resolved_attachments: &[Attachment],
 ) -> MessageDisplayData {
     use chrono::Local;
@@ -1055,6 +1096,8 @@ pub fn anon_dm_message_to_display_data(
         reply_count_text: String::new(),
         is_thread_reply: false,
         delivery_status: msg.delivery_status.clone(),
+        sender_avatar_bytes: sender_avatar,
+        sender_avatar_decoded: None,
         is_call: false,
         call_message_type: String::new(),
         call_initiator_id: String::new(),

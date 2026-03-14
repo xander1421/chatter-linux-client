@@ -3,6 +3,7 @@
 //! System tray integration using ksni (StatusNotifierItem protocol).
 
 use crate::error::SystemError;
+use super::platform::{APP_ID, APP_DISPLAY_NAME};
 use ksni::{self, menu::StandardItem, Icon, MenuItem, Tray, TrayService};
 use std::sync::{
     atomic::{AtomicU32, Ordering},
@@ -173,11 +174,11 @@ impl TrayServiceImpl {
 
 impl Tray for TrayServiceImpl {
     fn id(&self) -> String {
-        "chatter-linux".to_string()
+        APP_ID.to_string()
     }
 
     fn title(&self) -> String {
-        "Chatter".to_string()
+        APP_DISPLAY_NAME.to_string()
     }
 
     fn icon_name(&self) -> String {
@@ -194,7 +195,7 @@ impl Tray for TrayServiceImpl {
 
         vec![
             StandardItem {
-                label: "Open Chatter".to_string(),
+                label: format!("Open {}", APP_DISPLAY_NAME),
                 activate: Box::new(move |_| {
                     let _ = event_sender.try_send(TrayMessage::OpenWindow);
                 }),

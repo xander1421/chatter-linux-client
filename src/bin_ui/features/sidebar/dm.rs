@@ -17,6 +17,7 @@ use super::channel::load_channel_into_ui;
 use super::stop_audio_playback;
 
 pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let ui_ctx_clone = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state.clone();
     let channel_service = ui_ctx.channel_service.clone();
     let message_service = ui_ctx.message_service.clone();
@@ -34,6 +35,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     window.on_dm_selected(move |dm_id: SharedString| {
         let dm_id_str = dm_id.to_string();
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_clone.clone();
         let chat_state = chat_state.clone();
         let channel_service = channel_service.clone();
         let message_service = message_service.clone();
@@ -82,6 +84,13 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     }
                 };
 
+                // Send presence update and track activity when opening anon DM
+                crate::bin_ui::features::auth::presence_integration::notify_chat_opened(
+                    &ui_ctx,
+                    &anon_dm_id,
+                ).await;
+                crate::bin_ui::features::auth::presence_integration::track_activity(&ui_ctx).await;
+                
                 load_anon_dm_into_ui(
                     weak,
                     anon_dm_id,
@@ -236,6 +245,8 @@ async fn load_anon_dm_into_ui(
     // Do NOT use user_service - these are strangers
     let peer_name = dm.peer_display_name.clone()
         .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+    let peer_avatar = dm.peer_avatar.clone();
+    let my_avatar = anon_dm_service.get_my_avatar();
 
     // Load messages
     let messages = match anon_dm_service.get_messages(&dm_id, None, 50) {
@@ -250,6 +261,13 @@ async fn load_anon_dm_into_ui(
     let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
     for msg in &messages {
         let sender_name = user_service.get_display_name(&msg.sender_id);
+        
+        // Determine which avatar to use
+        let sender_avatar = if current_user_id.map(|uid| msg.sender_id == uid).unwrap_or(false) {
+            my_avatar.clone()
+        } else {
+            peer_avatar.clone()
+        };
 
         // Resolve attachments from stored IDs
         let attachment_ids = msg.attachment_ids();
@@ -273,6 +291,7 @@ async fn load_anon_dm_into_ui(
         let display_data = crate::bin_ui::converters::anon_dm_message_to_display_data(
             msg,
             &sender_name,
+            sender_avatar,
             &resolved_attachments,
         );
         display_messages.push(display_data);
@@ -281,7 +300,7 @@ async fn load_anon_dm_into_ui(
     // Reverse to show oldest first
     display_messages.reverse();
 
-    // Pre-decode attachment thumbnails before UI thread
+    // Pre-decode attachment thumbnails and sender avatars before UI thread
     for msg in &mut display_messages {
         msg.decode_attachment_thumbnails();
     }
@@ -398,15 +417,18 @@ pub fn add_anon_dm_to_sidebar(
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_window.upgrade() {
             let existing = w.get_dm_conversations();
-            let mut dms: Vec<crate::DMListItemData> = (0..existing.row_count())
-                .filter_map(|i| existing.row_data(i))
-                .collect();
+            let mut dms: Vec<crate::DMListItemData> = Vec::new();
 
             let channel_id = format!("anon_dm:{}", dm_id);
 
-            // Avoid duplicates
-            if dms.iter().any(|d| d.channel_id.as_str() == channel_id) {
-                return;
+            // Remove any existing entries for this peer (by user_id)
+            // This handles both updates (acceptance) and retries (new conversation)
+            for i in 0..existing.row_count() {
+                if let Some(dm) = existing.row_data(i) {
+                    if dm.user_id.as_str() != peer_id {
+                        dms.push(dm);
+                    }
+                }
             }
 
             // Create Slint Image from pre-decoded pixels (fast, on UI thread)
@@ -424,7 +446,7 @@ pub fn add_anon_dm_to_sidebar(
             let display_name = if is_pending {
                 format!("\u{1F4EE} {}", peer_name)
             } else {
-                format!("\u{1F475} {}", peer_name)
+                format!("\u{1F512} {}", peer_name)
             };
 
             // Add new DM at the beginning

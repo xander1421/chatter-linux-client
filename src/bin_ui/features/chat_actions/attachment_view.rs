@@ -187,6 +187,70 @@ fn handle_local_attachment(
         show_image_preview(&weak, &attachment_service, &att_id, &filename, file_size);
     }
 
+    // OPTIMIZATION: For GIFs, try to reuse inline animation frames (avoids re-decryption)
+    // INLINE_GIFS is thread-local to UI thread, so we handle GIFs entirely on UI thread
+    if is_gif {
+        let att_id_str = attachment_id.to_string();
+        let filename_for_gif = filename.clone();
+        let size_display = format_file_size(file_size);
+        let weak_for_gif = weak.clone();
+        let attachment_service_for_gif = attachment_service.clone();
+        let att_id_for_gif = att_id.clone();
+
+        // Schedule on UI thread: check inline cache, then decrypt only if needed
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak_for_gif.upgrade() {
+                let weak_inner = w.as_weak();
+
+                // First, try to reuse inline frames (instant, no decryption)
+                if let Some(first_frame) = crate::bin_ui::gif_state::start_viewer_from_inline(
+                    &att_id_str,
+                    &weak_inner,
+                ) {
+                    w.set_image_viewer_source(first_frame);
+                    w.set_image_viewer_filename(filename_for_gif.into());
+                    w.set_image_viewer_size(size_display.into());
+                    w.set_image_viewer_visible(true);
+                    crate::bin_ui::gif_state::resume();
+                    tracing::info!("Opened GIF viewer using cached inline frames (no decrypt)");
+                    return;
+                }
+
+                // No inline frames - decrypt in background and display
+                tracing::debug!("No inline GIF frames cached for {}, decrypting", att_id_str);
+                let weak_decrypt = weak_inner.clone();
+                let att_id_str_decrypt = att_id_str.clone();
+                std::thread::spawn(move || {
+                    match attachment_service_for_gif.decrypt_auto(&att_id_for_gif) {
+                        Ok(buffer) => {
+                            let data = buffer.as_slice().to_vec();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak_decrypt.upgrade() {
+                                    let weak_anim = w.as_weak();
+                                    if let Some(first_frame) = crate::bin_ui::gif_state::start_gif_animation_and_inline(
+                                        &data,
+                                        &weak_anim,
+                                        &att_id_str_decrypt,
+                                    ) {
+                                        w.set_image_viewer_source(first_frame);
+                                        w.set_image_viewer_filename(filename_for_gif.into());
+                                        w.set_image_viewer_size(size_display.into());
+                                        w.set_image_viewer_visible(true);
+                                        crate::bin_ui::gif_state::resume();
+                                    }
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to decrypt GIF: {}", e);
+                        }
+                    }
+                });
+            }
+        });
+        return; // GIF handled entirely above
+    }
+
     // Decrypt synchronously (we're already in a background thread)
     let secure_buffer = match attachment_service.decrypt_auto(&att_id) {
         Ok(buffer) => buffer,

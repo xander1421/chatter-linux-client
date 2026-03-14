@@ -19,7 +19,7 @@ use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
     /// Get the current user ID.
-    pub(crate) fn current_user_id(&self) -> Result<UserId, AnonGroupError> {
+    pub fn current_user_id(&self) -> Result<UserId, AnonGroupError> {
         Ok(self.settings_repo.current_user_id()?)
     }
 
@@ -68,7 +68,7 @@ impl AnonGroupService {
         let current_user = self.current_user_id()?;
 
         // 1. Create group locally
-        let group = AnonGroup::new_as_owner(name);
+        let group = AnonGroup::new_as_owner(name, current_user);
         self.anon_group_repo.insert_group(&group)?;
 
         // 2. Create our mailbox for this group
@@ -154,7 +154,7 @@ impl AnonGroupService {
         let current_user = self.current_user_id()?;
 
         // 1. Create group locally
-        let group = AnonGroup::new_as_owner(name);
+        let group = AnonGroup::new_as_owner(name, current_user);
         self.anon_group_repo.insert_group(&group)?;
 
         // 2. Create our mailbox for this group
@@ -311,6 +311,7 @@ impl AnonGroupService {
         &self,
         group_id: AnonGroupId,
         group_name: String,
+        owner_id: UserId,
         inviter_id: UserId,
         inviter_mailbox_pk: [u8; 32],
         inviter_profile_key: Option<[u8; 32]>,
@@ -320,7 +321,7 @@ impl AnonGroupService {
         let current_user = self.current_user_id()?;
 
         // 1. Create group locally as member
-        let group = AnonGroup::from_invite(group_id, group_name);
+        let group = AnonGroup::from_invite(group_id, group_name, owner_id);
         self.anon_group_repo.insert_group(&group)?;
 
         // 2. Create our mailbox for this group

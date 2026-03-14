@@ -34,6 +34,13 @@ pub fn create_call_history_message(
     duration_secs: i64,
     is_missed: bool,
 ) {
+    // Safety net: skip for anonymous calls — no server-side channel exists.
+    // Primary routing uses is_anonymous_call bool; this is a fallback guard.
+    if call_id.starts_with("anon-") {
+        tracing::debug!("Skipping channel-based call history for anonymous call");
+        return;
+    }
+
     // Create call message content
     let call_type = if is_missed {
         CallMessageType::Missed

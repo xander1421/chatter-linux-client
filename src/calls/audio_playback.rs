@@ -165,6 +165,9 @@ impl AudioPlayback {
     pub fn add_track(&self, participant_id: String, track: RemoteAudioTrack) {
         tracing::info!("Adding audio track from participant: {}", participant_id);
 
+        // Re-activate playback (may have been stopped by a previous call)
+        self.is_active.store(true, Ordering::Relaxed);
+
         // Lazily initialize the CPAL stream on first track
         if let Err(e) = self.ensure_stream_initialized() {
             tracing::error!("Failed to initialize audio output: {}. Remote audio will not be played.", e);
@@ -254,6 +257,12 @@ impl AudioPlayback {
         for (_, stream) in streams.drain() {
             stream.stop_signal.store(true, Ordering::Relaxed);
         }
+
+        // Clear the output stream so it's recreated on next call
+        *self.output_stream.write() = None;
+
+        // Drain any leftover samples
+        self.sample_buffer.write().clear();
 
         tracing::info!("Audio playback stopped");
     }

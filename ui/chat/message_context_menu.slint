@@ -58,6 +58,7 @@ export component MessageContextMenu inherits Rectangle {
     in property <string> timestamp-ns: "";
     in property <bool> is-own-message: false;  // Can edit/delete own messages
     in property <bool> is-pinned: false;
+    in property <bool> has-attachments: false;  // Show download option when true
 
     // Callbacks - use (sender_id, timestamp_ns) for Signal-style lookups
     callback close();
@@ -68,6 +69,7 @@ export component MessageContextMenu inherits Rectangle {
     callback pin-clicked(string, string);
     callback forward-clicked(string, string);
     callback copy-clicked(string, string);
+    callback download-clicked(string, string);         // Download attachments
 
     // Only render when visible
     visible: root.show;
@@ -148,6 +150,15 @@ export component MessageContextMenu inherits Rectangle {
                 label: "Copy";
                 clicked => {
                     root.copy-clicked(root.sender-id, root.timestamp-ns);
+                    root.close();
+                }
+            }
+
+            if root.has-attachments: MenuItem {
+                icon: Icons.download;
+                label: "Download";
+                clicked => {
+                    root.download-clicked(root.sender-id, root.timestamp-ns);
                     root.close();
                 }
             }

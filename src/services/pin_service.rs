@@ -38,7 +38,6 @@ pub struct PinnedMessageData {
 
 /// Pin service for message pinning.
 pub struct PinService {
-    database: Arc<Database>,
     message_service: Arc<MessageService>,
     attachment_service: Arc<AttachmentService>,
 }
@@ -46,12 +45,11 @@ pub struct PinService {
 impl PinService {
     /// Create a new pin service.
     pub fn new(
-        database: Arc<Database>,
+        _database: Arc<Database>,
         message_service: Arc<MessageService>,
         attachment_service: Arc<AttachmentService>,
     ) -> Self {
         Self {
-            database,
             message_service,
             attachment_service,
         }

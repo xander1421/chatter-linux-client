@@ -36,6 +36,15 @@ impl SignalService {
         let our_address = self.get_our_address()?;
         let skdm_bytes = self.actor.create_sender_key(*channel_id, our_address).await?;
 
+        // Initialize sender key metadata for rotation tracking
+        if let Err(e) = self.key_store.init_sender_key_metadata(&channel_id.to_string()) {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to initialize sender key metadata"
+            );
+        }
+
         Ok(SenderKeyDistribution {
             channel_id: channel_id.to_string(),
             distribution_message: skdm_bytes,
@@ -57,16 +66,34 @@ impl SignalService {
     }
 
     /// Encrypt a message for a group channel using sender keys.
+    ///
+    /// Automatically rotates sender keys based on Signal best practices:
+    /// - Rotate after 24 hours
+    /// - Rotate after 100 messages
     pub async fn encrypt_for_group(
         &self,
         channel_id: &ChannelId,
         plaintext: &[u8],
     ) -> Result<(GroupEncrypted, Option<SenderKeyDistribution>), ServiceError> {
         let our_address = self.get_our_address()?;
+        let channel_id_str = channel_id.to_string();
 
-        // Check if rotation was requested
+        // Check if rotation was manually requested
         if self.check_and_clear_rotation_needed(channel_id)? {
+            tracing::info!(channel_id = %channel_id, "Manual sender key rotation requested");
             let _ = self.clear_channel_sender_keys(channel_id).await;
+        }
+
+        // Check for automatic rotation based on age or message count
+        if let Ok((should_rotate, reason)) = self.key_store.should_rotate_sender_key(&channel_id_str) {
+            if should_rotate {
+                tracing::info!(
+                    channel_id = %channel_id,
+                    reason = reason,
+                    "Automatic sender key rotation triggered"
+                );
+                let _ = self.clear_channel_sender_keys(channel_id).await;
+            }
         }
 
         // Check if we need to create a sender key
@@ -78,6 +105,15 @@ impl SignalService {
         };
 
         let ciphertext = self.actor.encrypt_for_group(*channel_id, our_address, plaintext.to_vec()).await?;
+
+        // Increment message count for rotation tracking
+        if let Err(e) = self.key_store.increment_sender_key_message_count(&channel_id_str) {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to increment sender key message count"
+            );
+        }
 
         let group_encrypted = GroupEncrypted {
             channel_id: channel_id.to_string(),

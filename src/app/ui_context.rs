@@ -32,6 +32,7 @@ use crate::services::reaction_service::ReactionService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
 use crate::services::user::UserService;
+use crate::services::typing_service::TypingService;
 use crate::state::{
     AuthState, ChatState, JarvisState, MessageState, OfflineState, PinnedState, PresenceState,
     PrivacyState, StreamingState, UIState, UserState,
@@ -68,6 +69,7 @@ pub struct UIContext {
     pub channel_event_service: Arc<ChannelEventService>,
     pub ai_service: Arc<AIService>,
     pub reaction_service: Arc<ReactionService>,
+    pub typing_service: Arc<TypingService>,
     pub draft_service: Arc<DraftService>,
     pub pin_service: Arc<PinService>,
     pub anon_group_service: Arc<AnonGroupService>,
@@ -136,6 +138,7 @@ impl UIContext {
             channel_event_service: services.channel_event_service.clone(),
             ai_service: services.ai_service.clone(),
             reaction_service: services.reaction_service.clone(),
+            typing_service: services.typing_service.clone(),
             draft_service: services.draft_service.clone(),
             pin_service: services.pin_service.clone(),
             anon_group_service: services.anon_group_service.clone(),
@@ -294,5 +297,56 @@ impl UIContext {
                 }
             }
         }
+    }
+
+    /// Start the inbox provider with the InboxEventProcessor.
+    ///
+    /// This is the recommended way to handle inbox events. It:
+    /// 1. Starts the inbox provider
+    /// 2. Creates an InboxEventProcessor that converts InboxEvent → DomainEvent
+    /// 3. Spawns a background task to process events
+    ///
+    /// UI code should subscribe to DomainEvent via `event_bus.subscribe_domain()`.
+    ///
+    /// Returns true if started successfully, false if already running or failed.
+    pub async fn start_inbox_with_processor(&self) -> bool {
+        use crate::services::InboxEventProcessor;
+
+        let inbox_rx = match self.start_inbox_provider().await {
+            Some(rx) => rx,
+            None => return false,
+        };
+
+        // Create the processor
+        let processor = InboxEventProcessor::new(
+            self.event_bus.domain_sender(),
+            self.message_service.clone(),
+            self.dm_bootstrap_service.clone(),
+            self.mailbox_manager.clone(),
+            self.key_store.clone(),
+        );
+
+        // Spawn the processing task
+        let mut inbox_rx = inbox_rx;
+        tokio::spawn(async move {
+            tracing::info!("InboxEventProcessor started");
+            loop {
+                match inbox_rx.recv().await {
+                    Ok(event) => {
+                        processor.process(event).await;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "InboxEventProcessor lagged, events skipped");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("InboxEventProcessor stopped (channel closed)");
+                        break;
+                    }
+                }
+            }
+        });
+
+        tracing::info!("Inbox provider started with InboxEventProcessor");
+        true
     }
 }

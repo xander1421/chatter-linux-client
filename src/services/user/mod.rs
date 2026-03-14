@@ -161,11 +161,16 @@ impl UserService {
             user_id,
             &proto_profile.display_name,
         ).unwrap_or_else(|| {
-            // No profile key or decryption failed - use placeholder
+            // No profile key or decryption failed
+            // Never show encrypted ciphertext - use a placeholder instead
             if proto_profile.display_name.is_empty() {
                 format!("User {}", &user_id.to_string()[..8.min(user_id.to_string().len())])
+            } else if proto_profile.display_name.len() > 50 {
+                // Likely encrypted (base64 encoded ciphertext is typically long)
+                // Use a short placeholder instead of showing ciphertext
+                format!("User {}", &user_id.to_string()[..8.min(user_id.to_string().len())])
             } else {
-                // Keep the ciphertext/original value (might be unencrypted legacy)
+                // Might be unencrypted legacy name - keep it
                 proto_profile.display_name.clone()
             }
         });
@@ -292,9 +297,15 @@ impl UserService {
             }
         }
 
-        let profile = profile_opt.ok_or_else(|| {
+        let mut profile = profile_opt.ok_or_else(|| {
             UserError::InvalidInput("no profile updated event received".to_string())
         })?;
+
+        // Decrypt the display name before storing locally
+        // The server returns the encrypted version, but we want plaintext in local storage
+        if let Some(plaintext_name) = display_name {
+            profile.display_name = plaintext_name.to_string();
+        }
 
         self.user_repo.upsert_profile(&profile)?;
 
@@ -614,7 +625,7 @@ impl UserService {
         if let Ok(Some(user)) = self.user_repo.get(user_id) {
             return user.username;
         }
-        "Unknown".to_string()
+        user_id.to_string()
     }
 
     /// Get the current user's ID.

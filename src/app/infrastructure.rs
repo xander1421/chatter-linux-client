@@ -15,7 +15,7 @@ use crate::mailbox::group::{GroupCoordinator, GroupMailboxManager};
 use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
-use crate::network::streaming::ReactionAggregator;
+use crate::network::streaming::{ReactionAggregator, TypingAggregator};
 use crate::storage::repositories::{AnonDmRepository, AnonGroupRepository, JarvisGraphRepository, JarvisMemoryRepository};
 use crate::storage::{
     AttachmentRepository, ChannelRepository, Database, DraftRepository, KeyStore,
@@ -90,6 +90,8 @@ pub struct InfrastructureContainer {
     // Streaming aggregators
     /// Reaction event aggregator for real-time reaction updates.
     pub(crate) reaction_aggregator: Arc<ReactionAggregator>,
+    /// Typing indicator aggregator for real-time typing state.
+    pub(crate) typing_aggregator: Arc<TypingAggregator>,
 
     // Network - pub for post-boot initialization
     /// gRPC connection pool.
@@ -104,8 +106,16 @@ pub struct InfrastructureContainer {
     pub group_coordinator: Arc<GroupCoordinator>,
 
     // Mailbox infrastructure
-    /// Token manager for blind-signed anonymous mailbox tokens.
+    /// Token manager for blind-signed anonymous mailbox and call room tokens.
     pub(crate) token_manager: Arc<TokenManager>,
+    
+    // Event infrastructure
+    /// Event bus for domain events.
+    pub(crate) event_bus: crate::events::EventBus,
+    
+    // Shared post-boot services (initialized later)
+    /// Group fanout for multi-device messaging.
+    pub group_fanout: Arc<std::sync::OnceLock<Arc<crate::mailbox::group::GroupFanout>>>,
 }
 
 impl InfrastructureContainer {
@@ -195,8 +205,9 @@ impl InfrastructureContainer {
 
         // 11. Create streaming aggregators
         let reaction_aggregator = Arc::new(ReactionAggregator::new());
+        let typing_aggregator = Arc::new(TypingAggregator::new());
 
-        // 12. Create token manager for anonymous mailbox credentials
+        // 12. Create token manager for anonymous mailbox and call room credentials
         let token_manager = Arc::new(TokenManager::new(database.clone()));
 
         tracing::info!("Infrastructure initialized");
@@ -218,6 +229,7 @@ impl InfrastructureContainer {
             prekey_manager,
             sesame_manager,
             reaction_aggregator,
+            typing_aggregator,
             grpc_pool,
             auth_interceptor,
             group_mailbox_manager,
@@ -227,6 +239,8 @@ impl InfrastructureContainer {
             anon_dm_repo,
             jarvis_memory_repo,
             jarvis_graph_repo,
+            event_bus: crate::events::EventBus::new(),
+            group_fanout: Arc::new(std::sync::OnceLock::new()),
         })
     }
 

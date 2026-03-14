@@ -116,6 +116,23 @@ impl IdentityKeyStore for SignalStore {
             .save_identity(&address_str, &identity.serialize())
             .map_err(storage_to_signal_error)?;
 
+        // If identity key changed, archive the old session
+        // This forces re-establishment of a new session with the new key
+        // Signal best practice: auto-archive on key change, show "safety number changed" UI
+        if key_changed {
+            tracing::warn!(
+                address = %address_str,
+                "Identity key changed - archiving session for re-establishment"
+            );
+            if let Err(e) = self.key_store.delete_session(&address_str) {
+                tracing::error!(
+                    address = %address_str,
+                    error = %e,
+                    "Failed to archive session after identity key change"
+                );
+            }
+        }
+
         Ok(IdentityChange::from_changed(key_changed))
     }
 

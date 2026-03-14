@@ -114,38 +114,40 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>
 
 pub(crate) fn wire_profile_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let auth_state = ui_ctx.auth_state.clone();
+    let user_state = ui_ctx.user_state.clone();
 
     let weak_window = window.as_weak();
 
     window.on_profile_clicked(move || {
         let weak = weak_window.clone();
         let auth_state = auth_state.clone();
+        let user_state = user_state.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 let state = auth_state.get();
+                if let Some(user_id) = state.current_user_id {
+                    w.set_profile_user_id(user_id.to_string().into());
+                    w.set_profile_display_name(state.display_name.clone().unwrap_or_default().into());
+                    w.set_profile_username(user_id.to_string().into());
+                    w.set_profile_is_self(true);
+                    w.set_profile_is_friend(false);
+                    w.set_profile_is_blocked(false);
+                    w.set_profile_presence("online".into());
 
-                w.set_profile_user_id(
-                    state
-                        .current_user_id
-                        .map(|id| id.to_string())
-                        .unwrap_or_default()
-                        .into(),
-                );
-                w.set_profile_display_name(state.display_name.clone().unwrap_or_default().into());
-                w.set_profile_username(
-                    state
-                        .current_user_id
-                        .map(|id| id.to_string())
-                        .unwrap_or_default()
-                        .into(),
-                );
-                w.set_profile_is_self(true);
-                w.set_profile_is_friend(false);
-                w.set_profile_is_blocked(false);
-                w.set_profile_presence("online".into());
+                    // Set bio from user state if available
+                    if let Some(profile) = user_state.get_profile(&user_id) {
+                        if let Some(msg) = profile.status_message {
+                            w.set_profile_bio(msg.text.into());
+                        } else {
+                            w.set_profile_bio("".into());
+                        }
+                    } else {
+                        w.set_profile_bio("".into());
+                    }
 
-                w.set_active_modal("user-profile".into());
+                    w.set_active_modal("user-profile".into());
+                }
             }
         });
     });

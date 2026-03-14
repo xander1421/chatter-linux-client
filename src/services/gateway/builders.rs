@@ -5,7 +5,8 @@
 
 use crate::proto::content_v1::{
     AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage,
-    PinMessage, Reaction, ReceiptMessage, TypingMessage, content, typing_message, receipt_message,
+    PinMessage, Reaction, ReceiptMessage, TypingMessage, Quote,
+    content, typing_message, receipt_message, quote,
 };
 use crate::util::time::TimestampNanos;
 
@@ -40,6 +41,45 @@ pub fn build_data_message_content(body: &str, attachments: Vec<AttachmentPointer
             body: body.to_string(),
             timestamp: sent_at,
             attachments,
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+/// Create a Content proto for a reply message with Quote.
+/// Uses Signal-style message identification via sender ACI + timestamp.
+pub fn build_reply_content(
+    body: &str,
+    attachments: Vec<AttachmentPointer>,
+    quote_author_id: &str,
+    quote_timestamp: u64,
+    quote_text: &str,
+    sent_at: u64,
+) -> Content {
+    tracing::debug!(
+        sent_at = sent_at,
+        body_len = body.len(),
+        attachment_count = attachments.len(),
+        quote_author = quote_author_id,
+        quote_ts = quote_timestamp,
+        "build_reply_content: creating Content proto with Quote"
+    );
+    
+    Content {
+        timestamp: sent_at,
+        content: Some(content::Content::DataMessage(DataMessage {
+            body: body.to_string(),
+            timestamp: sent_at,
+            attachments,
+            quote: Some(Quote {
+                id: quote_timestamp,  // Signal uses timestamp as ID
+                text: quote_text.to_string(),
+                attachments: vec![],  // TODO: Add quoted attachment support if needed
+                author_aci: quote_author_id.to_string(),
+                r#type: quote::Type::Normal as i32,
+                author_aci_binary: vec![],  // We use string format
+            }),
             ..Default::default()
         })),
         ..Default::default()

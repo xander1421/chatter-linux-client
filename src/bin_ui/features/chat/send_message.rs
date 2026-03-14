@@ -69,6 +69,14 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         // Clear outgoing typing state (Signal: clearTypingTimers on message send)
         clear_outgoing_typing();
         if has_attachments { chat_state.clear_pending_attachments(); }
+        
+        // Track user activity for presence updates
+        {
+            let ui_ctx = ui_ctx_jarvis.clone();
+            tokio::spawn(async move {
+                crate::bin_ui::features::auth::presence_integration::track_activity(&ui_ctx).await;
+            });
+        }
 
         // Special handling for Klipy GIFs: if the text is just a GIF marker, 
         // we can treat it differently (e.g. by wrapping it in an attachment later).
@@ -87,7 +95,36 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let group_fanout = group_fanout.clone();
         let weak = weak_window.clone();
 
-        let (selected_dm_id, selected_private_group_id) = weak.upgrade().map(|w| (w.get_selected_dm_id().to_string(), w.get_selected_private_group_id().to_string())).unwrap_or_default();
+        // Get selection and reply state from window
+        let (selected_dm_id, selected_private_group_id, reply_to_sender, reply_to_timestamp) = weak.upgrade().map(|w| {
+            let dm_id = w.get_selected_dm_id().to_string();
+            let group_id = w.get_selected_private_group_id().to_string();
+            let reply_sender = if w.get_composer_is_replying() {
+                w.get_composer_reply_to_sender().to_string()
+            } else {
+                String::new()
+            };
+            let reply_ts = if w.get_composer_is_replying() {
+                w.get_composer_reply_to_timestamp().to_string()
+            } else {
+                String::new()
+            };
+            (dm_id, group_id, reply_sender, reply_ts)
+        }).unwrap_or_default();
+
+        // Clear reply state immediately after capturing
+        let is_reply = !reply_to_sender.is_empty() && !reply_to_timestamp.is_empty();
+        if is_reply {
+            let weak_clear_reply = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_clear_reply.upgrade() {
+                    w.set_composer_is_replying(false);
+                    w.set_composer_reply_to_sender("".into());
+                    w.set_composer_reply_to_timestamp("".into());
+                    w.set_composer_placeholder("Type a message...".into());
+                }
+            });
+        }
 
         if has_attachments {
             let weak_clear = weak.clone();
@@ -144,8 +181,34 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     }
                 }
 
-                // Send via anon DM service with attachments
-                match anon_dm_service.send_with_attachments(&anon_dm_id, &text, attachment_pointers).await {
+                // Send via anon DM service with attachments (and optional reply)
+                let send_result = if is_reply {
+                    // Parse reply target for Signal-style lookup
+                    use chatter_linux::domain::UserId;
+                    let reply_sender: UserId = match reply_to_sender.parse() {
+                        Ok(id) => id,
+                        Err(_) => {
+                            tracing::error!("Invalid reply_to_sender: {}", reply_to_sender);
+                            return;
+                        }
+                    };
+                    let reply_ts: u64 = match reply_to_timestamp.parse() {
+                        Ok(ts) => ts,
+                        Err(_) => {
+                            tracing::error!("Invalid reply_to_timestamp: {}", reply_to_timestamp);
+                            return;
+                        }
+                    };
+                    tracing::info!(
+                        reply_sender = %reply_sender,
+                        reply_ts = reply_ts,
+                        "Sending reply in anon DM"
+                    );
+                    anon_dm_service.send_reply(&anon_dm_id, &text, attachment_pointers, &reply_sender, reply_ts).await
+                } else {
+                    anon_dm_service.send_with_attachments(&anon_dm_id, &text, attachment_pointers).await
+                };
+                match send_result {
                     Ok((message_id, sent_at)) => {
                         // Use the actual sent_at from the service for timestamp display
                         // This ensures the UI timestamp matches what was sent over the wire
@@ -180,6 +243,8 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     sender_name: sender_name.into(),
                                     sender_initials: sender_initials.into(),
                                     sender_avatar_url: "".into(),
+                                    sender_avatar_source: slint::Image::default(),
+                                    has_avatar: false,
                                     content: sent_text.into(),
                                     timestamp: timestamp_str.into(),
                                     timestamp_ns: sent_at.to_string().into(),
@@ -247,8 +312,63 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
                     let dm_channel_id: chatter_linux::domain::ids::ChannelId = selected_dm_id.parse().unwrap_or_else(|_| peer_id.into());
                     let file_paths: Vec<_> = pending_attachments.iter().map(|att| att.path.as_path()).collect();
+                    
+                    // Handle reply if we have reply context
+                    let send_result = if is_reply {
+                        // Parse reply target for Signal-style lookup
+                        use chatter_linux::domain::UserId;
+                        let reply_sender: UserId = match reply_to_sender.parse() {
+                            Ok(id) => id,
+                            Err(_) => {
+                                tracing::error!("Invalid reply_to_sender: {}", reply_to_sender);
+                                return;
+                            }
+                        };
+                        let reply_ts: u64 = match reply_to_timestamp.parse() {
+                            Ok(ts) => ts,
+                            Err(_) => {
+                                tracing::error!("Invalid reply_to_timestamp: {}", reply_to_timestamp);
+                                return;
+                            }
+                        };
+                        
+                        // Get the quoted message preview
+                        let preview_text = message_service.get_by_sender_timestamp(&reply_sender, reply_ts)
+                            .ok()
+                            .flatten()
+                            .map(|msg| {
+                                let text = msg.as_text().unwrap_or_default();
+                                if text.chars().count() > 100 {
+                                    format!("{}...", text.chars().take(97).collect::<String>())
+                                } else {
+                                    text.to_string()
+                                }
+                            })
+                            .unwrap_or_default();
+                        
+                        tracing::info!(
+                            reply_sender = %reply_sender,
+                            reply_ts = reply_ts,
+                            preview = %preview_text,
+                            "Sending reply in DM with Quote proto"
+                        );
+                        
+                        // Use the new service method for replies
+                        message_service.send_dm_with_reply(
+                            &peer_id,
+                            &dm_channel_id,
+                            &text,
+                            file_paths,
+                            &reply_sender,
+                            reply_ts,
+                            &preview_text,
+                            &mailbox_manager,
+                        ).await
+                    } else {
+                        message_service.send_dm_with_files(&peer_id, &dm_channel_id, &text, file_paths, &mailbox_manager).await
+                    };
 
-                    match message_service.send_dm_with_files(&peer_id, &dm_channel_id, &text, file_paths, &mailbox_manager).await {
+                    match send_result {
                         Ok(result) => {
                             let gif_ids = result.gif_attachment_ids.clone();
                             let preview = if text.chars().count() > 50 { format!("You: {}...", text.chars().take(47).collect::<String>()) } else { format!("You: {}", text) };
@@ -278,6 +398,8 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                             sender_name: sender_name.into(),
                                             sender_initials: sender_initials.into(),
                                             sender_avatar_url: "".into(),
+                                            sender_avatar_source: slint::Image::default(),
+                                            has_avatar: false,
                                             content: sent_text.into(),
                                             timestamp: timestamp_str.clone().into(),
                                             timestamp_ns: msg_sent_at.to_string().into(),
@@ -311,6 +433,12 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                         });
                                         w.set_messages(ModelRc::new(VecModel::from(messages)));
                                         w.set_composer_text("".into());
+                                        // Clear reply state if we were replying
+                                        w.set_composer_is_replying(false);
+                                        w.set_composer_reply_to_sender("".into());
+                                        w.set_composer_reply_to_timestamp("".into());
+                                        w.set_composer_reply_preview("".into());
+                                        w.set_composer_placeholder("Type a message...".into());
                                         w.set_message_scroll_position(-99999.0);
                                         w.set_is_at_bottom(true);
                                         update_dm_sidebar_preview(&w, &sidebar_peer_id, &preview, &timestamp_str);
@@ -333,6 +461,8 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                             sender_name: sender_name.into(),
                                             sender_initials: sender_initials.into(),
                                             sender_avatar_url: "".into(),
+                                            sender_avatar_source: slint::Image::default(),
+                                            has_avatar: false,
                                             content: sent_text.into(),
                                             timestamp: timestamp_str.clone().into(),
                                             timestamp_ns: sent_at.to_string().into(),
@@ -366,6 +496,11 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                         });
                                         w.set_messages(ModelRc::new(VecModel::from(messages)));
                                         w.set_composer_text("".into());
+                                        // Clear reply state if we were replying
+                                        w.set_composer_is_replying(false);
+                                        w.set_composer_reply_to_sender("".into());
+                                        w.set_composer_reply_to_timestamp("".into());
+                                        w.set_composer_reply_preview("".into());
                                         w.set_composer_placeholder("Setting up secure channel...".into());
                                         w.set_message_scroll_position(-99999.0);
                                         w.set_is_at_bottom(true);
@@ -455,6 +590,8 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 sender_name: current_user_name.into(),
                                 sender_initials: sender_initials.into(),
                                 sender_avatar_url: "".into(),
+                                sender_avatar_source: slint::Image::default(),
+                                has_avatar: false,
                                 content: sent_text.into(),
                                 timestamp: timestamp_str.clone().into(),
                                 timestamp_ns: sent_at.to_string().into(),

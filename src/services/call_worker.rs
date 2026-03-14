@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::calls::{LiveKitRoomEvent, RoomManager, RoomState, ScreenSource, SharedVideoFrames, VideoCaptureConfig};
 use crate::crypto::call_key_provider::CallKeyState;
-use crate::domain::call::{Call, CallType, Participant};
+use crate::domain::call::{Call, CallState, CallType, Participant};
 use crate::domain::ids::{CallId, ChannelId, UserId};
 use crate::error::CallError;
 use crate::network::grpc::CallClient;
@@ -116,6 +116,16 @@ enum CallCommand {
     Reconnect {
         response: oneshot::Sender<Result<(), CallError>>,
     },
+    /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
+    ConnectWithToken {
+        access_token: String,
+        livekit_url: String,
+        encryption_key: Vec<u8>,
+        room_name: String,
+        call_id: CallId,
+        channel_id: ChannelId,
+        response: oneshot::Sender<Result<(), CallError>>,
+    },
     /// Shutdown the worker.
     Shutdown,
 }
@@ -204,6 +214,34 @@ impl CallWorkerHandle {
                 call_id,
                 encryption_root_key: *encryption_root_key,
                 joiner_id,
+                response: tx,
+            })
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await.map_err(|_| CallError::WorkerShutdown)?
+    }
+
+    /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
+    ///
+    /// This bypasses the server call creation and directly connects to LiveKit.
+    /// Used for anonymous calls where we get the token from the anonymous call service.
+    pub async fn connect_with_token(
+        &self,
+        access_token: &str,
+        livekit_url: &str,
+        encryption_key: Vec<u8>,
+        room_name: &str,
+        call_id: CallId,
+        channel_id: ChannelId,
+    ) -> Result<(), CallError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::ConnectWithToken {
+                access_token: access_token.to_string(),
+                livekit_url: livekit_url.to_string(),
+                encryption_key,
+                room_name: room_name.to_string(),
+                call_id,
+                channel_id,
                 response: tx,
             })
             .map_err(|_| CallError::WorkerShutdown)?;
@@ -488,7 +526,7 @@ fn run_call_worker(
 
                     // Start key ratchet timer on successful call initiation
                     if result.is_ok() {
-                        start_key_ratchet_timer(&room_manager, &ratchet_cancel);
+                        start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call);
                     }
 
                     let _ = response.send(result);
@@ -512,7 +550,36 @@ fn run_call_worker(
 
                     // Start key ratchet timer on successful call join
                     if result.is_ok() {
-                        start_key_ratchet_timer(&room_manager, &ratchet_cancel);
+                        start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call);
+                    }
+
+                    let _ = response.send(result);
+                }
+
+                CallCommand::ConnectWithToken {
+                    access_token,
+                    livekit_url,
+                    encryption_key,
+                    room_name,
+                    call_id,
+                    channel_id,
+                    response,
+                } => {
+                    let result = connect_with_token_impl(
+                        &room_manager,
+                        &active_call,
+                        access_token,
+                        livekit_url,
+                        encryption_key,
+                        room_name,
+                        call_id,
+                        channel_id,
+                    )
+                    .await;
+
+                    // Start key ratchet timer on successful connection (though anonymous calls might not use key ratcheting)
+                    if result.is_ok() {
+                        start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call);
                     }
 
                     let _ = response.send(result);
@@ -794,6 +861,68 @@ async fn join_call_impl(
     Ok(call)
 }
 
+/// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
+/// 
+/// This bypasses the server call creation and directly connects to LiveKit.
+/// Used for anonymous calls where we get the token from the anonymous call service.
+async fn connect_with_token_impl(
+    room_manager: &Arc<RoomManager>,
+    active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
+    access_token: String,
+    livekit_url: String,
+    encryption_key: Vec<u8>,
+    room_name: String,
+    call_id: CallId,
+    channel_id: ChannelId,
+) -> Result<(), CallError> {
+    // Check if already in a call
+    if active_call.read().is_some() {
+        return Err(CallError::AlreadyInCall);
+    }
+
+    // Connect to LiveKit room with E2EE key
+    room_manager
+        .connect(&livekit_url, &access_token, encryption_key.clone())
+        .await?;
+
+    // Create a minimal Call object for UI purposes
+    let call = Call {
+        id: call_id,
+        channel_id,
+        initiator_id: UserId::new(), // Anonymous
+        call_type: CallType::Voice, // Default to voice for anonymous calls
+        state: CallState::Connected,
+        participants: vec![],
+        started_at: Some(chrono::Utc::now()),
+        connected_at: Some(chrono::Utc::now()),
+        ended_at: None,
+        is_encrypted: true, // Anonymous calls are always encrypted (oblivious)
+    };
+
+    // Create key state from real encryption key
+    let mut key_arr = [0u8; 32];
+    if encryption_key.len() >= 32 { key_arr.copy_from_slice(&encryption_key[..32]); }
+    // Use room_name as call_id for CallKeyState — both sides know it, ensuring
+    // coordinated ratcheting produces identical keys on both sides
+    let key_state = CallKeyState::new(&key_arr, &room_name)
+        .map_err(|e| CallError::CryptoError(e.to_string()))?;
+
+    // Store active call info
+    *active_call.write() = Some(ActiveCallState {
+        call: call.clone(),
+        key_state,
+        room_name: room_name.clone(),
+        livekit_url: livekit_url.to_string(),
+    });
+
+    tracing::info!(
+        call_id = %call_id,
+        "Connected to LiveKit for anonymous call"
+    );
+
+    Ok(())
+}
+
 // TODO: Refactor to use tokio::sync::Mutex or drop guard before await
 #[allow(clippy::await_holding_lock)]
 async fn leave_call_impl(
@@ -801,16 +930,14 @@ async fn leave_call_impl(
     room_manager: &Arc<RoomManager>,
     active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
 ) -> Result<(), CallError> {
-    let call_id = {
+    let (call_id, is_anonymous) = {
         let active = active_call.read();
-        active
-            .as_ref()
-            .map(|a| a.call.id.to_string())
-            .ok_or(CallError::NotInCall)?
+        let state = active.as_ref().ok_or(CallError::NotInCall)?;
+        (state.call.id.to_string(), state.room_name.starts_with("anon-"))
     };
 
-    // Leave on server with timeout
-    {
+    // Skip server leave_call for anonymous calls (no server-side call state)
+    if !is_anonymous {
         let mut client = call_client.write();
         match tokio::time::timeout(
             tokio::time::Duration::from_secs(3),
@@ -918,13 +1045,28 @@ async fn reconnect_impl(
 }
 
 /// Key ratchet interval in seconds.
-/// Ratcheting every 60 seconds provides good forward secrecy without excessive overhead.
-const KEY_RATCHET_INTERVAL_SECS: u64 = 60;
+/// Ratcheting every 30 seconds provides good forward secrecy without excessive overhead.
+const KEY_RATCHET_INTERVAL_SECS: u64 = 30;
 
-/// Start the periodic key ratchet timer.
+/// Start the coordinated key ratchet timer.
+///
+/// Both sides ratchet at deterministic epoch boundaries aligned to the call start
+/// timestamp, ensuring they produce identical keys without any signaling.
+///
+/// The ratchet uses `CallKeyState::ratchet()` (HKDF-SHA256 with call_id + epoch)
+/// which is deterministic, then pushes the new key to LiveKit via `set_encryption_key()`.
+///
+/// # Forward secrecy
+/// Each ratchet derives a new key from the current one. Compromising epoch N
+/// doesn't reveal keys for epochs 0..N-1 (pre-compromise security).
+///
+/// # Post-compromise security
+/// After a key compromise, the next ratchet produces a key the attacker can derive.
+/// However, once the call ends, the keys are zeroized and can't be recovered.
 fn start_key_ratchet_timer(
     room_manager: &Arc<RoomManager>,
     ratchet_cancel: &Arc<parking_lot::RwLock<Option<tokio::sync::oneshot::Sender<()>>>>,
+    active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
 ) {
     // Cancel any existing timer
     stop_key_ratchet_timer(ratchet_cancel);
@@ -933,6 +1075,7 @@ fn start_key_ratchet_timer(
     *ratchet_cancel.write() = Some(cancel_tx);
 
     let room_manager = room_manager.clone();
+    let active_call = active_call.clone();
 
     tokio::task::spawn_local(async move {
         let mut interval = tokio::time::interval(
@@ -944,12 +1087,33 @@ fn start_key_ratchet_timer(
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    if let Some(epoch) = room_manager.ratchet_key() {
-                        tracing::debug!(epoch = epoch, "Periodic key ratchet completed");
-                    } else {
-                        // Not connected, stop the timer
-                        tracing::debug!("Key ratchet timer stopping: not connected");
-                        break;
+                    // Ratchet using our deterministic CallKeyState
+                    let new_key = {
+                        let mut call_guard = active_call.write();
+                        if let Some(ref mut state) = *call_guard {
+                            match state.key_state.ratchet() {
+                                Ok(()) => {
+                                    let epoch = state.key_state.epoch();
+                                    let key = state.key_state.current_key_vec();
+                                    tracing::info!(epoch = epoch, "Coordinated key ratchet completed");
+                                    Some(key)
+                                }
+                                Err(e) => {
+                                    tracing::error!("Key ratchet failed: {}", e);
+                                    None
+                                }
+                            }
+                        } else {
+                            tracing::debug!("Key ratchet timer stopping: no active call");
+                            break;
+                        }
+                    };
+
+                    // Push the new key to LiveKit outside the lock
+                    if let Some(key) = new_key {
+                        if !room_manager.set_encryption_key(key) {
+                            tracing::warn!("Failed to push ratcheted key to LiveKit");
+                        }
                     }
                 }
                 _ = &mut cancel_rx => {

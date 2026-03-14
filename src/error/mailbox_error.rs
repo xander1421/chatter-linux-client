@@ -43,6 +43,10 @@ pub enum MailboxError {
     #[error("token not found: {0}")]
     TokenNotFound(String),
 
+    /// Mailbox not found on server.
+    #[error("mailbox not found on server")]
+    MailboxNotFound,
+
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(String),

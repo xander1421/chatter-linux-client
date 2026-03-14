@@ -1,4 +1,4 @@
-use crate::domain::anon_dm::{AnonDm, AnonDmId};
+use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
 use crate::domain::private_friend_code::PrivateFriendCode;
 use crate::domain::UserId;
 use crate::proto::chat_v1::SealedSenderMessage;
@@ -26,8 +26,26 @@ impl AnonDmService {
         }
 
         // Check if conversation already exists
-        if self.anon_dm_repo.get_conversation_by_peer(&peer_id)?.is_some() {
-            return Err(AnonDmError::ConversationExists(peer_id));
+        if let Some(existing) = self.anon_dm_repo.get_conversation_by_peer(&peer_id)? {
+            // Allow retry if:
+            // - Previous request was declined by them
+            // - Our outgoing request is still pending (never got response, retrying with new code)
+            let can_retry = existing.status == AnonDmStatus::Declined
+                || (existing.status == AnonDmStatus::Pending && existing.initiated_by_us);
+
+            if can_retry {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    old_conversation_id = %existing.id,
+                    old_status = ?existing.status,
+                    "Removing old conversation to allow retry"
+                );
+                // Delete old mailbox first (if any), then conversation
+                let _ = self.anon_dm_repo.delete_mailbox(&existing.id);
+                self.anon_dm_repo.delete_conversation(&existing.id)?;
+            } else {
+                return Err(AnonDmError::ConversationExists(peer_id));
+            }
         }
 
         // Create conversation locally
@@ -93,8 +111,26 @@ impl AnonDmService {
         }
 
         // Check if conversation already exists
-        if self.anon_dm_repo.get_conversation_by_peer(&peer_id)?.is_some() {
-            return Err(AnonDmError::ConversationExists(peer_id));
+        if let Some(existing) = self.anon_dm_repo.get_conversation_by_peer(&peer_id)? {
+            // Allow retry if:
+            // - Previous request was declined by them
+            // - Our outgoing request is still pending (never got response, retrying with new code)
+            let can_retry = existing.status == AnonDmStatus::Declined
+                || (existing.status == AnonDmStatus::Pending && existing.initiated_by_us);
+
+            if can_retry {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    old_conversation_id = %existing.id,
+                    old_status = ?existing.status,
+                    "Removing old conversation to allow retry (private mode)"
+                );
+                // Delete old mailbox first (if any), then conversation
+                let _ = self.anon_dm_repo.delete_mailbox(&existing.id);
+                self.anon_dm_repo.delete_conversation(&existing.id)?;
+            } else {
+                return Err(AnonDmError::ConversationExists(peer_id));
+            }
         }
 
         // Create conversation locally
@@ -163,7 +199,11 @@ impl AnonDmService {
 
         // Build the initial contact message per NDSS'21: "init" || pk_e
         // Extended to include our identity for subsequent session establishment
-        let sender_avatar = self.get_my_avatar();
+        use crate::storage::repositories::settings_keys;
+        let sender_avatar = self.settings_repo
+            .get_bytes(settings_keys::AVATAR)
+            .ok()
+            .flatten();
         let init_message = AnonDmInitMessage::new(
             *conversation_id,
             our_user_id,

@@ -101,9 +101,12 @@ impl DmConversation {
 
     /// Check if we can send messages to this peer.
     ///
-    /// Requires peer mailbox address and established conversation key.
+    /// Requires peer mailbox address, established conversation key,
+    /// and that our own mailbox is healthy (so we can receive replies).
+    /// Also checks if the peer's mailbox is known to be expired.
     pub fn is_ready_to_send(&self) -> bool {
-        self.peer_mailbox.is_some()
+        self.is_ready_to_receive()
+            && self.peer_mailbox.as_ref().is_some_and(|p| !p.is_possibly_expired())
             && self
                 .conversation_key
                 .as_ref()
@@ -121,9 +124,9 @@ impl DmConversation {
 
     /// Check if this conversation needs initial bootstrap.
     ///
-    /// True if we don't have our own mailbox yet.
+    /// True if we don't have our own mailbox yet or if it has expired.
     pub fn needs_bootstrap(&self) -> bool {
-        self.our_mailbox.is_none()
+        self.our_mailbox.as_ref().map_or(true, |m| m.is_expired())
     }
 
     /// Check if our mailbox needs refresh (expiring soon).

@@ -74,7 +74,7 @@ export component ChatHeader inherits Rectangle {
     property <bool> show-member-count: (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
 
     // Show settings for regular channels and private groups, not for anon DMs
-    property <bool> show-settings: !is-anon-dm;
+    property <bool> show-settings: !is-anon-dm || is-private-group;
 
     // Layout
     height: 56px;

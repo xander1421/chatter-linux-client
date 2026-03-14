@@ -131,12 +131,20 @@ pub async fn process_anon_dm_results(
                         "Received anonymous DM acceptance from mailbox poll"
                     );
 
+                    // Use plaintext display name if non-empty, otherwise None
+                    let display_name = if accept.responder_display_name.is_empty() {
+                        None
+                    } else {
+                        Some(accept.responder_display_name)
+                    };
+
                     let _ = event_tx
                         .send(InboxEvent::AnonDmAccept {
                             peer_id: sender_id,
                             conversation_id: conversation_id.as_bytes().to_vec(),
                             responder_mailbox_pk: accept.responder_mailbox_pk,
                             profile_key: accept.profile_key,
+                            responder_display_name: display_name,
                             encrypted_display_name: accept.encrypted_display_name,
                             encrypted_avatar: accept.encrypted_avatar,
                             timestamp: accept.timestamp,
@@ -268,6 +276,54 @@ pub async fn process_anon_dm_results(
                             conversation_id: conversation_id.as_bytes().to_vec(),
                             inner_content: Box::new(Content {
                                 content: Some(content_v1::content::Content::Typing(typing)),
+                                timestamp: content.timestamp,
+                                ephemeral_reply_to: content.ephemeral_reply_to,
+                                padding: content.padding,
+                            }),
+                        })
+                        .await;
+                    true
+                }
+                Some(content_v1::content::Content::AnonDmPresence(presence)) => {
+                    // Handle presence updates
+                    tracing::debug!(
+                        sender_id = %sender_id,
+                        conversation_id = %conversation_id,
+                        status = ?presence.status,
+                        "[ANON_DM] Received presence update from peer"
+                    );
+
+                    let _ = event_tx
+                        .send(InboxEvent::AnonDmMessage {
+                            peer_id: sender_id,
+                            conversation_id: conversation_id.as_bytes().to_vec(),
+                            inner_content: Box::new(Content {
+                                content: Some(content_v1::content::Content::AnonDmPresence(presence)),
+                                timestamp: content.timestamp,
+                                ephemeral_reply_to: content.ephemeral_reply_to,
+                                padding: content.padding,
+                            }),
+                        })
+                        .await;
+                    true
+                }
+                Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)) => {
+                    // Handle profile updates
+                    tracing::info!(
+                        sender_id = %sender_id,
+                        conversation_id = %conversation_id,
+                        has_display_name = profile_update.display_name.is_some(),
+                        has_avatar = profile_update.avatar_url.is_some(),
+                        has_bio = profile_update.bio.is_some(),
+                        "[ANON_DM] Received profile update from peer"
+                    );
+
+                    let _ = event_tx
+                        .send(InboxEvent::AnonDmMessage {
+                            peer_id: sender_id,
+                            conversation_id: conversation_id.as_bytes().to_vec(),
+                            inner_content: Box::new(Content {
+                                content: Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)),
                                 timestamp: content.timestamp,
                                 ephemeral_reply_to: content.ephemeral_reply_to,
                                 padding: content.padding,

@@ -14,18 +14,36 @@ use crate::error::StorageError;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::message_repo::MessageRepository;
 use crate::storage::repositories::user_repo::UserRepository;
+use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::network::grpc::channel_client::ChannelClient;
+use crate::proto::chat_v1::channel_event;
+use crate::events::EventBus;
+use crate::inbox::DomainEvent;
+use crate::error::NetworkError;
+use tokio_stream::StreamExt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChannelEventError {
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+    #[error("stream error: {0}")]
+    Stream(String),
+    #[error("grpc error: {0}")]
+    Grpc(#[from] tonic::Status),
+    #[error("network error: {0}")]
+    Network(#[from] NetworkError),
 }
 
 /// Service for handling channel events (member join/leave) and creating system messages.
+/// 
+/// This service now owns the gRPC stream and handles all reconnection logic,
+/// converting proto events to domain events for the UI to consume.
 pub struct ChannelEventService {
     message_repo: Arc<MessageRepository>,
     channel_repo: Arc<ChannelRepository>,
     user_repo: Arc<UserRepository>,
+    grpc_pool: Arc<GrpcClientPool>,
+    event_bus: EventBus,
 }
 
 impl ChannelEventService {
@@ -34,11 +52,167 @@ impl ChannelEventService {
         message_repo: Arc<MessageRepository>,
         channel_repo: Arc<ChannelRepository>,
         user_repo: Arc<UserRepository>,
+        grpc_pool: Arc<GrpcClientPool>,
+        event_bus: EventBus,
     ) -> Self {
         Self {
             message_repo,
             channel_repo,
             user_repo,
+            grpc_pool,
+            event_bus,
+        }
+    }
+    
+    /// Start the channel event stream.
+    ///
+    /// This spawns a background task that owns the gRPC stream,
+    /// handles reconnection logic, and emits domain events.
+    pub fn start_event_stream(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            loop {
+                match self.run_stream_with_retry().await {
+                    Ok(()) => {
+                        tracing::info!("Channel event stream ended normally");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Channel event stream error: {}. Reconnecting in 5s...", e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        })
+    }
+    
+    /// Run the event stream with automatic retry on failure.
+    async fn run_stream_with_retry(&self) -> Result<(), ChannelEventError> {
+        let mut channel_client = ChannelClient::new(
+            self.grpc_pool.channel(),
+            self.grpc_pool.auth_clone(),
+        );
+        
+        // Stream events for all channels
+        let mut stream = channel_client
+            .stream_channel_events(None)
+            .await?;
+        
+        tracing::info!("Channel event stream started");
+        
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(event) => {
+                    if let Some(event_data) = event.event {
+                        self.handle_stream_event(
+                            event_data,
+                            &event.channel_id,
+                            event.timestamp,
+                        ).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Channel event stream error: {}", e);
+                    return Err(ChannelEventError::Stream(e.to_string()));
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Handle a channel event from the stream.
+    async fn handle_stream_event(
+        &self,
+        event: channel_event::Event,
+        channel_id: &str,
+        _timestamp: u64,
+    ) {
+        use channel_event::Event;
+        use crate::domain::channel::{MemberRole, NotificationPreference};
+        
+        let channel_id = match channel_id.parse::<uuid::Uuid>() {
+            Ok(uuid) => ChannelId::from(uuid),
+            Err(e) => {
+                tracing::error!("Invalid channel ID {}: {}", channel_id, e);
+                return;
+            }
+        };
+        
+        match event {
+            Event::MemberAdded(member) => {
+                let user_id = match member.user_id.parse::<uuid::Uuid>() {
+                    Ok(uuid) => UserId::from(uuid),
+                    Err(e) => {
+                        tracing::error!("Invalid user ID {}: {}", member.user_id, e);
+                        return;
+                    }
+                };
+                
+                let membership = Membership {
+                    channel_id,
+                    user_id,
+                    role: MemberRole::Member,
+                    notification_preference: NotificationPreference::All,
+                    joined_at: Utc::now(),
+                    last_read_message_id: None,
+                    is_muted: false,
+                    muted_until: None,
+                };
+                
+                if let Ok((message, display_name)) = self.handle_member_joined(&channel_id, &user_id, &membership) {
+                    // Emit domain event for UI consumption
+                    let event = DomainEvent::ChannelMemberJoined {
+                        channel_id,
+                        user_id,
+                        display_name: display_name.clone(),
+                        message,
+                    };
+                    
+                    if let Err(e) = self.event_bus.domain_sender().send(event) {
+                        tracing::warn!("Failed to publish ChannelMemberJoined event: {}", e);
+                    }
+                    
+                    tracing::info!(
+                        "Channel member joined: channel={}, user={}, display_name={}",
+                        channel_id,
+                        user_id,
+                        display_name
+                    );
+                }
+            }
+            Event::MemberRemovedId(user_id_str) => {
+                let user_id = match user_id_str.parse::<uuid::Uuid>() {
+                    Ok(uuid) => UserId::from(uuid),
+                    Err(e) => {
+                        tracing::error!("Invalid user ID {}: {}", user_id_str, e);
+                        return;
+                    }
+                };
+                
+                if let Ok((message, display_name)) = self.handle_member_removed(&channel_id, &user_id) {
+                    // Emit domain event for UI consumption
+                    let event = DomainEvent::ChannelMemberLeft {
+                        channel_id,
+                        user_id,
+                        display_name: display_name.clone(),
+                        message,
+                    };
+                    
+                    if let Err(e) = self.event_bus.domain_sender().send(event) {
+                        tracing::warn!("Failed to publish ChannelMemberLeft event: {}", e);
+                    }
+                    
+                    tracing::info!(
+                        "Channel member left: channel={}, user={}, display_name={}",
+                        channel_id,
+                        user_id,
+                        display_name
+                    );
+                }
+            }
+            _ => {
+                tracing::debug!("Unhandled channel event type");
+            }
         }
     }
 

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, SharedString};
+use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::ids::MessageId;
@@ -37,6 +37,23 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     window.on_reply_clicked(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_str = timestamp_ns.to_string();
+        
+        tracing::info!(
+            sender_id = %sender_id_str,
+            timestamp = %timestamp_str,
+            "Reply button clicked"
+        );
+        
+        // Check if values are empty
+        if sender_id_str.is_empty() || timestamp_str.is_empty() {
+            tracing::error!(
+                "Reply clicked with empty values - sender_id: '{}', timestamp: '{}'", 
+                sender_id_str, 
+                timestamp_str
+            );
+            return;
+        }
+        
         let weak = weak_window.clone();
         let message_service = message_service.clone();
 
@@ -57,9 +74,32 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            let reply_preview = match message_service.get_by_sender_timestamp(&target_sender, target_timestamp) {
+            // Look up the message to get reply preview
+            let (reply_preview, sender_name) = match message_service.get_by_sender_timestamp(&target_sender, target_timestamp) {
                 Ok(Some(msg)) => {
-                    let sender = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
+                    // Get sender's display name (might be different from ID)
+                    let sender_name = if let Some(w) = weak.upgrade() {
+                        // Check messages model for display name
+                        let messages = w.get_messages();
+                        let mut name = String::new();
+                        for i in 0..messages.row_count() {
+                            if let Some(m) = messages.row_data(i) {
+                                if m.sender_id.as_str() == sender_id_str && 
+                                   m.timestamp_ns.as_str() == timestamp_str {
+                                    name = m.sender_name.to_string();
+                                    break;
+                                }
+                            }
+                        }
+                        if name.is_empty() {
+                            msg.sender_id.map(|id| id.to_string()).unwrap_or_else(|| "Unknown".to_string())
+                        } else {
+                            name
+                        }
+                    } else {
+                        msg.sender_id.map(|id| id.to_string()).unwrap_or_else(|| "Unknown".to_string())
+                    };
+                    
                     let content = msg.as_text().unwrap_or("").to_string();
                     let preview = if content.chars().count() > 50 {
                         let truncated: String = content.chars().take(47).collect();
@@ -67,17 +107,28 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     } else {
                         content
                     };
-                    format!("Reply to {}: {}", sender, preview)
+                    (preview, sender_name)
                 }
-                _ => "Reply to message".to_string(),
+                _ => ("".to_string(), "Unknown".to_string()),
             };
-
-            let placeholder = reply_preview.clone();
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    w.set_composer_placeholder(placeholder.into());
-                    tracing::info!(sender = %sender_id_str, timestamp = %timestamp_str, "Reply mode activated");
+                    // Set reply state
+                    w.set_composer_is_replying(true);
+                    w.set_composer_reply_to_sender(sender_name.clone().into());
+                    w.set_composer_reply_to_timestamp(timestamp_str.clone().into());
+                    w.set_composer_reply_preview(reply_preview.clone().into());
+
+                    // Update placeholder to indicate reply mode
+                    w.set_composer_placeholder("Type your reply...".into());
+
+                    tracing::info!(
+                        sender = %sender_name,
+                        timestamp = %timestamp_str,
+                        preview = %reply_preview,
+                        "Reply mode activated"
+                    );
                 }
             });
         });
@@ -134,6 +185,26 @@ pub fn wire_react_clicked(window: &MainWindow) {
                     let emojis = emoji_loader::search_emojis(&query_str);
                     w.set_reaction_picker_emojis(slint::ModelRc::new(slint::VecModel::from(emojis)));
                 }
+            }
+        });
+    });
+}
+
+/// Wire cancel reply callback.
+pub fn wire_cancel_reply(window: &MainWindow) {
+    let weak_window = window.as_weak();
+
+    window.on_cancel_reply(move || {
+        let weak = weak_window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                // Clear reply state
+                w.set_composer_is_replying(false);
+                w.set_composer_reply_to_sender("".into());
+                w.set_composer_reply_to_timestamp("".into());
+                w.set_composer_reply_preview("".into());
+                w.set_composer_placeholder("Type a message...".into());
+                tracing::debug!("Cancelled reply mode");
             }
         });
     });

@@ -24,7 +24,7 @@ async fn main() {
         )
         .init();
 
-    tracing::info!("Chatter Linux Client v0.1.0");
+    tracing::info!("Chatter Client v0.1.0 ({})", std::env::consts::OS);
 
     // Security: Check for debugger attachment before handling sensitive data
     // This is defense-in-depth - logs warning if debugger detected
@@ -64,6 +64,14 @@ async fn main() {
     // Get UIContext for all UI operations
     let ui_ctx = ctx.ui_context();
 
+    // Restore authentication session from saved credentials
+    // This populates the gRPC auth interceptor before we connect
+    ui_ctx.auth_service.restore_session();
+
+    // Start background typing indicator cleanup task
+    let _typing_cleanup = ui_ctx.typing_service.start_cleanup_task();
+    tracing::info!("Typing indicator cleanup task started");
+
     // Connect to server (continue in offline mode if fails)
     let _connected = match ui_ctx.grpc_pool.connect().await {
         Ok(()) => {
@@ -102,10 +110,68 @@ async fn main() {
 
         // Spawn event handlers for DomainEvent processing (NDSS '21 mailboxes, etc.)
         let _event_handlers = ctx.spawn_event_handlers();
+        
+        // Start channel event stream service (owns gRPC stream, handles reconnection)
+        let _channel_events = ctx.start_channel_event_stream();
+        
+        // Start channel bootstrap service (flushes pending messages to new members)
+        let _channel_bootstrap = ctx.start_channel_bootstrap_service();
+
+        // Spawn DM bootstrap handler for processing incoming key exchanges
+        let _bootstrap_handle = ctx.spawn_dm_bootstrap_handler();
+
+        // Spawn UI-level domain event handlers (anon DM messages, requests, group events, etc.)
+        let weak_window = window.as_weak();
+        let _anon_dm_handle = bin_ui::features::modals::spawn_anon_dm_request_handler(
+            weak_window.clone(),
+            &ui_ctx,
+        );
+        let _anon_invite_handle = bin_ui::features::modals::spawn_anon_group_invite_handler(
+            weak_window.clone(),
+            &ui_ctx,
+        );
+        let _anon_group_events_handle = bin_ui::features::auth::inbox::spawn_anon_group_event_handler(
+            weak_window.clone(),
+            &ui_ctx,
+        );
+        let _pin_persistence_handle = bin_ui::features::auth::inbox::spawn_pin_persistence_handler(
+            ui_ctx.event_bus.clone(),
+            ui_ctx.message_service.clone(),
+        );
+
+        // Subscribe to DomainEvent for UI updates (sidebar, message list, etc.)
+        {
+            let mut domain_rx = ui_ctx.event_bus.subscribe_domain();
+            let weak_for_domain = weak_window.clone();
+            let ui_ctx_for_domain = ui_ctx.clone();
+            tokio::spawn(async move {
+                loop {
+                    match domain_rx.recv().await {
+                        Ok(event) => {
+                            bin_ui::features::auth::inbox::domain_handler::handle_domain_event(
+                                event,
+                                &weak_for_domain,
+                                &ui_ctx_for_domain,
+                            ).await;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(
+                                dropped_count = n,
+                                "Domain event receiver lagged - {} events dropped",
+                                n
+                            );
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            tracing::info!("Domain event channel closed");
+                            break;
+                        }
+                    }
+                }
+            });
+        }
 
         // Start inbox provider and load initial data (only if connected)
         let inbox_provider = ctx.get_device_inbox_provider();
-        let weak_window = window.as_weak();
         let ui_ctx_for_events = ui_ctx.clone();
         let weak_for_events = weak_window.clone();
         let shutdown_for_inbox = shutdown_token.clone();
@@ -173,10 +239,34 @@ async fn main() {
         } else {
             window.set_current_view("register".into());
         }
+
     }
 
     // Wire all UI callbacks
     bin_ui::features::wire_all(&window, &ui_ctx);
+
+    // Dev mode: auto-fill and auto-submit registration for fast testing
+    if std::env::var("CHATTER_DEV").is_ok() && !ui_ctx.auth_service.is_logged_in() && !ui_ctx.auth_service.has_registered_before() {
+        let suffix: u16 = rand::random();
+        let username = format!("dev{}", suffix);
+        let display_name = format!("Dev User {}", suffix);
+        let password = "devpass123";
+        let pin = "123456";
+
+        window.set_register_username(username.clone().into());
+        window.set_register_display_name(display_name.clone().into());
+        window.set_register_password(password.into());
+        window.set_register_confirm_password(password.into());
+        window.set_register_pin(pin.into());
+
+        tracing::info!("DEV MODE: Auto-registering as {} ({})", username, display_name);
+        window.invoke_register(
+            username.into(),
+            password.into(),
+            display_name.into(),
+            pin.into(),
+        );
+    }
 
     // Spawn periodic anti-debugging check (defense-in-depth against runtime attachment)
     let shutdown_for_antidebug = shutdown_token.clone();
@@ -216,6 +306,14 @@ async fn main() {
 
     // Quick cleanup of critical resources
     tracing::info!("Shutting down services...");
+
+    // Send offline presence before shutting down
+    if ui_ctx.auth_state.is_logged_in() {
+        tracing::info!("Sending offline presence before shutdown...");
+        bin_ui::features::auth::presence_integration::shutdown_presence(&ui_ctx).await;
+        // Give a moment for presence updates to be sent
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 
     // Stop inbox provider (has its own shutdown logic)
     if let Some(provider) = ctx.get_device_inbox_provider() {

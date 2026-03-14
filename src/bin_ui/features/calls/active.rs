@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::calls::ScreenCapture;
@@ -110,6 +110,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let session_service = ui_ctx.session_service.clone();
     let channel_service = ui_ctx.channel_service.clone();
     let user_service = ui_ctx.user_service.clone();
+    let anon_dm_service = ui_ctx.anon_dm_service.clone();
 
     // End call
     window.on_call_end({
@@ -119,6 +120,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let session_service = session_service.clone();
         let channel_service = channel_service.clone();
         let user_service = user_service.clone();
+        let anon_dm_service = anon_dm_service.clone();
 
         move || {
             tracing::info!("End call");
@@ -130,6 +132,15 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let session_service = session_service.clone();
             let channel_service = channel_service.clone();
             let user_service = user_service.clone();
+            let anon_dm_service_clone = anon_dm_service.clone();
+            
+            // Get call info before the async block
+            let (call_id_str, is_anonymous) = if let Some(w) = weak.upgrade() {
+                let data = w.get_active_call_data();
+                (data.call_id.to_string(), data.is_anonymous_call)
+            } else {
+                (String::new(), false)
+            };
 
             slint::spawn_local(async move {
                 // IMPORTANT: Update UI immediately BEFORE async operations
@@ -139,6 +150,103 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 if let Some(w) = weak.upgrade() {
                     w.set_active_call_visible(false);
                 }
+
+                // Check if this is an anonymous call
+                if is_anonymous {
+                    // Try to get the pending call from service
+                    if let Some(pending_anon) = anon_dm_service_clone.take_pending_anon_call(&call_id_str) {
+                    // Send anonymous call hangup
+                    tracing::info!(
+                        conversation_id = %pending_anon.conversation_id,
+                        room_name = %pending_anon.room_name,
+                        "Sending anonymous call hangup"
+                    );
+                    
+                    if let Err(e) = anon_dm_service_clone.send_call_hangup(
+                        &pending_anon.conversation_id,
+                        &pending_anon.call_room_id,
+                        chatter_linux::proto::content_v1::anon_call_hangup::Reason::Normal,
+                    ).await {
+                        tracing::error!(
+                            "Failed to send anonymous call hangup: {}", e
+                        );
+                    }
+                    
+                    // Store call history in anon DM conversation
+                    let call_duration = if let Some(started_at) = pending_anon.started_at {
+                        (chrono::Utc::now() - started_at).num_seconds()
+                    } else {
+                        get_call_duration_secs() as i64
+                    };
+                    let duration_str = if call_duration > 0 {
+                        format!("{}:{:02}", call_duration / 60, call_duration % 60)
+                    } else {
+                        "0:00".to_string()
+                    };
+                    let call_type_label = if pending_anon.is_outgoing { "Outgoing call" } else { "Incoming call" };
+                    let call_text = format!("📞 {} · {}", call_type_label, duration_str);
+
+                    // Store in anon DM message store
+                    let sent_at = super::timers::current_time_ns();
+                    let our_user_id = session_service.current_user_id().unwrap_or_else(chatter_linux::domain::ids::UserId::new);
+                    if let Err(e) = anon_dm_service_clone.store_message(
+                        &pending_anon.conversation_id,
+                        &our_user_id,
+                        0, // text content type
+                        &call_text,
+                        sent_at,
+                    ) {
+                        tracing::error!("Failed to store anon call history: {}", e);
+                    }
+
+                    // Push call bubble to UI if viewing this conversation
+                    let conv_id_str = format!("anon_dm:{}", pending_anon.conversation_id);
+                    if let Some(w) = weak.upgrade() {
+                        let selected_dm = w.get_selected_dm_id().to_string();
+                        if selected_dm == conv_id_str {
+                            let messages = w.get_messages();
+                            if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
+                                let msg_item = crate::MessageItemData {
+                                    message_id: uuid::Uuid::new_v4().to_string().into(),
+                                    sender_id: our_user_id.to_string().into(),
+                                    sender_name: "".into(),
+                                    sender_initials: "".into(),
+                                    sender_avatar_url: "".into(),
+                                    sender_avatar_source: slint::Image::default(),
+                                    has_avatar: false,
+                                    content: call_text.into(),
+                                    timestamp: chrono::Utc::now().format("%H:%M").to_string().into(),
+                                    timestamp_ns: sent_at.to_string().into(),
+                                    is_own: true,
+                                    is_edited: false,
+                                    is_deleted: false,
+                                    is_system: true,
+                                    is_ai: false,
+                                    has_attachments: false,
+                                    attachment_count: 0,
+                                    attachments: slint::ModelRc::default(),
+                                    has_reactions: false,
+                                    reaction_summary: "".into(),
+                                    reply_count: 0,
+                                    reply_count_text: "".into(),
+                                    is_thread_reply: false,
+                                    show_sender: false,
+                                    delivery_status: "".into(),
+                                    is_pinned: false,
+                                    is_call: true,
+                                    call_type: call_type_label.into(),
+                                    call_duration: duration_str.into(),
+                                };
+                                model.push(msg_item);
+                            }
+                        }
+                    }
+
+                        // State already consumed by take_pending_anon_call
+                        return; // Don't process regular call logic
+                    }
+                }
+                
                 if let Some(service) = call_service.get() {
                     // Get call info before leaving
                     let call_info = service.active_call().await;

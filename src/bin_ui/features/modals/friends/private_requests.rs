@@ -129,14 +129,98 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<UIC
                     // Refresh private requests list
                     refresh_private_requests(weak.clone(), anon_dm_service.clone()).await;
 
+                    // Remove from DM sidebar
+                    let channel_id = format!("anon_dm:{}", conv_id_str);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            remove_dm_from_sidebar(&w, &channel_id);
                             w.set_friends_loading(false);
                         }
                     });
                 }
                 Err(e) => {
                     tracing::error!("Failed to decline private request: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friends_loading(false);
+                        }
+                    });
+                }
+            }
+        });
+    });
+}
+
+/// Wire callback to block an anonymous DM request.
+///
+/// This blocks the conversation AND the user globally.
+pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let weak_window = window.as_weak();
+    let anon_dm_service = ui_ctx.anon_dm_service.clone();
+
+    window.on_friends_block_private_request(move |conversation_id: SharedString| {
+        let weak = weak_window.clone();
+        let anon_dm_service = anon_dm_service.clone();
+        let conv_id_str = conversation_id.to_string();
+
+        tokio::spawn(async move {
+            // Set loading state
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_friends_loading(true);
+                }
+            });
+
+            // Parse conversation ID
+            let conv_id: chatter_linux::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    tracing::error!("Invalid conversation ID: {}", conv_id_str);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friends_loading(false);
+                        }
+                    });
+                    return;
+                }
+            };
+
+            // Get the conversation to find the peer ID for global block
+            let peer_id = match anon_dm_service.get_conversation(&conv_id) {
+                Ok(Some(dm)) => Some(dm.peer_id),
+                _ => None,
+            };
+
+            // Block the conversation
+            match anon_dm_service.block_conversation(&conv_id) {
+                Ok(_) => {
+                    tracing::info!("Blocked private message request {}", conv_id_str);
+
+                    // Also block the user globally if we have their ID
+                    if let Some(user_id) = peer_id {
+                        if let Err(e) = anon_dm_service.block_user(&user_id, Some("Blocked from request")) {
+                            tracing::warn!("Failed to globally block user: {}", e);
+                        } else {
+                            tracing::info!("Globally blocked user {} from anonymous DMs", user_id);
+                        }
+                    }
+
+                    // Refresh private requests list and blocked users list
+                    refresh_private_requests(weak.clone(), anon_dm_service.clone()).await;
+                    refresh_blocked_users(weak.clone(), anon_dm_service.clone());
+
+                    // Remove from DM sidebar
+                    let channel_id = format!("anon_dm:{}", conv_id_str);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            remove_dm_from_sidebar(&w, &channel_id);
+                            w.set_friends_loading(false);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to block private request: {}", e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);
@@ -256,4 +340,50 @@ fn add_anon_dm_to_sidebar(
             w.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
         }
     });
+}
+
+/// Remove a DM from the sidebar by channel_id.
+fn remove_dm_from_sidebar(window: &MainWindow, channel_id: &str) {
+    let current_dms = window.get_dm_conversations();
+    let mut dm_vec: Vec<DMListItemData> = Vec::new();
+
+    for i in 0..current_dms.row_count() {
+        if let Some(dm) = current_dms.row_data(i) {
+            if dm.channel_id.as_str() != channel_id {
+                dm_vec.push(dm);
+            }
+        }
+    }
+
+    window.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
+}
+
+/// Refresh the blocked users list in the UI.
+pub(crate) fn refresh_blocked_users(
+    weak_window: slint::Weak<MainWindow>,
+    anon_dm_service: Arc<AnonDmService>,
+) {
+    match anon_dm_service.get_blocked_users() {
+        Ok(blocked_users) => {
+            let blocked_data: Vec<crate::BlockedUserData> = blocked_users
+                .into_iter()
+                .map(|user_id| crate::BlockedUserData {
+                    user_id: user_id.to_string().into(),
+                    display_name: format!("User {}", &user_id.to_string()[..8]).into(),
+                    username: "Private".into(),
+                    avatar_url: SharedString::default(),
+                    blocked_at: String::new().into(),
+                })
+                .collect();
+
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_window.upgrade() {
+                    w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_data)));
+                }
+            });
+        }
+        Err(e) => {
+            tracing::warn!("Failed to refresh blocked users: {}", e);
+        }
+    }
 }

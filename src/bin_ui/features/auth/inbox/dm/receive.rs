@@ -13,7 +13,6 @@ use chatter_linux::proto::content_v1::AttachmentPointer;
 use crate::bin_ui::converters::{
     attachment_pointer_to_display_data, message_to_display_data_with_attachments,
 };
-use crate::bin_ui::features::chat::get_dm_channel_from_peer;
 use crate::{DMListItemData, MainWindow, MessageItemData};
 
 use super::super::typing::clear_typing_for_peer;
@@ -25,12 +24,13 @@ pub fn handle_dm_received(
     weak_window: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<UIContext>,
     peer_id: chatter_linux::domain::UserId,
+    dm_channel_id: chatter_linux::domain::ids::ChannelId,
     text: String,
     timestamp: u64,
     message_id: String,
     attachments: Vec<AttachmentPointer>,
 ) {
-    tracing::info!("DM received from {}: {} chars, {} attachments", peer_id, text.len(), attachments.len());
+    tracing::info!("DM received from {}: {} chars, {} attachments, channel={}", peer_id, text.len(), attachments.len(), dm_channel_id);
 
     // Collect attachments with encryption keys for auto-download
     let download_pointers: Vec<AttachmentPointer> = attachments
@@ -94,6 +94,22 @@ pub fn handle_dm_received(
     let message_id_for_ui = message_id.clone();
     let text_for_ui = text.clone();
 
+    // Determine is_active from ChatState (source of truth), not the Slint sidebar model.
+    // ChatState.active_channel_id is set in dm.rs:106 when user navigates to a DM.
+    let is_active = ui_ctx
+        .chat_state
+        .get()
+        .active_channel_id
+        .map(|id| id == dm_channel_id)
+        .unwrap_or(false);
+
+    tracing::debug!(
+        dm_channel_id = %dm_channel_id,
+        peer_id = %peer_id,
+        is_active,
+        "DM is_active check (from ChatState)"
+    );
+
     let weak = weak_window.clone();
     let ui_ctx_cloned = ui_ctx.clone();
     let peer_id_cloned = peer_id.clone();
@@ -119,13 +135,7 @@ pub fn handle_dm_received(
             peer_id_cloned.to_string()
         });
 
-        let selected_dm = window.get_selected_dm_id().to_string();
-
-        // Check if this is the active conversation
         let peer_id_str = peer_id_cloned.to_string();
-        let peer_channel_id = get_dm_channel_from_peer(&window, &peer_id_str);
-        let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
-            || selected_dm == peer_id_str;
 
         // Clear typing timer (Signal-style)
         clear_typing_for_peer(&window, &peer_id_str);
@@ -214,14 +224,13 @@ pub fn handle_dm_received(
             }
 
             // Send read receipt for this message since conversation is active
-            if let Some(id_str) = peer_channel_id.as_ref() {
-                if let Some(anon_dm_id_str) = id_str.strip_prefix("anon_dm:") {
-                    if let Ok(dm_id) = anon_dm_id_str.parse::<chatter_linux::domain::anon_dm::AnonDmId>() {
-                        let service = ui_ctx_cloned.anon_dm_service.clone();
-                        tokio::spawn(async move {
-                            let _ = service.send_read_receipt(&dm_id, vec![timestamp]).await;
-                        });
-                    }
+            let channel_id_str = dm_channel_id.to_string();
+            if let Some(anon_dm_id_str) = channel_id_str.strip_prefix("anon_dm:") {
+                if let Ok(dm_id) = anon_dm_id_str.parse::<chatter_linux::domain::anon_dm::AnonDmId>() {
+                    let service = ui_ctx_cloned.anon_dm_service.clone();
+                    tokio::spawn(async move {
+                        let _ = service.send_read_receipt(&dm_id, vec![timestamp]).await;
+                    });
                 }
             }
         }

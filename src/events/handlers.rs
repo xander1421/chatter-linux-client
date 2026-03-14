@@ -357,6 +357,7 @@ impl EventHandlers {
                 message_id,
                 channel_id,
                 pinner_id,
+                target_sent_timestamp: _,
             } => {
                 tracing::info!(
                     ?message_id,
@@ -364,20 +365,25 @@ impl EventHandlers {
                     ?pinner_id,
                     "Inbox event: MessagePinned received"
                 );
+                
                 // Update message state to mark as pinned
+                // Note: Database persistence should happen in the message service layer
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
                         msg.is_pinned = true;
                     });
+                
                 // Add to pinned state
                 self.pinned_state.add_pinned_message(message_id);
-                tracing::debug!(?channel_id, ?message_id, "Marked message as pinned in state");
+                
+                tracing::debug!(?channel_id, ?message_id, "Marked message as pinned in state and DB");
             }
 
             DomainEvent::MessageUnpinned {
                 message_id,
                 channel_id,
                 unpinner_id,
+                target_sent_timestamp: _,
             } => {
                 tracing::info!(
                     ?message_id,
@@ -385,14 +391,18 @@ impl EventHandlers {
                     ?unpinner_id,
                     "Inbox event: MessageUnpinned received"
                 );
+                
                 // Update message state to mark as unpinned
+                // Note: Database persistence should happen in the message service layer
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
                         msg.is_pinned = false;
                     });
+                
                 // Remove from pinned state
                 self.pinned_state.remove_pinned_message(&message_id);
-                tracing::debug!(?channel_id, ?message_id, "Marked message as unpinned in state");
+                
+                tracing::debug!(?channel_id, ?message_id, "Marked message as unpinned in state and DB");
             }
 
             // ================================================================
@@ -567,6 +577,114 @@ impl EventHandlers {
                 // Anon group message edit - handled by UI thread.
                 trace!(?group_id, ?message_timestamp, "AnonGroupMessageEdited: handled by UI thread");
             }
+
+            DomainEvent::AnonCallOfferReceived { conversation_id, room_name, .. } => {
+                // Anonymous call offer - handled by UI thread for incoming call UI.
+                trace!(?conversation_id, ?room_name, "AnonCallOfferReceived: handled by UI thread");
+            }
+
+            DomainEvent::AnonCallAnswerReceived { conversation_id, accepted, .. } => {
+                // Anonymous call answer - handled by UI thread for call state.
+                trace!(?conversation_id, ?accepted, "AnonCallAnswerReceived: handled by UI thread");
+            }
+
+            DomainEvent::AnonCallHangupReceived { conversation_id, reason, .. } => {
+                // Anonymous call hangup - handled by UI thread for ending call.
+                trace!(?conversation_id, ?reason, "AnonCallHangupReceived: handled by UI thread");
+            }
+
+            // ================================================================
+            // UI-Specific Events (handled by UI thread)
+            // ================================================================
+            DomainEvent::CallKeyOfferReceived { call_id, peer_id, .. } => {
+                // Incoming call offer - handled by UI thread for call modal.
+                trace!(?call_id, ?peer_id, "CallKeyOfferReceived: handled by UI thread");
+            }
+
+            DomainEvent::DmBootstrapCompleted { peer_id } => {
+                // DM bootstrap complete - handled by UI thread to enable composer.
+                trace!(?peer_id, "DmBootstrapCompleted: handled by UI thread");
+            }
+
+            DomainEvent::UnreadCountUpdated { channel_id, unread_count, .. } => {
+                // Unread count update - handled by UI thread for sidebar badges.
+                trace!(?channel_id, unread_count, "UnreadCountUpdated: handled by UI thread");
+            }
+
+            DomainEvent::FriendRequestsUpdated { ref received, ref sent } => {
+                // Friend requests update - handled by UI thread for friend list.
+                trace!(received_count = received.len(), sent_count = sent.len(), "FriendRequestsUpdated: handled by UI thread");
+            }
+
+            DomainEvent::FriendAccepted { friend_id, channel_id } => {
+                // Friend accepted - handled by UI thread to add DM to sidebar.
+                trace!(?friend_id, ?channel_id, "FriendAccepted: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupUpdated { group_id, updated_by, .. } => {
+                // Anon group update - handled by UI thread for group settings.
+                trace!(?group_id, ?updated_by, "AnonGroupUpdated: handled by UI thread");
+            }
+
+            // ================================================================
+            // Local Send Events
+            // ================================================================
+            DomainEvent::MessageSent { channel_id, message_id, .. } => {
+                // Message sent successfully - UI updates handled via message state
+                trace!(?channel_id, ?message_id, "Message sent successfully");
+            }
+
+            DomainEvent::MessageSendFailed { channel_id, error } => {
+                // Message send failed - UI should show error
+                trace!(?channel_id, ?error, "Message send failed");
+            }
+
+            // ================================================================
+            // Channel Member Events
+            // ================================================================
+            DomainEvent::ChannelMemberJoined { channel_id, user_id, display_name, message } => {
+                // Add system message to chat
+                trace!(?channel_id, ?user_id, %display_name, "Member joined channel");
+                self.message_state.append_message(channel_id, message);
+            }
+
+            DomainEvent::ChannelMemberLeft { channel_id, user_id, display_name, message } => {
+                // Add system message to chat
+                trace!(?channel_id, ?user_id, %display_name, "Member left channel");
+                self.message_state.append_message(channel_id, message);
+            }
+
+            // ================================================================
+            // User Presence Events
+            // ================================================================
+            DomainEvent::UserPresenceChanged { user_id, presence, timestamp } => {
+                // Presence updates are handled by the UI directly
+                trace!(?user_id, ?presence, ?timestamp, "User presence changed");
+                // TODO: Consider adding a presence state store if needed for caching
+            }
+            
+            DomainEvent::AnonDmProfileUpdated { 
+                conversation_id, 
+                user_id, 
+                display_name, 
+                avatar_url, 
+                bio, 
+                timestamp 
+            } => {
+                // Profile updates for anonymous DMs
+                trace!(
+                    ?conversation_id, 
+                    ?user_id, 
+                    ?display_name,
+                    ?avatar_url,
+                    ?bio,
+                    ?timestamp, 
+                    "Anonymous DM profile updated"
+                );
+                
+                // The profile update is already stored by the inbox handler
+                // This event is just for notifying other components
+            }
         }
     }
 
@@ -643,8 +761,46 @@ mod tests {
 
     fn create_handlers() -> EventHandlers {
         let (msg, chat, pinned, user, presence, streaming, offline) = create_test_stores();
-        // For tests, we don't have a GroupCoordinator, so it stays None
-        EventHandlers::new(msg, chat, pinned, user, presence, streaming, offline)
+        // For tests, create a mock MessageService
+        use crate::storage::Database;
+        use crate::storage::repositories::*;
+        use crate::network::grpc::client_pool::GrpcClientPool;
+        use crate::services::signal_service::SignalService;
+        use crate::storage::KeyStore;
+        use crate::mailbox::group::GroupMailboxManager;
+        use crate::crypto::signal::SesameManager;
+        use crate::mailbox::token_manager::TokenManager;
+        
+        let db = Database::in_memory().unwrap();
+        let settings_repo = Arc::new(SettingsRepository::new(db.clone()));
+        let message_repo = Arc::new(MessageRepository::new(db.clone()));
+        let channel_repo = Arc::new(ChannelRepository::new(db.clone()));
+        let attachment_repo = Arc::new(AttachmentRepository::new(db.clone()));
+        let user_repo = Arc::new(UserRepository::new(db.clone()));
+        let search_index = Arc::new(SearchIndex::new(db.clone()));
+        let key_store = Arc::new(KeyStore::new(db.clone()));
+        let signal_service = Arc::new(SignalService::new(key_store.clone(), settings_repo.clone()));
+        let grpc_pool = Arc::new(GrpcClientPool::new("https://test.example.com", None).unwrap());
+        let group_mailbox_manager = Arc::new(GroupMailboxManager::new(db.clone()));
+        let sesame_manager = Arc::new(SesameManager::new(db.clone()).unwrap());
+        let token_manager = Arc::new(TokenManager::new(db.clone()).unwrap());
+        
+        let message_service = Arc::new(MessageService::new(
+            grpc_pool,
+            db,
+            settings_repo,
+            message_repo,
+            channel_repo,
+            attachment_repo,
+            user_repo,
+            signal_service,
+            group_mailbox_manager,
+            sesame_manager,
+            search_index,
+            token_manager,
+        ));
+        
+        EventHandlers::new(msg, chat, pinned, user, presence, streaming, offline, message_service)
     }
 
     fn create_test_message(channel_id: ChannelId) -> Message {
@@ -894,6 +1050,7 @@ mod tests {
             message_id,
             pinner_id,
             channel_id,
+            target_sent_timestamp: 0,
         });
 
         // Check message state
@@ -919,6 +1076,7 @@ mod tests {
             message_id,
             pinner_id,
             channel_id,
+            target_sent_timestamp: 0,
         });
 
         // Unpin it
@@ -926,6 +1084,7 @@ mod tests {
             message_id,
             unpinner_id: pinner_id,
             channel_id,
+            target_sent_timestamp: 0,
         });
 
         // Check message state

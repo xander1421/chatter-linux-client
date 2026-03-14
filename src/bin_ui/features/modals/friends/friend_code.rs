@@ -329,11 +329,12 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<UIContext>)
                                 let current_dms = w.get_dm_conversations();
                                 let mut dm_vec: Vec<crate::DMListItemData> = Vec::new();
 
-                                // Copy existing DMs (excluding any duplicate)
-                                let new_channel_id = dm_item.channel_id.as_str();
+                                // Copy existing DMs, excluding any with the same peer
+                                // (removes old pending conversations when retrying)
+                                let new_user_id = dm_item.user_id.as_str();
                                 for i in 0..current_dms.row_count() {
                                     if let Some(existing_dm) = current_dms.row_data(i) {
-                                        if existing_dm.channel_id.as_str() != new_channel_id {
+                                        if existing_dm.user_id.as_str() != new_user_id {
                                             dm_vec.push(existing_dm);
                                         }
                                     }

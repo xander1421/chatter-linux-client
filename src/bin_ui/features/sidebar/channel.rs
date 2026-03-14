@@ -86,34 +86,55 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
             );
 
             // Load pinned messages for this channel
-            if let Ok(pinned_messages) = pin_service.load_pinned_for_channel(&channel_id).await {
-                if !pinned_messages.is_empty() {
-                    let message_ids: Vec<_> = pinned_messages.iter().map(|p| p.message_id).collect();
-                    pinned_state.set_pinned_messages(channel_id, message_ids);
+            match pin_service.load_pinned_for_channel(&channel_id).await {
+                Ok(pinned_messages) => {
+                    tracing::info!(
+                        channel_id = %channel_id,
+                        pinned_count = pinned_messages.len(),
+                        "[PINNED] Loaded {} pinned messages",
+                        pinned_messages.len()
+                    );
                     
-                    if let Some(first) = pinned_messages.first() {
-                        let preview = first.preview.clone();
-                        let total_count = pinned_messages.len() as i32;
-                        let should_show = pinned_state.should_show();
+                    if !pinned_messages.is_empty() {
+                        let message_ids: Vec<_> = pinned_messages.iter().map(|p| p.message_id).collect();
+                        pinned_state.set_pinned_messages(channel_id, message_ids);
                         
+                        if let Some(first) = pinned_messages.first() {
+                            let preview = first.preview.clone();
+                            let total_count = pinned_messages.len() as i32;
+                            let should_show = pinned_state.should_show();
+                            
+                            tracing::info!(
+                                preview = %preview,
+                                should_show = should_show,
+                                "[PINNED] Setting UI: preview='{}', should_show={}",
+                                preview,
+                                should_show
+                            );
+                            
+                            let weak_pinned = weak.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak_pinned.upgrade() {
+                                    w.set_has_pinned_messages(should_show);
+                                    w.set_pinned_message_preview(preview.into());
+                                    w.set_pinned_current_index(1); // 1-based for display
+                                    w.set_pinned_total_count(total_count);
+                                }
+                            });
+                        }
+                    } else {
+                        tracing::debug!("[PINNED] No pinned messages for channel {}", channel_id);
+                        pinned_state.clear();
                         let weak_pinned = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_pinned.upgrade() {
-                                w.set_has_pinned_messages(should_show);
-                                w.set_pinned_message_preview(preview.into());
-                                w.set_pinned_current_index(1); // 1-based for display
-                                w.set_pinned_total_count(total_count);
+                                w.set_has_pinned_messages(false);
                             }
                         });
                     }
-                } else {
-                    pinned_state.clear();
-                    let weak_pinned = weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak_pinned.upgrade() {
-                            w.set_has_pinned_messages(false);
-                        }
-                    });
+                }
+                Err(e) => {
+                    tracing::warn!("[PINNED] Failed to load pinned messages: {}", e);
                 }
             }
 

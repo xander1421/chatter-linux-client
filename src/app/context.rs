@@ -48,7 +48,6 @@ pub struct AppContext {
 
     // Post-boot initialization (OnceLock) - shared with UIContext
     device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
-    group_fanout: Arc<std::sync::OnceLock<Arc<GroupFanout>>>,
     call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
 }
 
@@ -56,17 +55,17 @@ impl AppContext {
     /// Create a new AppContext, initializing all subsystems.
     pub fn new() -> Result<Self, ContextError> {
         let infrastructure = Arc::new(InfrastructureContainer::new()?);
-        let services = Arc::new(ServiceContainer::new(&infrastructure)?);
-
+        
         // Create shared OnceLocks for post-boot services (shared with UIContext)
         let device_inbox_provider = Arc::new(std::sync::OnceLock::new());
-        let group_fanout = Arc::new(std::sync::OnceLock::new());
         let call_service = Arc::new(std::sync::OnceLock::new());
+        
+        let services = Arc::new(ServiceContainer::new(&infrastructure)?);
 
         let ui_context = Arc::new(UIContext::new(
             &infrastructure,
             &services,
-            group_fanout.clone(),
+            infrastructure.group_fanout.clone(),
             call_service.clone(),
             device_inbox_provider.clone(),
         ));
@@ -78,7 +77,6 @@ impl AppContext {
             services,
             ui_context,
             device_inbox_provider,
-            group_fanout,
             call_service,
         })
     }
@@ -130,7 +128,7 @@ impl AppContext {
 
     /// Initialize the group fanout (call after grpc connect).
     pub fn init_group_fanout(&self) {
-        self.group_fanout.get_or_init(|| {
+        self.infrastructure.group_fanout.get_or_init(|| {
             let mailbox_client = crate::network::grpc::mailbox_client::MailboxClient::new(
                 self.infrastructure.grpc_pool.channel(),
                 self.infrastructure.grpc_pool.auth_clone(),
@@ -144,7 +142,7 @@ impl AppContext {
 
     /// Get the group fanout.
     pub fn get_group_fanout(&self) -> Option<Arc<GroupFanout>> {
-        self.group_fanout.get().cloned()
+        self.infrastructure.group_fanout.get().cloned()
     }
 
     /// Initialize the call worker (call after grpc connect).
@@ -188,5 +186,34 @@ impl AppContext {
         .with_group_coordinator(self.infrastructure.group_coordinator.clone());
 
         handlers.spawn(self.ui_context.event_bus.clone())
+    }
+    
+    /// Start the channel event stream service.
+    ///
+    /// This starts the background service that owns the gRPC stream,
+    /// handles reconnection, and emits domain events.
+    pub fn start_channel_event_stream(&self) -> tokio::task::JoinHandle<()> {
+        self.services.channel_event_service.clone().start_event_stream()
+    }
+    
+    /// Restart the channel event stream service.
+    ///
+    /// This is needed after re-login to ensure the stream uses the new
+    /// authentication credentials. Returns a new task handle.
+    pub fn restart_channel_event_stream(&self) -> tokio::task::JoinHandle<()> {
+        // The service handles stream lifecycle internally with retry logic
+        // Just start a new instance - the old one will eventually stop
+        // when it fails to authenticate with old credentials
+        self.services.channel_event_service.clone().start_event_stream()
+    }
+    
+    /// Start the channel bootstrap service.
+    ///
+    /// This starts the background service that listens for GroupMailboxReceived
+    /// events and flushes pending messages to new members.
+    pub fn start_channel_bootstrap_service(&self) -> tokio::task::JoinHandle<()> {
+        self.services.channel_bootstrap_service.start(
+            self.ui_context.event_bus.subscribe_domain()
+        )
     }
 }

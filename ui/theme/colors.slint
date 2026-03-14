@@ -1,10 +1,14 @@
 // Color definitions for Chatter
 
 export global Colors {
-    // Primary colors
-    out property <color> primary: #6366f1;
-    out property <color> primary-hover: #4f46e5;
-    out property <color> primary-active: #4338ca;
+    // Primary colors (dark teal)
+    out property <color> primary: #0d9488;
+    out property <color> primary-hover: #0f766e;
+    out property <color> primary-active: #115e59;
+
+    // Accent color (orange - complements teal)
+    out property <color> accent: #f97316;
+    out property <color> accent-hover: #ea580c;
 
     // Background colors (OLED Black)
     out property <color> background: #000000;
@@ -21,7 +25,7 @@ export global Colors {
     out property <color> warning: #f59e0b;
     out property <color> error: #ef4444;
     out property <color> info: #3b82f6;
-    out property <color> accent-purple: #a855f7;
+    out property <color> accent-purple: #f97316;  // Now orange (kept name for compatibility)
 
     // Presence colors
     out property <color> online: #10b981;
@@ -30,8 +34,8 @@ export global Colors {
     out property <color> offline: #6b7280;
 
     // Message bubbles
-    out property <color> bubble-own: #1e1b4b;           // Dark indigo (subtle primary tint)
+    out property <color> bubble-own: #0a2725;           // Dark teal tint
     out property <color> bubble-other: #141414;         // Surface-hover equivalent
-    out property <color> bubble-own-hover: #2e2a5b;     // Lighter indigo on hover
+    out property <color> bubble-own-hover: #0f3533;     // Lighter teal on hover
     out property <color> bubble-other-hover: #1c1c1c;   // Slightly lighter surface
 }

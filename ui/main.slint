@@ -11,6 +11,7 @@ export component MainWindow inherits Window {
     icon: @image-url("../assets/icon-256.png");
     min-width: 800px;
     min-height: 600px;
+    default-font-family: "Inter, Roboto, Noto Sans, Ubuntu, Cantarell, sans-serif";
 
     // Expose App properties through MainWindow for Rust binding
     // ========== View routing ==========
@@ -30,6 +31,7 @@ export component MainWindow inherits Window {
     in-out property <string> register-username <=> app.register-username;
     in-out property <string> register-password <=> app.register-password;
     in-out property <string> register-confirm-password <=> app.register-confirm-password;
+    in-out property <string> register-pin <=> app.register-pin;
     in property <bool> register-loading <=> app.register-loading;
     in property <string> register-error <=> app.register-error;
     in property <image> register-avatar-source <=> app.register-avatar-source;
@@ -72,6 +74,12 @@ export component MainWindow inherits Window {
     in property <[PendingAttachmentData]> pending-attachments <=> app.pending-attachments;
     in-out property <bool> composer-is-editing <=> app.composer-is-editing;
     in-out property <string> composer-edit-message-id <=> app.composer-edit-message-id;
+
+    // ========== Reply-to state (Signal-style: sender_id + timestamp) ==========
+    in-out property <bool> composer-is-replying <=> app.composer-is-replying;
+    in-out property <string> composer-reply-to-sender <=> app.composer-reply-to-sender;
+    in-out property <string> composer-reply-to-timestamp <=> app.composer-reply-to-timestamp;
+    in-out property <string> composer-reply-preview <=> app.composer-reply-preview;
 
     // ========== Audio playback state ==========
     in-out property <string> current-playing-attachment-id <=> app.current-playing-attachment-id;
@@ -168,6 +176,7 @@ export component MainWindow inherits Window {
     in-out property <length> context-menu-y <=> app.context-menu-y;
     in property <bool> context-menu-is-own-message <=> app.context-menu-is-own-message;
     in property <bool> context-menu-is-pinned <=> app.context-menu-is-pinned;
+    in property <bool> context-menu-has-attachments <=> app.context-menu-has-attachments;
     callback reply-message <=> app.reply-message;
     callback edit-message <=> app.edit-message;
     callback delete-message <=> app.delete-message;
@@ -175,6 +184,7 @@ export component MainWindow inherits Window {
     callback pin-message <=> app.pin-message;
     callback forward-message-action <=> app.forward-message-action;
     callback copy-message <=> app.copy-message;
+    callback download-message <=> app.download-message;
 
     // ========== Pinned bar state ==========
     in property <bool> has-pinned-messages <=> app.has-pinned-messages;
@@ -252,6 +262,13 @@ export component MainWindow inherits Window {
     in property <bool> profile-is-blocked <=> app.profile-is-blocked;
     in property <bool> profile-is-self <=> app.profile-is-self;
     in property <bool> profile-loading <=> app.profile-loading;
+
+    // Edit Profile data
+    in-out property <string> edit-profile-display-name <=> app.edit-profile-display-name;
+    in-out property <string> edit-profile-bio <=> app.edit-profile-bio;
+    in property <image> edit-profile-avatar <=> app.edit-profile-avatar;
+    in property <bool> edit-profile-loading <=> app.edit-profile-loading;
+    in property <string> edit-profile-error <=> app.edit-profile-error;
 
     // Friend requests modal properties (legacy)
     in property <string> friend-requests-tab <=> app.friend-requests-tab;
@@ -383,6 +400,8 @@ export component MainWindow inherits Window {
     callback saved-messages-clicked <=> app.saved-messages-clicked;
     callback settings-clicked <=> app.settings-clicked;
     callback profile-clicked <=> app.profile-clicked;
+    callback change-user-status <=> app.change-user-status;
+    pure callback get-user-status <=> app.get-user-status;
     callback open-create-channel <=> app.open-create-channel;
     callback open-join-channel <=> app.open-join-channel;
     callback toggle-sidebar <=> app.toggle-sidebar;
@@ -401,6 +420,7 @@ export component MainWindow inherits Window {
     callback send <=> app.send;
     callback send-edit <=> app.send-edit;
     callback cancel-edit <=> app.cancel-edit;
+    callback cancel-reply <=> app.cancel-reply;
     callback attachment-clicked <=> app.attachment-clicked;
     callback emoji-clicked <=> app.emoji-clicked;
     callback gif-clicked <=> app.gif-clicked;
@@ -429,6 +449,9 @@ export component MainWindow inherits Window {
     callback profile-remove-friend <=> app.profile-remove-friend;
     callback profile-block-user <=> app.profile-block-user;
     callback profile-unblock-user <=> app.profile-unblock-user;
+    callback profile-edit-profile <=> app.profile-edit-profile;
+    callback edit-profile-save <=> app.edit-profile-save;
+    callback edit-profile-change-avatar <=> app.edit-profile-change-avatar;
     callback friend-requests-switch-tab <=> app.friend-requests-switch-tab;
     callback friend-request-accept <=> app.friend-request-accept;
     callback friend-request-decline <=> app.friend-request-decline;
@@ -453,6 +476,7 @@ export component MainWindow inherits Window {
     callback friends-connect-private <=> app.friends-connect-private;
     callback friends-accept-private-request <=> app.friends-accept-private-request;
     callback friends-decline-private-request <=> app.friends-decline-private-request;
+    callback friends-block-private-request <=> app.friends-block-private-request;
     // Message requests (anon DM)
     callback message-requests-clicked <=> app.message-requests-clicked;
     callback forward-message <=> app.forward-message;

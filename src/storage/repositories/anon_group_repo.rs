@@ -34,11 +34,12 @@ impl AnonGroupRepository {
     pub fn insert_group(&self, group: &AnonGroup) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO anon_groups (id, name, my_role, bootstrap_complete, created_at, updated_at, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO anon_groups (id, name, owner_id, my_role, bootstrap_complete, created_at, updated_at, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 group.id.as_bytes().as_slice(),
                 group.name,
+                group.owner_id.as_bytes().as_slice(),
                 group.my_role.to_i32(),
                 group.bootstrap_complete as i32,
                 group.created_at.to_rfc3339(),
@@ -53,7 +54,7 @@ impl AnonGroupRepository {
     pub fn get_group(&self, id: &AnonGroupId) -> Result<Option<AnonGroup>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, my_role, bootstrap_complete, created_at, updated_at, status
+            "SELECT id, name, my_role, bootstrap_complete, created_at, updated_at, status, owner_id
              FROM anon_groups WHERE id = ?1",
         )?;
 
@@ -70,14 +71,15 @@ impl AnonGroupRepository {
     pub fn update_group(&self, group: &AnonGroup) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE anon_groups SET name = ?1, my_role = ?2, bootstrap_complete = ?3, updated_at = ?4, status = ?5
-             WHERE id = ?6",
+            "UPDATE anon_groups SET name = ?1, my_role = ?2, bootstrap_complete = ?3, updated_at = ?4, status = ?5, owner_id = ?6
+             WHERE id = ?7",
             params![
                 group.name,
                 group.my_role.to_i32(),
                 group.bootstrap_complete as i32,
                 group.updated_at.to_rfc3339(),
                 group.status.to_i32(),
+                group.owner_id.as_bytes().as_slice(),
                 group.id.as_bytes().as_slice(),
             ],
         )?;
@@ -118,7 +120,7 @@ impl AnonGroupRepository {
     pub fn list_groups(&self) -> Result<Vec<AnonGroup>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, my_role, bootstrap_complete, created_at, updated_at, status
+            "SELECT id, name, my_role, bootstrap_complete, created_at, updated_at, status, owner_id
              FROM anon_groups ORDER BY updated_at DESC",
         )?;
 
@@ -194,6 +196,10 @@ impl AnonGroupRepository {
     }
 
     /// Update a member's mailbox public key and profile (when JoinAck is received).
+    ///
+    /// Uses COALESCE to preserve existing profile data when new values are NULL.
+    /// This prevents member list updates from clearing display names that were
+    /// correctly stored during invite acceptance.
     pub fn update_member_mailbox_and_profile(
         &self,
         group_id: &AnonGroupId,
@@ -205,8 +211,11 @@ impl AnonGroupRepository {
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE anon_group_members 
-             SET mailbox_pk = ?1, profile_key = ?4, display_name = ?5, avatar = ?6 
+            "UPDATE anon_group_members
+             SET mailbox_pk = ?1,
+                 profile_key = COALESCE(?4, profile_key),
+                 display_name = COALESCE(?5, display_name),
+                 avatar = COALESCE(?6, avatar)
              WHERE group_id = ?2 AND user_id = ?3",
             params![
                 mailbox_pk.as_slice(),
@@ -227,6 +236,8 @@ impl AnonGroupRepository {
     }
 
     /// Update a member's profile (display name, avatar) without touching mailbox key.
+    ///
+    /// Uses COALESCE to preserve existing profile data when new values are NULL.
     pub fn update_member_profile(
         &self,
         group_id: &AnonGroupId,
@@ -238,7 +249,9 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE anon_group_members
-             SET profile_key = ?1, display_name = ?2, avatar = ?3
+             SET profile_key = COALESCE(?1, profile_key),
+                 display_name = COALESCE(?2, display_name),
+                 avatar = COALESCE(?3, avatar)
              WHERE group_id = ?4 AND user_id = ?5",
             params![
                 profile_key.as_ref().map(|pk| pk.as_slice()),
@@ -342,6 +355,29 @@ impl AnonGroupRepository {
         }
 
         Ok(members)
+    }
+
+    /// Get a member of a group.
+    pub fn get_member(&self, group_id: &AnonGroupId, user_id: &UserId) -> Result<Option<AnonGroupMember>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
+             FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+        )?;
+
+        let result = stmt.query_row(
+            params![
+                group_id.as_bytes().as_slice(),
+                user_id.as_bytes().as_slice(),
+            ],
+            row_to_member,
+        );
+
+        match result {
+            Ok(member) => Ok(Some(member)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
     }
 
     /// Check if a user is a member of a group.
@@ -1037,9 +1073,14 @@ fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroup> {
     // Status column may not exist in older schemas, default to Active
     let status: i32 = row.get(6).unwrap_or(0);
 
+    let owner_id_bytes: Vec<u8> = row.get(7)?;
+    let owner_id = UserId::try_from_slice(&owner_id_bytes)
+        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid owner ID".into()))?;
+
     Ok(AnonGroup {
         id,
         name: row.get(1)?,
+        owner_id,
         my_role: AnonGroupRole::from_i32(row.get(2)?),
         status: AnonGroupStatus::from_i32(status),
         bootstrap_complete: row.get::<_, i32>(3)? != 0,

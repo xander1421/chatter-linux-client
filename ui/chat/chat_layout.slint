@@ -57,6 +57,12 @@ export component ChatLayout inherits Rectangle {
     in property <[PendingAttachmentData]> pending-attachments: [];
     in-out property <bool> composer-is-editing: false;
     in-out property <string> composer-edit-message-id: "";
+    
+    // Reply properties
+    in property <bool> composer-is-replying: false;
+    in property <string> composer-reply-to-sender: "";
+    in property <string> composer-reply-to-timestamp: "";
+    in property <string> composer-reply-preview: "";
 
     // Pinned bar properties (Telegram-style always visible)
     in property <bool> has-pinned-messages: false;
@@ -81,7 +87,7 @@ export component ChatLayout inherits Rectangle {
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string);  // (sender_id, timestamp_ns)
     callback thread-clicked(string);
-    callback more-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback view-attachment(string);  // attachment ID - for viewing attachment in messages
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
@@ -91,6 +97,7 @@ export component ChatLayout inherits Rectangle {
     callback send(string);
     callback send-edit(string, string);  // (message_id, new_text)
     callback cancel-edit();
+    callback cancel-reply();
     callback attachment-clicked();
     callback emoji-clicked();
     callback gif-clicked();
@@ -187,8 +194,8 @@ export component ChatLayout inherits Rectangle {
             thread-clicked(id) => {
                 root.thread-clicked(id);
             }
-            more-clicked(sender-id, timestamp-ns) => {
-                root.more-clicked(sender-id, timestamp-ns);
+            more-clicked(sender-id, timestamp-ns, x, y) => {
+                root.more-clicked(sender-id, timestamp-ns, x, y);
             }
             load-more => {
                 root.load-more();
@@ -217,6 +224,9 @@ export component ChatLayout inherits Rectangle {
                 pending-attachments: root.pending-attachments;
                 is-editing <=> root.composer-is-editing;
                 edit-message-id <=> root.composer-edit-message-id;
+                is-replying: root.composer-is-replying;
+                reply-to-sender: root.composer-reply-to-sender;
+                reply-to-preview: root.composer-reply-preview;
 
                 send(text) => {
                     root.send(text);
@@ -226,6 +236,9 @@ export component ChatLayout inherits Rectangle {
                 }
                 cancel-edit => {
                     root.cancel-edit();
+                }
+                cancel-reply => {
+                    root.cancel-reply();
                 }
                 attachment-clicked => {
                     root.attachment-clicked();

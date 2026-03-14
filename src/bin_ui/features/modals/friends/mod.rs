@@ -44,4 +44,5 @@ pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     // Anonymous DM (private) request actions
     private_requests::wire_accept_private_request(window, ui_ctx);
     private_requests::wire_decline_private_request(window, ui_ctx);
+    private_requests::wire_block_private_request(window, ui_ctx);
 }

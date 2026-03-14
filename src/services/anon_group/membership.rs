@@ -15,6 +15,7 @@ use crate::proto::content_v1::{
     AnonGroupMemberInfo, AnonGroupMemberList, AnonGroupProfileShare, Content,
 };
 use crate::proto::mailbox_v1::EnvelopeType;
+use crate::services::current_user::CurrentUserProvider;
 use crate::services::message::SendDmContentParams;
 use crate::util::time::TimestampNanos;
 
@@ -387,11 +388,14 @@ impl AnonGroupService {
             .ok_or(AnonGroupError::GroupNotFound(group_id))?;
 
         if !group.is_admin_or_owner() {
-            // Not an error - could be a late ack received as non-owner
-            tracing::debug!(
-                "Received JoinAck but not owner/admin for group {}",
+            // SECURITY: If we're not owner/admin, we don't handle JoinAcks.
+            // Regular members learn about new members via MemberList broadcasts from the owner.
+            tracing::warn!(
+                "Rejected JoinAck from {} for group {} - not owner/admin",
+                joiner_id,
                 group_id
             );
+            return Ok(());
         }
 
         // 2. Update member's mailbox key and profile
@@ -447,14 +451,22 @@ impl AnonGroupService {
                 if let Some(pk) = m.profile_key {
                     if let Some(ref name) = m.display_name {
                         if !name.is_empty() {
-                            encrypted_display_name =
-                                crate::crypto::profile_crypto::encrypt_display_name(&pk, name).ok();
+                            match crate::crypto::profile_crypto::encrypt_display_name(&pk, name) {
+                                Ok(enc) => encrypted_display_name = Some(enc),
+                                Err(e) => tracing::warn!("Failed to encrypt display name for {}: {}", m.user_id, e),
+                            }
                         }
                     }
                     if let Some(ref av) = m.avatar {
-                        encrypted_avatar =
-                            crate::crypto::profile_crypto::encrypt_avatar(&pk, av).ok();
+                        if !av.is_empty() {
+                            match crate::crypto::profile_crypto::encrypt_avatar(&pk, av) {
+                                Ok(enc) => encrypted_avatar = Some(enc),
+                                Err(e) => tracing::warn!("Failed to encrypt avatar for {}: {}", m.user_id, e),
+                            }
+                        }
                     }
+                } else {
+                    tracing::debug!("No profile key for member {} in group {} - cannot encrypt profile for broadcast", m.user_id, group_id);
                 }
 
                 AnonGroupMemberInfo {
@@ -520,6 +532,7 @@ impl AnonGroupService {
     pub fn handle_member_list(
         &self,
         group_id: AnonGroupId,
+        sender_id: UserId,
         members: Vec<AnonGroupMemberInfo>,
     ) -> Result<(), AnonGroupError> {
         let current_user = self.current_user_id()?;
@@ -529,6 +542,8 @@ impl AnonGroupService {
             .anon_group_repo
             .get_group(&group_id)?
             .ok_or(AnonGroupError::GroupNotFound(group_id))?;
+
+        let is_local_owner = _group.my_role == AnonGroupRole::Owner;
 
         // Update local member state
         for member_info in members {
@@ -567,22 +582,43 @@ impl AnonGroupService {
                 match (&profile_key, &member_info.encrypted_display_name) {
                     (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
                         match decrypt_display_name(pk, encrypted) {
-                            Ok(name) if !name.is_empty() => Some(name),
-                            _ => None,
+                            Ok(name) if !name.is_empty() => {
+                                tracing::debug!("Decrypted display name for {}: {}", user_id, name);
+                                Some(name)
+                            },
+                            Ok(_) => {
+                                tracing::debug!("Decrypted empty display name for {}", user_id);
+                                None
+                            },
+                            Err(e) => {
+                                tracing::warn!("Failed to decrypt display name for {}: {}", user_id, e);
+                                None
+                            },
                         }
                     }
-                    _ => None,
+                    _ => {
+                        tracing::trace!("No profile key or encrypted name for member {} in list", user_id);
+                        None
+                    },
                 };
 
             let avatar: Option<Vec<u8>> = match (&profile_key, &member_info.encrypted_avatar) {
                 (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    decrypt_avatar(pk, encrypted).ok()
+                    match decrypt_avatar(pk, encrypted) {
+                        Ok(av) => Some(av),
+                        Err(e) => {
+                            tracing::warn!("Failed to decrypt avatar for {}: {}", user_id, e);
+                            None
+                        }
+                    }
                 }
                 _ => None,
             };
 
             // Check if member already exists
-            if self.anon_group_repo.is_member(&group_id, &user_id)? {
+            let is_member = self.anon_group_repo.is_member(&group_id, &user_id)?;
+
+            if is_member {
                 // Update existing member
                 self.anon_group_repo
                     .update_member_role(&group_id, &user_id, role)?;
@@ -597,6 +633,17 @@ impl AnonGroupService {
                     )?;
                 }
             } else {
+                // SECURITY: Only the OWNER can add new members to the group graph.
+                // If an Admin sends a member list with new people, we ignore the new people.
+                if _group.owner_id != sender_id && !is_local_owner {
+                    tracing::warn!(
+                        sender_id = %sender_id,
+                        new_member_id = %user_id,
+                        "Rejected new member addition from non-owner admin"
+                    );
+                    continue;
+                }
+
                 // Add new member
                 let member = if let Some(pk) = mailbox_pk {
                     AnonGroupMember::with_mailbox(group_id, user_id, role, pk)
@@ -715,6 +762,15 @@ impl AnonGroupService {
         Ok(self.anon_group_repo.get_members(group_id)?)
     }
 
+    /// Get a member of a group.
+    pub fn get_member(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+    ) -> Result<Option<AnonGroupMember>, AnonGroupError> {
+        Ok(self.anon_group_repo.get_member(group_id, user_id)?)
+    }
+
     /// Get a member's display name from their group profile.
     pub fn get_member_display_name(
         &self,
@@ -729,6 +785,51 @@ impl AnonGroupService {
     /// Check if a user is a member of a group.
     pub fn is_member(&self, group_id: &AnonGroupId, user_id: &UserId) -> Result<bool, AnonGroupError> {
         Ok(self.anon_group_repo.is_member(group_id, user_id)?)
+    }
+
+    /// Get a member's role in a group.
+    pub fn get_member_role(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+    ) -> Result<Option<AnonGroupRole>, AnonGroupError> {
+        Ok(self.anon_group_repo.get_member_role(group_id, user_id)?)
+    }
+
+    /// Update a member's profile and broadcast the new roster if we are the owner.
+    pub async fn handle_profile_share(
+        &self,
+        group_id: AnonGroupId,
+        member_id: UserId,
+        profile_key: Option<[u8; 32]>,
+        display_name: Option<String>,
+        avatar: Option<Vec<u8>>,
+    ) -> Result<(), AnonGroupError> {
+        // 1. Verify membership
+        if !self.anon_group_repo.is_member(&group_id, &member_id)? {
+            return Err(AnonGroupError::MemberNotFound(member_id));
+        }
+
+        // 2. Update local profile
+        self.anon_group_repo.update_member_profile(
+            &group_id,
+            &member_id,
+            profile_key,
+            display_name,
+            avatar,
+        )?;
+
+        // 3. If we are owner, broadcast the update to everyone
+        let group = self
+            .anon_group_repo
+            .get_group(&group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(group_id))?;
+
+        if group.is_owner() {
+            self.broadcast_member_list(&group_id).await?;
+        }
+
+        Ok(())
     }
 
     /// Update a member's mailbox public key and profile (sync, no encryption).
@@ -771,6 +872,56 @@ impl AnonGroupService {
     ) -> Result<(), AnonGroupError> {
         self.anon_group_repo
             .update_member_profile(group_id, user_id, profile_key, display_name, avatar)?;
+        Ok(())
+    }
+
+    /// Broadcast profile update to all groups where we are the owner.
+    ///
+    /// Called when user updates their profile to notify all owned groups.
+    pub async fn broadcast_profile_to_owned_groups(&self) -> Result<(), AnonGroupError> {
+        let my_user_id = CurrentUserProvider::current_user_id(&*self.settings_repo)?;
+        let groups = self.anon_group_repo.list_active_groups()?;
+        
+        for group in groups {
+            // Only broadcast to groups we own
+            if group.owner_id != my_user_id {
+                continue;
+            }
+            
+            // Get group members
+            let members = self.anon_group_repo.get_members(&group.id)?;
+            
+            // Send profile share to each member
+            for member in &members {
+                // Skip ourselves
+                if member.user_id == my_user_id {
+                    continue;
+                }
+                
+                // Send profile share to this member
+                if let Some(mailbox_pk) = member.mailbox_pk.as_ref() {
+                    let pk_bytes: &[u8] = mailbox_pk;
+                    if pk_bytes.len() == 32 {
+                        let mut pk = [0u8; 32];
+                        pk.copy_from_slice(pk_bytes);
+                        
+                        if let Err(e) = self.send_profile_share(&group.id, &member.user_id, &pk).await {
+                            tracing::warn!(
+                                "Failed to send profile update to member {} in group {}: {}",
+                                member.user_id, group.id, e
+                            );
+                        }
+                    }
+                }
+            }
+            
+            tracing::info!(
+                "Broadcasted profile update to {} members in owned group {}",
+                members.len() - 1, // Minus ourselves
+                group.id
+            );
+        }
+        
         Ok(())
     }
 

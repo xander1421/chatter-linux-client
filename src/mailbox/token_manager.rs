@@ -1,4 +1,4 @@
-//! Token manager for blind-signed mailbox tokens.
+//! Token manager for blind-signed mailbox and call room tokens.
 //!
 //! Manages the full lifecycle of Chaum blind signature tokens:
 //! - Fetching server's RSA public key
@@ -7,6 +7,10 @@
 //! - Unblinding signatures to create usable tokens
 //! - Storing tokens securely in SQLCipher
 //! - Tracking daily quota
+//!
+//! Supports two token types:
+//! - **Mailbox tokens**: For creating ephemeral mailboxes (10/day quota)
+//! - **Call room tokens**: For joining anonymous call rooms (5/day quota)
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,11 +26,17 @@ use crate::mailbox::blind_signature::{
 use crate::network::grpc::MailboxClient;
 use crate::storage::Database;
 
-/// Default number of tokens to request at once.
+/// Default number of mailbox tokens to request at once.
 pub const DEFAULT_TOKEN_REQUEST_COUNT: u32 = 5;
 
-/// Request more tokens when below this threshold.
+/// Request more mailbox tokens when below this threshold.
 pub const MIN_TOKEN_THRESHOLD: u32 = 2;
+
+/// Default number of call room tokens to request at once.
+pub const DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT: u32 = 3;
+
+/// Request more call room tokens when below this threshold.
+pub const MIN_CALL_ROOM_TOKEN_THRESHOLD: u32 = 1;
 
 /// A ready-to-use mailbox token.
 ///
@@ -51,6 +61,33 @@ pub struct QuotaStatus {
     /// Remaining tokens that can be requested today.
     pub remaining: u32,
     /// When the quota resets (Unix timestamp milliseconds).
+    pub resets_at: u64,
+}
+
+/// A ready-to-use call room token.
+///
+/// Contains the ephemeral Ed25519 keypair and its blind signature.
+/// The signature proves the right to join/create an anonymous call room.
+#[derive(Clone)]
+pub struct CallRoomToken {
+    /// Unique token identifier.
+    pub id: String,
+    /// Ed25519 public key (32 bytes).
+    pub public_key: Vec<u8>,
+    /// Ed25519 private key (64 bytes) for signing challenges.
+    pub private_key: Vec<u8>,
+    /// Unblinded RSA signature over the public key.
+    pub signature: Vec<u8>,
+    /// Message randomizer for signature verification.
+    pub randomizer: Option<Vec<u8>>,
+}
+
+/// Quota status for call room token requests.
+#[derive(Debug, Clone)]
+pub struct CallRoomQuotaStatus {
+    /// Remaining tokens that can be requested today.
+    pub remaining: u32,
+    /// When the quota resets (Unix timestamp nanoseconds).
     pub resets_at: u64,
 }
 
@@ -577,6 +614,382 @@ impl TokenManager {
             .and_then(|t| t.with_nanosecond(0))
             .unwrap_or(tomorrow);
         midnight.timestamp_nanos_opt().unwrap_or(0) as u64
+    }
+
+    // ========================================================================
+    // Call Room Token Methods
+    // ========================================================================
+
+    /// Request new call room tokens from the server.
+    ///
+    /// Uses the same blind signature infrastructure as mailbox tokens,
+    /// but with separate storage tables and quota tracking.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - MailboxClient for server communication
+    /// * `count` - Number of tokens to request
+    ///
+    /// # Returns
+    ///
+    /// The number of tokens successfully acquired.
+    pub async fn request_call_room_tokens(
+        &self,
+        client: &mut MailboxClient,
+        count: u32,
+    ) -> Result<u32, MailboxError> {
+        tracing::info!("TokenManager: request_call_room_tokens called, count={}", count);
+
+        // Check quota
+        self.reset_call_room_quota_if_needed()?;
+        let quota = self.get_call_room_quota_status()?;
+        if quota.remaining == 0 {
+            tracing::warn!("TokenManager: call room quota exhausted!");
+            return Err(MailboxError::QuotaExhausted);
+        }
+
+        let request_count = count.min(quota.remaining);
+        tracing::info!("TokenManager: will request {} call room tokens", request_count);
+
+        // Get/refresh server key (shared with mailbox tokens)
+        let server_key = self.refresh_server_key(client).await?;
+
+        // Generate ephemeral keypairs and blind them
+        let mut blinded_keys = Vec::with_capacity(request_count as usize);
+        let mut pending_ops = Vec::with_capacity(request_count as usize);
+
+        for _ in 0..request_count {
+            let mut secret_bytes = [0u8; 32];
+            rand::fill(&mut secret_bytes);
+            let signing_key = SigningKey::from_bytes(&secret_bytes);
+            let verifying_key = VerifyingKey::from(&signing_key);
+
+            let public_key_bytes = verifying_key.to_bytes().to_vec();
+            let private_key_bytes = signing_key.to_keypair_bytes().to_vec();
+
+            let blinding_op = blind_key(&server_key, &public_key_bytes)?;
+
+            blinded_keys.push(blinding_op.blinded_message.clone());
+            pending_ops.push((
+                Uuid::new_v4().to_string(),
+                public_key_bytes,
+                private_key_bytes,
+                blinding_op,
+            ));
+        }
+
+        // Store pending blinds in call_room_pending_blinds table
+        for (id, pub_key, priv_key, op) in &pending_ops {
+            self.store_call_room_pending_blind(
+                id,
+                pub_key,
+                priv_key,
+                &op.blinded_message,
+                &op.secret,
+                &op.randomizer,
+                &server_key.key_id,
+            )?;
+        }
+
+        // Request signatures from server
+        let response = client
+            .get_mailbox_tokens(request_count as i32, blinded_keys)
+            .await
+            .map_err(|e| {
+                tracing::error!("TokenManager: get_mailbox_tokens (call room) failed: {}", e);
+                MailboxError::Network(e.to_string())
+            })?;
+
+        // Update call room quota
+        self.update_call_room_quota(response.remaining_quota as u32, response.quota_resets_at)?;
+
+        // Process each signature
+        let mut success_count = 0;
+        for (i, blinded_sig) in response.blinded_signatures.iter().enumerate() {
+            if let Some((id, pub_key, priv_key, op)) = pending_ops.get(i) {
+                match unblind(&server_key, blinded_sig, &op.secret, &op.randomizer, pub_key) {
+                    Ok(signature) => {
+                        if self
+                            .store_call_room_ready_token(
+                                id,
+                                pub_key,
+                                priv_key,
+                                &signature,
+                                &op.randomizer,
+                                &server_key.key_id,
+                            )
+                            .is_ok()
+                        {
+                            let _ = self.delete_call_room_pending_blind(id);
+                            success_count += 1;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to unblind call room signature: {}", e);
+                    }
+                }
+            }
+        }
+
+        tracing::info!("TokenManager: request_call_room_tokens complete, got {} tokens", success_count);
+        Ok(success_count)
+    }
+
+    /// Store a pending call room blinding operation.
+    #[allow(clippy::too_many_arguments)]
+    fn store_call_room_pending_blind(
+        &self,
+        id: &str,
+        ephemeral_pk: &[u8],
+        ephemeral_sk: &[u8],
+        blinded_message: &[u8],
+        secret: &BlindingSecret,
+        randomizer: &MessageRandomizer,
+        server_key_id: &str,
+    ) -> Result<(), MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
+
+        conn.execute(
+            "INSERT INTO call_room_pending_blinds
+             (id, ephemeral_public_key, ephemeral_private_key, blinded_message, blinding_secret, message_randomizer, server_key_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                id,
+                ephemeral_pk,
+                ephemeral_sk,
+                blinded_message,
+                secret.as_bytes(),
+                randomizer_bytes,
+                server_key_id,
+                now
+            ],
+        )
+        .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Delete a pending call room blinding operation.
+    fn delete_call_room_pending_blind(&self, id: &str) -> Result<(), MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        conn.execute("DELETE FROM call_room_pending_blinds WHERE id = ?1", [id])
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Store a ready-to-use call room token.
+    fn store_call_room_ready_token(
+        &self,
+        id: &str,
+        ephemeral_pk: &[u8],
+        ephemeral_sk: &[u8],
+        signature: &[u8],
+        randomizer: &MessageRandomizer,
+        server_key_id: &str,
+    ) -> Result<(), MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
+
+        conn.execute(
+            "INSERT INTO call_room_tokens
+             (id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer, server_key_id, created_at, used_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+            rusqlite::params![
+                id,
+                ephemeral_pk,
+                ephemeral_sk,
+                signature,
+                randomizer_bytes,
+                server_key_id,
+                now
+            ],
+        )
+        .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Get an available (unused) call room token.
+    ///
+    /// Returns the oldest unused token or None if no tokens available.
+    pub fn get_available_call_room_token(&self) -> Result<Option<CallRoomToken>, MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        let result: Option<(String, Vec<u8>, Vec<u8>, Vec<u8>, Option<Vec<u8>>)> = conn
+            .query_row(
+                "SELECT id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer
+                 FROM call_room_tokens WHERE used_at IS NULL ORDER BY created_at ASC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .ok();
+
+        match result {
+            Some((id, public_key, private_key, signature, randomizer)) => Ok(Some(CallRoomToken {
+                id,
+                public_key,
+                private_key,
+                signature,
+                randomizer,
+            })),
+            None => Ok(None),
+        }
+    }
+
+    /// Mark a call room token as used.
+    pub fn mark_call_room_token_used(&self, token_id: &str) -> Result<(), MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+
+        let rows = conn
+            .execute(
+                "UPDATE call_room_tokens SET used_at = ?1 WHERE id = ?2 AND used_at IS NULL",
+                rusqlite::params![now, token_id],
+            )
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        if rows == 0 {
+            return Err(MailboxError::TokenNotFound(token_id.to_string()));
+        }
+
+        Ok(())
+    }
+
+    /// Count available (unused) call room tokens.
+    pub fn available_call_room_token_count(&self) -> Result<u32, MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM call_room_tokens WHERE used_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        Ok(count as u32)
+    }
+
+    /// Get current call room quota status.
+    pub fn get_call_room_quota_status(&self) -> Result<CallRoomQuotaStatus, MailboxError> {
+        let result: Option<(i64, i64)> = {
+            let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+            conn.query_row(
+                "SELECT tokens_used_today, quota_resets_at FROM call_room_quota WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok()
+        };
+
+        match result {
+            Some((used_today, resets_at)) => {
+                // Call room quota: 5 tokens per day
+                let max_quota = 5u32;
+                let remaining = max_quota.saturating_sub(used_today as u32);
+                Ok(CallRoomQuotaStatus {
+                    remaining,
+                    resets_at: resets_at as u64,
+                })
+            }
+            None => {
+                let tomorrow_midnight = self.next_midnight_nanos();
+                self.initialize_call_room_quota(tomorrow_midnight)?;
+                Ok(CallRoomQuotaStatus {
+                    remaining: 5,
+                    resets_at: tomorrow_midnight,
+                })
+            }
+        }
+    }
+
+    /// Reset call room quota if the reset time has passed.
+    pub fn reset_call_room_quota_if_needed(&self) -> Result<(), MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        let now_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as i64)
+            .unwrap_or(0);
+
+        let result: Option<i64> = conn
+            .query_row(
+                "SELECT quota_resets_at FROM call_room_quota WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+
+        if let Some(resets_at) = result {
+            if now_nanos >= resets_at {
+                let tomorrow_midnight = self.next_midnight_nanos();
+                let now = Utc::now().to_rfc3339();
+
+                conn.execute(
+                    "UPDATE call_room_quota SET tokens_used_today = 0, quota_resets_at = ?1, last_updated = ?2 WHERE id = 1",
+                    rusqlite::params![tomorrow_midnight as i64, now],
+                )
+                .map_err(|e| MailboxError::Storage(e.to_string()))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Initialize call room quota tracking.
+    fn initialize_call_room_quota(&self, resets_at: u64) -> Result<(), MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT OR IGNORE INTO call_room_quota (id, tokens_used_today, quota_resets_at, last_updated)
+             VALUES (1, 0, ?1, ?2)",
+            rusqlite::params![resets_at as i64, now],
+        )
+        .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Update call room quota from server response.
+    fn update_call_room_quota(&self, remaining: u32, resets_at: u64) -> Result<(), MailboxError> {
+        let conn = self.db.connection().map_err(|e| MailboxError::Storage(e.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+
+        let max_quota = 5u32;
+        let used = max_quota.saturating_sub(remaining);
+
+        conn.execute(
+            "INSERT OR REPLACE INTO call_room_quota (id, tokens_used_today, quota_resets_at, last_updated)
+             VALUES (1, ?1, ?2, ?3)",
+            rusqlite::params![used as i64, resets_at as i64, now],
+        )
+        .map_err(|e| MailboxError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Ensure we have enough call room tokens available.
+    ///
+    /// Requests more tokens if below the minimum threshold.
+    pub async fn ensure_call_room_tokens_available(
+        &self,
+        client: &mut MailboxClient,
+    ) -> Result<(), MailboxError> {
+        let count = self.available_call_room_token_count()?;
+        if count < MIN_CALL_ROOM_TOKEN_THRESHOLD {
+            let needed = DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT.saturating_sub(count);
+            if needed > 0 {
+                self.request_call_room_tokens(client, needed).await?;
+            }
+        }
+        Ok(())
     }
 }
 

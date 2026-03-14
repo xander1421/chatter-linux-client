@@ -417,6 +417,31 @@ impl KeyStore {
         Ok(())
     }
 
+    /// Delete a session record.
+    ///
+    /// Used when archiving sessions due to identity key change.
+    pub fn delete_session(&self, address: &str) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows_affected = conn.execute(
+            "DELETE FROM sessions WHERE address = ?1",
+            params![address],
+        )?;
+        Ok(rows_affected > 0)
+    }
+
+    /// Delete all sessions for a user (all devices).
+    ///
+    /// Address format is "user_id:device_id", so we match on "user_id:%".
+    pub fn delete_sessions_for_user(&self, user_id: &str) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let pattern = format!("{}:%", user_id);
+        let rows_affected = conn.execute(
+            "DELETE FROM sessions WHERE address LIKE ?1",
+            params![pattern],
+        )?;
+        Ok(rows_affected as u32)
+    }
+
     // ========================================================================
     // Sender Keys (Group)
     // ========================================================================
@@ -536,6 +561,115 @@ impl KeyStore {
             "DELETE FROM sender_keys WHERE distribution_id = ?1",
             [distribution_id],
         )?;
+        // Also clear metadata for this channel
+        conn.execute(
+            "DELETE FROM sender_key_metadata WHERE channel_id = ?1",
+            [distribution_id],
+        )?;
         Ok(())
+    }
+
+    // ========================================================================
+    // Sender Key Rotation Tracking
+    // ========================================================================
+
+    /// Maximum age for a sender key before rotation (24 hours in seconds).
+    pub const SENDER_KEY_MAX_AGE_SECS: i64 = 24 * 60 * 60;
+
+    /// Maximum messages per sender key before rotation.
+    pub const SENDER_KEY_MAX_MESSAGES: i64 = 100;
+
+    /// Initialize sender key metadata when creating a new sender key.
+    pub fn init_sender_key_metadata(&self, channel_id: &str) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO sender_key_metadata (channel_id, created_at, message_count, last_used_at)
+             VALUES (?1, ?2, 0, ?2)
+             ON CONFLICT(channel_id) DO UPDATE SET
+                 created_at = excluded.created_at,
+                 message_count = 0,
+                 last_used_at = excluded.last_used_at",
+            params![channel_id, now],
+        )?;
+
+        Ok(())
+    }
+
+    /// Increment message count for a sender key.
+    /// Returns the new message count.
+    pub fn increment_sender_key_message_count(&self, channel_id: &str) -> Result<i64, StorageError> {
+        let conn = self.db.connection()?;
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "UPDATE sender_key_metadata
+             SET message_count = message_count + 1, last_used_at = ?2
+             WHERE channel_id = ?1",
+            params![channel_id, now],
+        )?;
+
+        let count: i64 = conn.query_row(
+            "SELECT message_count FROM sender_key_metadata WHERE channel_id = ?1",
+            params![channel_id],
+            |row| row.get(0),
+        ).unwrap_or(0);
+
+        Ok(count)
+    }
+
+    /// Check if a sender key needs rotation based on age or message count.
+    /// Returns (needs_rotation, reason) where reason is "age", "messages", or empty.
+    pub fn should_rotate_sender_key(&self, channel_id: &str) -> Result<(bool, &'static str), StorageError> {
+        let conn = self.db.connection()?;
+
+        let result: Result<(String, i64), _> = conn.query_row(
+            "SELECT created_at, message_count FROM sender_key_metadata WHERE channel_id = ?1",
+            params![channel_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
+
+        match result {
+            Ok((created_at_str, message_count)) => {
+                // Check message count first (cheaper)
+                if message_count >= Self::SENDER_KEY_MAX_MESSAGES {
+                    return Ok((true, "messages"));
+                }
+
+                // Check age
+                if let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(&created_at_str) {
+                    let age = Utc::now().signed_duration_since(created_at.with_timezone(&Utc));
+                    if age.num_seconds() >= Self::SENDER_KEY_MAX_AGE_SECS {
+                        return Ok((true, "age"));
+                    }
+                }
+
+                Ok((false, ""))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                // No metadata means no key exists, so no rotation needed
+                Ok((false, ""))
+            }
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Get sender key metadata for a channel.
+    /// Returns (created_at, message_count) or None if not found.
+    pub fn get_sender_key_metadata(&self, channel_id: &str) -> Result<Option<(String, i64)>, StorageError> {
+        let conn = self.db.connection()?;
+
+        let result: Result<(String, i64), _> = conn.query_row(
+            "SELECT created_at, message_count FROM sender_key_metadata WHERE channel_id = ?1",
+            params![channel_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
+
+        match result {
+            Ok(data) => Ok(Some(data)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
     }
 }

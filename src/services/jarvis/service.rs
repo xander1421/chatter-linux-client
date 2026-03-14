@@ -62,6 +62,72 @@ impl JarvisService {
     // Main API
     // ========================================================================
 
+    /// Process user input to detect and handle Jarvis commands.
+    ///
+    /// Returns true if the input was handled as a Jarvis command, false otherwise.
+    /// This allows the UI to simply check if Jarvis handled the input.
+    ///
+    /// Handles:
+    /// - `/ask <question>` - Direct Jarvis query
+    /// - `@Jarvis <message>` or `@jarvis <message>` - Mention-based query
+    /// - `/jarvis <command>` - Various Jarvis commands (stats, clear, etc.)
+    pub async fn process_input(
+        &self,
+        text: &str,
+        context: &JarvisContext,
+        author_id: Option<&UserId>,
+    ) -> Result<bool, JarvisError> {
+        // Check for /ask command
+        if let Some(query) = text.strip_prefix("/ask ") {
+            let _response = self.ask(context, query, author_id).await?;
+            // Emit event for UI to display response
+            // TODO: Emit JarvisResponse event on EventBus
+            tracing::info!("Jarvis handled /ask command");
+            return Ok(true);
+        }
+
+        // Check for @Jarvis or @jarvis mention
+        if text.starts_with("@Jarvis ") || text.starts_with("@jarvis ") {
+            let query = text.trim_start_matches("@Jarvis ")
+                .trim_start_matches("@jarvis ")
+                .trim();
+            if !query.is_empty() {
+                let _response = self.ask(context, query, author_id).await?;
+                // TODO: Emit JarvisResponse event on EventBus
+                tracing::info!("Jarvis handled @mention");
+                return Ok(true);
+            }
+        }
+
+        // Check for /jarvis commands
+        if text.starts_with("/jarvis") {
+            if let Some(cmd) = text.strip_prefix("/jarvis ") {
+                match cmd {
+                    "stats" => {
+                        let _stats = self.memory_manager.get_stats(context)?;
+                        // TODO: Emit JarvisStats event
+                        tracing::info!("Jarvis handled stats command");
+                        return Ok(true);
+                    }
+                    "clear" => {
+                        // TODO: Implement clear_context method in MemoryManager
+                        // self.memory_manager.clear_context(context)?;
+                        // TODO: Emit JarvisCleared event
+                        tracing::info!("Jarvis clear command not yet implemented");
+                        return Ok(true);
+                    }
+                    _ => {
+                        // Unknown jarvis command, let it through as regular message
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+
+        // Not a Jarvis command
+        Ok(false)
+    }
+
     /// Ask Jarvis a question with full context.
     ///
     /// Retrieves relevant context from memory and the knowledge graph,

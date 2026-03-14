@@ -7,10 +7,10 @@ use std::path::Path;
 
 use crate::error::MediaError;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod gstreamer;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use self::gstreamer::GStreamerDecoder as PlatformDecoder;
 
 // Future platform implementations
@@ -23,11 +23,6 @@ pub use self::mediacodec::MediaCodecDecoder as PlatformDecoder;
 mod videotoolbox;
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use self::videotoolbox::VideoToolboxDecoder as PlatformDecoder;
-
-#[cfg(target_os = "windows")]
-mod mediafoundation;
-#[cfg(target_os = "windows")]
-pub use self::mediafoundation::MediaFoundationDecoder as PlatformDecoder;
 
 /// Information about an opened video.
 #[derive(Debug, Clone)]
@@ -140,12 +135,12 @@ pub trait VideoDecoder: Send {
 
 /// Create a new platform-specific decoder.
 pub fn create_decoder() -> Result<Box<dyn VideoDecoder>, MediaError> {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         Ok(Box::new(PlatformDecoder::new()?))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         Err(MediaError::UnsupportedFormat("Video decoding not implemented for this platform".to_string()))
     }

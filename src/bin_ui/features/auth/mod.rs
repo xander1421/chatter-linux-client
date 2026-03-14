@@ -2,12 +2,12 @@
 //!
 //! Handles login, register, logout, and inbox event processing.
 
-mod channel_events;
 pub mod inbox;
 mod inbox_events;
 mod initial_data;
 mod login;
 mod logout;
+pub mod presence_integration;
 mod register;
 
 pub use inbox::{handle_inbox_event, update_reaction_summary};
@@ -25,6 +25,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     register::wire_register(window, ui_ctx);
     logout::wire_logout(window, ui_ctx);
 
-    // Wire channel bootstrap handler for pending message flush
-    inbox::wire_channel_bootstrap_handler(ui_ctx);
+    // Channel bootstrap is now handled by ChannelBootstrapService in the service layer
+    // Started automatically in main.rs via AppContext::start_channel_bootstrap_service()
 }

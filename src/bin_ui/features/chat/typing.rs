@@ -72,6 +72,7 @@ pub fn clear_outgoing_typing() {
 
 /// Wire typing indicator callback for DM and channel conversations.
 pub fn wire_typing_changed(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let ui_ctx_for_activity = ui_ctx.clone();
     let auth_state = ui_ctx.auth_state.clone();
     let mailbox_manager = ui_ctx.mailbox_manager.clone();
     let chat_state = ui_ctx.chat_state.clone();
@@ -82,6 +83,13 @@ pub fn wire_typing_changed(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
 
     window.on_typing_changed(move |is_typing: bool| {
+        // Track user activity for presence updates
+        if is_typing {
+            let ui_ctx = ui_ctx_for_activity.clone();
+            tokio::spawn(async move {
+                crate::bin_ui::features::auth::presence_integration::track_activity(&ui_ctx).await;
+            });
+        }
         // Get current conversation context
         let (selected_dm_id, peer_user_id, selected_channel_id, selected_private_group_id) = weak_window
             .upgrade()

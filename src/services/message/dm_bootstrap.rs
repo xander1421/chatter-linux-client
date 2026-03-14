@@ -188,7 +188,7 @@ impl MessageService {
 
         // Check if we already received their bootstrap (conversation state might be pending)
         let already_pending = conversation
-            .map(|c| c.our_mailbox.is_some() || c.peer_mailbox.is_some())
+            .map(|c| !c.needs_bootstrap())
             .unwrap_or(false);
 
         if already_pending {

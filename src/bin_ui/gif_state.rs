@@ -662,6 +662,55 @@ pub fn resume() {
     });
 }
 
+/// Try to start viewer animation from existing inline frames (no decryption needed).
+///
+/// Returns `Some(first_frame)` if inline frames were found and copied to viewer,
+/// or `None` if this attachment isn't registered as an inline GIF.
+///
+/// This is an optimization: if a GIF is already animating in a message bubble,
+/// we reuse those decoded frames instead of re-decrypting and re-decoding.
+pub fn start_viewer_from_inline(
+    attachment_id: &str,
+    window: &Weak<MainWindow>,
+) -> Option<Image> {
+    // Check if we have inline frames for this attachment
+    let inline_state = INLINE_GIFS.with(|gifs| {
+        gifs.borrow().get(attachment_id).cloned()
+    });
+
+    let state = inline_state?;
+
+    if state.frames.is_empty() {
+        return None;
+    }
+
+    let first_frame = state.frames.first().cloned().unwrap_or_default();
+    let frame_count = state.frames.len();
+
+    tracing::info!(
+        "Reusing {} inline GIF frames for viewer: {} (no decryption needed)",
+        frame_count,
+        attachment_id
+    );
+
+    // Copy frames to viewer state
+    let viewer_state = ViewerGifState {
+        frames: state.frames,
+        delays: state.delays,
+        current_frame: 0,
+        playing: true,
+    };
+
+    VIEWER_GIF_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(viewer_state);
+    });
+
+    // Start viewer animation timer
+    start_viewer_timer(window.clone());
+
+    Some(first_frame)
+}
+
 /// Stop and clean up image viewer GIF animation.
 pub fn stop_gif_animation() {
     // Stop timer

@@ -12,6 +12,7 @@ export component RegisterPage inherits Rectangle {
     in-out property <string> username: "";
     in-out property <string> password: "";
     in-out property <string> confirm-password: "";
+    in-out property <string> pin: "";  // 6-digit PIN for SVR
     in property <bool> loading: false;
     in property <string> error: "";
     in property <image> avatar-source;
@@ -24,10 +25,12 @@ export component RegisterPage inherits Rectangle {
     property <bool> username-empty: username == "";
     property <bool> password-empty: password == "";
     property <bool> confirm-password-empty: confirm-password == "";
+    property <bool> pin-empty: pin == "";
+    property <bool> pin-valid: true;  // Validated in Rust before submission
     property <bool> passwords-match: password == confirm-password;
-    property <bool> fields-valid: !display-name-empty && !username-empty && !password-empty && !confirm-password-empty && passwords-match;
+    property <bool> fields-valid: !display-name-empty && !username-empty && !password-empty && !confirm-password-empty && !pin-empty && pin-valid && passwords-match;
 
-    callback register(string, string, string);
+    callback register(string, string, string, string);  // username, password, display_name, pin
     callback select-avatar();
     callback select-default-avatar(int);
     callback go-to-login();
@@ -184,47 +187,86 @@ export component RegisterPage inherits Rectangle {
                     }
                 }
 
-                // Password field with label
-                VerticalLayout {
-                    spacing: Spacing.xs;
+                // Password fields in a single row
+                HorizontalLayout {
+                    spacing: Spacing.md;
+                    width: 100%;
 
-                    Text {
-                        text: "Password";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
+                    // Password field with label
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: "Password";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                        }
+
+                        Input {
+                            placeholder: "Create a strong password";
+                            password: true;
+                            text <=> root.password;
+                            disabled: root.loading;
+                            error: submitted && password-empty;
+                            error-message: submitted && password-empty ? "Password is required" : "";
+                        }
                     }
 
-                    Input {
-                        placeholder: "Create a strong password";
-                        password: true;
-                        text <=> root.password;
-                        disabled: root.loading;
-                        error: submitted && password-empty;
-                        error-message: submitted && password-empty ? "Password is required" : "";
+                    // Confirm password field with label
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: "Confirm Password";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                        }
+
+                        Input {
+                            placeholder: "Enter password again";
+                            password: true;
+                            text <=> root.confirm-password;
+                            disabled: root.loading;
+                            error: submitted && (confirm-password-empty || (!confirm-password-empty && !passwords-match));
+                            error-message: {
+                                if submitted && confirm-password-empty {
+                                    "Please confirm your password"
+                                } else if submitted && !passwords-match {
+                                    "Passwords do not match"
+                                } else {
+                                    ""
+                                }
+                            };
+                        }
                     }
                 }
 
-                // Confirm password field with label
+                // PIN field with label
                 VerticalLayout {
                     spacing: Spacing.xs;
 
                     Text {
-                        text: "Confirm Password";
+                        text: "6-Digit PIN";
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                     }
 
+                    Text {
+                        text: "For account recovery (remember this!)";
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                    }
+
                     Input {
-                        placeholder: "Enter password again";
-                        password: true;
-                        text <=> root.confirm-password;
+                        placeholder: "6-digit PIN (e.g., 123456)";
+                        text <=> root.pin;
                         disabled: root.loading;
-                        error: submitted && (confirm-password-empty || (!confirm-password-empty && !passwords-match));
+                        error: submitted && pin-empty;
                         error-message: {
-                            if submitted && confirm-password-empty {
-                                "Please confirm your password"
-                            } else if submitted && !passwords-match {
-                                "Passwords do not match"
+                            if submitted && pin-empty {
+                                "PIN is required for account recovery (6 digits)"
                             } else {
                                 ""
                             }
@@ -263,7 +305,7 @@ export component RegisterPage inherits Rectangle {
                     clicked => {
                         submitted = true;
                         if fields-valid {
-                            root.register(root.username, root.password, root.display-name);
+                            root.register(root.username, root.password, root.display-name, root.pin);
                         }
                     }
                 }

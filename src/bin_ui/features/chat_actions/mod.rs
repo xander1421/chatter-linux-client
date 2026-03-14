@@ -31,6 +31,7 @@ mod video_player;
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     message_actions::wire_message_clicked(window);
     message_actions::wire_reply_clicked(window, ui_ctx);
+    message_actions::wire_cancel_reply(window);
     message_actions::wire_react_clicked(window);
     message_actions::wire_thread_clicked(window, ui_ctx);
     message_actions::wire_close_image_viewer(window);

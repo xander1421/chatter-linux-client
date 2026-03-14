@@ -22,6 +22,8 @@ export component MessageItem inherits Rectangle {
     in property <string> sender-name: "";
     in property <string> sender-initials: "";
     in property <string> sender-avatar-url: "";
+    in property <image> sender-avatar-source;
+    in property <bool> has-avatar: false;
 
     // Content
     in property <string> content: "";
@@ -69,7 +71,7 @@ export component MessageItem inherits Rectangle {
     callback reply-clicked(string, string);
     callback react-clicked(string, string);
     callback thread-clicked(string);
-    callback more-clicked(string, string);
+    callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback message-clicked(string);
     callback attachment-clicked(string);
     callback audio-seek(string, float);
@@ -156,7 +158,7 @@ export component MessageItem inherits Rectangle {
                 }
 
                 // More button
-                Rectangle {
+                more-btn := Rectangle {
                     height: 24px;
                     width: 24px;
                     background: more-touch.has-hover ? Colors.surface-hover : transparent;
@@ -174,7 +176,10 @@ export component MessageItem inherits Rectangle {
                     more-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => {
-                            root.more-clicked(root.sender-id, root.timestamp-ns);
+                            // Pass absolute position of button for menu placement
+                            root.more-clicked(root.sender-id, root.timestamp-ns,
+                                more-btn.absolute-position.x,
+                                more-btn.absolute-position.y + more-btn.height);
                         }
                     }
                 }
@@ -317,6 +322,7 @@ export component MessageItem inherits Rectangle {
             // Avatar for others in channels (before bubble)
             if !root.is-own && !root.is-dm && root.show-sender: Avatar {
                 size: Spacing.avatar-sm;
+                source: root.sender-avatar-source;
                 fallback-text: root.sender-initials;
             }
 
@@ -725,12 +731,13 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
-                        // Timestamp row (own: bottom-left, others: bottom-right)
+                        // Timestamp + reactions row
+                        // Own: [timestamp status] --- [reactions]
+                        // Others: [reactions] --- [edited timestamp]
                         HorizontalLayout {
-                            alignment: root.is-own ? start : end;
                             spacing: Spacing.xs;
 
-                            // Own messages: timestamp + status on left
+                            // Own messages: timestamp+status on LEFT
                             if root.is-own: HorizontalLayout {
                                 spacing: 4px;
 
@@ -748,7 +755,6 @@ export component MessageItem inherits Rectangle {
                                 }
 
                                 // Delivery status checkmarks
-                                // ✓ = sent, ✓✓ = delivered, ✓✓ (blue) = read
                                 Text {
                                     text: root.delivery-status == "sent" ? "✓" : "✓✓";
                                     color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
@@ -756,7 +762,38 @@ export component MessageItem inherits Rectangle {
                                 }
                             }
 
-                            // Others' messages: timestamp on right
+                            // Others' messages: reactions on LEFT
+                            if !root.is-own && root.has-reactions: Text {
+                                text: root.reaction-summary;
+                                color: Colors.text-secondary;
+                                font-size: 11px;
+                                vertical-alignment: center;
+
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
+                                }
+                            }
+
+                            // Spacer
+                            Rectangle {
+                                horizontal-stretch: 1;
+                            }
+
+                            // Own messages: reactions on RIGHT
+                            if root.is-own && root.has-reactions: Text {
+                                text: root.reaction-summary;
+                                color: Colors.text-secondary;
+                                font-size: 11px;
+                                vertical-alignment: center;
+
+                                TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
+                                }
+                            }
+
+                            // Others' messages: timestamp on RIGHT
                             if !root.is-own: HorizontalLayout {
                                 spacing: 4px;
 
@@ -777,34 +814,14 @@ export component MessageItem inherits Rectangle {
                     }
                 }
 
-                // Reactions and thread (below bubble)
-                if root.has-reactions || root.reply-count > 0: HorizontalLayout {
+                // Thread replies indicator (below bubble)
+                if root.reply-count > 0: HorizontalLayout {
                     spacing: Spacing.sm;
                     alignment: root.is-own ? end : start;
                     padding-left: Spacing.xs;
                     padding-right: Spacing.xs;
 
-                    if root.has-reactions: Rectangle {
-                        height: 22px;
-                        width: reactions-text.preferred-width + Spacing.sm;
-                        background: Colors.surface;
-                        border-radius: Spacing.radius-sm;
-
-                        reactions-text := Text {
-                            x: Spacing.xs;
-                            text: root.reaction-summary;
-                            color: Colors.text-secondary;
-                            font-size: Typography.xs;
-                            vertical-alignment: center;
-                        }
-
-                        reactions-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
-                        }
-                    }
-
-                    if root.reply-count > 0: Rectangle {
+                    Rectangle {
                         height: 22px;
                         width: thread-layout.preferred-width + Spacing.sm;
 

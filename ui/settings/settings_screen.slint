@@ -32,8 +32,8 @@ export component SettingsScreen inherits Rectangle {
     in property <int> prekey-count: 0;
 
     // AI settings
-    in-out property <bool> local-ai-enabled: false;
-    in-out property <string> local-ai-model-id: "lmstudio-community/Qwen2.5-7B-Instruct-GGUF";
+    in-out property <bool> local-ai-enabled: true;
+    in-out property <string> local-ai-model-id: "Qwen/Qwen2.5-7B-Instruct-GGUF";
     in property <bool> local-ai-loading: false;
     in property <string> local-ai-status: "";  // "not loaded", "loading", "loaded: ModelName"
     in property <string> local-ai-error: "";
@@ -276,18 +276,24 @@ export component SettingsScreen inherits Rectangle {
                                             text <=> root.current-password;
                                         }
 
-                                        Input {
-                                            placeholder: "New password";
-                                            password: true;
-                                            text <=> root.new-password;
-                                        }
+                                        HorizontalLayout {
+                                            spacing: Spacing.md;
 
-                                        Input {
-                                            placeholder: "Confirm new password";
-                                            password: true;
-                                            text <=> root.confirm-password;
-                                            error: root.password-error != "";
-                                            error-message: root.password-error;
+                                            Input {
+                                                placeholder: "New password";
+                                                password: true;
+                                                text <=> root.new-password;
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            Input {
+                                                placeholder: "Confirm new password";
+                                                password: true;
+                                                text <=> root.confirm-password;
+                                                error: root.password-error != "";
+                                                error-message: root.password-error;
+                                                horizontal-stretch: 1;
+                                            }
                                         }
 
                                         HorizontalLayout {

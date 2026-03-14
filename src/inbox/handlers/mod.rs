@@ -39,6 +39,7 @@ use tokio::sync::broadcast;
 use crate::domain::{Attachment, ChannelId, Message, MessageContent, MessageId, UserId};
 use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
 use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
+use crate::inbox::events::FriendRequestInfo;
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 use crate::proto::content_v1::Content;
 
@@ -346,6 +347,8 @@ pub enum DomainEvent {
         pinner_id: UserId,
         /// Channel context.
         channel_id: ChannelId,
+        /// Original sent timestamp (nanoseconds) for UI matching.
+        target_sent_timestamp: u64,
     },
     /// Message was unpinned.
     MessageUnpinned {
@@ -355,6 +358,8 @@ pub enum DomainEvent {
         unpinner_id: UserId,
         /// Channel context.
         channel_id: ChannelId,
+        /// Original sent timestamp (nanoseconds) for UI matching.
+        target_sent_timestamp: u64,
     },
     /// Key exchange received (mailbox DM encryption setup).
     ///
@@ -595,6 +600,32 @@ pub enum DomainEvent {
         sent_at: u64,
     },
 
+    /// User presence changed (online/away/dnd/offline).
+    UserPresenceChanged {
+        /// User whose presence changed.
+        user_id: UserId,
+        /// New presence status.
+        presence: crate::proto::UserPresence,
+        /// Timestamp of the change (nanoseconds).
+        timestamp: u64,
+    },
+
+    /// Anonymous DM profile updated.
+    AnonDmProfileUpdated {
+        /// Conversation ID.
+        conversation_id: crate::domain::anon_dm::AnonDmId,
+        /// User whose profile was updated.
+        user_id: UserId,
+        /// Updated display name (if changed).
+        display_name: Option<String>,
+        /// Updated avatar URL (if changed).
+        avatar_url: Option<String>,
+        /// Updated bio/status message (if changed).
+        bio: Option<String>,
+        /// Timestamp of the update (nanoseconds).
+        timestamp: u64,
+    },
+
     /// NDSS'21 ECIES init message received (private friend contact).
     ///
     /// This is the Phase 1 HPKE-encrypted initial contact message.
@@ -648,6 +679,191 @@ pub enum DomainEvent {
         /// The new message text.
         new_text: String,
     },
+
+    /// Anonymous call offer received.
+    AnonCallOfferReceived {
+        /// The conversation ID.
+        conversation_id: AnonDmId,
+        /// Caller's user ID.
+        sender_id: UserId,
+        /// The call room ID.
+        call_room_id: Vec<u8>,
+        /// The LiveKit room name.
+        room_name: String,
+        /// Call type (voice = 1, video = 2).
+        call_type: i32,
+        /// Caller's display name.
+        caller_display_name: String,
+        /// E2EE encryption key (32 bytes).
+        call_encryption_key: Vec<u8>,
+        /// Timestamp of the offer.
+        timestamp: u64,
+    },
+
+    /// Anonymous call answer received.
+    AnonCallAnswerReceived {
+        /// The conversation ID.
+        conversation_id: AnonDmId,
+        /// Callee's user ID.
+        sender_id: UserId,
+        /// The call room ID.
+        call_room_id: Vec<u8>,
+        /// Whether the call was accepted.
+        accepted: bool,
+        /// Callee's display name.
+        callee_display_name: String,
+        /// Timestamp of the answer.
+        timestamp: u64,
+    },
+
+    /// Anonymous call hangup received.
+    AnonCallHangupReceived {
+        /// The conversation ID.
+        conversation_id: AnonDmId,
+        /// Sender's user ID.
+        sender_id: UserId,
+        /// The call room ID.
+        call_room_id: Vec<u8>,
+        /// Hangup reason.
+        reason: i32,
+        /// Timestamp of the hangup.
+        timestamp: u64,
+    },
+
+    // ========================================================================
+    // UI-Specific Events (previously handled only in UI layer)
+    // ========================================================================
+
+    /// Call key offer received (incoming call with ephemeral key for PFS).
+    ///
+    /// Initiates the call key exchange. Callee should:
+    /// 1. Generate ephemeral keypair
+    /// 2. Show incoming call modal
+    /// 3. If accepted, send CallKeyAnswer
+    CallKeyOfferReceived {
+        /// The call ID.
+        call_id: String,
+        /// Caller's user ID.
+        peer_id: UserId,
+        /// Caller's ephemeral X25519 public key (32 bytes).
+        ephemeral_public_key: [u8; 32],
+        /// Call type: "Voice Call" or "Video Call".
+        call_type: String,
+        /// DM channel ID for context.
+        channel_id: String,
+        /// Whether caller's identity is verified (known identity key).
+        is_identity_verified: bool,
+        /// Identity warning message (if verification failed).
+        identity_warning: String,
+        /// Caller's display name.
+        caller_name: String,
+        /// Timestamp when offer was sent.
+        timestamp: u64,
+    },
+
+    /// DM bootstrap completed - shared secret established with peer.
+    ///
+    /// Emitted when key exchange with a DM peer completes successfully.
+    /// UI should enable composer and flush pending messages.
+    DmBootstrapCompleted {
+        /// Peer user ID.
+        peer_id: UserId,
+    },
+
+    /// Unread count updated for a conversation.
+    ///
+    /// Used to update sidebar badges and notification counts.
+    UnreadCountUpdated {
+        /// Channel ID (DM or group channel).
+        channel_id: ChannelId,
+        /// Peer user ID (for DMs).
+        peer_id: Option<UserId>,
+        /// New unread message count.
+        unread_count: u32,
+    },
+
+    /// Friend requests list was updated.
+    ///
+    /// Emitted when received or sent friend requests change.
+    FriendRequestsUpdated {
+        /// Received friend requests.
+        received: Vec<FriendRequestInfo>,
+        /// Sent friend requests.
+        sent: Vec<FriendRequestInfo>,
+    },
+
+    /// Friend request was accepted.
+    ///
+    /// Emitted when a friend request (ours or theirs) is accepted.
+    /// A new DM channel is created for the friendship.
+    FriendAccepted {
+        /// Friend's user ID.
+        friend_id: UserId,
+        /// DM channel ID created for this friendship.
+        channel_id: ChannelId,
+    },
+
+    /// Anonymous group metadata was updated.
+    ///
+    /// Emitted when group name, description, or roles change.
+    AnonGroupUpdated {
+        /// The group ID.
+        group_id: AnonGroupId,
+        /// The update payload.
+        update: crate::proto::content_v1::AnonGroupUpdate,
+        /// User who made the update.
+        updated_by: UserId,
+    },
+
+    // ========================================================================
+    // Local Send Events (emitted when user sends a message)
+    // ========================================================================
+
+    /// Message was sent successfully.
+    MessageSent {
+        /// The message ID.
+        message_id: MessageId,
+        /// The channel ID.
+        channel_id: ChannelId,
+        /// The sender ID (current user).
+        sender_id: UserId,
+        /// The message content.
+        content: String,
+        /// When the message was sent.
+        sent_at: chrono::DateTime<chrono::Utc>,
+    },
+
+    /// Message send failed.
+    MessageSendFailed {
+        /// The channel ID.
+        channel_id: ChannelId,
+        /// The error message.
+        error: String,
+    },
+
+    /// Channel member joined.
+    ChannelMemberJoined {
+        /// The channel ID.
+        channel_id: ChannelId,
+        /// User who joined.
+        user_id: UserId,
+        /// Display name of the user.
+        display_name: String,
+        /// System message created for this event.
+        message: Message,
+    },
+
+    /// Channel member left.
+    ChannelMemberLeft {
+        /// The channel ID.
+        channel_id: ChannelId,
+        /// User who left.
+        user_id: UserId,
+        /// Display name of the user.
+        display_name: String,
+        /// System message created for this event.
+        message: Message,
+    },
 }
 
 impl DomainEvent {
@@ -691,6 +907,26 @@ impl DomainEvent {
             DomainEvent::AnonDmMessageDeleted { .. } => None,
             DomainEvent::AnonDmMessageEdited { .. } => None,
             DomainEvent::AnonGroupMessageEdited { .. } => None,
+            // Anonymous call events don't have ChannelId
+            DomainEvent::AnonCallOfferReceived { .. } => None,
+            DomainEvent::AnonCallAnswerReceived { .. } => None,
+            DomainEvent::AnonCallHangupReceived { .. } => None,
+            // UI-specific events
+            DomainEvent::CallKeyOfferReceived { .. } => None,
+            DomainEvent::DmBootstrapCompleted { .. } => None,
+            DomainEvent::UnreadCountUpdated { channel_id, .. } => Some(*channel_id),
+            DomainEvent::FriendRequestsUpdated { .. } => None,
+            DomainEvent::FriendAccepted { channel_id, .. } => Some(*channel_id),
+            DomainEvent::AnonGroupUpdated { .. } => None,
+            // Local send events
+            DomainEvent::MessageSent { channel_id, .. } => Some(*channel_id),
+            DomainEvent::MessageSendFailed { channel_id, .. } => Some(*channel_id),
+            // Channel member events
+            DomainEvent::ChannelMemberJoined { channel_id, .. } => Some(*channel_id),
+            DomainEvent::ChannelMemberLeft { channel_id, .. } => Some(*channel_id),
+            // User presence events
+            DomainEvent::UserPresenceChanged { .. } => None,
+            DomainEvent::AnonDmProfileUpdated { .. } => None,
         }
     }
 

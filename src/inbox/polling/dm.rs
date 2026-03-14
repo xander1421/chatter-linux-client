@@ -11,6 +11,7 @@ use crate::crypto::envelope_crypto::decrypt_envelope;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::Message;
 use crate::domain::UserId;
+use crate::error::MailboxError;
 use crate::inbox::events::InboxEvent;
 use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::dm::{ConversationKey, DmConversationManager, PeerMailbox, TwoWayAnonymity};
@@ -57,9 +58,32 @@ pub async fn poll_dm_mailboxes(
         .and_then(|s| s.parse().ok());
     let mut client = mailbox_client.lock().await;
 
+    // 1. Check for expired mailboxes and trigger healing (NDSS '21 healing path)
+    if let Ok(expiring) = two_way.get_expiring_conversations(0) {
+        for peer_id in expiring {
+            tracing::info!(
+                peer_id = %peer_id,
+                "DM mailbox expired, triggering healing path (re-bootstrap)"
+            );
+            let _ = event_tx.send(InboxEvent::DmMailboxExpired { peer_id });
+        }
+    }
+
     match two_way.poll_all_mailboxes(&mut client).await {
-        Ok(poll_results) => {
+        Ok((poll_results, failures)) => {
             let mut total_messages = 0u32;
+
+            // Handle failures first (healing path)
+            for (peer_id, error) in failures {
+                if matches!(error, MailboxError::MailboxNotFound | MailboxError::TokenExpired) {
+                    tracing::info!(
+                        peer_id = %peer_id,
+                        error = %error,
+                        "DM mailbox invalid or gone from server, triggering healing path (re-bootstrap)"
+                    );
+                    let _ = event_tx.send(InboxEvent::DmMailboxExpired { peer_id });
+                }
+            }
 
             for result in poll_results {
                 let peer_id = result.peer_id;
@@ -287,13 +311,12 @@ fn dispatch_dm_content(
                 }
             }
 
-            // Store message in local database for persistence
-            if let Some(current_user) = current_user_id {
+            // Resolve the DM channel ID for this peer (needed for both DB storage and UI routing)
+            let dm_channel_id = if let Some(current_user) = current_user_id {
                 // Look up the DM channel by peer ID (server-assigned, NOT derived)
                 let dm_channel = channel_repo.get_dm_channel_by_peer(current_user, sender_id);
 
-                // Get or create the DM channel
-                let dm_channel_id = if let Ok(Some(channel)) = dm_channel {
+                if let Ok(Some(channel)) = dm_channel {
                     channel.id
                 } else {
                     // Channel doesn't exist locally - create it with derived ID
@@ -325,8 +348,14 @@ fn dispatch_dm_content(
                     }
 
                     derived_id
-                };
+                }
+            } else {
+                // No current user - derive channel ID from peer (best effort)
+                ChannelId::new()
+            };
 
+            // Store message in local database for persistence
+            if current_user_id.is_some() {
                 let msg_id = message_id
                     .parse::<MessageId>()
                     .unwrap_or_else(|_| MessageId::new());
@@ -389,6 +418,7 @@ fn dispatch_dm_content(
 
             let _ = event_tx.send(InboxEvent::DmReceived {
                 peer_id,
+                channel_id: dm_channel_id,
                 text: body,
                 // Both timestamp and server_timestamp are in nanoseconds
                 timestamp: if timestamp > 0 { timestamp } else { server_timestamp },
@@ -843,6 +873,7 @@ fn dispatch_dm_content(
                 conversation_id,
                 responder_mailbox_pk,
                 profile_key,
+                responder_display_name: None, // Will be decrypted in handler
                 encrypted_display_name,
                 encrypted_avatar,
                 timestamp,

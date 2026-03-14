@@ -1,8 +1,11 @@
-//! GStreamer-based video decoder for Linux.
+//! GStreamer-based video decoder (Linux/Windows).
 //!
 //! Uses GStreamer's playbin for demuxing and decoding, with appsink
 //! to receive decoded frames. This avoids FFmpeg symbol conflicts
 //! with libwebrtc while providing full codec support.
+//!
+//! On Windows, GStreamer uses DirectShow/Media Foundation decoders.
+//! On Linux, it uses VA-API/V4L2/software decoders.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, Once};

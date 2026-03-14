@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Image, ModelRc, VecModel, Weak};
+use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel, Weak, Model};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::channel::ChannelType;
@@ -490,6 +490,24 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
 
     tracing::info!("Loaded {} private groups", private_groups.len());
 
+    // Load blocked users for the Blocked tab
+    let blocked_users_data: Vec<(String, String)> = match ui_ctx.anon_dm_service.get_blocked_users() {
+        Ok(users) => {
+            tracing::info!("Loaded {} blocked users", users.len());
+            users.into_iter()
+                .map(|user_id| {
+                    let id_str = user_id.to_string();
+                    let display_name = format!("User {}", &id_str[..8.min(id_str.len())]);
+                    (id_str, display_name)
+                })
+                .collect()
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load blocked users: {}", e);
+            Vec::new()
+        }
+    };
+
     // Pre-decode avatars before entering UI thread to avoid blocking
     let mut dm_list = dm_list;
     for dm in &mut dm_list {
@@ -530,6 +548,19 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
             w.set_friends_received_requests(ModelRc::new(VecModel::from(received_ui_slint)));
             w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_ui_slint)));
             w.set_friends_private_requests(ModelRc::new(VecModel::from(private_requests_ui_slint)));
+
+            // Set blocked users
+            let blocked_users_slint: Vec<crate::BlockedUserData> = blocked_users_data
+                .into_iter()
+                .map(|(user_id, display_name)| crate::BlockedUserData {
+                    user_id: user_id.into(),
+                    display_name: display_name.into(),
+                    username: "Private".into(),
+                    avatar_url: SharedString::default(),
+                    blocked_at: SharedString::default(),
+                })
+                .collect();
+            w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_users_slint)));
 
             // Set sidebar badge count for message requests
             w.set_pending_message_requests(pending_message_requests_count);
@@ -675,4 +706,394 @@ async fn load_channel_into_ui_from_services(
             );
         }
     });
+}
+
+/// Refresh the DM list in the UI with latest data from storage.
+pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let ui_ctx = ui_ctx.clone();
+    let window_weak = window.as_weak();
+    
+    tokio::spawn(async move {
+        // Get current user ID for DM peer detection
+        let current_user_id = ui_ctx.auth_state.get().current_user_id;
+        
+        // Get channels from local storage
+        let channels = match ui_ctx.channel_service.get_channels_for_user() {
+            Ok(ch) => ch,
+            Err(e) => {
+                tracing::error!("Failed to refresh DM list: {}", e);
+                return;
+            }
+        };
+        
+        let mut dm_list: Vec<DMListItemSendData> = Vec::new();
+        
+        // Process regular DMs
+        for channel in &channels {
+            if channel.channel_type == ChannelType::DirectMessage {
+                // Find the OTHER user (not ourselves)
+                let other_user_id = if let Some(current_id) = current_user_id {
+                    match ui_ctx.channel_service.list_members_local(&channel.id) {
+                        Ok(members) => members
+                            .iter()
+                            .find(|m| m.user_id != current_id)
+                            .map(|m| m.user_id.to_string())
+                            .unwrap_or_else(|| channel.owner_id.to_string()),
+                        Err(_) => channel.owner_id.to_string(),
+                    }
+                } else {
+                    channel.owner_id.to_string()
+                };
+                
+                let other_user_name = channel.name.clone();
+                
+                // Get the most recent message
+                let (last_message, timestamp) = 
+                    match ui_ctx.message_service.get_messages_local(&channel.id, None, 1) {
+                        Ok(messages) if !messages.is_empty() => {
+                            let msg = &messages[0];
+                            let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
+                            
+                            let preview = msg.as_text()
+                                .map(|text| {
+                                    let mut display_text = text.to_string();
+                                    if display_text.chars().count() > 50 {
+                                        let truncated: String = display_text.chars().take(47).collect();
+                                        display_text = format!("{}...", truncated);
+                                    }
+                                    if is_own {
+                                        format!("You: {}", display_text)
+                                    } else {
+                                        display_text
+                                    }
+                                })
+                                .unwrap_or_else(|| {
+                                    if msg.has_attachments() {
+                                        if is_own {
+                                            "You: [Attachment]".to_string()
+                                        } else {
+                                            "[Attachment]".to_string()
+                                        }
+                                    } else {
+                                        String::new()
+                                    }
+                                });
+                            
+                            let ts = msg.created_at
+                                .with_timezone(&chrono::Local)
+                                .format("%H:%M")
+                                .to_string();
+                            
+                            (preview, ts)
+                        }
+                        _ => (String::new(), String::new()),
+                    };
+                
+                // Create DM item manually since dm_to_send_data signature changed
+                let dm_item = DMListItemSendData {
+                    channel_id: channel.id.to_string(),
+                    user_id: other_user_id.clone(),
+                    display_name: other_user_name.clone(),
+                    avatar_url: String::new(),
+                    avatar_bytes: Some(Vec::new()),
+                    avatar_decoded: None,
+                    initials: get_initials(&other_user_name),
+                    presence_status: "online".to_string(),
+                    last_message,
+                    timestamp,
+                    unread_count: 0,
+                    is_typing: false,
+                };
+                dm_list.push(dm_item);
+            }
+        }
+        
+        // Update UI on the main thread
+        if let Some(w) = window_weak.upgrade() {
+            // Convert Send-safe DM data to Slint types
+            let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter()
+                .map(|d| d.to_slint())
+                .collect();
+            w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
+        }
+    });
+}
+
+/// Refresh the anonymous groups list in the UI.
+pub fn refresh_anon_groups(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let ui_ctx = ui_ctx.clone();
+    let window_weak = window.as_weak();
+    
+    tokio::spawn(async move {
+        let mut private_group_list: Vec<PrivateGroupListItemData> = Vec::new();
+        
+        // Load anonymous groups
+        match ui_ctx.anon_group_service.list_groups() {
+            Ok(groups) => {
+                for group in groups {
+                    let group_item = PrivateGroupListItemData {
+                        group_id: SharedString::from(group.id.to_string()),
+                        name: SharedString::from(group.name.clone()),
+                        member_count: 0, // Could query member count from storage if needed
+                        unread_count: 0,
+                        last_message: SharedString::from(""),
+                        timestamp: SharedString::from(""),
+                        is_typing: false,
+                    };
+                    private_group_list.push(group_item);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load anonymous groups: {}", e);
+            }
+        }
+        
+        // Update UI on the main thread
+        if let Some(w) = window_weak.upgrade() {
+            let private_group_model = VecModel::from(private_group_list);
+            w.set_private_groups(ModelRc::new(private_group_model));
+        }
+    });
+}
+
+/// Refresh the anonymous DMs list in the UI.
+pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let ui_ctx = ui_ctx.clone();
+    let window_weak = window.as_weak();
+    
+    tokio::spawn(async move {
+        let mut dm_list: Vec<DMListItemSendData> = Vec::new();
+        
+        // Load active anon DM conversations
+        match ui_ctx.anon_dm_service.list_conversations() {
+            Ok(dms) => {
+                for dm in dms {
+                    if dm.status != chatter_linux::domain::anon_dm::AnonDmStatus::Pending {
+                        let peer_name = dm.peer_display_name.clone()
+                            .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                        let peer_id_str = dm.peer_id.to_string();
+                        
+                        // Get latest message for preview
+                        let (last_message, timestamp) = match ui_ctx.anon_dm_service.get_latest_message(&dm.id) {
+                            Ok(Some(msg)) => {
+                                let preview = msg.as_text()
+                                    .map(|text| {
+                                        if text.chars().count() > 50 {
+                                            let truncated: String = text.chars().take(47).collect();
+                                            format!("{}...", truncated)
+                                        } else {
+                                            text.to_string()
+                                        }
+                                    })
+                                    .unwrap_or_else(|| "[Attachment]".to_string());
+                                
+                                let ts = msg.created_at
+                                    .with_timezone(&chrono::Local)
+                                    .format("%H:%M")
+                                    .to_string();
+                                
+                                (preview, ts)
+                            }
+                            _ => (String::new(), String::new()),
+                        };
+                        
+                        let dm_item = DMListItemSendData {
+                            channel_id: format!("anon_dm:{}", dm.id),
+                            user_id: peer_id_str.clone(),
+                            display_name: format!("\u{1F512} {}", peer_name), // Lock emoji prefix
+                            avatar_url: String::new(),
+                            avatar_bytes: dm.peer_avatar.clone(),
+                            avatar_decoded: None,
+                            initials: get_initials(&peer_name),
+                            presence_status: if dm.status == chatter_linux::domain::anon_dm::AnonDmStatus::Active {
+                                "online".to_string()
+                            } else {
+                                "offline".to_string()
+                            },
+                            last_message,
+                            timestamp,
+                            unread_count: dm.unread_count as i32,
+                            is_typing: false,
+                        };
+                        dm_list.push(dm_item);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to refresh anonymous DMs: {}", e);
+            }
+        }
+        
+        // Also load pending anon DM requests
+        match ui_ctx.anon_dm_service.list_message_requests() {
+            Ok(requests) => {
+                for dm in requests {
+                    let peer_name = dm.peer_display_name.clone()
+                        .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                    let peer_id_str = dm.peer_id.to_string();
+                    
+                    let last_message = match ui_ctx.anon_dm_service.get_latest_message(&dm.id) {
+                        Ok(Some(msg)) => msg.as_text().unwrap_or_default(),
+                        _ => "Message request".to_string(),
+                    };
+                    
+                    let dm_item = DMListItemSendData {
+                        channel_id: format!("anon_dm:{}", dm.id),
+                        user_id: peer_id_str.clone(),
+                        display_name: format!("\u{1F4E9} {}", peer_name), // Envelope emoji for pending
+                        avatar_url: String::new(),
+                        avatar_bytes: dm.peer_avatar.clone(),
+                        avatar_decoded: None,
+                        initials: get_initials(&peer_name),
+                        presence_status: "pending".to_string(),
+                        last_message: last_message.clone(),
+                        timestamp: dm.created_at
+                            .with_timezone(&chrono::Local)
+                            .format("%H:%M")
+                            .to_string(),
+                        unread_count: 1,
+                        is_typing: false,
+                    };
+                    dm_list.push(dm_item);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load pending anon DM requests: {}", e);
+            }
+        }
+        
+        // Get existing DM list and merge with anon DMs
+        if let Some(w) = window_weak.upgrade() {
+            let existing_dms = w.get_dm_conversations();
+            let mut all_dms = Vec::new();
+            
+            // Add existing regular DMs (non-anon)
+            let existing_count = existing_dms.iter().count();
+            for i in 0..existing_count {
+                if let Some(dm) = existing_dms.iter().nth(i) {
+                    let channel_id = dm.channel_id.to_string();
+                    if !channel_id.starts_with("anon_dm:") {
+                        all_dms.push(dm);
+                    }
+                }
+            }
+            
+            // Add the anon DMs
+            for dm in dm_list {
+                all_dms.push(dm.to_slint());
+            }
+            
+            let dm_model = VecModel::from(all_dms);
+            w.set_dm_conversations(ModelRc::new(dm_model));
+        }
+    });
+}
+
+/// Update typing indicator for a specific user in a DM.
+pub fn update_dm_typing_indicator(window: &MainWindow, user_id: &str, is_typing: bool) {
+    let dm_list = window.get_dm_conversations();
+    
+    // Find and update the specific DM
+    let dm_count = dm_list.iter().count();
+    for i in 0..dm_count {
+        if let Some(dm) = dm_list.iter().nth(i) {
+            if dm.user_id.to_string() == user_id {
+                // Need to recreate the model to update
+                let mut all_dms = Vec::new();
+                for j in 0..dm_count {
+                    if let Some(mut item) = dm_list.iter().nth(j) {
+                        if j == i {
+                            item.is_typing = is_typing;
+                        }
+                        all_dms.push(item);
+                    }
+                }
+                window.set_dm_conversations(ModelRc::new(VecModel::from(all_dms)));
+                break;
+            }
+        }
+    }
+}
+
+/// Update typing indicator for a user in a group.
+pub fn update_group_typing_indicator(window: &MainWindow, group_id: &str, _user_id: &str, is_typing: bool) {
+    // Regular channels don't have typing indicator in the UI currently
+    // Only private groups have is_typing field
+    
+    // Check private groups
+    let private_group_list = window.get_private_groups();
+    let group_count = private_group_list.iter().count();
+    for i in 0..group_count {
+        if let Some(group) = private_group_list.iter().nth(i) {
+            if group.group_id.to_string() == group_id {
+                // Need to recreate the model to update
+                let mut all_groups = Vec::new();
+                for j in 0..group_count {
+                    if let Some(mut item) = private_group_list.iter().nth(j) {
+                        if j == i {
+                            item.is_typing = is_typing;
+                        }
+                        all_groups.push(item);
+                    }
+                }
+                window.set_private_groups(ModelRc::new(VecModel::from(all_groups)));
+                break;
+            }
+        }
+    }
+}
+
+/// Show incoming call modal with caller information.
+pub fn show_incoming_call(
+    window: &MainWindow,
+    call_id: &str,
+    peer_id: &str,
+    caller_name: &str,
+    call_type: &str,
+    is_identity_verified: bool,
+    identity_warning: &str,
+    is_anonymous: bool,
+) {
+    use crate::IncomingCallData;
+
+    // Create incoming call data structure
+    let call_data = IncomingCallData {
+        call_id: call_id.into(),
+        caller_id: peer_id.into(),
+        caller_name: caller_name.into(),
+        caller_avatar: String::new().into(),
+        channel_name: String::new().into(),
+        is_video_call: call_type == "video",
+        is_anonymous_call: is_anonymous,
+        is_identity_verified,
+        identity_warning: identity_warning.into(),
+        encryption_key: String::new().into(),
+        call_start_timestamp_ns: String::new().into(),
+    };
+    
+    // Set call data and show modal
+    window.set_incoming_call_data(call_data);
+    window.set_incoming_call_visible(true);
+}
+
+/// Hide incoming call modal.
+pub fn hide_incoming_call(window: &MainWindow) {
+    window.set_incoming_call_visible(false);
+}
+
+/// Update friend requests lists in the UI.
+pub fn update_friend_requests(
+    window: &MainWindow,
+    received: Vec<crate::FriendRequestData>,
+    sent: Vec<crate::FriendRequestData>,
+) {
+    use slint::{ModelRc, VecModel};
+    
+    // Update received requests
+    let received_model = VecModel::from(received);
+    window.set_friends_received_requests(ModelRc::new(received_model));
+    
+    // Update sent requests
+    let sent_model = VecModel::from(sent);
+    window.set_friends_sent_requests(ModelRc::new(sent_model));
 }

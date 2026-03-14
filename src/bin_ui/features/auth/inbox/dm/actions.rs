@@ -247,6 +247,7 @@ pub fn handle_dm_reaction(
 pub fn handle_dm_pin(
     weak_window: &slint::Weak<MainWindow>,
     peer_id: chatter_linux::domain::UserId,
+    pinned_state: chatter_linux::state::PinnedState,
     target_sent_timestamp: u64,
     unpin: bool,
 ) {
@@ -275,36 +276,47 @@ pub fn handle_dm_pin(
 
         let messages = window.get_messages();
         let target_ts_ns = target_sent_timestamp.to_string();
+        let new_pinned = !unpin;
         let mut preview = String::new();
 
+        // Update is_pinned on the message and generate preview
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
                 if msg.timestamp_ns.as_str() == target_ts_ns {
-                    preview = msg.content.to_string();
-                    if preview.len() > 100 {
-                        preview = format!("{}...", &preview[..97]);
+                    preview = super::super::utils::generate_preview_from_ui_message(&msg);
+
+                    // Update is_pinned on the message
+                    let mut updated_msg = msg.clone();
+                    updated_msg.is_pinned = new_pinned;
+                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                        model.set_row_data(i, updated_msg);
+                    }
+
+                    // Update pinned_state with message ID
+                    if let Ok(msg_id) = msg.message_id.to_string().parse::<chatter_linux::domain::ids::MessageId>() {
+                        if new_pinned {
+                            pinned_state.add_pinned_message(msg_id);
+                        } else {
+                            pinned_state.remove_pinned_message(&msg_id);
+                        }
                     }
                     break;
                 }
             }
         }
 
-        let current_count = window.get_pinned_total_count();
+        let pinned_count = pinned_state.get().pinned_message_ids.len() as i32;
         if unpin {
-            let new_count = (current_count - 1).max(0);
-            window.set_pinned_total_count(new_count);
-            window.set_has_pinned_messages(new_count > 0);
-            if new_count == 0 {
+            window.set_pinned_total_count(pinned_count);
+            window.set_has_pinned_messages(pinned_count > 0);
+            if pinned_count == 0 {
                 window.set_pinned_message_preview("".into());
             }
         } else {
-            let new_count = current_count + 1;
-            window.set_pinned_total_count(new_count);
+            window.set_pinned_total_count(pinned_count);
             window.set_has_pinned_messages(true);
-            if !preview.is_empty() {
-                window.set_pinned_message_preview(preview.into());
-                window.set_pinned_current_index(new_count);
-            }
+            window.set_pinned_message_preview(preview.into());
+            window.set_pinned_current_index(pinned_count);
         }
     });
 }

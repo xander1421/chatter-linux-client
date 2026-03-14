@@ -2,6 +2,16 @@
 //!
 //! Processes incoming DM and channel events to update the UI in real-time.
 //!
+//! # Architecture
+//!
+//! The inbox system uses a two-layer event architecture:
+//!
+//! 1. **InboxEvent** (raw polling events) → **InboxEventProcessor** (protocol handling)
+//! 2. **DomainEvent** (clean domain events) → **domain_handler** (UI updates only)
+//!
+//! The old `handle_inbox_event` function still exists for backwards compatibility
+//! but should be migrated to use `handle_domain_event` for cleaner separation.
+//!
 //! # Service-Based Architecture
 //!
 //! This module uses UIContext for all service access:
@@ -13,13 +23,15 @@ mod anon_dm_actions;
 mod anon_group_events;
 mod anon_group_handlers;
 pub mod attachment_download;
-mod channel_bootstrap;
 mod channel_handlers;
 pub mod dm;
+pub mod domain_handler;
+mod pin_persistence;
 pub mod typing;
 pub mod utils;
 
 pub use anon_group_events::spawn_anon_group_event_handler;
+pub use pin_persistence::spawn_pin_persistence_handler;
 
 pub use anon_dm_actions::{
     handle_anon_dm_delete,
@@ -31,7 +43,6 @@ pub use anon_dm_actions::{
     handle_anon_dm_receipt,
     handle_anon_dm_typing,
 };
-pub use channel_bootstrap::wire_channel_bootstrap_handler;
 
 use std::sync::Arc;
 
@@ -47,7 +58,7 @@ use crate::MainWindow;
 
 // Re-export public items
 pub use channel_handlers::update_channel_sidebar_preview;
-pub use utils::{format_timestamp, update_reaction_summary};
+pub use utils::update_reaction_summary;
 
 /// Handle inbox events and update UI accordingly.
 pub async fn handle_inbox_event(
@@ -58,12 +69,13 @@ pub async fn handle_inbox_event(
     match event {
         InboxEvent::DmReceived {
             peer_id,
+            channel_id,
             text,
             timestamp,
             message_id,
             attachments,
         } => {
-            dm::handle_dm_received(weak_window, ui_ctx, peer_id, text.clone(), timestamp, message_id, attachments);
+            dm::handle_dm_received(weak_window, ui_ctx, peer_id, channel_id, text.clone(), timestamp, message_id, attachments);
 
             // Send delivery receipt back to sender (Signal Protocol)
             tracing::info!(
@@ -97,6 +109,13 @@ pub async fn handle_inbox_event(
             );
 
             ui_ctx.dm_bootstrap_service.handle_convergence_failure(peer_id);
+        }
+        InboxEvent::DmMailboxExpired { peer_id } => {
+            tracing::info!(
+                peer_id = %peer_id,
+                "HEALING: DmMailboxExpired event received, triggering re-bootstrap"
+            );
+            ui_ctx.dm_bootstrap_service.handle_mailbox_expired(peer_id);
         }
         InboxEvent::DmPollCompleted { total_messages } => {
             if total_messages > 0 {
@@ -219,7 +238,7 @@ pub async fn handle_inbox_event(
             unpin,
             ..
         } => {
-            dm::handle_dm_pin(weak_window, peer_id, target_sent_timestamp, unpin);
+            dm::handle_dm_pin(weak_window, peer_id, ui_ctx.pinned_state.clone(), target_sent_timestamp, unpin);
         }
         InboxEvent::DmEdit {
             peer_id,
@@ -263,7 +282,7 @@ pub async fn handle_inbox_event(
             unpin,
             ..
         } => {
-            channel_handlers::handle_channel_pin(weak_window, channel_id, target_sent_timestamp, unpin);
+            channel_handlers::handle_channel_pin(weak_window, ui_ctx.pinned_state.clone(), channel_id, target_sent_timestamp, unpin);
         }
         InboxEvent::ChannelEdit {
             channel_id,
@@ -559,6 +578,7 @@ pub async fn handle_inbox_event(
                         caller_avatar: "".into(),
                         channel_name: channel_id.into(),
                         is_video_call: is_video,
+                        is_anonymous_call: false,
                         is_identity_verified,
                         identity_warning: identity_warning.into(),
                         encryption_key: ephemeral_key_b64.into(),
@@ -936,8 +956,9 @@ pub async fn handle_inbox_event(
             let members_clone = members.clone();
 
             // handle_member_list is a sync method, so we run it in a blocking task
+            let sender_id = peer_id;
             let _ = tokio::task::spawn_blocking(move || {
-                if let Err(e) = anon_service.handle_member_list(anon_group_id, members_clone) {
+                if let Err(e) = anon_service.handle_member_list(anon_group_id, sender_id, members_clone) {
                     tracing::error!(
                         group_id = ?anon_group_id,
                         error = %e,
@@ -1124,6 +1145,7 @@ pub async fn handle_inbox_event(
                 Some(content::Content::Pin(pin)) => {
                     anon_group_handlers::handle_anon_group_pin(
                         weak_window,
+                        ui_ctx.pinned_state.clone(),
                         anon_group_id,
                         pin.target_sent_timestamp,
                         pin.unpin,
@@ -1253,7 +1275,13 @@ pub async fn handle_inbox_event(
                                 );
 
                                 // Update UI if viewing this group
-                                let sender_name = user_service.get_display_name(&peer_id_clone);
+                                // Look up display name from group member list first, then fall back to user service
+                                let sender_name = anon_service
+                                    .get_member_display_name(&anon_group_id, &peer_id_clone)
+                                    .ok()
+                                    .flatten()
+                                    .filter(|n| !n.is_empty())
+                                    .unwrap_or_else(|| user_service.get_display_name(&peer_id_clone));
                                 let text_clone = text.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak.upgrade() {
@@ -1275,6 +1303,8 @@ pub async fn handle_inbox_event(
                                                     sender_name: sender_name.into(),
                                                     sender_initials: "".into(),
                                                     sender_avatar_url: "".into(),
+                                                    sender_avatar_source: slint::Image::default(),
+                                                    has_avatar: false,
                                                     content: text_clone.clone().into(),
                                                     timestamp: chrono::Utc::now().format("%H:%M").to_string().into(),
                                                     timestamp_ns: sent_at_for_ui.to_string().into(),
@@ -1457,6 +1487,7 @@ pub async fn handle_inbox_event(
             conversation_id,
             responder_mailbox_pk,
             profile_key,
+            responder_display_name: _, // Ignored - we decrypt ourselves
             encrypted_display_name,
             encrypted_avatar,
             timestamp,

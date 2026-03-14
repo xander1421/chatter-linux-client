@@ -40,5 +40,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     actions::wire_reply_message(window, ui_ctx);
     actions::wire_forward_message_action(window, ui_ctx);
     actions::wire_copy_message(window, ui_ctx);
+    actions::wire_download_message(window, ui_ctx);
     emoji_loader::wire_emoji_loader(window);
 }

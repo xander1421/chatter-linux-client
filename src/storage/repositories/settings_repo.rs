@@ -27,6 +27,8 @@ pub mod keys {
     // Auth settings
     pub const CURRENT_USER_ID: &str = "auth.current_user_id";
     pub const CURRENT_DEVICE_ID: &str = "auth.current_device_id";
+    /// Device authentication token (32 bytes, base64 encoded)
+    pub const DEVICE_AUTH_TOKEN: &str = "auth.device_token";
     /// Current user's plaintext display name
     pub const DISPLAY_NAME: &str = "auth.display_name";
     /// Current user's avatar (raw image bytes, stored locally, encrypted when shared)
@@ -256,7 +258,7 @@ impl SettingsRepository {
 
     /// Check if local AI is enabled.
     pub fn get_local_ai_enabled(&self) -> Result<bool, StorageError> {
-        Ok(self.get_bool(keys::LOCAL_AI_ENABLED)?.unwrap_or(false))
+        Ok(self.get_bool(keys::LOCAL_AI_ENABLED)?.unwrap_or(true))
     }
 
     /// Set whether local AI is enabled.

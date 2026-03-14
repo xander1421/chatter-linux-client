@@ -53,6 +53,8 @@ pub enum InboxEvent {
     DmReceived {
         /// Peer user ID.
         peer_id: UserId,
+        /// DM channel ID (for reliable active-conversation matching).
+        channel_id: ChannelId,
         /// Decrypted message text.
         text: String,
         /// Server timestamp.
@@ -325,6 +327,11 @@ pub enum InboxEvent {
         /// Peer user ID.
         peer_id: UserId,
     },
+    /// A DM mailbox has expired and needs re-establishment.
+    DmMailboxExpired {
+        /// Peer user ID.
+        peer_id: UserId,
+    },
     // =========================================================================
     // Call Events (Signal-style ephemeral key exchange)
     // =========================================================================
@@ -520,6 +527,8 @@ pub enum InboxEvent {
         responder_mailbox_pk: Vec<u8>,
         /// Optional profile key for decrypting their profile.
         profile_key: Option<Vec<u8>>,
+        /// Responder's display name (plaintext, revealed upon acceptance).
+        responder_display_name: Option<String>,
         /// Encrypted display name (AES-256-GCM with profile_key).
         encrypted_display_name: Option<Vec<u8>>,
         /// Encrypted avatar (AES-256-GCM with profile_key).

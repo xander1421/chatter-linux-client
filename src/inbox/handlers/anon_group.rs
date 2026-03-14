@@ -128,7 +128,7 @@ impl AnonGroupHandler {
     /// Updates local member state synchronously and emits event.
     /// The UI layer should call `service.broadcast_member_list()` in response
     /// if we are the group owner.
-    fn handle_join_ack(
+    async fn handle_join_ack(
         &self,
         ack: content_v1::AnonGroupJoinAck,
         sender_id: UserId,
@@ -176,16 +176,23 @@ impl AnonGroupHandler {
             _ => None,
         };
 
-        // Update member's mailbox key and profile synchronously (no encryption needed)
+        // Process the join ack via service (async - handles broadcast)
         if let Err(e) = self
             .service
-            .update_member_mailbox_and_profile(&group_id, &sender_id, joiner_mailbox_pk, profile_key, display_name.clone(), avatar.clone())
+            .handle_join_ack(
+                group_id,
+                sender_id,
+                joiner_mailbox_pk,
+                profile_key,
+                display_name.clone(),
+                avatar.clone(),
+            )
+            .await
         {
-            tracing::warn!("Failed to update member for {}: {}", sender_id, e);
-            // Don't fail - the ack might be for a group we don't own
+            tracing::warn!("Failed to handle join ack for {}: {}", sender_id, e);
         }
 
-        // Emit event for UI - the UI layer should handle broadcasting member list
+        // Emit event for UI
         ctx.emit(DomainEvent::AnonGroupMemberJoined {
             group_id,
             user_id: sender_id,
@@ -203,17 +210,88 @@ impl AnonGroupHandler {
     ///
     /// Updates local member state and emits event. The UI layer should trigger
     /// profile sharing with the new members we learned about.
+    ///
+    /// SECURITY: Only accepts member lists from admins/owners to prevent
+    /// regular members from spoofing other members' profiles.
     fn handle_member_list(
         &self,
         list: content_v1::AnonGroupMemberList,
-        _sender_id: UserId,
+        sender_id: UserId,
         ctx: &HandlerContext,
     ) -> HandlerResult {
         let group_id = AnonGroupId::try_from_slice(&list.group_id)
             .ok_or_else(|| HandlerError::parse_failed("Invalid group ID in member list"))?;
 
+        // SECURITY: Verify sender is admin or owner before accepting member list
+        // This prevents regular members from spoofing other members' profiles
+        match self.service.get_member_role(&group_id, &sender_id) {
+            Ok(Some(role)) if role.can_broadcast_member_list() => {
+                // Sender is authorized to broadcast member lists
+            }
+            Ok(Some(role)) => {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    group_id = %group_id,
+                    role = ?role,
+                    "Rejected member list from non-admin member"
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    group_id = %group_id,
+                    "Rejected member list from non-member"
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    group_id = %group_id,
+                    error = %e,
+                    "Failed to verify sender role for member list"
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+        }
+
+        // SECURITY: Verify sender is admin or owner before accepting member list
+        // This prevents regular members from spoofing other members' profiles
+        match self.service.get_member_role(&group_id, &sender_id) {
+            Ok(Some(role)) if role.can_broadcast_member_list() => {
+                // Sender is authorized to broadcast member lists
+            }
+            Ok(Some(role)) => {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    group_id = %group_id,
+                    ?role,
+                    "Rejected member list from unauthorized member"
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    group_id = %group_id,
+                    "Rejected member list from non-member"
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+            Err(e) => {
+                tracing::error!(
+                    sender_id = %sender_id,
+                    group_id = %group_id,
+                    error = %e,
+                    "Failed to verify sender role for member list"
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+        }
+
         // Process the member list
-        if let Err(e) = self.service.handle_member_list(group_id, list.members.clone()) {
+        if let Err(e) = self.service.handle_member_list(group_id, sender_id, list.members.clone()) {
             tracing::warn!("Failed to handle member list for group {}: {}", group_id, e);
         }
 
@@ -298,11 +376,11 @@ impl AnonGroupHandler {
     /// Handle an incoming profile share.
     ///
     /// Updates the sender's profile in the local member list.
-    fn handle_profile_share(
+    async fn handle_profile_share(
         &self,
         profile: content_v1::AnonGroupProfileShare,
         sender_id: UserId,
-        _ctx: &HandlerContext,
+        ctx: &HandlerContext,
     ) -> HandlerResult {
         let group_id = AnonGroupId::try_from_slice(&profile.group_id)
             .ok_or_else(|| HandlerError::parse_failed("Invalid group ID in profile share"))?;
@@ -355,18 +433,34 @@ impl AnonGroupHandler {
             _ => None,
         };
 
-        // Update member's profile
+        // Update member's profile via service (async - handles broadcast if owner)
         if let Err(e) = self
             .service
-            .update_member_profile(&group_id, &sender_id, profile_key, display_name.clone(), avatar)
+            .handle_profile_share(
+                group_id,
+                sender_id,
+                profile_key,
+                display_name.clone(),
+                avatar.clone(),
+            )
+            .await
         {
             tracing::warn!(
-                "Failed to update profile for {} in group {}: {}",
+                "Failed to handle profile share for {} in group {}: {}",
                 sender_id,
                 group_id,
                 e
             );
         }
+
+        // Emit event for UI
+        ctx.emit(DomainEvent::AnonGroupMemberJoined {
+            group_id,
+            user_id: sender_id,
+            profile_key,
+            display_name: display_name.clone(),
+            avatar,
+        });
 
         tracing::debug!(
             "Received profile share from {} in group {} (name: {:?})",
@@ -630,6 +724,39 @@ impl AnonGroupHandler {
         pin: &content_v1::PinMessage,
         ctx: &HandlerContext,
     ) -> HandlerResult {
+        // SECURITY: Verify sender is admin or owner before pinning for group
+        match self.service.get_member_role(&group_id, &sender_id) {
+            Ok(Some(role)) if role.can_pin() => {
+                // Sender is authorized to pin/unpin
+            }
+            Ok(Some(role)) => {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    group_id = %group_id,
+                    ?role,
+                    "Rejected pin/unpin from unauthorized member"
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    sender_id = %sender_id,
+                    group_id = %group_id,
+                    "Rejected pin/unpin from non-member"
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+            Err(e) => {
+                tracing::error!(
+                    sender_id = %sender_id,
+                    group_id = %group_id,
+                    error = %e,
+                    "Failed to verify sender role for pin/unpin"
+                );
+                return Ok(HandlerOutcome::Ignored);
+            }
+        }
+
         let message_id = crate::domain::MessageId::from_timestamp(pin.target_sent_timestamp);
         let channel_id: ChannelId = group_id.into();
 
@@ -638,12 +765,14 @@ impl AnonGroupHandler {
                 message_id,
                 unpinner_id: sender_id,
                 channel_id,
+                target_sent_timestamp: pin.target_sent_timestamp,
             }
         } else {
             DomainEvent::MessagePinned {
                 message_id,
                 pinner_id: sender_id,
                 channel_id,
+                target_sent_timestamp: pin.target_sent_timestamp,
             }
         };
         ctx.emit(event);
@@ -803,7 +932,7 @@ impl InboxHandler for AnonGroupHandler {
                 self.handle_invite(invite, sender_id, ctx)
             }
             Some(content_v1::content::Content::AnonGroupJoinAck(ack)) => {
-                self.handle_join_ack(ack, sender_id, ctx)
+                self.handle_join_ack(ack, sender_id, ctx).await
             }
             Some(content_v1::content::Content::AnonGroupMemberList(list)) => {
                 self.handle_member_list(list, sender_id, ctx)
@@ -818,7 +947,7 @@ impl InboxHandler for AnonGroupHandler {
                 self.handle_group_message(msg, sender_id, ctx)
             }
             Some(content_v1::content::Content::AnonGroupProfileShare(profile)) => {
-                self.handle_profile_share(profile, sender_id, ctx)
+                self.handle_profile_share(profile, sender_id, ctx).await
             }
             _ => Ok(HandlerOutcome::Ignored),
         }

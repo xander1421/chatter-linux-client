@@ -92,6 +92,9 @@ impl AnonDmService {
             Some(ContentType::AnonGroupInvite(_)) => "AnonGroupInvite",
             Some(ContentType::AnonGroupJoinAck(_)) => "AnonGroupJoinAck",
             Some(ContentType::AnonGroupMemberList(_)) => "AnonGroupMemberList",
+            Some(ContentType::AnonCallOffer(_)) => "AnonCallOffer",
+            Some(ContentType::AnonCallAnswer(_)) => "AnonCallAnswer",
+            Some(ContentType::AnonCallHangup(_)) => "AnonCallHangup",
             _ => "Unknown",
         };
 
@@ -172,6 +175,14 @@ impl AnonDmService {
                         message_id,
                         inner_content: inner_content.clone(),
                         sent_at,
+                    });
+                    
+                    // Clear typing indicator when message arrives
+                    // This prevents stuck typing indicators after message is sent
+                    let channel_id: crate::domain::ChannelId = (*conversation_id).into();
+                    events.push(DomainEvent::TypingStopped {
+                        channel_id,
+                        user_id: *sender_id,
                     });
                 }
             }
@@ -267,12 +278,14 @@ impl AnonDmService {
                         message_id,
                         unpinner_id: *sender_id,
                         channel_id,
+                        target_sent_timestamp: pin.target_sent_timestamp,
                     });
                 } else {
                     events.push(DomainEvent::MessagePinned {
                         message_id,
                         pinner_id: *sender_id,
                         channel_id,
+                        target_sent_timestamp: pin.target_sent_timestamp,
                     });
                 }
             }
@@ -376,6 +389,62 @@ impl AnonDmService {
                 events.push(DomainEvent::AnonGroupMemberListReceived {
                     group_id,
                     members: list.members.clone(),
+                });
+            }
+            Some(ContentType::AnonCallOffer(offer)) => {
+                tracing::info!(
+                    conversation_id = %conversation_id,
+                    sender_id = %sender_id,
+                    room_name = %offer.room_name,
+                    call_type = ?offer.call_type,
+                    "[ANON_DM_CALL] Received call offer"
+                );
+
+                // Emit event for UI to show incoming call
+                events.push(DomainEvent::AnonCallOfferReceived {
+                    conversation_id: *conversation_id,
+                    sender_id: *sender_id,
+                    call_room_id: offer.call_room_id.clone(),
+                    room_name: offer.room_name.clone(),
+                    call_type: offer.call_type,
+                    caller_display_name: offer.caller_display_name.clone(),
+                    call_encryption_key: offer.call_encryption_key.clone(),
+                    timestamp: inner_content.timestamp,
+                });
+            }
+            Some(ContentType::AnonCallAnswer(answer)) => {
+                tracing::info!(
+                    conversation_id = %conversation_id,
+                    sender_id = %sender_id,
+                    accepted = answer.accepted,
+                    "[ANON_DM_CALL] Received call answer"
+                );
+
+                // Emit event for UI to handle call acceptance/rejection
+                events.push(DomainEvent::AnonCallAnswerReceived {
+                    conversation_id: *conversation_id,
+                    sender_id: *sender_id,
+                    call_room_id: answer.call_room_id.clone(),
+                    accepted: answer.accepted,
+                    callee_display_name: answer.callee_display_name.clone(),
+                    timestamp: inner_content.timestamp,
+                });
+            }
+            Some(ContentType::AnonCallHangup(hangup)) => {
+                tracing::info!(
+                    conversation_id = %conversation_id,
+                    sender_id = %sender_id,
+                    reason = ?hangup.reason,
+                    "[ANON_DM_CALL] Received call hangup"
+                );
+
+                // Emit event for UI to end call
+                events.push(DomainEvent::AnonCallHangupReceived {
+                    conversation_id: *conversation_id,
+                    sender_id: *sender_id,
+                    call_room_id: hangup.call_room_id.clone(),
+                    reason: hangup.reason,
+                    timestamp: inner_content.timestamp,
                 });
             }
             _ => {

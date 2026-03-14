@@ -20,6 +20,10 @@ mod queries;
 mod infrastructure;
 mod blocking;
 mod helpers;
+mod calls;
+
+// Re-export call types for external use
+pub use calls::{AnonCallOfferResult, AnonCallRoomCredentials, ReceivedCallOffer, ReceivedCallAnswer, PendingAnonCall};
 
 use std::sync::Arc;
 
@@ -148,4 +152,43 @@ impl AnonDmService {
     pub(crate) fn current_user_id(&self) -> Result<UserId, AnonDmError> {
         Ok(self.settings_repo.current_user_id()?)
     }
+
+    /// Get our avatar bytes from settings.
+    pub fn get_my_avatar(&self) -> Option<Vec<u8>> {
+        use crate::storage::settings_keys;
+        self.settings_repo
+            .get_bytes(settings_keys::AVATAR)
+            .ok()
+            .flatten()
+    }
+    
+    /// Get an available call room token.
+    pub fn get_available_call_room_token(&self) -> Result<Option<crate::mailbox::CallRoomToken>, AnonDmError> {
+        self.token_manager
+            .get_available_call_room_token()
+            .map_err(|e| AnonDmError::MessageError(format!("Failed to get call room token: {}", e)))
+    }
+    
+    /// Mark a call room token as used.
+    pub fn mark_call_room_token_used(&self, token_id: &str) -> Result<(), AnonDmError> {
+        self.token_manager
+            .mark_call_room_token_used(token_id)
+            .map_err(|e| AnonDmError::MessageError(format!("Failed to mark token as used: {}", e)))
+    }
+    
+    /// Request new call room tokens.
+    pub async fn request_call_room_tokens(&self, count: u32) -> Result<u32, AnonDmError> {
+        // Get a gRPC channel and auth interceptor
+        let channel = self.grpc_pool.try_channel()
+            .ok_or_else(|| AnonDmError::MessageError("No gRPC connection available".to_string()))?;
+        let auth = self.grpc_pool.auth_clone();
+        
+        // Request tokens
+        let mut client = crate::network::grpc::MailboxClient::new(channel, auth);
+        self.token_manager
+            .request_call_room_tokens(&mut client, count)
+            .await
+            .map_err(|e| AnonDmError::MessageError(format!("Failed to request tokens: {}", e)))
+    }
+    
 }
