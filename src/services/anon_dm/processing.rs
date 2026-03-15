@@ -4,6 +4,7 @@ use crate::domain::UserId;
 use crate::proto::content_v1::Content;
 use crate::services::AttachmentService;
 
+use crate::services::gateway::shared;
 use super::{AnonDmError, AnonDmService};
 
 impl AnonDmService {
@@ -179,13 +180,8 @@ impl AnonDmService {
                             }
                         }).to_string();
 
-                        let content_type = if has_text && has_attachments { 3 }
-                            else if has_attachments { 2 }
-                            else { 1 };
-
-                        use crate::storage::serialization::db_serialize;
-                        let attachments_blob = db_serialize(&attachment_ids.to_vec())
-                            .unwrap_or_else(|_| vec![8, 0, 0, 0, 0, 0, 0, 0]);
+                        let content_type = shared::determine_content_type(has_text, has_attachments);
+                        let attachments_blob = shared::serialize_attachment_ids(&attachment_ids);
 
                         let message = crate::domain::anon_dm::AnonDmMessage {
                             id: crate::domain::anon_dm::AnonDmMessageId::new(),
