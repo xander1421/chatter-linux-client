@@ -37,23 +37,10 @@ use zeroize::ZeroizeOnDrop;
 use crate::crypto::secure_buffer::SecureBuffer;
 use crate::error::CryptoError;
 
-/// AES block size and IV length.
-const IV_LENGTH: usize = 16;
+use super::attachment_constants::*;
 
-/// AES-256 key length.
-const AES_KEY_LENGTH: usize = 32;
-
-/// HMAC-SHA256 key length.
-const MAC_KEY_LENGTH: usize = 32;
-
-/// HMAC-SHA256 output length.
-const HMAC_LENGTH: usize = 32;
-
-/// Combined key length (AES key + MAC key).
-pub const KEY_SET_LENGTH: usize = AES_KEY_LENGTH + MAC_KEY_LENGTH;
-
-/// Minimum ciphertext length: IV + one AES block + HMAC.
-const MIN_CIPHERTEXT_LENGTH: usize = IV_LENGTH + 16 + HMAC_LENGTH;
+// Re-export for external consumers
+pub use super::attachment_constants::KEY_SET_LENGTH;
 
 /// Minimum padded size for log-bucketing.
 const MIN_PADDED_SIZE: usize = 541;
