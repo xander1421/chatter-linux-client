@@ -13,6 +13,7 @@ use chatter_linux::domain::anon_dm::AnonDm;
 use chatter_linux::inbox::DomainEvent;
 use crate::{DMListItemData, FriendRequestData, MainWindow, MessageItemData};
 use crate::bin_ui::converters::get_initials;
+use crate::bin_ui::features::auth::inbox::unified_actions::{self, EventSource};
 
 /// Spawn anonymous DM request handler to process incoming request events.
 ///
@@ -27,6 +28,7 @@ pub fn spawn_anon_dm_request_handler(
 ) -> tokio::task::JoinHandle<()> {
     let anon_dm_service = ui_ctx.anon_dm_service.clone();
     let attachment_service = ui_ctx.attachment_service.clone();
+    let chat_state = ui_ctx.chat_state.clone();
     let pinned_state = ui_ctx.pinned_state.clone();
     let mut event_rx = ui_ctx.event_bus.subscribe_domain();
 
@@ -626,22 +628,11 @@ pub fn spawn_anon_dm_request_handler(
                 // derived from AnonDmId. We check if the channel_id is an
                 // anon DM by checking if our selected_dm_id matches.
                 // =============================================================
-                DomainEvent::TypingStarted { channel_id, user_id } => {
-                    // Check if this is an anon DM by seeing if selected_dm_id matches
-                    crate::bin_ui::features::auth::inbox::handle_anon_dm_typing(
-                        &weak_window,
-                        channel_id,
-                        user_id,
-                        true, // started
-                    );
+                DomainEvent::TypingStarted { channel_id, user_id: _ } => {
+                    unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), true);
                 }
-                DomainEvent::TypingStopped { channel_id, user_id } => {
-                    crate::bin_ui::features::auth::inbox::handle_anon_dm_typing(
-                        &weak_window,
-                        channel_id,
-                        user_id,
-                        false, // stopped
-                    );
+                DomainEvent::TypingStopped { channel_id, user_id: _ } => {
+                    unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), false);
                 }
                 DomainEvent::ReactionAdded {
                     emoji,
@@ -654,18 +645,15 @@ pub fn spawn_anon_dm_request_handler(
                     // the currently selected conversation. The handler checks if
                     // the selected DM is an anon DM.
                     let weak = weak_window.clone();
+                    let cs = chat_state.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             let selected_dm = w.get_selected_dm_id().to_string();
                             if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
                                 if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_linux::domain::ChannelId>() {
-                                    // This is an anon DM - use timestamp as the target
-                                    crate::bin_ui::features::auth::inbox::handle_anon_dm_reaction(
-                                        &weak,
-                                        channel_id,
-                                        emoji.clone(),
-                                        false, // not remove
-                                        timestamp,
+                                    unified_actions::handle_reaction(
+                                        &weak, &cs, EventSource::Channel(channel_id),
+                                        emoji.clone(), false, timestamp,
                                     );
                                 }
                             }
@@ -678,17 +666,15 @@ pub fn spawn_anon_dm_request_handler(
                     ..
                 } => {
                     let weak = weak_window.clone();
+                    let cs = chat_state.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             let selected_dm = w.get_selected_dm_id().to_string();
                             if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
                                 if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_linux::domain::ChannelId>() {
-                                    crate::bin_ui::features::auth::inbox::handle_anon_dm_reaction(
-                                        &weak,
-                                        channel_id,
-                                        emoji.clone(),
-                                        true, // remove
-                                        timestamp,
+                                    unified_actions::handle_reaction(
+                                        &weak, &cs, EventSource::Channel(channel_id),
+                                        emoji.clone(), true, timestamp,
                                     );
                                 }
                             }
@@ -706,12 +692,10 @@ pub fn spawn_anon_dm_request_handler(
                         .and_then(|b| b.try_into().ok())
                         .map(u64::from_be_bytes)
                         .unwrap_or(0);
-                    crate::bin_ui::features::auth::inbox::handle_anon_dm_pin(
-                        &weak_window,
-                        channel_id,
-                        pinned_state.clone(),
-                        target_sent_timestamp,
-                        false, // pin
+                    unified_actions::handle_pin(
+                        &weak_window, &chat_state, &pinned_state,
+                        EventSource::Channel(channel_id),
+                        target_sent_timestamp, true, // is_pinned = true
                     );
                 }
                 DomainEvent::MessageUnpinned {
@@ -724,12 +708,10 @@ pub fn spawn_anon_dm_request_handler(
                         .and_then(|b| b.try_into().ok())
                         .map(u64::from_be_bytes)
                         .unwrap_or(0);
-                    crate::bin_ui::features::auth::inbox::handle_anon_dm_pin(
-                        &weak_window,
-                        channel_id,
-                        pinned_state.clone(),
-                        target_sent_timestamp,
-                        true, // unpin
+                    unified_actions::handle_pin(
+                        &weak_window, &chat_state, &pinned_state,
+                        EventSource::Channel(channel_id),
+                        target_sent_timestamp, false, // is_pinned = false (unpin)
                     );
                 }
                 DomainEvent::MessageDeleted {
@@ -742,9 +724,9 @@ pub fn spawn_anon_dm_request_handler(
                         .and_then(|b| b.try_into().ok())
                         .map(u64::from_be_bytes)
                         .unwrap_or(0);
-                    crate::bin_ui::features::auth::inbox::handle_anon_dm_delete(
-                        &weak_window,
-                        channel_id,
+                    unified_actions::handle_delete(
+                        &weak_window, &chat_state,
+                        EventSource::Channel(channel_id),
                         target_sent_timestamp,
                     );
                 }
@@ -752,9 +734,9 @@ pub fn spawn_anon_dm_request_handler(
                     conversation_id,
                     message_timestamp,
                 } => {
-                    crate::bin_ui::features::auth::inbox::handle_anon_dm_message_deleted(
-                        &weak_window,
-                        conversation_id,
+                    unified_actions::handle_delete(
+                        &weak_window, &chat_state,
+                        EventSource::Channel(conversation_id.into()),
                         message_timestamp,
                     );
                 }
@@ -763,11 +745,10 @@ pub fn spawn_anon_dm_request_handler(
                     message_timestamp,
                     new_text,
                 } => {
-                    crate::bin_ui::features::auth::inbox::handle_anon_dm_message_edited(
-                        &weak_window,
-                        conversation_id,
-                        message_timestamp,
-                        new_text,
+                    unified_actions::handle_edit(
+                        &weak_window, &chat_state,
+                        EventSource::Channel(conversation_id.into()),
+                        message_timestamp, new_text,
                     );
                 }
                 DomainEvent::MessagesRead {
@@ -777,6 +758,7 @@ pub fn spawn_anon_dm_request_handler(
                 } => {
                     // Use channel_id from event if present, otherwise try to determine from UI
                     let weak = weak_window.clone();
+                    let cs = chat_state.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             // Use channel_id from event if available
@@ -793,9 +775,9 @@ pub fn spawn_anon_dm_request_handler(
                             };
 
                             if let Some(channel_id) = ch_id {
-                                crate::bin_ui::features::auth::inbox::handle_anon_dm_receipt(
-                                    &weak,
-                                    channel_id,
+                                unified_actions::handle_receipt(
+                                    &weak, &cs,
+                                    EventSource::Channel(channel_id),
                                     2, // read
                                     message_timestamps.clone(),
                                 );
@@ -809,14 +791,15 @@ pub fn spawn_anon_dm_request_handler(
                 } => {
                     // For anon DM receipts, check if we're viewing an anon DM
                     let weak = weak_window.clone();
+                    let cs = chat_state.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             let selected_dm = w.get_selected_dm_id().to_string();
                             if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
                                 if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_linux::domain::ChannelId>() {
-                                    crate::bin_ui::features::auth::inbox::handle_anon_dm_receipt(
-                                        &weak,
-                                        channel_id,
+                                    unified_actions::handle_receipt(
+                                        &weak, &cs,
+                                        EventSource::Channel(channel_id),
                                         1, // delivered
                                         message_timestamps.clone(),
                                     );
@@ -840,11 +823,10 @@ pub fn spawn_anon_dm_request_handler(
                         chatter_linux::domain::message::MessageContent::Text(text) => text,
                         _ => "[Unsupported content]".to_string(),
                     };
-                    crate::bin_ui::features::auth::inbox::handle_anon_dm_edit(
-                        &weak_window,
-                        channel_id,
-                        target_sent_timestamp,
-                        new_body,
+                    unified_actions::handle_edit(
+                        &weak_window, &chat_state,
+                        EventSource::Channel(channel_id),
+                        target_sent_timestamp, new_body,
                     );
                 }
                 _ => {

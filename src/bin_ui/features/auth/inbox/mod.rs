@@ -34,16 +34,8 @@ pub mod utils;
 pub use anon_group_events::spawn_anon_group_event_handler;
 pub use pin_persistence::spawn_pin_persistence_handler;
 
-pub use anon_dm_actions::{
-    handle_anon_dm_delete,
-    handle_anon_dm_edit,
-    handle_anon_dm_message_deleted,
-    handle_anon_dm_message_edited,
-    handle_anon_dm_pin,
-    handle_anon_dm_reaction,
-    handle_anon_dm_receipt,
-    handle_anon_dm_typing,
-};
+// Legacy anon DM action handlers — now unified in unified_actions.rs
+// Kept for anon_dm_actions.rs internal use (message_deleted/edited still used by some paths)
 
 use std::sync::Arc;
 
@@ -1116,38 +1108,53 @@ pub async fn handle_inbox_event(
             match &inner_content.content {
                 // Handle typing indicator
                 Some(content::Content::Typing(typing)) => {
-                    let action = typing.action;
-                    anon_group_handlers::handle_anon_group_typing(
-                        weak_window,
-                        ui_ctx,
-                        anon_group_id,
-                        peer_id,
-                        action,
+                    let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                    unified_actions::handle_typing(
+                        weak_window, &ui_ctx.chat_state,
+                        unified_actions::EventSource::Channel(channel_id),
+                        typing.action == 1,
                     );
                 }
 
                 // Handle reaction
                 Some(content::Content::Reaction(reaction)) => {
-                    anon_group_handlers::handle_anon_group_reaction(
-                        weak_window,
-                        ui_ctx,
-                        anon_group_id,
-                        peer_id,
-                        reaction.emoji.clone(),
-                        reaction.remove,
-                        reaction.target_sent_timestamp,
+                    // Persist to DB
+                    let service = ui_ctx.anon_group_service.clone();
+                    let emoji_db = reaction.emoji.clone();
+                    let gid = anon_group_id;
+                    let ts = reaction.target_sent_timestamp;
+                    let remove = reaction.remove;
+                    let pid = peer_id;
+                    let _ = std::thread::spawn(move || {
+                        if remove {
+                            let _ = service.remove_reaction(&gid, ts, &pid, &emoji_db);
+                        } else {
+                            let _ = service.add_reaction(&gid, ts, &pid, &emoji_db);
+                        }
+                    });
+
+                    // Update UI
+                    let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                    unified_actions::handle_reaction(
+                        weak_window, &ui_ctx.chat_state,
+                        unified_actions::EventSource::Channel(channel_id),
+                        reaction.emoji.clone(), reaction.remove, reaction.target_sent_timestamp,
                     );
                 }
 
                 // Handle pin/unpin
                 Some(content::Content::Pin(pin)) => {
-                    anon_group_handlers::handle_anon_group_pin(
-                        weak_window,
-                        &ui_ctx.anon_group_service,
-                        ui_ctx.pinned_state.clone(),
-                        anon_group_id,
-                        pin.target_sent_timestamp,
-                        pin.unpin,
+                    // Persist to DB
+                    let _ = ui_ctx.anon_group_service.set_message_pinned(
+                        &anon_group_id, pin.target_sent_timestamp, !pin.unpin,
+                    );
+
+                    // Update UI
+                    let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                    unified_actions::handle_pin(
+                        weak_window, &ui_ctx.chat_state, &ui_ctx.pinned_state,
+                        unified_actions::EventSource::Channel(channel_id),
+                        pin.target_sent_timestamp, !pin.unpin,
                     );
                 }
 
@@ -1193,11 +1200,11 @@ pub async fn handle_inbox_event(
                     });
 
                     // Update UI immediately
-                    anon_group_handlers::handle_anon_group_edit(
-                        weak_window,
-                        anon_group_id,
-                        edit.target_sent_timestamp,
-                        new_body,
+                    let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                    unified_actions::handle_edit(
+                        weak_window, &ui_ctx.chat_state,
+                        unified_actions::EventSource::Channel(channel_id),
+                        edit.target_sent_timestamp, new_body,
                     );
                 }
 
@@ -1205,9 +1212,10 @@ pub async fn handle_inbox_event(
                 Some(content::Content::DataMessage(data_msg)) => {
                     // Check for delete first
                     if let Some(delete) = &data_msg.delete {
-                        anon_group_handlers::handle_anon_group_delete(
-                            weak_window,
-                            anon_group_id,
+                        let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                        unified_actions::handle_delete(
+                            weak_window, &ui_ctx.chat_state,
+                            unified_actions::EventSource::Channel(channel_id),
                             delete.target_sent_timestamp,
                         );
                         return;
