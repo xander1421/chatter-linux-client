@@ -3,6 +3,7 @@
 //! Service layer orchestrating domain, storage, network, and crypto.
 
 pub mod ai;
+pub mod conversation;
 pub mod current_user;
 pub mod auth_service;
 pub mod session_service;
