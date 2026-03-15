@@ -235,74 +235,22 @@ pub fn handle_dm_received(
             }
         }
 
-        // Always update sidebar
-        update_dm_sidebar(&window, &ui_ctx_cloned, &peer_id_cloned, &sender_name, &preview, &timestamp_str);
+        // Always update sidebar (with unread increment for received messages)
+        let conv = chatter_linux::state::ActiveConversation::Dm {
+            channel_id: dm_channel_id,
+            peer_id: peer_id_cloned,
+        };
+        crate::bin_ui::features::sidebar::update_sidebar_preview(
+            &window, conv, &preview, &timestamp_str, true,
+        );
+
+        // If DM wasn't in sidebar (new peer), create it
+        if !crate::bin_ui::features::sidebar::sidebar_has_dm(&window, &peer_id_cloned) {
+            crate::bin_ui::features::sidebar::create_dm_sidebar_entry(
+                &window, &ui_ctx_cloned, &peer_id_cloned, &sender_name, &preview, &timestamp_str,
+            );
+        }
     });
-}
-
-/// Update DM sidebar with latest message preview.
-pub fn update_dm_sidebar(
-    window: &MainWindow,
-    ui_ctx: &Arc<UIContext>,
-    peer_id: &chatter_linux::domain::UserId,
-    sender_name: &str,
-    preview: &str,
-    timestamp_str: &str,
-) {
-    let peer_id_str = peer_id.to_string();
-    let dms = window.get_dm_conversations();
-    let mut dm_vec: Vec<DMListItemData> = Vec::new();
-    let mut updated_item = None;
-
-    // Extract all items, identifying the one to update
-    for i in 0..dms.row_count() {
-        if let Some(dm) = dms.row_data(i) {
-            if dm.user_id.as_str() == peer_id_str {
-                let mut updated = dm.clone();
-                updated.last_message = preview.into();
-                updated.timestamp = timestamp_str.into();
-                // Increment unread count if it's not the active conversation
-                let selected_dm = window.get_selected_dm_id().to_string();
-                if selected_dm != updated.channel_id.as_str() && selected_dm != updated.user_id.as_str() {
-                    updated.unread_count += 1;
-                }
-                updated_item = Some(updated);
-            } else {
-                dm_vec.push(dm);
-            }
-        }
-    }
-
-    if let Some(item) = updated_item {
-        // Move to top
-        dm_vec.insert(0, item);
-    } else {
-        // Peer not found in sidebar - use dm_to_slint to create it if we can find the channel
-        match ui_ctx.channel_service.get_dm_channel_for_peer(peer_id) {
-            Ok(Some(channel)) => {
-                let mut new_dm = crate::bin_ui::converters::dm_to_slint(&channel, sender_name, &peer_id_str);
-                new_dm.last_message = preview.into();
-                new_dm.timestamp = timestamp_str.into();
-                new_dm.unread_count = 1; // First message in this session
-                dm_vec.insert(0, new_dm);
-                
-                tracing::info!(
-                    peer_id = %peer_id_str,
-                    channel_id = %channel.id,
-                    "Added missing DM conversation to sidebar using dm_to_slint"
-                );
-            }
-            _ => {
-                tracing::warn!(
-                    peer_id = %peer_id_str,
-                    sender_name = %sender_name,
-                    "DM conversation not in sidebar and channel not found - cannot add"
-                );
-            }
-        }
-    }
-
-    window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(dm_vec)));
 }
 
 /// Handle DM unread count update.

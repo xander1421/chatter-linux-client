@@ -853,8 +853,8 @@ export component MessageItem inherits Rectangle {
                     border-radius: 11px;
                     border-width: 1px;
                     border-color: Colors.text-muted.with-alpha(0.15);
-                    x: root.is-own ? -self.width / 2 : bubble.width - self.width / 2;
-                    y: bubble.height - self.height / 2;
+                    x: root.is-own ? -self.width + 8px : bubble.width - 8px;
+                    y: bubble.height - 4px;
 
                     reactions-row := HorizontalLayout {
                         padding-left: 6px;

@@ -77,6 +77,12 @@ pub enum OutgoingIntent {
         quote: Option<AnonQuoteIntent>,
     },
 
+    /// Save a message to the SavedMessages channel (Note to Self).
+    SavedMessages {
+        text: String,
+        attachment_ids: Vec<AttachmentId>,
+    },
+
     /// Initiate a call.
     CallOffer {
         channel_id: CallChannelId,
@@ -276,6 +282,23 @@ pub async fn route_outgoing(
                 quote,
             )
             .await
+        }
+
+        OutgoingIntent::SavedMessages { text, attachment_ids } => {
+            let message = services.message_service
+                .save_message(&text, attachment_ids)
+                .await?;
+            let sent_at = message.sent_at;
+            let att_ids = message.attachments.clone();
+            Ok(SendResult {
+                sent_at,
+                message: Some(message),
+                attachment_ids: att_ids,
+                gif_attachment_ids: vec![],
+                bootstrap_initiated: false,
+                anon_message_id: None,
+                call_result: None,
+            })
         }
 
         OutgoingIntent::CallOffer { channel_id, video, display_name, token } => {

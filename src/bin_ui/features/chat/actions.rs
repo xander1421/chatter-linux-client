@@ -7,7 +7,6 @@ use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::UserId;
-use chatter_linux::state::ActiveConversation;
 
 use crate::MainWindow;
 
@@ -225,48 +224,16 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            // Look up message to get attachment IDs (Signal-style with conversation-aware routing)
-            let attachment_ids = match conversation {
-                ActiveConversation::AnonDm(anon_dm_id) => {
-                    match ui_ctx.anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg.attachment_ids(),
-                        Ok(None) => {
-                            tracing::error!("Anon DM message not found for download");
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to look up anon DM message for download");
-                            return;
-                        }
-                    }
+            // Look up attachment IDs via ConversationHandle (polymorphic across all types)
+            let handle = chatter_linux::services::conversation::ConversationHandle::new(
+                conversation, ui_ctx.clone(),
+            );
+            let attachment_ids = match handle.get_message_attachment_ids(&target_sender_id, target_sent_timestamp) {
+                Ok(ids) => ids,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to look up message for download");
+                    return;
                 }
-                ActiveConversation::AnonGroup(anon_group_id) => {
-                    match ui_ctx.anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg.attachment_ids(),
-                        Ok(None) => {
-                            tracing::error!("Anon group message not found for download");
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to look up anon group message for download");
-                            return;
-                        }
-                    }
-                }
-                ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
-                    match ui_ctx.message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg.attachments,
-                        Ok(None) => {
-                            tracing::error!("Message not found for download");
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to look up message for download");
-                            return;
-                        }
-                    }
-                }
-                ActiveConversation::None => return,
             };
 
             if attachment_ids.is_empty() {

@@ -316,6 +316,35 @@ impl ConversationHandle {
         }
     }
 
+    /// Get attachment IDs for a message by sender + timestamp across any conversation type.
+    pub fn get_message_attachment_ids(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> ConversationResult<Vec<crate::domain::AttachmentId>> {
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                match self.ui_ctx.anon_dm_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                    Ok(Some(msg)) => Ok(msg.attachment_ids()),
+                    Ok(None) => Ok(vec![]),
+                    Err(e) => Err(ConversationError::Other(e.to_string())),
+                }
+            }
+            ActiveConversation::AnonGroup(id) => {
+                match self.ui_ctx.anon_group_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                    Ok(Some(msg)) => Ok(msg.attachment_ids()),
+                    Ok(None) => Ok(vec![]),
+                    Err(e) => Err(ConversationError::Other(e.to_string())),
+                }
+            }
+            ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                Ok(msg.attachments)
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
     /// Check if a message is owned by the current user.
     pub fn is_own_message(
         &self,

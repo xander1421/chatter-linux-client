@@ -571,41 +571,6 @@ pub(crate) fn handle_channel_unread_count(
 }
 
 // =============================================================================
-// Sidebar Preview Update
-// =============================================================================
-
-/// Update the channel sidebar preview with a sent message.
-pub fn update_channel_sidebar_preview(
-    window: &MainWindow,
-    channel_id_str: &str,
-    preview: &str,
-    timestamp_str: &str,
-) {
-    let channels = window.get_channels();
-
-    // Find and update the channel entry
-    for i in 0..channels.row_count() {
-        if let Some(channel) = channels.row_data(i) {
-            if channel.channel_id.as_str() == channel_id_str {
-                let mut updated_channel = channel.clone();
-                updated_channel.last_message = preview.into();
-                updated_channel.timestamp = timestamp_str.into();
-
-                if let Some(model) = channels.as_any().downcast_ref::<VecModel<ChannelListItemData>>()
-                {
-                    model.set_row_data(i, updated_channel);
-                }
-                return;
-            }
-        }
-    }
-
-    tracing::debug!(
-        channel_id = %channel_id_str,
-        "Channel sidebar entry not found for sent message preview update"
-    );
-}
-
 // =============================================================================
 // Auto-Download Entry Point (called from inbox event handler)
 // =============================================================================
