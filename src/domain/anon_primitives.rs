@@ -155,30 +155,40 @@ impl<T> AnonMailbox<T> {
 // ============================================================================
 
 /// Shared structure for tracking rate limits in anonymous conversations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Used by both DM and Group repositories for the `anon_rate_limits` table.
+#[derive(Debug, Clone)]
 pub struct AnonRateLimitEntry {
+    /// Unique row ID.
+    pub id: String,
     /// Entity type ("dm" or "group").
     pub entity_type: String,
-    /// Entity ID (binary).
+    /// Entity ID (conversation_id or group_id as bytes).
     pub entity_id: Vec<u8>,
-    /// Number of messages sent in current window.
-    pub message_count: u32,
-    /// When the current window started.
+    /// Start of current time window.
     pub window_start: DateTime<Utc>,
-    /// When this entry was last updated.
-    pub updated_at: DateTime<Utc>,
+    /// Number of messages in current window.
+    pub message_count: u32,
+    /// Last message timestamp.
+    pub last_message_at: DateTime<Utc>,
 }
 
 impl AnonRateLimitEntry {
     /// Create a new rate limit entry.
-    pub fn new(entity_type: impl Into<String>, entity_id: Vec<u8>) -> Self {
+    pub fn new(entity_type: &str, entity_id: Vec<u8>) -> Self {
         let now = Utc::now();
         Self {
-            entity_type: entity_type.into(),
+            id: Uuid::new_v4().to_string(),
+            entity_type: entity_type.to_string(),
             entity_id,
             message_count: 1,
             window_start: now,
-            updated_at: now,
+            last_message_at: now,
         }
+    }
+
+    /// Check if the window has expired (older than given duration).
+    pub fn is_window_expired(&self, window_duration: chrono::Duration) -> bool {
+        Utc::now() > self.window_start + window_duration
     }
 }

@@ -35,6 +35,7 @@ pub mod settings_repo;
 pub mod user_repo;
 pub mod anon_group_repo;
 pub mod anon_dm_repo;
+pub(crate) mod repo_utils;
 pub mod jarvis_memory_repo;
 pub mod jarvis_graph_repo;
 

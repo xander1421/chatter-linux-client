@@ -545,42 +545,8 @@ impl AnonGroupBlockedUser {
 // Rate Limit Entry
 // ============================================================================
 
-/// Rate limit tracking entry.
-#[derive(Debug, Clone)]
-pub struct AnonRateLimitEntry {
-    /// Unique row ID.
-    pub id: String,
-    /// Entity type ('dm' or 'group').
-    pub entity_type: String,
-    /// Entity ID (conversation_id or group_id as bytes).
-    pub entity_id: Vec<u8>,
-    /// Start of current time window.
-    pub window_start: DateTime<Utc>,
-    /// Number of messages in current window.
-    pub message_count: u32,
-    /// Last message timestamp.
-    pub last_message_at: DateTime<Utc>,
-}
-
-impl AnonRateLimitEntry {
-    /// Create a new rate limit entry.
-    pub fn new(entity_type: &str, entity_id: Vec<u8>) -> Self {
-        let now = Utc::now();
-        Self {
-            id: Uuid::new_v4().to_string(),
-            entity_type: entity_type.to_string(),
-            entity_id,
-            window_start: now,
-            message_count: 1,
-            last_message_at: now,
-        }
-    }
-
-    /// Check if the window has expired (older than given duration).
-    pub fn is_window_expired(&self, window_duration: chrono::Duration) -> bool {
-        Utc::now() > self.window_start + window_duration
-    }
-}
+// AnonRateLimitEntry is now in anon_primitives.rs
+pub use super::anon_primitives::AnonRateLimitEntry;
 
 #[cfg(test)]
 mod tests {

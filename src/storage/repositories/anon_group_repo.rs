@@ -1180,33 +1180,12 @@ impl AnonGroupRepository {
     // Rate Limiting
     // ========================================================================
 
-    /// Get or create rate limit entry for a group.
+    /// Get rate limit entry for a group.
     pub fn get_rate_limit(
         &self,
         group_id: &AnonGroupId,
-    ) -> Result<Option<crate::domain::anon_group::AnonRateLimitEntry>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, entity_type, entity_id, window_start, message_count, last_message_at
-             FROM anon_rate_limits WHERE entity_type = 'group' AND entity_id = ?1",
-        )?;
-
-        let result = stmt.query_row(params![group_id.as_bytes().as_slice()], |row| {
-            Ok(crate::domain::anon_group::AnonRateLimitEntry {
-                id: row.get(0)?,
-                entity_type: row.get(1)?,
-                entity_id: row.get(2)?,
-                window_start: parse_datetime(&row.get::<_, String>(3)?),
-                message_count: row.get::<_, i32>(4)? as u32,
-                last_message_at: parse_datetime(&row.get::<_, String>(5)?),
-            })
-        });
-
-        match result {
-            Ok(entry) => Ok(Some(entry)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
+    ) -> Result<Option<crate::domain::AnonRateLimitEntry>, StorageError> {
+        super::repo_utils::get_rate_limit(&self.db, "group", group_id.as_bytes().as_slice())
     }
 
     /// Increment rate limit counter, resetting window if expired.
@@ -1215,53 +1194,7 @@ impl AnonGroupRepository {
         group_id: &AnonGroupId,
         window_duration: chrono::Duration,
     ) -> Result<u32, StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now();
-
-        // Try to get existing entry
-        if let Some(entry) = self.get_rate_limit(group_id)? {
-            if entry.is_window_expired(window_duration) {
-                // Reset window
-                conn.execute(
-                    "UPDATE anon_rate_limits SET window_start = ?1, message_count = 1, last_message_at = ?1
-                     WHERE entity_type = 'group' AND entity_id = ?2",
-                    params![now.to_rfc3339(), group_id.as_bytes().as_slice()],
-                )?;
-                Ok(1)
-            } else {
-                // Increment counter
-                let new_count = entry.message_count + 1;
-                conn.execute(
-                    "UPDATE anon_rate_limits SET message_count = ?1, last_message_at = ?2
-                     WHERE entity_type = 'group' AND entity_id = ?3",
-                    params![
-                        new_count as i32,
-                        now.to_rfc3339(),
-                        group_id.as_bytes().as_slice(),
-                    ],
-                )?;
-                Ok(new_count)
-            }
-        } else {
-            // Create new entry
-            let entry = crate::domain::anon_group::AnonRateLimitEntry::new(
-                "group",
-                group_id.as_bytes().to_vec(),
-            );
-            conn.execute(
-                "INSERT INTO anon_rate_limits (id, entity_type, entity_id, window_start, message_count, last_message_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    entry.id,
-                    entry.entity_type,
-                    entry.entity_id,
-                    entry.window_start.to_rfc3339(),
-                    entry.message_count as i32,
-                    entry.last_message_at.to_rfc3339(),
-                ],
-            )?;
-            Ok(1)
-        }
+        super::repo_utils::increment_rate_limit(&self.db, "group", group_id.as_bytes().as_slice(), window_duration)
     }
 }
 
@@ -1269,11 +1202,7 @@ impl AnonGroupRepository {
 // Helper functions
 // ============================================================================
 
-fn parse_datetime(s: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now())
-}
+use super::repo_utils::{parse_datetime, vec_to_array_32, require_array_32, require_array_64};
 
 fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroup> {
     use crate::domain::anon_group::AnonGroupStatus;
@@ -1310,27 +1239,8 @@ fn row_to_member(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMember> {
     let user_id = UserId::try_from_slice(&user_id_bytes)
         .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid user ID".into()))?;
 
-    let mailbox_pk: Option<Vec<u8>> = row.get(4)?;
-    let mailbox_pk = mailbox_pk.and_then(|bytes| {
-        if bytes.len() == 32 {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            Some(arr)
-        } else {
-            None
-        }
-    });
-
-    let profile_key: Option<Vec<u8>> = row.get(6)?;
-    let profile_key = profile_key.and_then(|bytes| {
-        if bytes.len() == 32 {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&bytes);
-            Some(arr)
-        } else {
-            None
-        }
-    });
+    let mailbox_pk = vec_to_array_32(row.get(4)?);
+    let profile_key = vec_to_array_32(row.get(6)?);
 
     Ok(AnonGroupMember {
         id: row.get(0)?,
@@ -1353,17 +1263,10 @@ fn row_to_mailbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMailbox>
     let pk_bytes: Vec<u8> = row.get(2)?;
     let sk_bytes: Vec<u8> = row.get(3)?;
 
-    if pk_bytes.len() != 32 {
-        return Err(rusqlite::Error::InvalidParameterName("Invalid public key".into()));
-    }
-    if sk_bytes.len() != 64 {
-        return Err(rusqlite::Error::InvalidParameterName("Invalid private key".into()));
-    }
-
-    let mut public_key = [0u8; 32];
-    let mut private_key = [0u8; 64];
-    public_key.copy_from_slice(&pk_bytes);
-    private_key.copy_from_slice(&sk_bytes);
+    let public_key = require_array_32(&pk_bytes)
+        .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid public key".into()))?;
+    let private_key = require_array_64(&sk_bytes)
+        .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid private key".into()))?;
 
     Ok(AnonGroupMailbox {
         id: row.get(0)?,

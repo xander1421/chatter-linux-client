@@ -806,29 +806,8 @@ impl AnonDmRepository {
     pub fn get_rate_limit(
         &self,
         conversation_id: &AnonDmId,
-    ) -> Result<Option<RateLimitEntry>, StorageError> {
-        let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, entity_type, entity_id, window_start, message_count, last_message_at
-             FROM anon_rate_limits WHERE entity_type = 'dm' AND entity_id = ?1",
-        )?;
-
-        let result = stmt.query_row(params![conversation_id.to_string().as_bytes()], |row| {
-            Ok(RateLimitEntry {
-                id: row.get(0)?,
-                entity_type: row.get(1)?,
-                entity_id: row.get(2)?,
-                window_start: parse_datetime(&row.get::<_, String>(3)?),
-                message_count: row.get::<_, i32>(4)? as u32,
-                last_message_at: parse_datetime(&row.get::<_, String>(5)?),
-            })
-        });
-
-        match result {
-            Ok(entry) => Ok(Some(entry)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
+    ) -> Result<Option<crate::domain::AnonRateLimitEntry>, StorageError> {
+        super::repo_utils::get_rate_limit(&self.db, "dm", conversation_id.to_string().as_bytes())
     }
 
     /// Increment rate limit counter, resetting window if expired.
@@ -837,40 +816,7 @@ impl AnonDmRepository {
         conversation_id: &AnonDmId,
         window_duration: chrono::Duration,
     ) -> Result<u32, StorageError> {
-        let conn = self.db.connection()?;
-        let now = Utc::now();
-        let entity_id = conversation_id.to_string().into_bytes();
-
-        // Try to get existing entry
-        if let Some(entry) = self.get_rate_limit(conversation_id)? {
-            if entry.is_window_expired(window_duration) {
-                // Reset window
-                conn.execute(
-                    "UPDATE anon_rate_limits SET window_start = ?1, message_count = 1, last_message_at = ?1
-                     WHERE entity_type = 'dm' AND entity_id = ?2",
-                    params![now.to_rfc3339(), entity_id],
-                )?;
-                Ok(1)
-            } else {
-                // Increment counter
-                let new_count = entry.message_count + 1;
-                conn.execute(
-                    "UPDATE anon_rate_limits SET message_count = ?1, last_message_at = ?2
-                     WHERE entity_type = 'dm' AND entity_id = ?3",
-                    params![new_count as i32, now.to_rfc3339(), entity_id],
-                )?;
-                Ok(new_count)
-            }
-        } else {
-            // Create new entry
-            let id = uuid::Uuid::new_v4().to_string();
-            conn.execute(
-                "INSERT INTO anon_rate_limits (id, entity_type, entity_id, window_start, message_count, last_message_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![id, "dm", entity_id, now.to_rfc3339(), 1, now.to_rfc3339()],
-            )?;
-            Ok(1)
-        }
+        super::repo_utils::increment_rate_limit(&self.db, "dm", conversation_id.to_string().as_bytes(), window_duration)
     }
 }
 
@@ -892,25 +838,8 @@ fn row_to_conversation(row: &rusqlite::Row) -> Result<AnonDm, rusqlite::Error> {
     let last_message_at_str: Option<String> = row.get(10)?;
     let unread_count: u32 = row.get(11)?;
 
-    let peer_mailbox_pk_arr = peer_mailbox_pk.and_then(|v| {
-        if v.len() == 32 {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&v);
-            Some(arr)
-        } else {
-            None
-        }
-    });
-
-    let peer_profile_key_arr = peer_profile_key.and_then(|v| {
-        if v.len() == 32 {
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&v);
-            Some(arr)
-        } else {
-            None
-        }
-    });
+    let peer_mailbox_pk_arr = vec_to_array_32(peer_mailbox_pk);
+    let peer_profile_key_arr = vec_to_array_32(peer_profile_key);
 
     Ok(AnonDm {
         id: id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?,
@@ -943,17 +872,8 @@ fn row_to_mailbox(row: &rusqlite::Row) -> Result<AnonDmMailbox, rusqlite::Error>
     let created_at_str: String = row.get(5)?;
     let expires_at_str: String = row.get(6)?;
 
-    let mut public_key = [0u8; 32];
-    if public_key_vec.len() != 32 {
-        return Err(rusqlite::Error::InvalidQuery);
-    }
-    public_key.copy_from_slice(&public_key_vec);
-
-    let mut private_key = [0u8; 64];
-    if private_key_vec.len() != 64 {
-        return Err(rusqlite::Error::InvalidQuery);
-    }
-    private_key.copy_from_slice(&private_key_vec);
+    let public_key = require_array_32(&public_key_vec)?;
+    let private_key = require_array_64(&private_key_vec)?;
 
     Ok(AnonDmMailbox {
         id,
@@ -1004,31 +924,4 @@ fn row_to_message(row: &rusqlite::Row) -> Result<AnonDmMessage, rusqlite::Error>
     })
 }
 
-// ============================================================================
-// Rate Limiting Types
-// ============================================================================
-
-/// Rate limit entry for tracking message frequency.
-#[allow(dead_code)]
-pub struct RateLimitEntry {
-    pub id: String,
-    pub entity_type: String,
-    pub entity_id: Vec<u8>,
-    pub window_start: DateTime<Utc>,
-    pub message_count: u32,
-    pub last_message_at: DateTime<Utc>,
-}
-
-impl RateLimitEntry {
-    /// Check if the rate limit window has expired.
-    pub fn is_window_expired(&self, window_duration: chrono::Duration) -> bool {
-        Utc::now() > self.window_start + window_duration
-    }
-}
-
-/// Parse a datetime string, falling back to now on error.
-fn parse_datetime(s: &str) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now())
-}
+use super::repo_utils::{vec_to_array_32, require_array_32, require_array_64};
