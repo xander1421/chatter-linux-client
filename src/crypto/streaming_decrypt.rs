@@ -27,8 +27,12 @@ use openssl::sign::Signer;
 use openssl::symm::{Cipher, Crypter, Mode};
 use subtle::ConstantTimeEq;
 
-use crate::crypto::attachment_constants::*;
+use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
 use crate::error::CryptoError;
+
+const IV_LENGTH: usize = 16;
+const AES_KEY_LENGTH: usize = 32;
+const HMAC_LENGTH: usize = 32;
 const CHUNK_SIZE: usize = 512 * 1024; // 512KB chunks - larger for better SQLite blob throughput
 
 /// Streaming decryptor for large attachments.

@@ -16,10 +16,15 @@ use subtle::ConstantTimeEq;
 use crate::crypto::secure_buffer::SecureBuffer;
 use crate::error::CryptoError;
 
-use super::attachment_constants::*;
+use super::attachment_crypto::KEY_SET_LENGTH;
 
 type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 type HmacSha256 = Hmac<Sha256>;
+
+const IV_LENGTH: usize = 16;
+const AES_KEY_LENGTH: usize = 32;
+const HMAC_LENGTH: usize = 32;
+const MIN_CIPHERTEXT_LENGTH: usize = IV_LENGTH + 16 + HMAC_LENGTH;
 
 /// Threshold for parallel processing (1MB)
 const PARALLEL_THRESHOLD: usize = 1024 * 1024;

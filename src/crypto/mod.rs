@@ -6,7 +6,6 @@
 //! Note: For blind signatures, use `crate::mailbox::blind_signature` which implements
 //! deterministic RSABSSA per NDSS '21 spec, compatible with the Go server.
 
-pub mod attachment_constants;
 pub mod attachment_crypto;
 pub mod attachment_crypto_fast;
 pub mod attachment_crypto_portable;

@@ -21,7 +21,12 @@ use subtle::ConstantTimeEq;
 use crate::crypto::secure_buffer::SecureBuffer;
 use crate::error::CryptoError;
 
-use super::attachment_constants::*;
+use super::attachment_crypto::KEY_SET_LENGTH;
+
+const IV_LENGTH: usize = 16;
+const AES_KEY_LENGTH: usize = 32;
+const HMAC_LENGTH: usize = 32;
+const MIN_CIPHERTEXT_LENGTH: usize = IV_LENGTH + 16 + HMAC_LENGTH;
 
 /// Threshold for parallel verification (1MB)
 /// Below this, sequential is faster due to thread overhead
