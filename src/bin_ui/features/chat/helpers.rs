@@ -362,3 +362,67 @@ pub async fn upload_pending_attachments(
 
     UploadedAttachments { pointers, attachments }
 }
+
+// ============================================================================
+// Shared UI update helpers
+// ============================================================================
+
+/// Update a message's reaction summary in the UI model.
+///
+/// Finds the message by sender_id + timestamp_ns, updates its reaction
+/// fields, and replaces the model. Used by all 4 reaction paths
+/// (anon DM, anon group, regular DM, channel).
+pub(crate) fn update_reaction_in_ui(
+    window: &MainWindow,
+    sender_id: &str,
+    timestamp_ns: &str,
+    emoji: &str,
+    remove: bool,
+) {
+    use crate::bin_ui::converters::parse_reaction_summary_to_entries;
+    use crate::bin_ui::features::auth::update_reaction_summary;
+
+    let current_model = window.get_messages();
+    let messages: Vec<_> = (0..current_model.row_count())
+        .filter_map(|i| current_model.row_data(i))
+        .map(|mut m| {
+            if m.sender_id.as_str() == sender_id
+                && m.timestamp_ns.as_str() == timestamp_ns
+            {
+                let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), emoji, remove);
+                m.reaction_summary = new_summary.clone().into();
+                m.has_reactions = !new_summary.is_empty();
+                m.reactions = slint::ModelRc::new(slint::VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
+            }
+            m
+        })
+        .collect();
+    window.set_messages(slint::ModelRc::new(slint::VecModel::from(messages)));
+}
+
+/// Remove a message from the UI model by sender_id + timestamp_ns.
+///
+/// Unregisters any inline GIF animations for the deleted message.
+/// Used by all delete paths (anon DM, anon group, regular DM, channel)
+/// for both delete-for-me and delete-for-everyone.
+pub(crate) fn remove_message_from_ui(
+    window: &MainWindow,
+    sender_id: &str,
+    timestamp_ns: &str,
+    unregister_gifs: impl Fn(&crate::MessageItemData),
+) {
+    let current_model = window.get_messages();
+    let mut messages = Vec::new();
+    for i in 0..current_model.row_count() {
+        if let Some(m) = current_model.row_data(i) {
+            if m.sender_id.as_str() == sender_id
+                && m.timestamp_ns.as_str() == timestamp_ns
+            {
+                unregister_gifs(&m);
+            } else {
+                messages.push(m);
+            }
+        }
+    }
+    window.set_messages(slint::ModelRc::new(slint::VecModel::from(messages)));
+}

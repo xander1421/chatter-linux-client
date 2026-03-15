@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::anon_dm::AnonDmId;
@@ -11,8 +11,6 @@ use chatter_linux::domain::UserId;
 use chatter_linux::services::{build_reaction_content, build_reaction_content_with_channel};
 
 use super::helpers::{get_peer_id_from_dm_channel, send_channel_content, send_dm_content};
-use crate::bin_ui::converters::parse_reaction_summary_to_entries;
-use crate::bin_ui::features::auth::update_reaction_summary;
 use crate::MainWindow;
 
 /// Wire reaction selected callback for DM and channel conversations.
@@ -96,22 +94,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     let timestamp_for_ui = timestamp_ns_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let current_model = w.get_messages();
-                            let messages: Vec<_> = (0..current_model.row_count())
-                                .filter_map(|i| current_model.row_data(i))
-                                .map(|mut m| {
-                                    if m.sender_id.as_str() == sender_id_for_ui.as_str()
-                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
-                                    {
-                                        let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), &emoji_for_update, false);
-                                        m.reaction_summary = new_summary.clone().into();
-                                        m.has_reactions = !new_summary.is_empty();
-                                        m.reactions = ModelRc::new(VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
-                                    }
-                                    m
-                                })
-                                .collect();
-                            w.set_messages(ModelRc::new(VecModel::from(messages)));
+                            super::helpers::update_reaction_in_ui(&w, &sender_id_for_ui, &timestamp_for_ui, &emoji_for_update, false);
                         }
                     });
                 }
@@ -161,22 +144,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     let timestamp_for_ui = timestamp_ns_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let current_model = w.get_messages();
-                            let messages: Vec<_> = (0..current_model.row_count())
-                                .filter_map(|i| current_model.row_data(i))
-                                .map(|mut m| {
-                                    if m.sender_id.as_str() == sender_id_for_ui.as_str()
-                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
-                                    {
-                                        let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), &emoji_for_update, false);
-                                        m.reaction_summary = new_summary.clone().into();
-                                        m.has_reactions = !new_summary.is_empty();
-                                        m.reactions = ModelRc::new(VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
-                                    }
-                                    m
-                                })
-                                .collect();
-                            w.set_messages(ModelRc::new(VecModel::from(messages)));
+                            super::helpers::update_reaction_in_ui(&w, &sender_id_for_ui, &timestamp_for_ui, &emoji_for_update, false);
                         }
                     });
                 }
@@ -229,22 +197,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     let timestamp_for_ui = timestamp_ns_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let current_model = w.get_messages();
-                            let messages: Vec<_> = (0..current_model.row_count())
-                                .filter_map(|i| current_model.row_data(i))
-                                .map(|mut m| {
-                                    if m.sender_id.as_str() == sender_id_for_ui.as_str()
-                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
-                                    {
-                                        let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), &emoji_for_update, false);
-                                        m.reaction_summary = new_summary.clone().into();
-                                        m.has_reactions = !new_summary.is_empty();
-                                        m.reactions = ModelRc::new(VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
-                                    }
-                                    m
-                                })
-                                .collect();
-                            w.set_messages(ModelRc::new(VecModel::from(messages)));
+                            super::helpers::update_reaction_in_ui(&w, &sender_id_for_ui, &timestamp_for_ui, &emoji_for_update, false);
                         }
                     });
                 }
@@ -289,22 +242,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     let timestamp_for_ui = timestamp_ns_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let current_model = w.get_messages();
-                            let messages: Vec<_> = (0..current_model.row_count())
-                                .filter_map(|i| current_model.row_data(i))
-                                .map(|mut m| {
-                                    if m.sender_id.as_str() == sender_id_for_ui.as_str()
-                                        && m.timestamp_ns.as_str() == timestamp_for_ui.as_str()
-                                    {
-                                        let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), &emoji_for_update, false);
-                                        m.reaction_summary = new_summary.clone().into();
-                                        m.has_reactions = !new_summary.is_empty();
-                                        m.reactions = ModelRc::new(VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
-                                    }
-                                    m
-                                })
-                                .collect();
-                            w.set_messages(ModelRc::new(VecModel::from(messages)));
+                            super::helpers::update_reaction_in_ui(&w, &sender_id_for_ui, &timestamp_for_ui, &emoji_for_update, false);
                         }
                     });
                 }
