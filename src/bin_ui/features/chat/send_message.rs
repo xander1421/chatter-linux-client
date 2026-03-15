@@ -5,12 +5,11 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_linux::app::UIContext;
-use chatter_linux::domain::anon_dm::AnonDmId;
 use chatter_linux::domain::channel::ChannelType;
+use chatter_linux::state::ActiveConversation;
 
 use crate::bin_ui::converters::{message_to_display_data, attachment_to_display_data};
 use crate::bin_ui::features::auth::inbox::update_channel_sidebar_preview;
-use crate::bin_ui::features::chat::helpers::get_peer_id_from_dm_channel;
 use super::typing::clear_outgoing_typing;
 use crate::{DMListItemData, MainWindow, MessageItemData, PendingAttachmentData, PrivateGroupListItemData};
 
@@ -95,16 +94,18 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let group_fanout = group_fanout.clone();
         let weak = weak_window.clone();
 
-        // Get selection and reply state from window
-        let (selected_dm_id, selected_private_group_id, reply_to_sender, reply_to_timestamp, reply_sender_name, reply_preview_text) = weak.upgrade().map(|w| {
-            let dm_id = w.get_selected_dm_id().to_string();
-            let group_id = w.get_selected_private_group_id().to_string();
+        // Determine active conversation from chat state
+        let conversation = chat_state.active_conversation();
+        if matches!(conversation, ActiveConversation::None) { return; }
+
+        // Get reply state from window
+        let (reply_to_sender, reply_to_timestamp, reply_sender_name, reply_preview_text) = weak.upgrade().map(|w| {
             let is_replying = w.get_composer_is_replying();
             let reply_sender = if is_replying { w.get_composer_reply_to_sender().to_string() } else { String::new() };
             let reply_ts = if is_replying { w.get_composer_reply_to_timestamp().to_string() } else { String::new() };
             let reply_name = if is_replying { w.get_composer_reply_to_sender_name().to_string() } else { String::new() };
             let reply_preview = if is_replying { w.get_composer_reply_preview().to_string() } else { String::new() };
-            (dm_id, group_id, reply_sender, reply_ts, reply_name, reply_preview)
+            (reply_sender, reply_ts, reply_name, reply_preview)
         }).unwrap_or_default();
 
         // Clear reply state immediately after capturing
@@ -133,139 +134,125 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             });
         }
 
-        // Check for anonymous DM (prefixed with "anon_dm:")
-        if let Some(anon_dm_id_str) = selected_dm_id.strip_prefix("anon_dm:") {
-            let anon_dm_id: AnonDmId = match anon_dm_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid anon DM ID: {}", e);
-                    return;
-                }
-            };
-
-            tokio::spawn(async move {
-                if !auth_state.is_logged_in() { return; }
-                let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
-                let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
-
-                // Upload attachments
-                let uploaded = super::helpers::upload_pending_attachments(
-                    &pending_attachments,
-                    &attachment_service,
-                    &grpc_pool,
-                    "anon_dm",
-                ).await;
-                let attachment_pointers = uploaded.pointers;
-                let uploaded_attachments = uploaded.attachments;
-
-                // Route via gateway
-                let quote = if is_reply {
-                    let reply = match super::helpers::parse_reply_context(&reply_to_sender, &reply_to_timestamp) {
-                        Some(r) => r,
-                        None => return,
-                    };
-                    Some(chatter_linux::services::gateway::AnonQuoteIntent {
-                        author_id: reply.sender_id,
-                        timestamp: reply.timestamp,
-                    })
-                } else {
-                    None
-                };
-
-                let services = chatter_linux::services::gateway::OutgoingServices {
-                    message_service: &message_service,
-                    mailbox_manager: &mailbox_manager,
-                    user_service: None,
-                    group_fanout: None,
-                    anon_dm_service: Some(&anon_dm_service),
-                    anon_group_service: None,
-                };
-
-                let intent = chatter_linux::services::gateway::OutgoingIntent::AnonDm {
-                    conversation_id: anon_dm_id.clone(),
-                    text: text.clone(),
-                    attachment_pointers,
-                    quote,
-                };
-
-                let send_result = chatter_linux::services::gateway::route_outgoing(intent, &services).await;
-
-                match send_result {
-                    Ok(result) => {
-                        let sent_at = result.sent_at;
-                        let sent_datetime = chrono::DateTime::from_timestamp_nanos(sent_at as i64);
-                        let timestamp_str = sent_datetime.with_timezone(&chrono::Local).format("%H:%M").to_string();
-                        let message_id_str = result.anon_message_id.unwrap_or_default();
-                        let sent_text = text.clone();
-                        let sender_name = current_user_name.clone();
-
-                        // Convert to display data outside the closure (these are Send-safe)
-                        let mut attachment_display_data: Vec<_> = uploaded_attachments
-                            .iter()
-                            .map(|a| attachment_to_display_data(a))
-                            .collect();
-                        // Pre-decode thumbnails before UI thread
-                        for att in &mut attachment_display_data {
-                            att.decode_thumbnail();
-                        }
-
-                        let attachment_service_for_gifs = attachment_service.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                // Convert to Slint types inside the event loop
-                                let slint_attachments: Vec<_> = attachment_display_data
-                                    .iter()
-                                    .map(|a| a.to_slint())
-                                    .collect();
-
-                                let msg_item = super::helpers::build_own_message_item(
-                                    &message_id_str, &current_user_id, &sender_name, &sent_text,
-                                    &timestamp_str, sent_at, slint_attachments,
-                                    is_reply, &reply_sender_name, &reply_preview_text, "sent",
-                                );
-
-                                // Append directly to existing model to avoid full re-render
-                                let model = w.get_messages();
-                                if let Some(vec_model) = model.as_any().downcast_ref::<VecModel<MessageItemData>>() {
-                                    vec_model.push(msg_item);
-                                } else {
-                                    // Fallback: replace entire model (causes full re-render)
-                                    let mut messages: Vec<_> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
-                                    messages.push(msg_item);
-                                    w.set_messages(ModelRc::new(VecModel::from(messages)));
-                                }
-                                w.set_composer_text("".into());
-                                w.set_message_scroll_position(-99999.0);
-                                w.set_is_at_bottom(true);
-
-                                // Auto-register GIF animations for sender's attachments
-                                crate::bin_ui::gif_state::auto_register_gifs_from_messages(
-                                    w.as_weak(),
-                                    attachment_service_for_gifs,
-                                );
-                            }
-                        });
-
-                        tracing::info!("Sent anon DM message to conversation {}", anon_dm_id);
-                    }
-                    Err(e) => {
-                        chatter_linux::services::gateway::shared::handle_send_error(&e, "anon_dm");
-                    }
-                }
-            });
-            return;
-        }
-
-        // Regular DM handling
-        if !selected_dm_id.is_empty() {
-            let peer_user_id = weak.upgrade().and_then(|w| get_peer_id_from_dm_channel(&w, &selected_dm_id));
-            if let Some(peer_user_id) = peer_user_id {
+        match conversation {
+            ActiveConversation::AnonDm(anon_dm_id) => {
                 tokio::spawn(async move {
                     if !auth_state.is_logged_in() { return; }
-                    let peer_id: chatter_linux::domain::UserId = match peer_user_id.parse() { Ok(id) => id, _ => return };
                     let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
                     let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
-                    let dm_channel_id: chatter_linux::domain::ids::ChannelId = selected_dm_id.parse().unwrap_or_else(|_| peer_id.into());
+
+                    // Upload attachments
+                    let uploaded = super::helpers::upload_pending_attachments(
+                        &pending_attachments,
+                        &attachment_service,
+                        &grpc_pool,
+                        "anon_dm",
+                    ).await;
+                    let attachment_pointers = uploaded.pointers;
+                    let uploaded_attachments = uploaded.attachments;
+
+                    // Route via gateway
+                    let quote = if is_reply {
+                        let reply = match super::helpers::parse_reply_context(&reply_to_sender, &reply_to_timestamp) {
+                            Some(r) => r,
+                            None => return,
+                        };
+                        Some(chatter_linux::services::gateway::AnonQuoteIntent {
+                            author_id: reply.sender_id,
+                            timestamp: reply.timestamp,
+                        })
+                    } else {
+                        None
+                    };
+
+                    let services = chatter_linux::services::gateway::OutgoingServices {
+                        message_service: &message_service,
+                        mailbox_manager: &mailbox_manager,
+                        user_service: None,
+                        group_fanout: None,
+                        anon_dm_service: Some(&anon_dm_service),
+                        anon_group_service: None,
+                    };
+
+                    let intent = chatter_linux::services::gateway::OutgoingIntent::AnonDm {
+                        conversation_id: anon_dm_id.clone(),
+                        text: text.clone(),
+                        attachment_pointers,
+                        quote,
+                    };
+
+                    let send_result = chatter_linux::services::gateway::route_outgoing(intent, &services).await;
+
+                    match send_result {
+                        Ok(result) => {
+                            let sent_at = result.sent_at;
+                            let sent_datetime = chrono::DateTime::from_timestamp_nanos(sent_at as i64);
+                            let timestamp_str = sent_datetime.with_timezone(&chrono::Local).format("%H:%M").to_string();
+                            let message_id_str = result.anon_message_id.unwrap_or_default();
+                            let sent_text = text.clone();
+                            let sender_name = current_user_name.clone();
+
+                            // Convert to display data outside the closure (these are Send-safe)
+                            let mut attachment_display_data: Vec<_> = uploaded_attachments
+                                .iter()
+                                .map(|a| attachment_to_display_data(a))
+                                .collect();
+                            // Pre-decode thumbnails before UI thread
+                            for att in &mut attachment_display_data {
+                                att.decode_thumbnail();
+                            }
+
+                            let attachment_service_for_gifs = attachment_service.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    // Convert to Slint types inside the event loop
+                                    let slint_attachments: Vec<_> = attachment_display_data
+                                        .iter()
+                                        .map(|a| a.to_slint())
+                                        .collect();
+
+                                    let msg_item = super::helpers::build_own_message_item(
+                                        &message_id_str, &current_user_id, &sender_name, &sent_text,
+                                        &timestamp_str, sent_at, slint_attachments,
+                                        is_reply, &reply_sender_name, &reply_preview_text, "sent",
+                                    );
+
+                                    // Append directly to existing model to avoid full re-render
+                                    let model = w.get_messages();
+                                    if let Some(vec_model) = model.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                                        vec_model.push(msg_item);
+                                    } else {
+                                        // Fallback: replace entire model (causes full re-render)
+                                        let mut messages: Vec<_> = (0..model.row_count()).filter_map(|i| model.row_data(i)).collect();
+                                        messages.push(msg_item);
+                                        w.set_messages(ModelRc::new(VecModel::from(messages)));
+                                    }
+                                    w.set_composer_text("".into());
+                                    w.set_message_scroll_position(-99999.0);
+                                    w.set_is_at_bottom(true);
+
+                                    // Auto-register GIF animations for sender's attachments
+                                    crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                                        w.as_weak(),
+                                        attachment_service_for_gifs,
+                                    );
+                                }
+                            });
+
+                            tracing::info!("Sent anon DM message to conversation {}", anon_dm_id);
+                        }
+                        Err(e) => {
+                            chatter_linux::services::gateway::shared::handle_send_error(&e, "anon_dm");
+                        }
+                    }
+                });
+            }
+
+            ActiveConversation::Dm { channel_id: dm_channel_id, peer_id } => {
+                tokio::spawn(async move {
+                    if !auth_state.is_logged_in() { return; }
+                    let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
+                    let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
                     let file_paths: Vec<std::path::PathBuf> = pending_attachments.iter().map(|att| att.path.clone()).collect();
 
                     // Build quote intent if replying
@@ -310,7 +297,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             let gif_ids = result.gif_attachment_ids.clone();
                             let preview = if text.chars().count() > 50 { format!("You: {}...", text.chars().take(47).collect::<String>()) } else { format!("You: {}", text) };
                             let sidebar_peer_id = peer_id.to_string();
-                            
+
                             if !result.bootstrap_initiated {
                                 let message = result.message.unwrap();
                                 let mut attachments: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).map(|a| attachment_to_display_data(&a)).collect();
@@ -323,7 +310,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 let message_id_str = message.id.to_string();
                                 let sent_text = text.clone();
                                 let sender_name = current_user_name.clone();
-        
+
 
                                 let weak_copy = weak.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
@@ -344,7 +331,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 let timestamp_str = chatter_linux::util::time::TimestampNanos::from_nanos(sent_at).to_datetime().unwrap_or_else(chrono::Utc::now).with_timezone(&chrono::Local).format("%H:%M").to_string();
                                 let sent_text = text.clone();
                                 let sender_name = current_user_name.clone();
-        
+
                                 let weak_copy = weak.clone();
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak_copy.upgrade() {
@@ -370,176 +357,180 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     }
                 });
             }
-        } else if !selected_private_group_id.is_empty() {
-            tokio::spawn(async move {
-                if !auth_state.is_logged_in() { return; }
-                let group_id: chatter_linux::domain::anon_group::AnonGroupId = match selected_private_group_id.parse() { Ok(id) => id, _ => return };
 
-                let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
-                let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
+            ActiveConversation::AnonGroup(group_id) => {
+                tokio::spawn(async move {
+                    if !auth_state.is_logged_in() { return; }
 
-                // Upload attachments
-                let uploaded = super::helpers::upload_pending_attachments(
-                    &pending_attachments,
-                    &attachment_service,
-                    &grpc_pool,
-                    "anon_group",
-                ).await;
-                let attachment_pointers = uploaded.pointers;
-                let uploaded_attachments = uploaded.attachments;
+                    let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
+                    let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
 
-                // Route via gateway
-                let quote = if is_reply {
-                    let reply = match super::helpers::parse_reply_context(&reply_to_sender, &reply_to_timestamp) {
-                        Some(r) => r,
-                        None => return,
+                    // Upload attachments
+                    let uploaded = super::helpers::upload_pending_attachments(
+                        &pending_attachments,
+                        &attachment_service,
+                        &grpc_pool,
+                        "anon_group",
+                    ).await;
+                    let attachment_pointers = uploaded.pointers;
+                    let uploaded_attachments = uploaded.attachments;
+
+                    // Route via gateway
+                    let quote = if is_reply {
+                        let reply = match super::helpers::parse_reply_context(&reply_to_sender, &reply_to_timestamp) {
+                            Some(r) => r,
+                            None => return,
+                        };
+                        Some(chatter_linux::services::gateway::AnonQuoteIntent {
+                            author_id: reply.sender_id,
+                            timestamp: reply.timestamp,
+                        })
+                    } else {
+                        None
                     };
-                    Some(chatter_linux::services::gateway::AnonQuoteIntent {
-                        author_id: reply.sender_id,
-                        timestamp: reply.timestamp,
-                    })
-                } else {
-                    None
-                };
-
-                let services = chatter_linux::services::gateway::OutgoingServices {
-                    message_service: &message_service,
-                    mailbox_manager: &mailbox_manager,
-                    user_service: None,
-                    group_fanout: None,
-                    anon_dm_service: None,
-                    anon_group_service: Some(&anon_group_service),
-                };
-
-                let intent = chatter_linux::services::gateway::OutgoingIntent::AnonGroup {
-                    group_id: group_id.clone(),
-                    text: text.clone(),
-                    attachment_pointers,
-                    quote,
-                };
-
-                if let Ok(result) = chatter_linux::services::gateway::route_outgoing(intent, &services).await {
-                    let sent_at = result.sent_at;
-                    let message_id = result.anon_message_id.unwrap_or_default();
-                    let sent_datetime = chrono::DateTime::from_timestamp_nanos(sent_at as i64);
-                    let timestamp_str = sent_datetime.with_timezone(&chrono::Local).format("%H:%M").to_string();
-                    let preview = if text.chars().count() > 50 { format!("You: {}...", text.chars().take(47).collect::<String>()) } else { format!("You: {}", text) };
-                    let group_id_str = group_id.to_string();
-
-                    let sent_text = text.clone();
-                    let mut attachment_display_data: Vec<_> = uploaded_attachments
-                        .iter()
-                        .map(|a| attachment_to_display_data(a))
-                        .collect();
-                    // Pre-decode thumbnails before UI thread
-                    for att in &mut attachment_display_data {
-                        att.decode_thumbnail();
-                    }
-
-                    let attachment_service_for_gifs = attachment_service.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            let slint_attachments: Vec<_> = attachment_display_data
-                                .iter()
-                                .map(|a| a.to_slint())
-                                .collect();
-
-                            let msg_item = super::helpers::build_own_message_item(
-                                &message_id.to_string(), &current_user_id, &current_user_name, &sent_text,
-                                &timestamp_str, sent_at, slint_attachments,
-                                is_reply, &reply_sender_name, &reply_preview_text, "sent",
-                            );
-                            super::helpers::append_message_to_ui(&w, msg_item);
-                            update_private_group_sidebar_preview(&w, &group_id_str, &preview, &timestamp_str);
-
-                            // Auto-register GIF animations for sender's attachments
-                            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
-                                w.as_weak(),
-                                attachment_service_for_gifs,
-                            );
-                        }
-                    });
-                }
-            });
-        } else {
-            tokio::spawn(async move {
-                let channel_id = match chat_state.get().active_channel_id { Some(id) => id, None => return };
-                if !auth_state.is_logged_in() { return; }
-                let is_saved = match channel_service.get_channel_local(&channel_id) { Ok(Some(c)) => c.channel_type == ChannelType::SavedMessages, _ => false };
-
-                // Get current user ID for is_own calculation
-                let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
-
-                if is_saved {
-                    let mut uploaded = Vec::new();
-                    for att in &pending_attachments {
-                        if let Some(pointer) = &att.pointer {
-                            // Pre-uploaded attachment (e.g., GIF from picker)
-                            let _ = pointer; // pointer already used in att.id
-                            uploaded.push(att.id);
-                        } else if let Ok(res) = attachment_service.upload_to_cdn_encrypted(&grpc_pool, &att.path).await {
-                            uploaded.push(res.attachment_id);
-                        }
-                    }
-                    if let Ok(message) = message_service.save_message(&text, uploaded).await {
-                        let resolved: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
-                        let mut display = message_to_display_data(&message, "Me", &resolved);
-                        // Pre-decode attachment thumbnails before UI thread
-                        display.decode_attachment_thumbnails();
-                        let attachment_service_for_gifs = attachment_service.clone();
-                        let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
-                            super::helpers::append_message_to_ui(&w, display.to_slint_with_user(&current_user_id));
-                            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
-                                w.as_weak(),
-                                attachment_service_for_gifs,
-                            );
-                        }});
-                    }
-                } else {
-                    let file_paths: Vec<std::path::PathBuf> = pending_attachments.iter().map(|a| a.path.clone()).collect();
 
                     let services = chatter_linux::services::gateway::OutgoingServices {
                         message_service: &message_service,
                         mailbox_manager: &mailbox_manager,
                         user_service: None,
-                        group_fanout: group_fanout.as_deref(),
+                        group_fanout: None,
                         anon_dm_service: None,
-                        anon_group_service: None,
+                        anon_group_service: Some(&anon_group_service),
                     };
 
-                    let intent = chatter_linux::services::gateway::OutgoingIntent::Channel {
-                        channel_id,
+                    let intent = chatter_linux::services::gateway::OutgoingIntent::AnonGroup {
+                        group_id: group_id.clone(),
                         text: text.clone(),
-                        file_paths,
-                        thread_id: None,
-                        mentioned_integrations: vec![],
-                        targets_ai_bot: false,
+                        attachment_pointers,
+                        quote,
                     };
 
-                    match chatter_linux::services::gateway::route_outgoing(intent, &services).await {
-                        Ok(result) => {
-                            let message = result.message.expect("Channel send always returns message");
+                    if let Ok(result) = chatter_linux::services::gateway::route_outgoing(intent, &services).await {
+                        let sent_at = result.sent_at;
+                        let message_id = result.anon_message_id.unwrap_or_default();
+                        let sent_datetime = chrono::DateTime::from_timestamp_nanos(sent_at as i64);
+                        let timestamp_str = sent_datetime.with_timezone(&chrono::Local).format("%H:%M").to_string();
+                        let preview = if text.chars().count() > 50 { format!("You: {}...", text.chars().take(47).collect::<String>()) } else { format!("You: {}", text) };
+                        let group_id_str = group_id.to_string();
+
+                        let sent_text = text.clone();
+                        let mut attachment_display_data: Vec<_> = uploaded_attachments
+                            .iter()
+                            .map(|a| attachment_to_display_data(a))
+                            .collect();
+                        // Pre-decode thumbnails before UI thread
+                        for att in &mut attachment_display_data {
+                            att.decode_thumbnail();
+                        }
+
+                        let attachment_service_for_gifs = attachment_service.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                let slint_attachments: Vec<_> = attachment_display_data
+                                    .iter()
+                                    .map(|a| a.to_slint())
+                                    .collect();
+
+                                let msg_item = super::helpers::build_own_message_item(
+                                    &message_id.to_string(), &current_user_id, &current_user_name, &sent_text,
+                                    &timestamp_str, sent_at, slint_attachments,
+                                    is_reply, &reply_sender_name, &reply_preview_text, "sent",
+                                );
+                                super::helpers::append_message_to_ui(&w, msg_item);
+                                update_private_group_sidebar_preview(&w, &group_id_str, &preview, &timestamp_str);
+
+                                // Auto-register GIF animations for sender's attachments
+                                crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                                    w.as_weak(),
+                                    attachment_service_for_gifs,
+                                );
+                            }
+                        });
+                    }
+                });
+            }
+
+            ActiveConversation::Channel(channel_id) => {
+                tokio::spawn(async move {
+                    if !auth_state.is_logged_in() { return; }
+                    let is_saved = match channel_service.get_channel_local(&channel_id) { Ok(Some(c)) => c.channel_type == ChannelType::SavedMessages, _ => false };
+
+                    // Get current user ID for is_own calculation
+                    let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
+
+                    if is_saved {
+                        let mut uploaded = Vec::new();
+                        for att in &pending_attachments {
+                            if let Some(pointer) = &att.pointer {
+                                // Pre-uploaded attachment (e.g., GIF from picker)
+                                let _ = pointer; // pointer already used in att.id
+                                uploaded.push(att.id);
+                            } else if let Ok(res) = attachment_service.upload_to_cdn_encrypted(&grpc_pool, &att.path).await {
+                                uploaded.push(res.attachment_id);
+                            }
+                        }
+                        if let Ok(message) = message_service.save_message(&text, uploaded).await {
                             let resolved: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
                             let mut display = message_to_display_data(&message, "Me", &resolved);
                             // Pre-decode attachment thumbnails before UI thread
                             display.decode_attachment_thumbnails();
-                            let sidebar_channel_id = channel_id.to_string();
-                            let preview = if text.chars().count() > 50 { format!("You: {}...", text.chars().take(47).collect::<String>()) } else { format!("You: {}", text) };
-                            let ts = crate::bin_ui::features::auth::inbox::utils::format_timestamp(message.sent_at);
                             let attachment_service_for_gifs = attachment_service.clone();
                             let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
                                 super::helpers::append_message_to_ui(&w, display.to_slint_with_user(&current_user_id));
-                                update_channel_sidebar_preview(&w, &sidebar_channel_id, &preview, &ts);
                                 crate::bin_ui::gif_state::auto_register_gifs_from_messages(
                                     w.as_weak(),
                                     attachment_service_for_gifs,
                                 );
                             }});
                         }
-                        Err(e) => { chatter_linux::services::gateway::shared::handle_send_error(&e, "channel"); }
+                    } else {
+                        let file_paths: Vec<std::path::PathBuf> = pending_attachments.iter().map(|a| a.path.clone()).collect();
+
+                        let services = chatter_linux::services::gateway::OutgoingServices {
+                            message_service: &message_service,
+                            mailbox_manager: &mailbox_manager,
+                            user_service: None,
+                            group_fanout: group_fanout.as_deref(),
+                            anon_dm_service: None,
+                            anon_group_service: None,
+                        };
+
+                        let intent = chatter_linux::services::gateway::OutgoingIntent::Channel {
+                            channel_id,
+                            text: text.clone(),
+                            file_paths,
+                            thread_id: None,
+                            mentioned_integrations: vec![],
+                            targets_ai_bot: false,
+                        };
+
+                        match chatter_linux::services::gateway::route_outgoing(intent, &services).await {
+                            Ok(result) => {
+                                let message = result.message.expect("Channel send always returns message");
+                                let resolved: Vec<_> = message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
+                                let mut display = message_to_display_data(&message, "Me", &resolved);
+                                // Pre-decode attachment thumbnails before UI thread
+                                display.decode_attachment_thumbnails();
+                                let sidebar_channel_id = channel_id.to_string();
+                                let preview = if text.chars().count() > 50 { format!("You: {}...", text.chars().take(47).collect::<String>()) } else { format!("You: {}", text) };
+                                let ts = crate::bin_ui::features::auth::inbox::utils::format_timestamp(message.sent_at);
+                                let attachment_service_for_gifs = attachment_service.clone();
+                                let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
+                                    super::helpers::append_message_to_ui(&w, display.to_slint_with_user(&current_user_id));
+                                    update_channel_sidebar_preview(&w, &sidebar_channel_id, &preview, &ts);
+                                    crate::bin_ui::gif_state::auto_register_gifs_from_messages(
+                                        w.as_weak(),
+                                        attachment_service_for_gifs,
+                                    );
+                                }});
+                            }
+                            Err(e) => { chatter_linux::services::gateway::shared::handle_send_error(&e, "channel"); }
+                        }
                     }
-                }
-            });
+                });
+            }
+
+            ActiveConversation::None => return,
         }
     });
 }

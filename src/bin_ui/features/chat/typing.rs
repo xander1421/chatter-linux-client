@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use slint::{ComponentHandle, Timer, TimerMode};
+use slint::{Timer, TimerMode};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::anon_dm::AnonDmId;
@@ -20,9 +20,9 @@ use chatter_linux::mailbox::group::GroupCoordinator;
 use chatter_linux::services::mailbox_manager::MailboxManager;
 use chatter_linux::services::message::MessageService;
 use chatter_linux::services::{build_typing_content, build_typing_content_with_channel};
-use chatter_linux::state::AuthState;
+use chatter_linux::state::{ActiveConversation, AuthState};
 
-use super::helpers::{get_peer_id_from_dm_channel, send_channel_content, send_dm_content};
+use super::helpers::{send_channel_content, send_dm_content};
 use crate::MainWindow;
 
 /// Typing refresh interval (Signal: 10 seconds)
@@ -80,7 +80,6 @@ pub fn wire_typing_changed(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let group_coordinator = ui_ctx.group_coordinator.clone();
     let anon_dm_service = ui_ctx.anon_dm_service.clone();
     let anon_group_service = ui_ctx.anon_group_service.clone();
-    let weak_window = window.as_weak();
 
     window.on_typing_changed(move |is_typing: bool| {
         // Track user activity for presence updates
@@ -90,168 +89,157 @@ pub fn wire_typing_changed(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 crate::bin_ui::features::auth::presence_integration::track_activity(&ui_ctx).await;
             });
         }
-        // Get current conversation context
-        let (selected_dm_id, peer_user_id, selected_channel_id, selected_private_group_id) = weak_window
-            .upgrade()
-            .map(|w| {
-                let dm_id = w.get_selected_dm_id().to_string();
-                let peer_id = if !dm_id.is_empty() {
-                    get_peer_id_from_dm_channel(&w, &dm_id)
+
+        let conversation = chat_state.active_conversation();
+
+        match conversation {
+            ActiveConversation::AnonDm(anon_dm_id) => {
+                let conversation_id = format!("anon_dm:{}", anon_dm_id);
+
+                if is_typing {
+                    bump_typing_anon_dm(
+                        &conversation_id,
+                        anon_dm_id.to_string(),
+                        anon_dm_service.clone(),
+                    );
                 } else {
-                    None
-                };
-                let channel_state = chat_state.get();
-                let channel_id = channel_state.active_channel_id.map(|id| id.to_string());
-                let group_id = w.get_selected_private_group_id().to_string();
-                (dm_id, peer_id, channel_id, group_id)
-            })
-            .unwrap_or_default();
+                    // User explicitly stopped typing - clear state and send STOPPED
+                    OUTGOING_TYPING.with(|state_cell| {
+                        let state = state_cell.borrow_mut().take();
+                        if let Some(state) = state {
+                            if state.conversation_id == conversation_id {
+                                tracing::debug!(
+                                    conversation_id = %conversation_id,
+                                    "TYPING_SEND: User stopped typing explicitly (anon DM)"
+                                );
 
-        // Handle anonymous DMs using the same timer-based pattern as regular DMs
-        if let Some(anon_dm_id_str) = selected_dm_id.strip_prefix("anon_dm:") {
-            let conversation_id = format!("anon_dm:{}", anon_dm_id_str);
-
-            if is_typing {
-                // Use bump_typing pattern with anon DM service
-                bump_typing_anon_dm(
-                    &conversation_id,
-                    anon_dm_id_str.to_string(),
-                    anon_dm_service.clone(),
-                );
-            } else {
-                // User explicitly stopped typing - clear state and send STOPPED
-                OUTGOING_TYPING.with(|state_cell| {
-                    let state = state_cell.borrow_mut().take();
-                    if let Some(state) = state {
-                        if state.conversation_id == conversation_id {
-                            tracing::debug!(
-                                conversation_id = %conversation_id,
-                                "TYPING_SEND: User stopped typing explicitly (anon DM)"
-                            );
-
-                            let anon_dm_id: AnonDmId = match anon_dm_id_str.parse() {
-                                Ok(id) => id,
-                                Err(_) => return,
-                            };
-                            let service = anon_dm_service.clone();
-                            tokio::spawn(async move {
-                                let _ = service.send_typing_indicator(&anon_dm_id, false).await;
-                            });
-                        }
-                    }
-                });
-            }
-            return;
-        }
-
-        // Handle anonymous groups using the same timer-based pattern
-        if !selected_private_group_id.is_empty() {
-            let conversation_id = format!("anon_group:{}", selected_private_group_id);
-
-            if is_typing {
-                // Use bump_typing pattern with anon group service
-                bump_typing_anon_group(
-                    &conversation_id,
-                    selected_private_group_id.clone(),
-                    anon_group_service.clone(),
-                );
-            } else {
-                // User explicitly stopped typing - clear state and send STOPPED
-                OUTGOING_TYPING.with(|state_cell| {
-                    let state = state_cell.borrow_mut().take();
-                    if let Some(state) = state {
-                        if state.conversation_id == conversation_id {
-                            tracing::debug!(
-                                conversation_id = %conversation_id,
-                                "TYPING_SEND: User stopped typing explicitly (anon group)"
-                            );
-
-                            let anon_group_id: AnonGroupId = match selected_private_group_id.parse() {
-                                Ok(id) => id,
-                                Err(_) => return,
-                            };
-                            let service = anon_group_service.clone();
-                            tokio::spawn(async move {
-                                let _ = service.send_typing_indicator(&anon_group_id, false).await;
-                            });
-                        }
-                    }
-                });
-            }
-            return;
-        }
-
-        let is_dm = !selected_dm_id.is_empty();
-        let conversation_id = if is_dm {
-            peer_user_id.clone().unwrap_or_default()
-        } else {
-            selected_channel_id.clone().unwrap_or_default()
-        };
-
-        if conversation_id.is_empty() {
-            return;
-        }
-
-        // Skip if typing to self
-        if let Some(user_id) = auth_state.get().current_user_id {
-            if conversation_id == user_id.to_string() {
-                return;
-            }
-        }
-
-        if is_typing {
-            // User started typing - use bumpTyping pattern
-            bump_typing(
-                &conversation_id,
-                is_dm,
-                auth_state.clone(),
-                mailbox_manager.clone(),
-                message_service.clone(),
-                group_coordinator.clone(),
-            );
-        } else {
-            // User explicitly stopped typing (e.g., backspaced to empty)
-            // Clear state and send STOPPED
-            OUTGOING_TYPING.with(|state_cell| {
-                let state = state_cell.borrow_mut().take();
-                if let Some(state) = state {
-                    if state.conversation_id == conversation_id {
-                        tracing::debug!(
-                            conversation_id = %conversation_id,
-                            "TYPING_SEND: User stopped typing explicitly"
-                        );
-
-                        // Send STOPPED
-                        let message_service = message_service.clone();
-                        let mailbox_manager = mailbox_manager.clone();
-                        let group_coordinator = group_coordinator.clone();
-                        let auth_state = auth_state.clone();
-                        let conv_id = conversation_id.clone();
-
-                        tokio::spawn(async move {
-                            if !auth_state.is_logged_in() {
-                                return;
+                                let service = anon_dm_service.clone();
+                                tokio::spawn(async move {
+                                    let _ = service.send_typing_indicator(&anon_dm_id, false).await;
+                                });
                             }
+                        }
+                    });
+                }
+            }
 
-                            if is_dm {
-                                let peer_id: UserId = match conv_id.parse() {
-                                    Ok(id) => id,
-                                    Err(_) => return,
-                                };
-                                let content = build_typing_content(false);
-                                let _ = send_dm_content(content, &peer_id, message_service, mailbox_manager).await;
-                            } else {
-                                let channel_id: chatter_linux::domain::ChannelId = match conv_id.parse() {
-                                    Ok(id) => id,
-                                    Err(_) => return,
-                                };
-                                let content = build_typing_content_with_channel(false, Some(&conv_id));
-                                let _ = send_channel_content(content, &channel_id, message_service, group_coordinator).await;
+            ActiveConversation::AnonGroup(anon_group_id) => {
+                let conversation_id = format!("anon_group:{}", anon_group_id);
+
+                if is_typing {
+                    bump_typing_anon_group(
+                        &conversation_id,
+                        anon_group_id.to_string(),
+                        anon_group_service.clone(),
+                    );
+                } else {
+                    // User explicitly stopped typing - clear state and send STOPPED
+                    OUTGOING_TYPING.with(|state_cell| {
+                        let state = state_cell.borrow_mut().take();
+                        if let Some(state) = state {
+                            if state.conversation_id == conversation_id {
+                                tracing::debug!(
+                                    conversation_id = %conversation_id,
+                                    "TYPING_SEND: User stopped typing explicitly (anon group)"
+                                );
+
+                                let service = anon_group_service.clone();
+                                tokio::spawn(async move {
+                                    let _ = service.send_typing_indicator(&anon_group_id, false).await;
+                                });
                             }
-                        });
+                        }
+                    });
+                }
+            }
+
+            ActiveConversation::Dm { peer_id, .. } => {
+                let conversation_id = peer_id.to_string();
+
+                // Skip if typing to self
+                if let Some(user_id) = auth_state.get().current_user_id {
+                    if peer_id == user_id {
+                        return;
                     }
                 }
-            });
+
+                if is_typing {
+                    bump_typing(
+                        &conversation_id,
+                        true,
+                        auth_state.clone(),
+                        mailbox_manager.clone(),
+                        message_service.clone(),
+                        group_coordinator.clone(),
+                    );
+                } else {
+                    OUTGOING_TYPING.with(|state_cell| {
+                        let state = state_cell.borrow_mut().take();
+                        if let Some(state) = state {
+                            if state.conversation_id == conversation_id {
+                                tracing::debug!(
+                                    conversation_id = %conversation_id,
+                                    "TYPING_SEND: User stopped typing explicitly"
+                                );
+
+                                let message_service = message_service.clone();
+                                let mailbox_manager = mailbox_manager.clone();
+                                let auth_state = auth_state.clone();
+
+                                tokio::spawn(async move {
+                                    if !auth_state.is_logged_in() {
+                                        return;
+                                    }
+                                    let content = build_typing_content(false);
+                                    let _ = send_dm_content(content, &peer_id, message_service, mailbox_manager).await;
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+
+            ActiveConversation::Channel(channel_id) => {
+                let conversation_id = channel_id.to_string();
+
+                if is_typing {
+                    bump_typing(
+                        &conversation_id,
+                        false,
+                        auth_state.clone(),
+                        mailbox_manager.clone(),
+                        message_service.clone(),
+                        group_coordinator.clone(),
+                    );
+                } else {
+                    OUTGOING_TYPING.with(|state_cell| {
+                        let state = state_cell.borrow_mut().take();
+                        if let Some(state) = state {
+                            if state.conversation_id == conversation_id {
+                                tracing::debug!(
+                                    conversation_id = %conversation_id,
+                                    "TYPING_SEND: User stopped typing explicitly"
+                                );
+
+                                let message_service = message_service.clone();
+                                let group_coordinator = group_coordinator.clone();
+                                let auth_state = auth_state.clone();
+                                let conv_id = conversation_id.clone();
+
+                                tokio::spawn(async move {
+                                    if !auth_state.is_logged_in() {
+                                        return;
+                                    }
+                                    let content = build_typing_content_with_channel(false, Some(&conv_id));
+                                    let _ = send_channel_content(content, &channel_id, message_service, group_coordinator).await;
+                                });
+                            }
+                        }
+                    });
+                }
+            }
+
+            ActiveConversation::None => return,
         }
     });
 }
