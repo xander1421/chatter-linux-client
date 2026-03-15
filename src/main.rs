@@ -1,6 +1,7 @@
-//! Chatter Linux Client
+//! Chatter Client
 //!
-//! Native Linux desktop client for Chatter secure messaging.
+//! Cross-platform client for Chatter secure messaging.
+//! Supports Linux, Windows, macOS, and Android.
 
 use chatter_linux::app::AppContext;
 use chatter_linux::system::{init_antidebug, antidebug_check};
@@ -12,8 +13,30 @@ slint::include_modules!();
 // Binary-only UI modules (require Slint types)
 mod bin_ui;
 
+/// Android entry point - called by android-activity glue.
+#[cfg(target_os = "android")]
+#[no_mangle]
+fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
+    // Set up the Slint Android platform backend
+    slint::platform::set_platform(Box::new(
+        i_slint_backend_android_activity::AndroidPlatform::new(app),
+    ))
+    .expect("Failed to set Android platform");
+
+    // Build and run the tokio runtime manually (can't use #[tokio::main] here)
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    rt.block_on(app_main());
+}
+
+/// Desktop entry point.
+#[cfg(not(target_os = "android"))]
 #[tokio::main]
 async fn main() {
+    app_main().await;
+}
+
+/// Shared application logic for all platforms.
+async fn app_main() {
     // Create shutdown token for graceful task cancellation
     let shutdown_token = CancellationToken::new();
     // Initialize tracing for logging
@@ -40,7 +63,9 @@ async fn main() {
         tracing::info!("GStreamer initialized: {}", gstreamer::version_string());
     }
 
-    // Select OpenGL ES backend for hardware-accelerated video rendering
+    // Select OpenGL ES backend for hardware-accelerated video rendering (desktop only)
+    // On Android, the platform is set up in android_main()
+    #[cfg(not(target_os = "android"))]
     if let Err(e) = slint::BackendSelector::new()
         .backend_name("winit".into())
         .require_opengl_es()
@@ -258,6 +283,7 @@ async fn main() {
         window.set_register_password(password.into());
         window.set_register_confirm_password(password.into());
         window.set_register_pin(pin.into());
+        window.set_register_server_url("http://localhost:50051".into());
 
         tracing::info!("DEV MODE: Auto-registering as {} ({})", username, display_name);
         window.invoke_register(
@@ -265,6 +291,7 @@ async fn main() {
             password.into(),
             display_name.into(),
             pin.into(),
+            "http://localhost:50051".into(),
         );
     }
 
@@ -286,16 +313,19 @@ async fn main() {
         }
     });
 
-    // Spawn Ctrl+C handler for graceful shutdown
-    let shutdown_for_ctrlc = shutdown_token.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            tracing::info!("Ctrl+C received, initiating shutdown...");
-            shutdown_for_ctrlc.cancel();
-            // Force quit Slint's event loop
-            slint::quit_event_loop().ok();
-        }
-    });
+    // Spawn Ctrl+C handler for graceful shutdown (desktop only)
+    #[cfg(not(target_os = "android"))]
+    {
+        let shutdown_for_ctrlc = shutdown_token.clone();
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                tracing::info!("Ctrl+C received, initiating shutdown...");
+                shutdown_for_ctrlc.cancel();
+                // Force quit Slint's event loop
+                slint::quit_event_loop().ok();
+            }
+        });
+    }
 
     // Run Slint event loop (blocks until window closes or Ctrl+C)
     window.run().expect("Failed to run application");

@@ -10,6 +10,9 @@ use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
     /// Send a reaction to a message in the group.
+    ///
+    /// Uses the ephemeral message path (no rate limiting) since reactions
+    /// are lightweight and shouldn't count against the message rate limit.
     pub async fn send_reaction(
         &self,
         group_id: &AnonGroupId,
@@ -24,7 +27,7 @@ impl AnonGroupService {
         }
 
         let content = build_reaction_content(emoji, remove, target_author_aci, target_sent_timestamp);
-        self.send_message(group_id, content).await
+        self.send_ephemeral_message(group_id, content).await
     }
 
     /// Send a typing indicator to all group members.
@@ -39,7 +42,7 @@ impl AnonGroupService {
         }
 
         let content = build_typing_content(started);
-        self.send_message(group_id, content).await
+        self.send_ephemeral_message(group_id, content).await
     }
 
     /// Send delete-for-everyone to all group members.
@@ -54,7 +57,7 @@ impl AnonGroupService {
         }
 
         let content = build_delete_for_everyone_content(target_sent_timestamp);
-        self.send_message(group_id, content).await
+        self.send_ephemeral_message(group_id, content).await
     }
 
     /// Send pin/unpin notification to all group members.
@@ -71,7 +74,7 @@ impl AnonGroupService {
         }
 
         let content = build_pin_content(target_author_aci, target_sent_timestamp, pin);
-        self.send_message(group_id, content).await
+        self.send_ephemeral_message(group_id, content).await
     }
 
     /// Send an edit message to update a previously sent message.

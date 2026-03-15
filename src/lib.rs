@@ -16,6 +16,7 @@ pub mod media;
 pub mod system;
 pub mod state;
 pub mod ui;
+#[cfg(feature = "local-ai")]
 pub mod local_ai;
 pub mod events;
 pub mod error;

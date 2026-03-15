@@ -62,6 +62,10 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
                     w.set_loading_messages(true);
                     w.set_selected_channel_id(channel_id.clone());
                     w.set_selected_dm_id("".into());
+                    // Clear pinned bar immediately while loading new channel's pins
+                    w.set_has_pinned_messages(false);
+                    w.set_pinned_message_preview("".into());
+                    w.set_pinned_total_count(0);
                 }
             });
 
@@ -86,57 +90,23 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
             );
 
             // Load pinned messages for this channel
-            match pin_service.load_pinned_for_channel(&channel_id).await {
-                Ok(pinned_messages) => {
-                    tracing::info!(
-                        channel_id = %channel_id,
-                        pinned_count = pinned_messages.len(),
-                        "[PINNED] Loaded {} pinned messages",
-                        pinned_messages.len()
-                    );
-                    
-                    if !pinned_messages.is_empty() {
-                        let message_ids: Vec<_> = pinned_messages.iter().map(|p| p.message_id).collect();
-                        pinned_state.set_pinned_messages(channel_id, message_ids);
-                        
-                        if let Some(first) = pinned_messages.first() {
-                            let preview = first.preview.clone();
-                            let total_count = pinned_messages.len() as i32;
-                            let should_show = pinned_state.should_show();
-                            
-                            tracing::info!(
-                                preview = %preview,
-                                should_show = should_show,
-                                "[PINNED] Setting UI: preview='{}', should_show={}",
-                                preview,
-                                should_show
-                            );
-                            
-                            let weak_pinned = weak.clone();
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak_pinned.upgrade() {
-                                    w.set_has_pinned_messages(should_show);
-                                    w.set_pinned_message_preview(preview.into());
-                                    w.set_pinned_current_index(1); // 1-based for display
-                                    w.set_pinned_total_count(total_count);
-                                }
-                            });
-                        }
-                    } else {
-                        tracing::debug!("[PINNED] No pinned messages for channel {}", channel_id);
-                        pinned_state.clear();
-                        let weak_pinned = weak.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak_pinned.upgrade() {
-                                w.set_has_pinned_messages(false);
-                            }
-                        });
-                    }
+            let (msg_ids, preview) = match pin_service.load_pinned_for_channel(&channel_id).await {
+                Ok(pinned) if !pinned.is_empty() => {
+                    let ids = pinned.iter().map(|p| p.message_id).collect();
+                    let preview = pinned[0].preview.clone();
+                    tracing::info!(channel_id = %channel_id, count = pinned.len(), "[PINNED] Loaded pinned messages");
+                    (ids, preview)
+                }
+                Ok(_) => {
+                    tracing::debug!("[PINNED] No pinned messages for channel {}", channel_id);
+                    (vec![], String::new())
                 }
                 Err(e) => {
                     tracing::warn!("[PINNED] Failed to load pinned messages: {}", e);
+                    (vec![], String::new())
                 }
-            }
+            };
+            super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
 
             // Load channel and messages
             let message_timestamps = load_channel_into_ui(

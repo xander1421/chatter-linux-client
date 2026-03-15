@@ -165,6 +165,22 @@ impl EphemeralCallKey {
         Self { secret, public }
     }
 
+    /// Reconstruct from raw private key bytes (for service-layer use).
+    ///
+    /// The private key is automatically zeroized when this struct is dropped.
+    pub fn from_private_bytes(bytes: [u8; 32]) -> Self {
+        let secret = X25519PrivateKey::from(bytes);
+        let public = X25519PublicKey::from(&secret);
+        Self { secret, public }
+    }
+
+    /// Get the private key bytes for passing to the service layer.
+    ///
+    /// The caller is responsible for ensuring these bytes are handled securely.
+    pub fn private_key_bytes(&self) -> [u8; 32] {
+        self.secret.to_bytes()
+    }
+
     /// Get the public key bytes to send in offer/answer.
     pub fn public_key_bytes(&self) -> [u8; 32] {
         *self.public.as_bytes()

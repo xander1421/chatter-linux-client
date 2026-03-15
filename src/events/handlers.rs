@@ -593,6 +593,18 @@ impl EventHandlers {
                 trace!(?conversation_id, ?reason, "AnonCallHangupReceived: handled by UI thread");
             }
 
+            DomainEvent::AnonGroupCallOfferReceived { group_id, room_name, .. } => {
+                trace!(?group_id, ?room_name, "AnonGroupCallOfferReceived: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupCallAnswerReceived { group_id, accepted, .. } => {
+                trace!(?group_id, ?accepted, "AnonGroupCallAnswerReceived: handled by UI thread");
+            }
+
+            DomainEvent::AnonGroupCallHangupReceived { group_id, reason, .. } => {
+                trace!(?group_id, ?reason, "AnonGroupCallHangupReceived: handled by UI thread");
+            }
+
             // ================================================================
             // UI-Specific Events (handled by UI thread)
             // ================================================================

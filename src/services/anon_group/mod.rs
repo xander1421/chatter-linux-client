@@ -13,6 +13,7 @@
 //!
 //! The anonymous mailbox per group ensures the server cannot correlate group membership.
 
+pub mod calls;
 mod control;
 mod ephemeral;
 mod error;
@@ -26,8 +27,6 @@ mod storage;
 pub use error::AnonGroupError;
 
 use std::sync::Arc;
-
-use rand::RngCore;
 
 use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -92,12 +91,10 @@ impl AnonGroupService {
         }
     }
 
-    /// Generate random padding to reach 160-byte boundary.
+    /// Generate random padding to reach a target size.
+    ///
+    /// Delegates to the centralized NDSS '21 padding in `gateway::builders`.
     pub(crate) fn generate_padding(boundary: usize) -> Vec<u8> {
-        let current_size = 0; // Will be adjusted based on actual content
-        let padding_needed = boundary - (current_size % boundary);
-        let mut padding = vec![0u8; padding_needed];
-        rand::rng().fill_bytes(&mut padding);
-        padding
+        crate::services::gateway::builders::generate_padding(boundary)
     }
 }

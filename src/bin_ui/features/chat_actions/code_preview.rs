@@ -69,6 +69,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
             let content = w.get_code_preview_plain_text().to_string();
             let line_count = w.get_code_preview_line_count();
             // Move clipboard operation to background thread
+            #[cfg(not(target_os = "android"))]
             std::thread::spawn(move || {
                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                     if let Err(e) = clipboard.set_text(&content) {
@@ -88,6 +89,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
             let content = w.get_code_preview_selected_text().to_string();
             if !content.is_empty() {
                 // Move clipboard operation to background thread
+                #[cfg(not(target_os = "android"))]
                 std::thread::spawn(move || {
                     if let Ok(mut clipboard) = arboard::Clipboard::new() {
                         if let Err(e) = clipboard.set_text(&content) {

@@ -153,13 +153,67 @@ impl AnonDmService {
 
                     // Use sender's timestamp for consistent ordering across devices
                     let sent_at = inner_content.timestamp;
-                    let message_id = self.store_message_with_attachments(
-                        conversation_id,
-                        sender_id,
-                        &data_msg.body,
-                        &attachment_ids,
-                        sent_at,
-                    )?;
+
+                    // Store with quote metadata if this is a reply
+                    let message_id = if let Some(ref q) = data_msg.quote {
+                        // Resolve author display name
+                        let author_name = if let Ok(author_uid) = q.author_aci.parse::<crate::domain::UserId>() {
+                            self.anon_dm_repo.get_conversation(conversation_id)
+                                .ok()
+                                .flatten()
+                                .and_then(|dm| {
+                                    if dm.peer_id == author_uid { dm.peer_display_name } else { None }
+                                })
+                                .unwrap_or_else(|| q.author_aci.clone())
+                        } else {
+                            q.author_aci.clone()
+                        };
+
+                        let content_json = serde_json::json!({
+                            "text": data_msg.body,
+                            "quote": {
+                                "author_id": q.author_aci,
+                                "author_name": author_name,
+                                "timestamp": q.id,
+                                "preview": q.text,
+                            }
+                        }).to_string();
+
+                        let content_type = if has_text && has_attachments { 3 }
+                            else if has_attachments { 2 }
+                            else { 1 };
+
+                        use crate::storage::serialization::db_serialize;
+                        let attachments_blob = db_serialize(&attachment_ids.to_vec())
+                            .unwrap_or_else(|_| vec![8, 0, 0, 0, 0, 0, 0, 0]);
+
+                        let message = crate::domain::anon_dm::AnonDmMessage {
+                            id: crate::domain::anon_dm::AnonDmMessageId::new(),
+                            conversation_id: *conversation_id,
+                            sender_id: *sender_id,
+                            content_type,
+                            content_json,
+                            attachments_blob,
+                            is_deleted: false,
+                            is_read: false,
+                            reaction_counts: Vec::new(),
+                            current_user_reactions: Vec::new(),
+                            delivery_status: String::new(),
+                            sent_at,
+                            created_at: Utc::now(),
+                            is_pinned: false,
+                        };
+                        self.anon_dm_repo.insert_message(&message)?;
+                        message.id
+                    } else {
+                        self.store_message_with_attachments(
+                            conversation_id,
+                            sender_id,
+                            &data_msg.body,
+                            &attachment_ids,
+                            sent_at,
+                        )?
+                    };
                     tracing::info!(
                         conversation_id = %conversation_id,
                         message_id = %message_id,
@@ -481,6 +535,7 @@ impl AnonDmService {
             delivery_status: String::new(),
             sent_at,
             created_at: Utc::now(),
+            is_pinned: false,
         };
 
         self.anon_dm_repo.insert_message(&message)?;
@@ -552,6 +607,7 @@ impl AnonDmService {
             delivery_status: String::new(),
             sent_at,
             created_at: Utc::now(),
+            is_pinned: false,
         };
 
         self.anon_dm_repo.insert_message(&message)?;

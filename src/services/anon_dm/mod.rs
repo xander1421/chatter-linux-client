@@ -148,6 +148,16 @@ impl AnonDmService {
         }
     }
 
+    /// Get the anon DM repository (for inbox provider initialization).
+    pub fn anon_dm_repo(&self) -> Arc<AnonDmRepository> {
+        self.anon_dm_repo.clone()
+    }
+
+    /// Get the pairwise service (for inbox provider initialization).
+    pub fn pairwise_service(&self) -> Arc<PairwiseService> {
+        self.pairwise_service.clone()
+    }
+
     /// Get the current user ID.
     pub(crate) fn current_user_id(&self) -> Result<UserId, AnonDmError> {
         Ok(self.settings_repo.current_user_id()?)

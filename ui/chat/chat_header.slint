@@ -58,9 +58,13 @@ export component ChatHeader inherits Rectangle {
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;
 
+    // Whether there are pinned messages (even if bar is dismissed)
+    in property <bool> has-any-pinned: false;
+
     // Callbacks
     callback search-clicked();
     callback settings-clicked();
+    callback pin-clicked();
     callback voice-call-clicked();
     callback video-call-clicked();
 
@@ -307,6 +311,13 @@ export component ChatHeader inherits Rectangle {
                 // Utility buttons group
                 HorizontalLayout {
                     spacing: Spacing.xs;
+
+                    // Pin button (shows when there are pinned messages)
+                    if root.has-any-pinned: IconButton {
+                        icon: Icons.pin;
+                        icon-color: Colors.primary;
+                        clicked => { root.pin-clicked(); }
+                    }
 
                     IconButton {
                         icon: Icons.search;

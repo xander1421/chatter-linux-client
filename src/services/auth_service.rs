@@ -452,14 +452,16 @@ impl AuthService {
         // PRIVACY: Hash username with profile key - server never sees actual username
         let username_hash = hash_username_with_profile_key(username, &profile_key);
 
-        // Derive SVR public key - required for registration
-        let svr_public_key = if let Some(p) = pin {
+        // Derive SVR public key and registration lock - required for registration
+        let (svr_public_key, registration_lock) = if let Some(p) = pin {
             // Validate PIN is exactly 6 digits
             if p.len() != 6 || !p.chars().all(|c| c.is_ascii_digit()) {
                 return Err(AuthError::RegistrationFailed("PIN must be exactly 6 digits".to_string()));
             }
             let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(p, username)?;
-            keypair.public_key_bytes().to_vec()
+            // SECURITY: Registration lock prevents account takeover without PIN
+            let reg_lock = crate::crypto::svr::derive_registration_lock(p, username)?;
+            (keypair.public_key_bytes().to_vec(), reg_lock)
         } else {
             return Err(AuthError::RegistrationFailed("PIN is required for account recovery".to_string()));
         };
@@ -606,7 +608,7 @@ impl AuthService {
                 &username_hash, // PRIVACY: Send hash, not plaintext username
                 password_hash.as_slice(),
                 &encrypted_display_name,
-                &svr_public_key, // Derived from PIN or empty
+                &svr_public_key, // Derived from PIN
                 device_info,
                 credentials.auth_token().as_bytes(),
                 &uak,
@@ -614,6 +616,7 @@ impl AuthService {
                 initial_prekeys,
                 &challenge.challenge_id,
                 &challenge_response,
+                &registration_lock, // SECURITY: Prevents account takeover without PIN
             )
             .await
             .map_err(|e| AuthError::RegistrationFailed(e.to_string()))?;

@@ -13,6 +13,7 @@ export component RegisterPage inherits Rectangle {
     in-out property <string> password: "";
     in-out property <string> confirm-password: "";
     in-out property <string> pin: "";  // 6-digit PIN for SVR
+    in-out property <string> server-url;
     in property <bool> loading: false;
     in property <string> error: "";
     in property <image> avatar-source;
@@ -26,11 +27,12 @@ export component RegisterPage inherits Rectangle {
     property <bool> password-empty: password == "";
     property <bool> confirm-password-empty: confirm-password == "";
     property <bool> pin-empty: pin == "";
+    property <bool> server-url-empty: server-url == "";
     property <bool> pin-valid: true;  // Validated in Rust before submission
     property <bool> passwords-match: password == confirm-password;
-    property <bool> fields-valid: !display-name-empty && !username-empty && !password-empty && !confirm-password-empty && !pin-empty && pin-valid && passwords-match;
+    property <bool> fields-valid: !display-name-empty && !username-empty && !password-empty && !confirm-password-empty && !pin-empty && pin-valid && passwords-match && !server-url-empty;
 
-    callback register(string, string, string, string);  // username, password, display_name, pin
+    callback register(string, string, string, string, string);  // username, password, display_name, pin, server_url
     callback select-avatar();
     callback select-default-avatar(int);
     callback go-to-login();
@@ -148,6 +150,65 @@ export component RegisterPage inherits Rectangle {
 
                 // Spacer
                 Rectangle { height: Spacing.md; }
+
+                // Server URL field
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Server URL";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Input {
+                        placeholder: "https://...";
+                        text <=> root.server-url;
+                        disabled: root.loading;
+                        error: submitted && server-url-empty;
+                        error-message: submitted && server-url-empty ? "Server URL is required" : "";
+                    }
+
+                    // Quick select buttons
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        alignment: start;
+                        
+                        Rectangle {
+                            height: 24px;
+                            width: 80px;
+                            background: Colors.surface-hover;
+                            border-radius: Spacing.radius-sm;
+                            Text {
+                                text: "Localhost";
+                                font-size: Typography.xs;
+                                color: Colors.text-secondary;
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.server-url = "http://localhost:50051";
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 24px;
+                            width: 80px;
+                            background: Colors.surface-hover;
+                            border-radius: Spacing.radius-sm;
+                            Text {
+                                text: "Tunnel";
+                                font-size: Typography.xs;
+                                color: Colors.text-secondary;
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.server-url = "https://seeker-dance-ignored-clusters.trycloudflare.com";
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Display name field with label
                 VerticalLayout {
@@ -305,7 +366,7 @@ export component RegisterPage inherits Rectangle {
                     clicked => {
                         submitted = true;
                         if fields-valid {
-                            root.register(root.username, root.password, root.display-name, root.pin);
+                            root.register(root.username, root.password, root.display-name, root.pin, root.server-url);
                         }
                     }
                 }

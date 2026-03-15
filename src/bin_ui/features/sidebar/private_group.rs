@@ -55,14 +55,29 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<UIContext>,
         let current_user_id_str = current_user_id.map(|id| id.to_string()).unwrap_or_default();
         
         // Load messages for this group
-        let messages = match anon_group_service.get_messages(&group_id, None, 50) {
+        let mut messages = match anon_group_service.get_messages(&group_id, None, 50) {
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::error!("Failed to load messages for private group {}: {}", group_id, e);
                 Vec::new()
             }
         };
-        
+
+        // Load reaction counts from DB and populate messages
+        if let Ok(reaction_map) = anon_group_service.get_all_reaction_counts(&group_id) {
+            for msg in &mut messages {
+                if let Some(counts) = reaction_map.get(&msg.sent_at) {
+                    msg.reaction_counts = counts
+                        .iter()
+                        .map(|(emoji, count): &(String, u32)| chatter_linux::domain::message::ReactionCount {
+                            emoji: emoji.clone(),
+                            count: *count,
+                        })
+                        .collect();
+                }
+            }
+        }
+
         // Convert messages to display data
         let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
         for msg in &messages {
@@ -182,6 +197,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
     let user_service = ui_ctx.user_service.clone();
     let attachment_service = ui_ctx.attachment_service.clone();
     let auth_state = ui_ctx.auth_state.clone();
+    let pinned_state = ui_ctx.pinned_state.clone();
     let weak_window = window.as_weak();
 
     window.on_private_group_selected(move |group_id: SharedString| {
@@ -191,6 +207,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
         let user_service = user_service.clone();
         let attachment_service = attachment_service.clone();
         let auth_state = auth_state.clone();
+        let pinned_state = pinned_state.clone();
 
         // Stop any playing audio when switching
         stop_audio_playback();
@@ -205,6 +222,27 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
                     return;
                 }
             };
+
+            // Load pinned messages for this group from DB
+            let (msg_ids, preview) = match anon_group_service.list_pinned(&group_id) {
+                Ok(pinned) if !pinned.is_empty() => {
+                    let ids = pinned.iter().filter_map(|m| m.id.as_str().parse().ok()).collect();
+                    let preview = pinned[0].as_text()
+                        .filter(|t| !t.is_empty())
+                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t })
+                        .unwrap_or_else(|| "[Pinned message]".to_string());
+                    (ids, preview)
+                }
+                _ => (vec![], String::new()),
+            };
+            let channel_id = group_id.to_string().parse()
+                .unwrap_or_else(|_| chatter_linux::domain::ids::ChannelId::new());
+            super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
+
+            // Mark messages as read when opening the group
+            if let Err(e) = anon_group_service.mark_as_read(&group_id) {
+                tracing::warn!(error = %e, "Failed to mark group messages as read");
+            }
 
             // Get group info from local storage
             let group = match anon_group_service.get_group(&group_id) {
@@ -230,13 +268,28 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
             let current_user_id_str = current_user_id.map(|id| id.to_string()).unwrap_or_default();
 
             // Load messages for this group
-            let messages = match anon_group_service.get_messages(&group_id, None, 50) {
+            let mut messages = match anon_group_service.get_messages(&group_id, None, 50) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to load messages for private group {}: {}", group_id, e);
                     Vec::new()
                 }
             };
+
+            // Load reaction counts from DB and populate messages
+            if let Ok(reaction_map) = anon_group_service.get_all_reaction_counts(&group_id) {
+                for msg in &mut messages {
+                    if let Some(counts) = reaction_map.get(&msg.sent_at) {
+                        msg.reaction_counts = counts
+                            .iter()
+                            .map(|(emoji, count): &(String, u32)| chatter_linux::domain::message::ReactionCount {
+                                emoji: emoji.clone(),
+                                count: *count,
+                            })
+                            .collect();
+                    }
+                }
+            }
 
             // Convert messages to display data
             let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());

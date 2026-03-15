@@ -1,10 +1,10 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry } from "app.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -32,6 +32,7 @@ export component MainWindow inherits Window {
     in-out property <string> register-password <=> app.register-password;
     in-out property <string> register-confirm-password <=> app.register-confirm-password;
     in-out property <string> register-pin <=> app.register-pin;
+    in-out property <string> register-server-url <=> app.register-server-url;
     in property <bool> register-loading <=> app.register-loading;
     in property <string> register-error <=> app.register-error;
     in property <image> register-avatar-source <=> app.register-avatar-source;
@@ -78,6 +79,7 @@ export component MainWindow inherits Window {
     // ========== Reply-to state (Signal-style: sender_id + timestamp) ==========
     in-out property <bool> composer-is-replying <=> app.composer-is-replying;
     in-out property <string> composer-reply-to-sender <=> app.composer-reply-to-sender;
+    in-out property <string> composer-reply-to-sender-name <=> app.composer-reply-to-sender-name;
     in-out property <string> composer-reply-to-timestamp <=> app.composer-reply-to-timestamp;
     in-out property <string> composer-reply-preview <=> app.composer-reply-preview;
 
@@ -194,6 +196,7 @@ export component MainWindow inherits Window {
     callback pinned-prev-clicked <=> app.pinned-prev-clicked;
     callback pinned-next-clicked <=> app.pinned-next-clicked;
     callback pinned-dismiss-clicked <=> app.pinned-dismiss-clicked;
+    callback pinned-show-clicked <=> app.pinned-show-clicked;
     callback pinned-go-to-message <=> app.pinned-go-to-message;
 
     // ========== Thread panel state ==========

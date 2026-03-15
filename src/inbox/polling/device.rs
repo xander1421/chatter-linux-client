@@ -134,9 +134,10 @@ pub async fn process_device_message(
     }
 
     // Check envelope type for identified sender (PreKey/Ciphertext vs SealedSender)
-    // envelope_type: 1=ciphertext, 2=prekey, 3=sealed_sender, 4=ecies_init
-    // This is AFTER the sender key check, so only non-sender-key messages reach here
-    let is_identified_sender = msg.envelope_type == 1 || msg.envelope_type == 2;
+    // EnvelopeType: 0=unspecified, 1=sealed_sender, 2=prekey_message, 3=message(ciphertext), 4=ecies_init
+    // PreKey(2) and Message(3) are identified sender; SealedSender(1) falls through below
+    let is_identified_sender = msg.envelope_type == EnvelopeType::PrekeyMessage as i32
+        || msg.envelope_type == EnvelopeType::Message as i32;
     if is_identified_sender && !msg.source_user_id.is_empty() {
         tracing::info!(
             message_guid = %msg.message_guid,

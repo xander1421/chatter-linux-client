@@ -4,8 +4,12 @@
 //! See `gateway/` for the implementation.
 
 pub use crate::services::gateway::{
-    // Content builders
+    // Padding
+    generate_padding, PADDING_GROUP_CONTROL, PADDING_MESSAGE, PADDING_LARGE,
+    // DataMessage builders
     build_text_content, build_data_message_content, build_reply_content,
+    build_data_message_content_with_quote, build_data_message_content_with_channel,
+    // Control message builders
     build_typing_content, build_typing_content_with_channel,
     build_read_receipt_content, build_read_receipt_content_with_channel,
     build_delivery_receipt_content, build_delivery_receipt_content_with_channel,

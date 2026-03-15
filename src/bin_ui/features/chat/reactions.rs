@@ -11,6 +11,7 @@ use chatter_linux::domain::UserId;
 use chatter_linux::services::{build_reaction_content, build_reaction_content_with_channel};
 
 use super::helpers::{get_peer_id_from_dm_channel, send_channel_content, send_dm_content};
+use crate::bin_ui::converters::parse_reaction_summary_to_entries;
 use crate::bin_ui::features::auth::update_reaction_summary;
 use crate::MainWindow;
 
@@ -29,6 +30,23 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         let emoji_str = emoji.to_string();
+
+        // Dedup: check if this emoji already exists on the message, skip if so
+        let already_reacted = weak_window.upgrade().map(|w| {
+            let current_model = w.get_messages();
+            (0..current_model.row_count())
+                .filter_map(|i| current_model.row_data(i))
+                .any(|m| {
+                    m.sender_id.as_str() == sender_id_str
+                        && m.timestamp_ns.as_str() == timestamp_ns_str
+                        && m.reaction_summary.to_string().contains(&emoji_str)
+                })
+        }).unwrap_or(false);
+
+        if already_reacted {
+            tracing::debug!(emoji = %emoji_str, "Skipping duplicate reaction");
+            return;
+        }
 
         let (selected_dm_id, peer_user_id, selected_private_group_id) = weak_window
             .upgrade()
@@ -88,6 +106,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                         let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), &emoji_for_update, false);
                                         m.reaction_summary = new_summary.clone().into();
                                         m.has_reactions = !new_summary.is_empty();
+                                        m.reactions = ModelRc::new(VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
                                     }
                                     m
                                 })
@@ -113,6 +132,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let service = anon_group_service.clone();
             let emoji_for_send = emoji_str.clone();
             let target_author = sender_id_str.clone();
+            let current_user_id = auth_state.get().current_user_id;
 
             tokio::spawn(async move {
                 if let Err(e) = service.send_reaction(
@@ -124,6 +144,17 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 ).await {
                     tracing::error!(error = %e, "Failed to send anon group reaction");
                 } else {
+                    // Persist own reaction to DB
+                    if let Some(user_id) = current_user_id {
+                        let service_db = service.clone();
+                        let emoji_db = emoji_for_send.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            if let Err(e) = service_db.add_reaction(&anon_group_id, target_sent_timestamp, &user_id, &emoji_db) {
+                                tracing::warn!(error = %e, "Failed to persist own reaction to DB");
+                            }
+                        });
+                    }
+
                     // Update UI optimistically
                     let emoji_for_update = emoji_for_send.clone();
                     let sender_id_for_ui = target_author.clone();
@@ -140,6 +171,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                         let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), &emoji_for_update, false);
                                         m.reaction_summary = new_summary.clone().into();
                                         m.has_reactions = !new_summary.is_empty();
+                                        m.reactions = ModelRc::new(VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
                                     }
                                     m
                                 })
@@ -207,6 +239,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                         let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), &emoji_for_update, false);
                                         m.reaction_summary = new_summary.clone().into();
                                         m.has_reactions = !new_summary.is_empty();
+                                        m.reactions = ModelRc::new(VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
                                     }
                                     m
                                 })
@@ -266,6 +299,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                         let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), &emoji_for_update, false);
                                         m.reaction_summary = new_summary.clone().into();
                                         m.has_reactions = !new_summary.is_empty();
+                                        m.reactions = ModelRc::new(VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
                                     }
                                     m
                                 })

@@ -26,6 +26,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let ctx_mailbox_manager = ui_ctx.mailbox_manager.clone();
     let ctx_channel_service = ui_ctx.channel_service.clone();
     let ctx_anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let ctx_anon_group_service = ui_ctx.anon_group_service.clone();
 
     // Start voice call
     window.on_start_voice_call({
@@ -36,6 +37,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let mailbox_manager = ctx_mailbox_manager.clone();
         let channel_service = ctx_channel_service.clone();
         let anon_dm_service = ctx_anon_dm_service.clone();
+        let anon_group_service = ctx_anon_group_service.clone();
 
         move || {
             let weak = weak.clone();
@@ -44,6 +46,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let mailbox_manager = mailbox_manager.clone();
             let channel_service = channel_service.clone();
             let anon_dm_service = anon_dm_service.clone();
+            let anon_group_service = anon_group_service.clone();
 
             // Get the call service from OnceLock
             let call_service = match call_service.get() {
@@ -64,6 +67,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     mailbox_manager,
                     channel_service,
                     anon_dm_service,
+                    anon_group_service,
                 ).await;
             }).unwrap();
         }
@@ -78,6 +82,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let mailbox_manager = ctx_mailbox_manager.clone();
         let channel_service = ctx_channel_service.clone();
         let anon_dm_service = ctx_anon_dm_service.clone();
+        let anon_group_service = ctx_anon_group_service.clone();
 
         move || {
             let weak = weak.clone();
@@ -86,6 +91,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let mailbox_manager = mailbox_manager.clone();
             let channel_service = channel_service.clone();
             let anon_dm_service = anon_dm_service.clone();
+            let anon_group_service = anon_group_service.clone();
 
             // Get the call service from OnceLock
             let call_service = match call_service.get() {
@@ -106,6 +112,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     mailbox_manager,
                     channel_service,
                     anon_dm_service,
+                    anon_group_service,
                 ).await;
             }).unwrap();
         }
@@ -122,27 +129,63 @@ async fn start_call_impl(
     mailbox_manager: Arc<chatter_linux::services::mailbox_manager::MailboxManager>,
     channel_service: Arc<chatter_linux::services::channel::ChannelService>,
     anon_dm_service: Arc<chatter_linux::services::anon_dm::AnonDmService>,
+    anon_group_service: Arc<chatter_linux::services::anon_group::AnonGroupService>,
 ) {
     // Get current channel ID and name from the window
-    // Check both selected-channel-id (for channels) and selected-dm-id (for DMs)
-    let (channel_id_str, channel_name, is_dm) = if let Some(w) = weak.upgrade() {
+    // Check selected-channel-id, selected-dm-id, and selected-private-group-id
+    let (channel_id_str, channel_name, is_dm, is_private_group) = if let Some(w) = weak.upgrade() {
         let channel_id = w.get_selected_channel_id().to_string();
         let dm_id = w.get_selected_dm_id().to_string();
+        let private_group_id = w.get_selected_private_group_id().to_string();
 
         if !channel_id.is_empty() {
-            (channel_id, w.get_channel_name().to_string(), false)
+            (channel_id, w.get_channel_name().to_string(), false, false)
         } else if !dm_id.is_empty() {
-            // For DMs, the dm_id IS the channel_id
-            (dm_id, w.get_channel_name().to_string(), true)
+            (dm_id, w.get_channel_name().to_string(), true, false)
+        } else if !private_group_id.is_empty() {
+            (private_group_id, w.get_channel_name().to_string(), false, true)
         } else {
-            (String::new(), String::new(), false)
+            (String::new(), String::new(), false, false)
         }
     } else {
         return;
     };
 
     if channel_id_str.is_empty() {
-        tracing::warn!("No channel or DM selected for call");
+        tracing::warn!("No channel, DM, or private group selected for call");
+        return;
+    }
+
+    // Get current user ID and display name
+    let user_id = match session_service.current_user_id() {
+        Some(id) => id,
+        None => {
+            tracing::error!("No user ID available");
+            return;
+        }
+    };
+
+    let display_name = anon_dm_service.get_my_display_name().unwrap_or_else(|| "Anonymous".to_string());
+
+    let is_video_call = matches!(call_type, CallType::Video);
+    let call_type_str = match call_type {
+        CallType::Voice => "Voice Call",
+        CallType::Video => "Video Call",
+        CallType::Group => "Group Call",
+    };
+
+    // Handle private group calls separately (they use AnonGroupId, not ChannelId)
+    if is_private_group {
+        start_private_group_call(
+            weak,
+            &channel_id_str,
+            &display_name,
+            user_id,
+            is_video_call,
+            call_type_str,
+            anon_dm_service,
+            anon_group_service,
+        ).await;
         return;
     }
 
@@ -160,25 +203,6 @@ async fn start_call_impl(
             tracing::error!("Invalid channel ID: {}", e);
             return;
         }
-    };
-
-    // Get current user ID and display name
-    let user_id = match session_service.current_user_id() {
-        Some(id) => id,
-        None => {
-            tracing::error!("No user ID available");
-            return;
-        }
-    };
-
-    // Get our real display name for the call offer (shown to remote peer)
-    let display_name = anon_dm_service.get_my_display_name().unwrap_or_else(|| "Anonymous".to_string());
-
-    let is_video_call = matches!(call_type, CallType::Video);
-    let call_type_str = match call_type {
-        CallType::Voice => "Voice Call",
-        CallType::Video => "Video Call",
-        CallType::Group => "Group Call",
     };
 
     tracing::info!("Starting {} in channel {}", call_type_str, channel_id);
@@ -656,6 +680,143 @@ async fn start_call_impl(
             }
             Err(e) => {
                 tracing::error!("Failed to start group call: {}", e);
+            }
+        }
+    }
+}
+
+/// Start a call in a private (anonymous) group.
+///
+/// Uses blind signature tokens for anonymous call rooms, same as anon DM calls.
+/// The offer is sent to all group members via the group messaging channel.
+#[allow(clippy::too_many_arguments)]
+async fn start_private_group_call(
+    weak: slint::Weak<MainWindow>,
+    group_id_str: &str,
+    display_name: &str,
+    user_id: chatter_linux::domain::ids::UserId,
+    is_video_call: bool,
+    call_type_str: &str,
+    anon_dm_service: Arc<chatter_linux::services::anon_dm::AnonDmService>,
+    anon_group_service: Arc<chatter_linux::services::anon_group::AnonGroupService>,
+) {
+    use chatter_linux::domain::anon_group::AnonGroupId;
+
+    let anon_group_id: AnonGroupId = match group_id_str.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("Invalid private group ID: {}", e);
+            return;
+        }
+    };
+
+    tracing::info!("Starting {} in private group {}", call_type_str, anon_group_id);
+
+    // Get a blind signature token for the call
+    let token = match anon_group_service.get_available_call_room_token() {
+        Ok(Some(token)) => token,
+        Ok(None) => {
+            tracing::info!("No call room tokens available - requesting more");
+            match anon_group_service.request_call_room_tokens(5).await {
+                Ok(count) => {
+                    tracing::info!("Successfully requested {} call room tokens", count);
+                    match anon_group_service.get_available_call_room_token() {
+                        Ok(Some(token)) => token,
+                        _ => {
+                            tracing::error!("Still no tokens available after request");
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to request call room tokens: {}", e);
+                    return;
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to get call room token: {}", e);
+            return;
+        }
+    };
+
+    // Send call offer to all group members
+    match anon_group_service.send_call_offer(
+        &anon_group_id,
+        &token,
+        is_video_call,
+        Some(display_name),
+    ).await {
+        Ok(offer_result) => {
+            tracing::info!(
+                room_name = %offer_result.room_name,
+                "Sent anonymous group call offer"
+            );
+
+            // Mark token as used
+            let _ = anon_group_service.mark_call_room_token_used(&token.id);
+
+            // Store pending call state (reuse anon DM pending call storage)
+            anon_dm_service.store_pending_anon_call(
+                offer_result.room_name.clone(),
+                chatter_linux::services::anon_dm::PendingAnonCall {
+                    call_room_id: offer_result.call_room_id,
+                    room_name: offer_result.room_name.clone(),
+                    // Use a synthetic AnonDmId from the group ID bytes for storage
+                    conversation_id: chatter_linux::domain::anon_dm::AnonDmId::try_from_slice(
+                        anon_group_id.as_bytes()
+                    ).expect("AnonGroupId is 16 bytes like AnonDmId"),
+                    token,
+                    is_video_call,
+                    is_outgoing: true,
+                    display_name: display_name.to_string(),
+                    encryption_key: offer_result.call_encryption_key.clone(),
+                    sender_id: None,
+                    started_at: None,
+                },
+            );
+
+            // Show "Calling..." UI
+            if let Some(w) = weak.upgrade() {
+                let local_participant = CallParticipantData {
+                    user_id: user_id.to_string().into(),
+                    display_name: display_name.to_string().into(),
+                    avatar_url: "".into(),
+                    is_muted: false,
+                    is_video_enabled: is_video_call,
+                    is_screen_sharing: false,
+                    is_speaking: false,
+                };
+
+                let call_data = ActiveCallData {
+                    call_id: offer_result.room_name.into(),
+                    channel_id: group_id_str.to_string().into(),
+                    title: format!("Calling...").into(),
+                    is_video_call,
+                    is_anonymous_call: true,
+                    is_encrypted: true,
+                    is_identity_verified: true,
+                    identity_warning: "".into(),
+                    participant_count: 1,
+                    duration_seconds: 0,
+                    participants: ModelRc::new(VecModel::from(vec![local_participant])),
+                    verification_emoji_1: "🔒".into(),
+                    verification_emoji_2: "".into(),
+                    verification_emoji_3: "".into(),
+                    verification_emoji_4: "".into(),
+                };
+
+                w.set_active_call_data(call_data);
+                w.set_call_is_muted(false);
+                w.set_call_is_video_enabled(is_video_call);
+                w.set_call_is_screen_sharing(false);
+                w.set_active_call_visible(true);
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to send anonymous group call offer: {}", e);
+            if let Some(w) = weak.upgrade() {
+                w.set_active_call_visible(false);
             }
         }
     }

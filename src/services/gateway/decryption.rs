@@ -10,6 +10,7 @@ use crate::error::ServiceError;
 use crate::proto::content_v1::{Content, DataMessage, GroupEncrypted, content};
 
 use super::{CallHangupReason, DecryptResult, DmContent, MessageGateway, SealedSenderResult};
+use super::inbound::content_type_name;
 
 impl MessageGateway {
     /// Process an incoming sealed sender message.
@@ -56,48 +57,13 @@ impl MessageGateway {
 
         // First try to parse as Content proto (preferred, contains KeyExchange)
         if let Ok(content_proto) = Content::decode(plaintext) {
-            // Log what content type we got
-            let content_type_name = match &content_proto.content {
-                Some(content::Content::DataMessage(_)) => "DataMessage",
-                Some(content::Content::Typing(_)) => "Typing",
-                Some(content::Content::Receipt(_)) => "Receipt",
-                Some(content::Content::Reaction(_)) => "Reaction",
-                Some(content::Content::Edit(_)) => "Edit",
-                Some(content::Content::Pin(_)) => "Pin",
-                Some(content::Content::KeyExchange(_)) => "KeyExchange",
-                Some(content::Content::Attachment(_)) => "Attachment",
-                Some(content::Content::SenderKey(_)) => "SenderKey",
-                Some(content::Content::GroupEncrypted(_)) => "GroupEncrypted",
-                Some(content::Content::SenderKeyRequest(_)) => "SenderKeyRequest",
-                Some(content::Content::GroupMailboxAddress(_)) => "GroupMailboxAddress",
-                Some(content::Content::CallKey(_)) => "CallKey",
-                Some(content::Content::CallHangup(_)) => "CallHangup",
-                Some(content::Content::DeleteForMeSync(_)) => "DeleteForMeSync",
-                Some(content::Content::GroupCallKey(_)) => "GroupCallKey",
-                Some(content::Content::AnonGroupInvite(_)) => "AnonGroupInvite",
-                Some(content::Content::AnonGroupJoinAck(_)) => "AnonGroupJoinAck",
-                Some(content::Content::AnonGroupMemberList(_)) => "AnonGroupMemberList",
-                Some(content::Content::AnonGroupLeave(_)) => "AnonGroupLeave",
-                Some(content::Content::AnonGroupKick(_)) => "AnonGroupKick",
-                Some(content::Content::AnonGroupUpdate(_)) => "AnonGroupUpdate",
-                Some(content::Content::AnonGroupMessage(_)) => "AnonGroupMessage",
-                Some(content::Content::AnonDmRequest(_)) => "AnonDmRequest",
-                Some(content::Content::AnonDmAccept(_)) => "AnonDmAccept",
-                Some(content::Content::AnonDmMessage(_)) => "AnonDmMessage",
-                Some(content::Content::AnonGroupProfileShare(_)) => "AnonGroupProfileShare",
-                Some(content::Content::AnonCallOffer(_)) => "AnonCallOffer",
-                Some(content::Content::AnonCallAnswer(_)) => "AnonCallAnswer",
-                Some(content::Content::AnonCallHangup(_)) => "AnonCallHangup",
-                Some(content::Content::AnonDmPresence(_)) => "AnonDmPresence",
-                Some(content::Content::AnonDmProfileUpdate(_)) => "AnonDmProfileUpdate",
-                None => "None",
-            };
+            let ct_name = content_type_name(&content_proto.content);
 
             tracing::info!(
                 sender_id = %sender_id,
-                content_type = content_type_name,
+                content_type = ct_name,
                 timestamp = content_proto.timestamp,
-                "GATEWAY: Parsed Content proto, content type = {}", content_type_name
+                "GATEWAY: Parsed Content proto, content type = {}", ct_name
             );
 
             // Check for KeyExchange
@@ -232,7 +198,7 @@ impl MessageGateway {
             // For now just log and return success
             tracing::info!(
                 sender_id = %sender_id,
-                content_type = content_type_name,
+                content_type = ct_name,
                 "GATEWAY: Non-data/non-keyexchange content - returning MessageStored"
             );
             return Ok(SealedSenderResult::MessageStored);
@@ -437,19 +403,10 @@ impl MessageGateway {
         // Try to parse as Content proto first (preferred)
         if let Ok(content_proto) = Content::decode(plaintext.as_slice()) {
             // Log content type before parsing
-            let content_type_name = match &content_proto.content {
-                Some(content::Content::DataMessage(_)) => "DataMessage",
-                Some(content::Content::Typing(_)) => "Typing",
-                Some(content::Content::Receipt(_)) => "Receipt",
-                Some(content::Content::Reaction(_)) => "Reaction",
-                Some(content::Content::Edit(_)) => "Edit",
-                Some(content::Content::Pin(_)) => "Pin",
-                Some(content::Content::KeyExchange(_)) => "KeyExchange",
-                _ => "Other",
-            };
+            let ct_name = content_type_name(&content_proto.content);
             tracing::info!(
                 sender_id = %sender_id,
-                content_type = content_type_name,
+                content_type = ct_name,
                 timestamp = content_proto.timestamp,
                 "DM_DECRYPT: Parsed Content proto from peer"
             );

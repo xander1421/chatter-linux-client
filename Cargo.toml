@@ -25,9 +25,9 @@ path = "src/lib.rs"
 # ============================================================================
 # UI Framework - Slint (cross-platform, mobile-friendly)
 # ============================================================================
-slint = { version = "1.13", default-features = false, features = ["backend-winit", "renderer-femtovg", "compat-1-2", "accessibility"] }
-i-slint-backend-winit = "1.13"
-winit = "0.30"
+slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility", "backend-android-activity-06"] }
+i-slint-backend-winit = { version = "1.15.1", optional = true }
+winit = { version = "0.30", optional = true }
 
 # ============================================================================
 # Async Runtime
@@ -63,7 +63,7 @@ aes-gcm = "0.10"
 aes = "0.8"                                       # AES-256 block cipher (for CBC mode)
 cbc = "0.1"                                       # CBC mode wrapper (Signal-compatible attachments)
 block-padding = "0.3"                             # PKCS7/NoPadding support
-openssl = { version = "0.10", features = ["vendored"] }  # Hardware-accelerated AES-CBC (vendored for cross-platform builds)
+openssl = "0.10"                                  # Hardware-accelerated AES-CBC (uses system OpenSSL to avoid conflict with webrtc-sys BoringSSL)
 chacha20poly1305 = "0.10"
 hpke = "0.12"                                     # RFC 9180 HPKE for NDSS'21 initial contact
 x25519-dalek = { version = "2", features = ["static_secrets"] }
@@ -85,11 +85,11 @@ memmap2 = "0.9"                           # Memory-mapped file I/O for large att
 # ============================================================================
 # System Integration (cross-platform)
 # ============================================================================
-keyring = { version = "3", features = ["sync-secret-service", "windows-native"] }  # Secret Service on Linux, Credential Manager on Windows
-notify-rust = "4"                     # Desktop notifications (works on Windows too)
+keyring = { version = "3", default-features = false }  # Secret Service on Linux, Credential Manager on Windows
+notify-rust = { version = "4", optional = true }  # Desktop notifications (desktop only)
 directories = "6"                     # XDG directories (cross-platform)
 dirs = "5"                            # Home directory detection
-arboard = "3"                         # Clipboard (cross-platform)
+arboard = { version = "3", optional = true }  # Clipboard (desktop only)
 
 # ============================================================================
 # Serialization
@@ -114,10 +114,10 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 bytes = "1"
 http = "1"
-rfd = "0.15"                              # Native file dialogs
+rfd = { version = "0.15", optional = true }  # Native file dialogs (desktop only)
 mime_guess = "2"                          # MIME type detection
 reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking"] }  # HTTP client for presigned URLs
-open = "5.3.3"
+open = { version = "5.3.3", optional = true }  # Desktop only
 rodio = "0.21.1"
 cpal = "0.15"                              # Audio input (recording)
 hound = "3.5"                              # WAV encoding
@@ -197,9 +197,11 @@ muda = "0.17"                         # Menu for tray icon
 [target.'cfg(target_os = "android")'.dependencies]
 gstreamer-gl-egl = "0.23"             # EGL integration for GL video
 glutin_egl_sys = "0.7"                # EGL bindings for context sharing
+i-slint-backend-android-activity = { version = "1.15.1", default-features = false, features = ["aa-06"], optional = true }
+android-activity = { version = "0.6", features = ["native-activity"], optional = true }
 
 [build-dependencies]
-slint-build = "1.13"
+slint-build = "1.15.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -210,6 +212,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 mockall = "0.13"              # Auto-generate mocks from traits
 paste = "1.0"                 # Macro utilities for test generation
 chrono = "0.4"                # Timestamps in test fixtures
+
+[patch.crates-io]
+android-activity = { git = "https://github.com/rust-mobile/android-activity", branch = "main" }
 
 [[bench]]
 name = "attachment_decrypt"
@@ -230,12 +235,36 @@ opt-level = 2          # Dependencies are optimized (they don't change often)
 debug = false
 
 # =============================================================================
+# Android Metadata (for cargo-apk)
+# =============================================================================
+[package.metadata.android]
+package = "com.chatter.client"
+label = "Chatter"
+icon = "assets/icon.png"
+min_sdk_version = 24
+target_sdk_version = 34
+permissions = [
+    "android.permission.INTERNET",
+    "android.permission.CAMERA",
+    "android.permission.RECORD_AUDIO",
+    "android.permission.MODIFY_AUDIO_SETTINGS",
+    "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.WAKE_LOCK",
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+]
+
+# =============================================================================
 # Release Profile - Optimized for size and speed
 # =============================================================================
 [features]
-default = ["local-ai"]
+default = ["desktop"]
+# Desktop feature - enables winit backend for Linux/Windows/macOS
+desktop = ["dep:i-slint-backend-winit", "dep:winit", "dep:rfd", "dep:arboard", "dep:notify-rust", "dep:open", "slint/backend-winit", "slint/renderer-femtovg", "keyring/sync-secret-service", "keyring/windows-native"]
 # Local AI - requires CUDA/cuDNN for GPU acceleration
-local-ai = ["mistralrs"]
+local-ai = ["dep:mistralrs"]
+# Mobile feature - disables heavy desktop-only dependencies
+mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity"]
 
 [profile.release]
 lto = true

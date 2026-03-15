@@ -272,11 +272,27 @@ pub fn spawn_anon_dm_request_handler(
                         _ => format!("User {}", &sender_id.to_string()[..8]),
                     };
 
-                    // Extract text and attachments for display
-                    let (text, attachment_pointers) = if let Some(chatter_linux::proto::content_v1::content::Content::DataMessage(data_msg)) = &inner_content.content {
-                        (data_msg.body.clone(), data_msg.attachments.clone())
+                    // Extract text, attachments, and quote for display
+                    let (text, attachment_pointers, has_quote, quote_author, quote_preview) = if let Some(chatter_linux::proto::content_v1::content::Content::DataMessage(data_msg)) = &inner_content.content {
+                        let q_has = data_msg.quote.is_some();
+                        let q_author = data_msg.quote.as_ref().map(|q| {
+                            // Resolve author UUID to display name
+                            if let Ok(uid) = q.author_aci.parse::<chatter_linux::domain::UserId>() {
+                                anon_dm_service.get_conversation(&conversation_id)
+                                    .ok()
+                                    .flatten()
+                                    .and_then(|dm| {
+                                        if dm.peer_id == uid { dm.peer_display_name } else { None }
+                                    })
+                                    .unwrap_or_else(|| sender_name.clone())
+                            } else {
+                                q.author_aci.clone()
+                            }
+                        }).unwrap_or_default();
+                        let q_preview = data_msg.quote.as_ref().map(|q| q.text.clone()).unwrap_or_default();
+                        (data_msg.body.clone(), data_msg.attachments.clone(), q_has, q_author, q_preview)
                     } else {
-                        ("[Message]".to_string(), Vec::new())
+                        ("[Message]".to_string(), Vec::new(), false, String::new(), String::new())
                     };
 
                     // Convert attachment pointers to display data (before closure)
@@ -427,9 +443,13 @@ pub fn spawn_anon_dm_request_handler(
                                     attachments: ModelRc::new(VecModel::from(slint_attachments)),
                                     has_reactions: false,
                                     reaction_summary: "".into(),
+                                    reactions: ModelRc::default(),
                                     reply_count: 0,
                                     reply_count_text: "".into(),
                                     is_thread_reply: false,
+                                    is_reply: has_quote,
+                                    reply_to_sender_name: quote_author.clone().into(),
+                                    reply_to_preview: quote_preview.clone().into(),
                                     show_sender: true,
                                     delivery_status: "".into(),
                                     is_pinned: false,

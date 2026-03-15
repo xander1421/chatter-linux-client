@@ -128,39 +128,44 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
             return;
         }
 
-        // Use tokio::spawn for the file picker (async operation)
-        tokio::spawn(async move {
-            use chatter_linux::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
+        #[cfg(not(target_os = "android"))]
+        {
+            // Use tokio::spawn for the file picker (async operation)
+            tokio::spawn(async move {
+                use chatter_linux::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
 
-            let config = FilePickerConfig::new()
-                .with_title("Select Attachment")
-                .with_filter(FileFilter::all()) // Default to all files
-                .with_filter(FileFilter::images())
-                .with_filter(FileFilter::videos())
-                .with_filter(FileFilter::audio())
-                .with_filter(FileFilter::documents())
-                .with_multiple(true);
+                let config = FilePickerConfig::new()
+                    .with_title("Select Attachment")
+                    .with_filter(FileFilter::all()) // Default to all files
+                    .with_filter(FileFilter::images())
+                    .with_filter(FileFilter::videos())
+                    .with_filter(FileFilter::audio())
+                    .with_filter(FileFilter::documents())
+                    .with_multiple(true);
 
-            let selected_files = FilePicker::pick_files(config).await;
+                let selected_files = FilePicker::pick_files(config).await;
 
-            if selected_files.is_empty() {
-                tracing::debug!("File picker cancelled or no files selected");
-                return;
-            }
-
-            tracing::info!("Selected {} file(s) for attachment", selected_files.len());
-
-            // Process each file
-            for file_path in selected_files {
-                if let Err(e) = process_and_add_file(file_path, &chat_state, &weak).await {
-                    tracing::error!("{}", e);
+                if selected_files.is_empty() {
+                    tracing::debug!("File picker cancelled or no files selected");
+                    return;
                 }
-            }
 
-            tracing::info!(
-                "Added file(s) to pending attachments",
-            );
-        });
+                tracing::info!("Selected {} file(s) for attachment", selected_files.len());
+
+                // Process each file
+                for file_path in selected_files {
+                    if let Err(e) = process_and_add_file(file_path, &chat_state, &weak).await {
+                        tracing::error!("{}", e);
+                    }
+                }
+
+                tracing::info!(
+                    "Added file(s) to pending attachments",
+                );
+            });
+        }
+        #[cfg(target_os = "android")]
+        tracing::warn!("File picker not yet supported on Android");
     });
 }
 

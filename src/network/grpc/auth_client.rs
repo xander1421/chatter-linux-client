@@ -258,6 +258,7 @@ impl AuthClient {
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
         challenge_id: &str,
         challenge_response: &[u8],
+        registration_lock: &[u8; 32],
     ) -> Result<impl Stream<Item = Result<AuthEvent, NetworkError>>, NetworkError> {
         use base64::Engine;
 
@@ -275,7 +276,7 @@ impl AuthClient {
             device_info: device_info.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
             device_auth_token: device_auth_token.to_vec(),
-            // NOTE: profile_key field removed from proto - UAK is sent via prekey_bundle.unidentified_access_key
+            registration_lock: registration_lock.to_vec(),
             prekey_bundle,
             initial_one_time_prekeys,
             challenge_response: challenge_response.to_vec(),
@@ -327,6 +328,7 @@ impl AuthClient {
         initial_one_time_prekeys: Vec<crate::proto::chat_v1::signal_pre_key_bundle::PreKeyRecord>,
         challenge_id: &str,
         challenge_response: &[u8],
+        registration_lock: &[u8; 32],
     ) -> Result<RegistrationResult, NetworkError> {
         let stream = self
             .register(
@@ -341,6 +343,7 @@ impl AuthClient {
                 initial_one_time_prekeys,
                 challenge_id,
                 challenge_response,
+                registration_lock,
             )
             .await?;
 

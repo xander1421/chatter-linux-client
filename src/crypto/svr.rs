@@ -5,6 +5,8 @@
 //! attacks on short PINs. The username is used as a deterministic salt.
 
 use argon2::{Argon2, Params};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
@@ -47,6 +49,21 @@ pub fn derive_svr_secret(pin: &str, salt: &str) -> Result<[u8; 32], CryptoError>
     ).map_err(|e| CryptoError::KeyDerivationFailed(e.to_string()))?;
     
     Ok(output)
+}
+
+/// Derive registration lock token from PIN.
+/// Signal: HMAC-SHA256(svr_secret, "Registration Lock")
+/// Server stores the hash; future re-registrations must present matching token.
+pub fn derive_registration_lock(pin: &str, username: &str) -> Result<[u8; 32], CryptoError> {
+    let svr_secret = derive_svr_secret(pin, username)?;
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(&svr_secret)
+        .expect("HMAC can take key of any size");
+    mac.update(b"Registration Lock");
+    let result = mac.finalize();
+    let mut lock = [0u8; 32];
+    lock.copy_from_slice(&result.into_bytes());
+    Ok(lock)
 }
 
 /// SVR Keypair for Secure Value Recovery.

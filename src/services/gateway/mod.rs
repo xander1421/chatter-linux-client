@@ -5,21 +5,35 @@
 
 pub mod builders;
 mod decryption;
+pub mod inbound;
+pub mod outgoing;
 mod routing;
+pub mod shared;
 
 use std::sync::Arc;
 
 use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{Message, MessageContent};
-use crate::proto::content_v1::{AttachmentPointer, DataMessage, GroupMailboxAddress};
+use crate::proto::content_v1::DataMessage;
 use crate::services::SignalService;
 use crate::storage::repositories::MessageRepository;
+
+// Re-export inbound types (moved from inline definitions)
+pub use inbound::{
+    content_type_name,
+    DmContent, DecryptResult, RouteResult, SealedSenderResult,
+};
 use crate::util::time::TimestampNanos;
 
 // Re-export all content builders
 pub use builders::{
+    // Padding
+    generate_padding, PADDING_GROUP_CONTROL, PADDING_MESSAGE, PADDING_LARGE,
+    // DataMessage builders
     build_text_content, build_data_message_content, build_reply_content,
+    build_data_message_content_with_quote, build_data_message_content_with_channel,
+    // Control message builders
     build_typing_content, build_typing_content_with_channel,
     build_read_receipt_content, build_read_receipt_content_with_channel,
     build_delivery_receipt_content, build_delivery_receipt_content_with_channel,
@@ -34,6 +48,18 @@ pub use builders::{
     build_group_call_key_content,
     // Call hangup
     build_call_hangup_content,
+    // Anonymous call signaling (anon DM + anon group)
+    generate_anon_call_room,
+    build_anon_call_token,
+    build_anon_call_offer_content,
+    build_anon_call_answer_content,
+    build_anon_call_hangup_content,
+};
+
+// Re-export outgoing router
+pub use outgoing::{
+    OutgoingIntent, QuoteIntent, AnonQuoteIntent, SendResult, SendError,
+    OutgoingServices, route_outgoing,
 };
 
 // ============================================================================
@@ -55,360 +81,8 @@ pub enum CallHangupReason {
     NetworkError,
 }
 
-/// Parsed DM content after decryption.
-#[derive(Debug, Clone)]
-pub enum DmContent {
-    /// Text message with optional attachments
-    Text {
-        body: String,
-        timestamp: u64,
-        /// Attachment pointers for any files included
-        attachments: Vec<AttachmentPointer>,
-        /// Sender's profile key (32 bytes) for decrypting their display_name.
-        /// Present when sender has enabled profile sharing with us.
-        profile_key: Option<Vec<u8>>,
-    },
-    /// Typing indicator
-    Typing {
-        action: i32, // 1=Started, 2=Stopped
-        timestamp: u64,
-    },
-    /// Read/delivery receipt
-    Receipt {
-        receipt_type: i32, // 1=Delivery, 2=Read, 3=Viewed
-        timestamps: Vec<u64>,
-    },
-    /// Emoji reaction
-    Reaction {
-        emoji: String,
-        remove: bool,
-        target_author_aci: String,
-        target_sent_timestamp: u64,
-    },
-    /// Pin/unpin message
-    Pin {
-        target_author_aci: String,
-        target_sent_timestamp: u64,
-        unpin: bool,
-    },
-    /// Edit message
-    Edit {
-        target_sent_timestamp: u64,
-        new_body: String,
-    },
-    /// Delete for me (multi-device sync)
-    DeleteForMe {
-        conversation_id: String,
-        target_author_aci: String,
-        target_sent_timestamp: u64,
-    },
-    /// Delete for everyone (peer notification)
-    DeleteForEveryone {
-        target_sent_timestamp: u64,
-    },
-    /// Key exchange for DM bootstrap (response from peer).
-    ///
-    /// When receiving a bootstrap response, this contains the peer's
-    /// mailbox public key and conversation ephemeral key.
-    KeyExchange {
-        /// Conversation ID this key exchange is for.
-        conversation_id: String,
-        /// Ephemeral public key (32 or 64 bytes).
-        ephemeral_pk: Vec<u8>,
-        /// Timestamp of the key exchange.
-        timestamp: u64,
-    },
-    /// Call key offer (ephemeral key exchange for DM calls with PFS).
-    ///
-    /// Caller sends their ephemeral X25519 public key. Callee responds
-    /// with their ephemeral key via CallKeyAnswer.
-    CallKeyOffer {
-        /// Call ID.
-        call_id: String,
-        /// Caller's ephemeral X25519 public key (32 bytes).
-        ephemeral_public_key: [u8; 32],
-        /// Timestamp when offer was sent.
-        timestamp: u64,
-        /// Call type: "Voice Call" or "Video Call".
-        call_type: String,
-        /// DM channel ID for context.
-        channel_id: String,
-    },
-    /// Call key answer (response to ephemeral key offer).
-    ///
-    /// Callee responds with their ephemeral X25519 public key.
-    /// Both parties then derive: HKDF(ECDH(eph, peer_eph) || identities)
-    CallKeyAnswer {
-        /// Call ID.
-        call_id: String,
-        /// Callee's ephemeral X25519 public key (32 bytes).
-        ephemeral_public_key: [u8; 32],
-        /// Timestamp when answer was sent.
-        timestamp: u64,
-    },
-    /// Group call key received (pairwise distribution).
-    ///
-    /// Symmetric key for group call E2EE, distributed via sealed sender.
-    GroupCallKey {
-        /// Call ID.
-        call_id: String,
-        /// AES-256 encryption key (32 bytes).
-        key_material: [u8; 32],
-        /// Key epoch (increments on rotation).
-        key_epoch: u32,
-        /// Group channel ID.
-        channel_id: String,
-        /// Timestamp when key was sent.
-        timestamp: u64,
-    },
-    /// Call hangup notification.
-    ///
-    /// Sent when a call participant ends the call to notify others.
-    CallHangup {
-        /// Call ID.
-        call_id: String,
-        /// Hangup reason.
-        reason: CallHangupReason,
-        /// Timestamp when hangup was sent.
-        timestamp: u64,
-    },
-    // ========================================================================
-    // Anonymous Group Messages (NDSS'21 style)
-    // ========================================================================
-    /// Invite to join an anonymous group.
-    AnonGroupInvite {
-        /// Group ID (16 bytes UUID).
-        group_id: Vec<u8>,
-        /// Human-readable group name.
-        group_name: String,
-        /// Inviter's mailbox public key for this group (32 bytes Ed25519).
-        inviter_mailbox_pk: Vec<u8>,
-        /// Timestamp.
-        timestamp: u64,
-        /// Inviter's profile key (32 bytes).
-        profile_key: Option<Vec<u8>>,
-        /// Inviter's encrypted display name.
-        encrypted_display_name: Option<Vec<u8>>,
-        /// Inviter's encrypted avatar.
-        encrypted_avatar: Option<Vec<u8>>,
-    },
-    /// Acknowledgment of joining an anonymous group.
-    AnonGroupJoinAck {
-        /// Group ID.
-        group_id: Vec<u8>,
-        /// Joiner's mailbox public key (32 bytes Ed25519).
-        joiner_mailbox_pk: Vec<u8>,
-        /// Timestamp.
-        timestamp: u64,
-        /// Joiner's profile key (32 bytes).
-        profile_key: Option<Vec<u8>>,
-        /// Joiner's encrypted display name.
-        encrypted_display_name: Option<Vec<u8>>,
-        /// Joiner's encrypted avatar.
-        encrypted_avatar: Option<Vec<u8>>,
-    },
-    /// Member list update for an anonymous group.
-    AnonGroupMemberList {
-        /// Group ID.
-        group_id: Vec<u8>,
-        /// List of members with their mailbox keys.
-        members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
-        /// Timestamp.
-        timestamp: u64,
-    },
-    /// Leave notification for an anonymous group.
-    AnonGroupLeave {
-        /// Group ID.
-        group_id: Vec<u8>,
-        /// Timestamp.
-        timestamp: u64,
-    },
-    /// Kick notification for an anonymous group.
-    AnonGroupKick {
-        /// Group ID.
-        group_id: Vec<u8>,
-        /// User being kicked.
-        kicked_user_id: Vec<u8>,
-        /// Admin signature.
-        admin_signature: Vec<u8>,
-        /// Timestamp.
-        timestamp: u64,
-    },
-    /// Group update (name change, role change).
-    AnonGroupUpdate {
-        /// Group ID.
-        group_id: Vec<u8>,
-        /// Update payload.
-        update: crate::proto::content_v1::AnonGroupUpdate,
-        /// Timestamp.
-        timestamp: u64,
-    },
-    /// Message within an anonymous group.
-    AnonGroupMessage {
-        /// Group ID.
-        group_id: Vec<u8>,
-        /// Inner message content.
-        inner_content: Box<crate::proto::content_v1::Content>,
-    },
-    // ========================================================================
-    // Anonymous DM Messages (NDSS'21 style stranger messaging)
-    // ========================================================================
-    /// Request to start an anonymous DM conversation.
-    AnonDmRequest {
-        /// Conversation ID (16 bytes UUID).
-        conversation_id: Vec<u8>,
-        /// Initiator's mailbox public key (32 bytes Ed25519).
-        initiator_mailbox_pk: Vec<u8>,
-        /// Optional intro message.
-        intro_message: Option<String>,
-        /// Optional profile key for decrypting sender's profile.
-        profile_key: Option<Vec<u8>>,
-        /// Encrypted display name (AES-256-GCM with profile_key).
-        encrypted_display_name: Option<Vec<u8>>,
-        /// Encrypted avatar (AES-256-GCM with profile_key).
-        encrypted_avatar: Option<Vec<u8>>,
-        /// Timestamp.
-        timestamp: u64,
-    },
-    /// Acceptance of an anonymous DM request.
-    AnonDmAccept {
-        /// Conversation ID.
-        conversation_id: Vec<u8>,
-        /// Responder's mailbox public key (32 bytes Ed25519).
-        responder_mailbox_pk: Vec<u8>,
-        /// Optional profile key for decrypting responder's profile.
-        profile_key: Option<Vec<u8>>,
-        /// Encrypted display name (AES-256-GCM with profile_key).
-        encrypted_display_name: Option<Vec<u8>>,
-        /// Encrypted avatar (AES-256-GCM with profile_key).
-        encrypted_avatar: Option<Vec<u8>>,
-        /// Timestamp.
-        timestamp: u64,
-    },
-    /// Message within an anonymous DM conversation.
-    AnonDmMessage {
-        /// Conversation ID.
-        conversation_id: Vec<u8>,
-        /// Inner message content.
-        inner_content: Box<crate::proto::content_v1::Content>,
-    },
-}
-
-/// Result of attempting to decrypt a group message.
-#[derive(Debug)]
-pub enum DecryptResult {
-    /// Successfully decrypted the message.
-    Plaintext(Vec<u8>),
-    /// Missing sender's key - need to request their SKDM.
-    NeedsSenderKey {
-        channel_id: ChannelId,
-        sender_id: UserId,
-    },
-}
-
-/// Result of routing an encrypted message.
-#[derive(Debug)]
-pub enum RouteResult {
-    /// Successfully decrypted content message (DataMessage).
-    Decrypted(Vec<u8>),
-    /// Decrypted control content (Content proto with typing, reaction, edit, etc.).
-    ControlContent(Vec<u8>),
-    /// Processed control message (SKDM, etc.) - no content.
-    Processed,
-    /// Missing sender's key - need to request their SKDM.
-    NeedsSenderKey {
-        channel_id: ChannelId,
-        sender_id: UserId,
-    },
-    /// Received a sender key request - need to respond with our SKDM.
-    RespondWithSkdm {
-        channel_id: ChannelId,
-        requester_id: UserId,
-        skdm: crate::proto::content_v1::SenderKeyDistribution,
-    },
-    /// Group mailbox announcement (NDSS '21 paper).
-    /// Member announcing their per-group ephemeral mailbox address.
-    MailboxAnnouncement {
-        /// Channel this mailbox is for.
-        channel_id: ChannelId,
-        /// The announcement proto.
-        announcement: GroupMailboxAddress,
-    },
-}
-
-/// Result of processing a sealed sender message.
-#[derive(Debug)]
-pub enum SealedSenderResult {
-    /// Regular message stored successfully (no details needed for UI).
-    MessageStored,
-    /// Data message received and stored - includes details for UI notification.
-    DataMessageReceived {
-        /// Who sent the message (from SSDecVer).
-        sender_id: UserId,
-        /// Channel the message belongs to.
-        channel_id: ChannelId,
-        /// Message ID (server-assigned or generated).
-        message_id: MessageId,
-        /// Message text body.
-        body: String,
-        /// Sender's timestamp.
-        timestamp: u64,
-        /// Attachment pointers if any.
-        attachments: Vec<AttachmentPointer>,
-    },
-    /// Key exchange message received - needs bootstrap handling.
-    KeyExchange {
-        sender_id: UserId,
-        conversation_id: String,
-        ephemeral_public_key: Vec<u8>,
-        timestamp: u64,
-    },
-    /// Sender key request received - need to respond with our SKDM.
-    SenderKeyRequested {
-        /// User who requested our sender key.
-        requester_id: UserId,
-        /// Channel for which sender key is requested.
-        channel_id: ChannelId,
-    },
-    /// Group mailbox announcement received (NDSS '21 paper bootstrap).
-    /// Member announcing their per-group ephemeral mailbox address.
-    MailboxAnnouncement {
-        /// Who sent the announcement.
-        sender_id: UserId,
-        /// Channel this mailbox is for.
-        channel_id: ChannelId,
-        /// The announcement proto.
-        announcement: GroupMailboxAddress,
-    },
-    /// Anonymous group message received.
-    AnonGroupMessageReceived {
-        /// Who sent the message (revealed via SSDecVer).
-        sender_id: UserId,
-        /// Group ID (16 bytes).
-        group_id: Vec<u8>,
-        /// Inner message content.
-        inner_content: Box<crate::proto::content_v1::Content>,
-    },
-    /// Anonymous group join acknowledgment received.
-    ///
-    /// The joiner is sending their mailbox public key so we can send them messages.
-    AnonGroupJoinAckReceived {
-        /// Who sent the ack (the joiner).
-        sender_id: UserId,
-        /// Group ID (16 bytes).
-        group_id: Vec<u8>,
-        /// Joiner's mailbox public key (32 bytes Ed25519).
-        joiner_mailbox_pk: Vec<u8>,
-        /// Timestamp.
-        timestamp: u64,
-        /// Joiner's profile key (32 bytes).
-        profile_key: Option<Vec<u8>>,
-        /// Joiner's encrypted display name.
-        encrypted_display_name: Option<Vec<u8>>,
-        /// Joiner's encrypted avatar.
-        encrypted_avatar: Option<Vec<u8>>,
-    },
-}
+// DmContent, DecryptResult, RouteResult, SealedSenderResult are in inbound.rs
+// and re-exported above.
 
 // ============================================================================
 // MessageGateway

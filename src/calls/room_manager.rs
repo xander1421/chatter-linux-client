@@ -19,6 +19,7 @@ use super::audio_capture::{AudioCapture, AudioDevice};
 use super::audio_playback::AudioPlayback;
 use super::video_capture::{VideoCapture, VideoDevice, VideoCaptureConfig};
 use super::video_playback::VideoPlayback;
+#[cfg(not(target_os = "android"))]
 use super::screen_capture::{ScreenCapture, ScreenSource, ScreenCaptureConfig};
 use super::shared_frames::SharedVideoFrames;
 
@@ -86,6 +87,7 @@ pub struct RoomManager {
     /// Video playback manager for remote participants.
     video_playback: Arc<RwLock<VideoPlayback>>,
     /// Screen capture manager.
+    #[cfg(not(target_os = "android"))]
     screen_capture: Arc<RwLock<ScreenCapture>>,
     /// Key provider for E2EE key updates (stored for ratcheting).
     key_provider: Arc<RwLock<Option<KeyProvider>>>,
@@ -126,6 +128,7 @@ impl RoomManager {
             audio_playback: Arc::new(RwLock::new(audio_playback)),
             video_capture: Arc::new(RwLock::new(VideoCapture::new())),
             video_playback: Arc::new(RwLock::new(video_playback)),
+            #[cfg(not(target_os = "android"))]
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
             key_provider: Arc::new(RwLock::new(None)),
             key_epoch: Arc::new(RwLock::new(0)),
@@ -148,6 +151,7 @@ impl RoomManager {
     }
 
     /// List available screen sources for sharing.
+    #[cfg(not(target_os = "android"))]
     pub fn list_screen_sources() -> Result<Vec<ScreenSource>, CallError> {
         ScreenCapture::list_sources()
     }
@@ -234,6 +238,7 @@ impl RoomManager {
     /// # Arguments
     /// * `source` - Screen source to capture
     /// * `config` - Optional capture configuration
+    #[cfg(not(target_os = "android"))]
     pub async fn publish_screen_share(
         &self,
         source: ScreenSource,
@@ -283,6 +288,7 @@ impl RoomManager {
     }
 
     /// Stop screen share capture and unpublish track.
+    #[cfg(not(target_os = "android"))]
     pub fn stop_screen_share(&self) {
         let mut capture = self.screen_capture.write();
         capture.stop();
@@ -312,7 +318,10 @@ impl RoomManager {
 
     /// Check if screen sharing is active.
     pub fn is_screen_sharing(&self) -> bool {
-        self.screen_capture.read().is_running()
+        #[cfg(not(target_os = "android"))]
+        { self.screen_capture.read().is_running() }
+        #[cfg(target_os = "android")]
+        { false }
     }
 
     /// Set playback volume for remote audio (0.0 to 1.0).
@@ -533,6 +542,7 @@ impl RoomManager {
             let video = self.video_capture.read();
             video.signal_stop();
         }
+        #[cfg(not(target_os = "android"))]
         {
             let screen = self.screen_capture.read();
             screen.signal_stop();

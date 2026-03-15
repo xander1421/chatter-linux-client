@@ -131,6 +131,11 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                 let new_pinned_state = !unpin;
 
+                // Persist pin state to DB
+                if let Err(e) = service.set_message_pinned(&anon_dm_id, target_sent_timestamp, new_pinned_state) {
+                    tracing::error!(error = %e, "Failed to persist anon DM pin state");
+                }
+
                 // Update pinned_state
                 if let Ok(msg_id) = msg_id_str.parse::<chatter_linux::domain::ids::MessageId>() {
                     if new_pinned_state {
@@ -230,6 +235,11 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
 
                 let new_pinned_state = !unpin;
+
+                // Persist pin state to DB
+                if let Err(e) = service.set_message_pinned(&anon_group_id, target_sent_timestamp, new_pinned_state) {
+                    tracing::error!(error = %e, "Failed to persist anon group pin state");
+                }
 
                 // Update pinned_state
                 if let Ok(msg_id) = msg_id_str.parse::<chatter_linux::domain::ids::MessageId>() {

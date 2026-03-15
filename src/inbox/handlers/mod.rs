@@ -19,6 +19,7 @@
 
 pub mod anon_dm;
 pub mod anon_group;
+mod base_anon;
 pub mod attachment;
 pub mod chat;
 pub mod key_exchange;
@@ -730,6 +731,56 @@ pub enum DomainEvent {
         timestamp: u64,
     },
 
+    /// Anonymous group call offer received.
+    AnonGroupCallOfferReceived {
+        /// The group ID.
+        group_id: AnonGroupId,
+        /// Caller's user ID.
+        sender_id: UserId,
+        /// The call room ID.
+        call_room_id: Vec<u8>,
+        /// The LiveKit room name.
+        room_name: String,
+        /// Call type (voice = 1, video = 2).
+        call_type: i32,
+        /// Caller's display name.
+        caller_display_name: String,
+        /// E2EE encryption key (32 bytes).
+        call_encryption_key: Vec<u8>,
+        /// Timestamp of the offer.
+        timestamp: u64,
+    },
+
+    /// Anonymous group call answer received (member joined/declined).
+    AnonGroupCallAnswerReceived {
+        /// The group ID.
+        group_id: AnonGroupId,
+        /// Callee's user ID.
+        sender_id: UserId,
+        /// The call room ID.
+        call_room_id: Vec<u8>,
+        /// Whether the call was accepted.
+        accepted: bool,
+        /// Callee's display name.
+        callee_display_name: String,
+        /// Timestamp of the answer.
+        timestamp: u64,
+    },
+
+    /// Anonymous group call hangup received.
+    AnonGroupCallHangupReceived {
+        /// The group ID.
+        group_id: AnonGroupId,
+        /// Sender's user ID.
+        sender_id: UserId,
+        /// The call room ID.
+        call_room_id: Vec<u8>,
+        /// Hangup reason.
+        reason: i32,
+        /// Timestamp of the hangup.
+        timestamp: u64,
+    },
+
     // ========================================================================
     // UI-Specific Events (previously handled only in UI layer)
     // ========================================================================
@@ -911,6 +962,9 @@ impl DomainEvent {
             DomainEvent::AnonCallOfferReceived { .. } => None,
             DomainEvent::AnonCallAnswerReceived { .. } => None,
             DomainEvent::AnonCallHangupReceived { .. } => None,
+            DomainEvent::AnonGroupCallOfferReceived { .. } => None,
+            DomainEvent::AnonGroupCallAnswerReceived { .. } => None,
+            DomainEvent::AnonGroupCallHangupReceived { .. } => None,
             // UI-specific events
             DomainEvent::CallKeyOfferReceived { .. } => None,
             DomainEvent::DmBootstrapCompleted { .. } => None,

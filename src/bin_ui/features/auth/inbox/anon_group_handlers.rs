@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use slint::{Model, VecModel};
+use slint::{Model, ModelRc, VecModel};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::anon_group::AnonGroupId;
@@ -94,10 +94,12 @@ pub(crate) fn handle_anon_group_typing(
 
 /// Handle anon group reaction.
 ///
-/// Updates the reaction summary on the target message in the UI.
+/// Persists the reaction to DB and updates the UI.
 pub(crate) fn handle_anon_group_reaction(
     weak_window: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<UIContext>,
     group_id: AnonGroupId,
+    sender_id: UserId,
     emoji: String,
     remove: bool,
     target_sent_timestamp: u64,
@@ -112,6 +114,21 @@ pub(crate) fn handle_anon_group_reaction(
         target = target_sent_timestamp,
         "ANON_GROUP_REACTION: Received reaction"
     );
+
+    // Persist to DB
+    let anon_group_service = ui_ctx.anon_group_service.clone();
+    let emoji_for_db = emoji.clone();
+    let _ = std::thread::spawn(move || {
+        if remove {
+            if let Err(e) = anon_group_service.remove_reaction(&group_id, target_sent_timestamp, &sender_id, &emoji_for_db) {
+                tracing::warn!(error = %e, "Failed to remove reaction from DB");
+            }
+        } else {
+            if let Err(e) = anon_group_service.add_reaction(&group_id, target_sent_timestamp, &sender_id, &emoji_for_db) {
+                tracing::warn!(error = %e, "Failed to save reaction to DB");
+            }
+        }
+    });
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(window) = weak.upgrade() else {
@@ -132,8 +149,11 @@ pub(crate) fn handle_anon_group_reaction(
                     let mut updated_msg = msg.clone();
                     let new_summary =
                         update_reaction_summary(&msg.reaction_summary.to_string(), &emoji, remove);
-                    updated_msg.reaction_summary = new_summary.into();
-                    updated_msg.has_reactions = !updated_msg.reaction_summary.is_empty();
+                    updated_msg.reaction_summary = new_summary.clone().into();
+                    updated_msg.has_reactions = !new_summary.is_empty();
+                    updated_msg.reactions = ModelRc::new(VecModel::from(
+                        crate::bin_ui::converters::parse_reaction_summary_to_entries(&new_summary),
+                    ));
 
                     if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>()
                     {
@@ -163,9 +183,10 @@ pub(crate) fn handle_anon_group_reaction(
 
 /// Handle anon group pin/unpin.
 ///
-/// Updates the pinned message state in the UI header.
+/// Persists pin state to DB and updates the pinned message UI header.
 pub(crate) fn handle_anon_group_pin(
     weak_window: &slint::Weak<MainWindow>,
+    anon_group_service: &Arc<chatter_linux::services::anon_group::AnonGroupService>,
     pinned_state: chatter_linux::state::PinnedState,
     group_id: AnonGroupId,
     target_sent_timestamp: u64,
@@ -173,6 +194,7 @@ pub(crate) fn handle_anon_group_pin(
 ) {
     let group_id_str = group_id.to_string();
     let weak = weak_window.clone();
+    let new_pinned = !unpin;
 
     tracing::debug!(
         group_id = %group_id_str,
@@ -180,6 +202,15 @@ pub(crate) fn handle_anon_group_pin(
         unpin,
         "ANON_GROUP_PIN: Received pin/unpin"
     );
+
+    // Persist pin state to DB (works regardless of which group is selected)
+    if let Err(e) = anon_group_service.set_message_pinned(&group_id, target_sent_timestamp, new_pinned) {
+        tracing::error!(
+            error = %e,
+            group_id = %group_id_str,
+            "ANON_GROUP_PIN: Failed to persist pin state"
+        );
+    }
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(window) = weak.upgrade() else {
@@ -194,7 +225,6 @@ pub(crate) fn handle_anon_group_pin(
         // Find the message, update is_pinned, and generate preview
         let messages = window.get_messages();
         let target_ts_ns = target_sent_timestamp.to_string();
-        let new_pinned = !unpin;
         let mut preview = String::new();
 
         for i in 0..messages.row_count() {
@@ -236,6 +266,10 @@ pub(crate) fn handle_anon_group_pin(
                 "ANON_GROUP_PIN: Decremented pinned count"
             );
         } else {
+            // Use fallback if message wasn't found in loaded UI messages
+            if preview.is_empty() {
+                preview = "[Pinned message]".to_string();
+            }
             window.set_pinned_total_count(pinned_count);
             window.set_has_pinned_messages(true);
             window.set_pinned_message_preview(preview.into());
@@ -431,9 +465,13 @@ pub(crate) fn handle_anon_group_member_joined(
                 attachments: slint::ModelRc::default(),
                 has_reactions: false,
                 reaction_summary: "".into(),
+                reactions: ModelRc::default(),
                 reply_count: 0,
                 reply_count_text: "".into(),
                 is_thread_reply: false,
+                is_reply: false,
+                reply_to_sender_name: "".into(),
+                reply_to_preview: "".into(),
                 show_sender: false,
                 delivery_status: "".into(),
                 is_pinned: false,
@@ -506,9 +544,13 @@ pub(crate) fn handle_anon_group_member_left(
                 attachments: slint::ModelRc::default(),
                 has_reactions: false,
                 reaction_summary: "".into(),
+                reactions: ModelRc::default(),
                 reply_count: 0,
                 reply_count_text: "".into(),
                 is_thread_reply: false,
+                is_reply: false,
+                reply_to_sender_name: "".into(),
+                reply_to_preview: "".into(),
                 show_sender: false,
                 delivery_status: "".into(),
                 is_pinned: false,
@@ -585,9 +627,13 @@ pub(crate) fn handle_anon_group_member_kicked(
                 attachments: slint::ModelRc::default(),
                 has_reactions: false,
                 reaction_summary: "".into(),
+                reactions: ModelRc::default(),
                 reply_count: 0,
                 reply_count_text: "".into(),
                 is_thread_reply: false,
+                is_reply: false,
+                reply_to_sender_name: "".into(),
+                reply_to_preview: "".into(),
                 show_sender: false,
                 delivery_status: "".into(),
                 is_pinned: false,

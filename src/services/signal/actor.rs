@@ -71,6 +71,18 @@ pub enum SignalCommand {
     EncryptForGroup { channel_id: ChannelId, our_address: ProtocolAddress, plaintext: Vec<u8>, response: oneshot::Sender<Result<Vec<u8>, ServiceError>> },
     DecryptFromGroup { channel_id: ChannelId, sender_address: ProtocolAddress, ciphertext: Vec<u8>, response: oneshot::Sender<Result<Vec<u8>, ServiceError>> },
     DeriveCallEncryptionKey { peer_id: UserId, peer_device_id: u32, response: oneshot::Sender<Result<[u8; 32], ServiceError>> },
+    /// Derive an ephemeral call key with identity binding (for DM calls with PFS).
+    ///
+    /// Completes ephemeral call key exchange: ECDH + identity lookup + HKDF.
+    /// All crypto stays in the service — UI just passes raw key bytes.
+    CompleteCallKeyExchange {
+        our_ephemeral_private: [u8; 32],
+        peer_ephemeral_public: [u8; 32],
+        peer_id: UserId,
+        call_id: String,
+        we_are_caller: bool,
+        response: oneshot::Sender<Result<[u8; 32], ServiceError>>,
+    },
     HasSenderKey { channel_id: ChannelId, our_address: ProtocolAddress, response: oneshot::Sender<Result<bool, ServiceError>> },
     HasSession { address: ProtocolAddress, response: oneshot::Sender<Result<bool, ServiceError>> },
     ClearChannelSenderKeys { channel_id: ChannelId, response: oneshot::Sender<Result<(), ServiceError>> },
@@ -323,6 +335,43 @@ impl SignalActorHandle {
                             let _ = response.send(Ok(*shared_secret.as_bytes()));
                         }
 
+                        SignalCommand::CompleteCallKeyExchange { our_ephemeral_private, peer_ephemeral_public, peer_id, call_id, we_are_caller, response } => {
+                            use libsignal_protocol::IdentityKeyStore;
+                            use crate::crypto::{EphemeralCallKey, derive_call_key_ephemeral};
+
+                            // ECDH: compute shared secret from ephemeral keys
+                            let ephemeral = EphemeralCallKey::from_private_bytes(our_ephemeral_private);
+                            let ephemeral_shared = ephemeral.diffie_hellman(&peer_ephemeral_public);
+
+                            let our_identity = match store.get_identity_key_pair().await
+                                .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string()))) {
+                                Ok(id) => id,
+                                Err(e) => { let _ = response.send(Err(e)); continue; }
+                            };
+
+                            let peer_address = ProtocolAddress::new(peer_id.to_string(), DeviceId::try_from(1u32).unwrap());
+                            let peer_identity = match store.get_identity(&peer_address).await
+                                .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string()))) {
+                                Ok(Some(id)) => id,
+                                Ok(None) => {
+                                    let _ = response.send(Err(ServiceError::Crypto(
+                                        CryptoError::SessionNotFound(format!("No identity key for peer {}", peer_id))
+                                    )));
+                                    continue;
+                                }
+                                Err(e) => { let _ = response.send(Err(e)); continue; }
+                            };
+
+                            let res = derive_call_key_ephemeral(
+                                &ephemeral_shared,
+                                &our_identity,
+                                &peer_identity,
+                                &call_id,
+                                we_are_caller,
+                            ).map_err(ServiceError::Crypto);
+                            let _ = response.send(res);
+                        }
+
                         SignalCommand::HasSenderKey { channel_id, our_address, response } => {
                             let distribution_id = Uuid::parse_str(&channel_id.to_string()).unwrap();
                             let sender_str = format!("{}:{}", our_address.name(), our_address.device_id());
@@ -424,6 +473,31 @@ impl SignalActorHandle {
 
     pub async fn derive_call_encryption_key(&self, peer_id: UserId, peer_device_id: u32) -> Result<[u8; 32], ServiceError> {
         self.send(|tx| SignalCommand::DeriveCallEncryptionKey { peer_id, peer_device_id, response: tx }).await?
+    }
+
+    /// Derive an ephemeral call key with identity binding (for DM calls with PFS).
+    ///
+    /// Completes ephemeral call key exchange: ECDH + identity lookup + HKDF.
+    ///
+    /// Takes raw ephemeral key bytes so callers never perform crypto operations.
+    /// The actor handles ECDH(our_ephemeral, peer_ephemeral), looks up both
+    /// identity keys, and derives the final call encryption key via HKDF.
+    pub async fn complete_call_key_exchange(
+        &self,
+        our_ephemeral_private: [u8; 32],
+        peer_ephemeral_public: [u8; 32],
+        peer_id: UserId,
+        call_id: String,
+        we_are_caller: bool,
+    ) -> Result<[u8; 32], ServiceError> {
+        self.send(|tx| SignalCommand::CompleteCallKeyExchange {
+            our_ephemeral_private,
+            peer_ephemeral_public,
+            peer_id,
+            call_id,
+            we_are_caller,
+            response: tx,
+        }).await?
     }
 
     pub async fn has_sender_key(&self, channel_id: ChannelId, our_address: ProtocolAddress) -> Result<bool, ServiceError> {

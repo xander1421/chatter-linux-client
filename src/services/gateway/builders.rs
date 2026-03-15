@@ -2,6 +2,11 @@
 //!
 //! These functions create properly formatted Content proto messages
 //! for various message types (text, typing, receipts, reactions, etc.).
+//!
+//! All builders are **pure functions** — no DB or network access.
+//! This is the single source of truth for Content/DataMessage construction.
+
+use rand::RngCore;
 
 use crate::proto::content_v1::{
     AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage,
@@ -11,6 +16,33 @@ use crate::proto::content_v1::{
 use crate::util::time::TimestampNanos;
 
 use super::CallHangupReason;
+
+// =============================================================================
+// NDSS '21 Padding
+// =============================================================================
+
+/// Group control messages (membership, leave, kick, ephemeral).
+pub const PADDING_GROUP_CONTROL: usize = 160;
+
+/// Standard messages, DM wrappers, ephemeral DM messages.
+pub const PADDING_MESSAGE: usize = 256;
+
+/// Profile updates, call signaling (larger payloads).
+pub const PADDING_LARGE: usize = 512;
+
+/// Generate random NDSS '21 padding.
+///
+/// Padding prevents message-length traffic analysis by adding random bytes
+/// to each encrypted envelope. Use the `PADDING_*` constants for standard
+/// bucket sizes.
+pub fn generate_padding(size: usize) -> Vec<u8> {
+    if size == 0 {
+        return vec![];
+    }
+    let mut padding = vec![0u8; size];
+    rand::rng().fill_bytes(&mut padding);
+    padding
+}
 
 /// Create a Content proto for a text message.
 /// `sent_at` should be the SAME timestamp used for Message.sent_at (nanoseconds).
@@ -80,6 +112,53 @@ pub fn build_reply_content(
                 r#type: quote::Type::Normal as i32,
                 author_aci_binary: vec![],  // We use string format
             }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+/// Create a Content proto for a message with optional quote.
+///
+/// This is the general-purpose DataMessage builder used by anon DM and
+/// anon group services. When `quote` is `None`, behaves like
+/// `build_data_message_content`.
+pub fn build_data_message_content_with_quote(
+    body: &str,
+    attachments: Vec<AttachmentPointer>,
+    quote: Option<Quote>,
+    sent_at: u64,
+) -> Content {
+    Content {
+        timestamp: sent_at,
+        content: Some(content::Content::DataMessage(DataMessage {
+            body: body.to_string(),
+            timestamp: sent_at,
+            attachments,
+            quote,
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+/// Create a Content proto for a channel message with channel_id.
+///
+/// Used for group fanout delivery where the channel_id must be embedded
+/// in the DataMessage so recipients can route the decrypted content.
+pub fn build_data_message_content_with_channel(
+    body: &str,
+    attachments: Vec<AttachmentPointer>,
+    channel_id: &str,
+    sent_at: u64,
+) -> Content {
+    Content {
+        timestamp: sent_at,
+        content: Some(content::Content::DataMessage(DataMessage {
+            body: body.to_string(),
+            timestamp: sent_at,
+            channel_id: channel_id.to_string(),
+            attachments,
             ..Default::default()
         })),
         ..Default::default()
@@ -404,6 +483,115 @@ pub fn build_call_hangup_content(call_id: &str, reason: CallHangupReason) -> Con
                 CallHangupReason::Timeout => call_hangup::Reason::Timeout as i32,
                 CallHangupReason::NetworkError => call_hangup::Reason::NetworkError as i32,
             },
+            timestamp: now,
+        })),
+        ..Default::default()
+    }
+}
+
+// =============================================================================
+// Anonymous Call Signaling (Anon DM + Anon Group)
+// =============================================================================
+
+/// Generate a new anonymous call room ID and name.
+///
+/// Returns `(room_id_bytes, room_name, encryption_key)`.
+/// The room name has format `"anon-{uuid}"`.
+pub fn generate_anon_call_room() -> ([u8; 16], String, Vec<u8>) {
+    let call_room_id = uuid::Uuid::new_v4();
+    let room_id_bytes: [u8; 16] = *call_room_id.as_bytes();
+    let room_name = format!("anon-{}", call_room_id);
+
+    // Generate random 32-byte E2EE key
+    let mut encryption_key = vec![0u8; 32];
+    rand::rng().fill_bytes(&mut encryption_key);
+
+    (room_id_bytes, room_name, encryption_key)
+}
+
+/// Build an `AnonCallToken` proto from a `CallRoomToken`.
+pub fn build_anon_call_token(token: &crate::mailbox::CallRoomToken) -> crate::proto::content_v1::AnonCallToken {
+    crate::proto::content_v1::AnonCallToken {
+        public_key: token.public_key.clone(),
+        signature: token.signature.clone(),
+        message_randomizer: token.randomizer.clone().unwrap_or_default(),
+    }
+}
+
+/// Create a Content proto for an anonymous call offer.
+///
+/// Used by both anon DM and anon group call initiation.
+pub fn build_anon_call_offer_content(
+    call_room_id: &[u8; 16],
+    room_name: &str,
+    token: &crate::mailbox::CallRoomToken,
+    video: bool,
+    display_name: &str,
+    encryption_key: &[u8],
+) -> Content {
+    use crate::proto::content_v1::{AnonCallOffer, anon_call_offer::CallType};
+
+    let now = TimestampNanos::now().as_u64();
+    Content {
+        timestamp: now,
+        padding: generate_padding(PADDING_LARGE),
+        content: Some(content::Content::AnonCallOffer(AnonCallOffer {
+            call_room_id: call_room_id.to_vec(),
+            room_name: room_name.to_string(),
+            caller_token: Some(build_anon_call_token(token)),
+            call_type: if video { CallType::Video.into() } else { CallType::Voice.into() },
+            timestamp: now,
+            caller_display_name: display_name.to_string(),
+            call_encryption_key: encryption_key.to_vec(),
+        })),
+        ..Default::default()
+    }
+}
+
+/// Create a Content proto for an anonymous call answer.
+///
+/// Used by both anon DM and anon group call acceptance/decline.
+pub fn build_anon_call_answer_content(
+    call_room_id: &[u8; 16],
+    accept: bool,
+    token: Option<&crate::mailbox::CallRoomToken>,
+    decline_reason: i32,
+    display_name: &str,
+) -> Content {
+    use crate::proto::content_v1::AnonCallAnswer;
+
+    let now = TimestampNanos::now().as_u64();
+    Content {
+        timestamp: now,
+        padding: generate_padding(PADDING_LARGE),
+        content: Some(content::Content::AnonCallAnswer(AnonCallAnswer {
+            call_room_id: call_room_id.to_vec(),
+            accepted: accept,
+            callee_token: if accept { token.map(build_anon_call_token) } else { None },
+            timestamp: now,
+            callee_display_name: display_name.to_string(),
+            decline_reason,
+        })),
+        ..Default::default()
+    }
+}
+
+/// Create a Content proto for an anonymous call hangup.
+///
+/// Used by both anon DM and anon group call termination.
+pub fn build_anon_call_hangup_content(
+    call_room_id: &[u8; 16],
+    reason: i32,
+) -> Content {
+    use crate::proto::content_v1::AnonCallHangup;
+
+    let now = TimestampNanos::now().as_u64();
+    Content {
+        timestamp: now,
+        padding: generate_padding(PADDING_MESSAGE),
+        content: Some(content::Content::AnonCallHangup(AnonCallHangup {
+            call_room_id: call_room_id.to_vec(),
+            reason,
             timestamp: now,
         })),
         ..Default::default()

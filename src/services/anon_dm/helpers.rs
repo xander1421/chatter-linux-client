@@ -1,5 +1,3 @@
-use rand::RngCore;
-
 use super::{AnonDmError, AnonDmService};
 
 impl AnonDmService {
@@ -78,10 +76,9 @@ impl AnonDmService {
     }
 
     /// Generate random padding to reach a target size.
+    ///
+    /// Delegates to the centralized NDSS '21 padding in `gateway::builders`.
     pub(crate) fn generate_padding(boundary: usize) -> Vec<u8> {
-        let padding_needed = boundary;
-        let mut padding = vec![0u8; padding_needed];
-        rand::rng().fill_bytes(&mut padding);
-        padding
+        crate::services::gateway::builders::generate_padding(boundary)
     }
 }

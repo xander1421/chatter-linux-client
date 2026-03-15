@@ -29,109 +29,62 @@ pub fn wire_message_clicked(window: &MainWindow) {
 }
 
 /// Wire reply click callback.
-pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+///
+/// Gets sender name and preview text directly from the UI message model,
+/// which works for all message types (channels, DMs, anon DMs, anon groups).
+pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
-    let message_service = ui_ctx.message_service.clone();
 
-    // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
     window.on_reply_clicked(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_str = timestamp_ns.to_string();
-        
-        tracing::info!(
-            sender_id = %sender_id_str,
-            timestamp = %timestamp_str,
-            "Reply button clicked"
-        );
-        
-        // Check if values are empty
+
         if sender_id_str.is_empty() || timestamp_str.is_empty() {
-            tracing::error!(
-                "Reply clicked with empty values - sender_id: '{}', timestamp: '{}'", 
-                sender_id_str, 
-                timestamp_str
-            );
+            tracing::error!("Reply clicked with empty values");
             return;
         }
-        
-        let weak = weak_window.clone();
-        let message_service = message_service.clone();
 
-        tokio::spawn(async move {
-            // Parse sender_id and timestamp for Signal-style lookup
-            let target_sender: chatter_linux::domain::ids::UserId = match sender_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!(error = %e, "Invalid sender ID for reply");
-                    return;
-                }
-            };
-            let target_timestamp: u64 = match timestamp_str.parse() {
-                Ok(ts) => ts,
-                Err(e) => {
-                    tracing::error!(error = %e, "Invalid timestamp for reply");
-                    return;
-                }
-            };
+        let Some(w) = weak_window.upgrade() else { return };
 
-            // Look up the message to get reply preview
-            let (reply_preview, sender_name) = match message_service.get_by_sender_timestamp(&target_sender, target_timestamp) {
-                Ok(Some(msg)) => {
-                    // Get sender's display name (might be different from ID)
-                    let sender_name = if let Some(w) = weak.upgrade() {
-                        // Check messages model for display name
-                        let messages = w.get_messages();
-                        let mut name = String::new();
-                        for i in 0..messages.row_count() {
-                            if let Some(m) = messages.row_data(i) {
-                                if m.sender_id.as_str() == sender_id_str && 
-                                   m.timestamp_ns.as_str() == timestamp_str {
-                                    name = m.sender_name.to_string();
-                                    break;
-                                }
-                            }
-                        }
-                        if name.is_empty() {
-                            msg.sender_id.map(|id| id.to_string()).unwrap_or_else(|| "Unknown".to_string())
-                        } else {
-                            name
-                        }
-                    } else {
-                        msg.sender_id.map(|id| id.to_string()).unwrap_or_else(|| "Unknown".to_string())
-                    };
-                    
-                    let content = msg.as_text().unwrap_or("").to_string();
-                    let preview = if content.chars().count() > 50 {
-                        let truncated: String = content.chars().take(47).collect();
-                        format!("{}...", truncated)
+        // Get reply info directly from the UI message model (works for all message types)
+        let messages = w.get_messages();
+        let mut sender_name = String::new();
+        let mut reply_preview = String::new();
+
+        for i in 0..messages.row_count() {
+            if let Some(m) = messages.row_data(i) {
+                if m.sender_id.as_str() == sender_id_str
+                    && m.timestamp_ns.as_str() == timestamp_str
+                {
+                    sender_name = m.sender_name.to_string();
+                    let content = m.content.to_string();
+                    reply_preview = if content.chars().count() > 50 {
+                        format!("{}...", content.chars().take(47).collect::<String>())
                     } else {
                         content
                     };
-                    (preview, sender_name)
+                    break;
                 }
-                _ => ("".to_string(), "Unknown".to_string()),
-            };
+            }
+        }
 
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    // Set reply state
-                    w.set_composer_is_replying(true);
-                    w.set_composer_reply_to_sender(sender_name.clone().into());
-                    w.set_composer_reply_to_timestamp(timestamp_str.clone().into());
-                    w.set_composer_reply_preview(reply_preview.clone().into());
+        if sender_name.is_empty() {
+            sender_name = sender_id_str.clone();
+        }
 
-                    // Update placeholder to indicate reply mode
-                    w.set_composer_placeholder("Type your reply...".into());
+        w.set_composer_is_replying(true);
+        w.set_composer_reply_to_sender(sender_id_str.clone().into());
+        w.set_composer_reply_to_sender_name(sender_name.clone().into());
+        w.set_composer_reply_to_timestamp(timestamp_str.clone().into());
+        w.set_composer_reply_preview(reply_preview.clone().into());
+        w.set_composer_placeholder("Type your reply...".into());
 
-                    tracing::info!(
-                        sender = %sender_name,
-                        timestamp = %timestamp_str,
-                        preview = %reply_preview,
-                        "Reply mode activated"
-                    );
-                }
-            });
-        });
+        tracing::info!(
+            sender = %sender_name,
+            timestamp = %timestamp_str,
+            preview = %reply_preview,
+            "Reply mode activated"
+        );
     });
 }
 
@@ -201,6 +154,7 @@ pub fn wire_cancel_reply(window: &MainWindow) {
                 // Clear reply state
                 w.set_composer_is_replying(false);
                 w.set_composer_reply_to_sender("".into());
+                w.set_composer_reply_to_sender_name("".into());
                 w.set_composer_reply_to_timestamp("".into());
                 w.set_composer_reply_preview("".into());
                 w.set_composer_placeholder("Type a message...".into());

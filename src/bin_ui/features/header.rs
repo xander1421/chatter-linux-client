@@ -128,14 +128,7 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 // Get content preview
                 let content_preview = msg
                     .as_text()
-                    .map(|t| {
-                        if t.chars().count() > 100 {
-                            let truncated: String = t.chars().take(97).collect();
-                            format!("{}...", truncated)
-                        } else {
-                            t.to_string()
-                        }
-                    })
+                    .map(|t| chatter_linux::services::gateway::shared::truncate_preview(&t))
                     .unwrap_or_else(|| "[Attachment]".to_string());
 
                 display_results.push(crate::SearchResult {
@@ -198,20 +191,22 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let pinned_state = ui_ctx.pinned_state.clone();
     let weak_window = window.as_weak();
     let pin_service = ui_ctx.pin_service.clone();
+    let anon_group_service = ui_ctx.anon_group_service.clone();
 
     window.on_pinned_prev_clicked(move || {
         pinned_state.navigate_prev();
-        update_pinned_ui_with_service(weak_window.clone(), pinned_state.clone(), pin_service.clone());
+        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), pin_service.clone(), anon_group_service.clone());
     });
 
     // Next pinned message
     let pinned_state = ui_ctx.pinned_state.clone();
     let weak_window = window.as_weak();
     let pin_service = ui_ctx.pin_service.clone();
+    let anon_group_service = ui_ctx.anon_group_service.clone();
 
     window.on_pinned_next_clicked(move || {
         pinned_state.navigate_next();
-        update_pinned_ui_with_service(weak_window.clone(), pinned_state.clone(), pin_service.clone());
+        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), pin_service.clone(), anon_group_service.clone());
     });
 
     // Dismiss pinned bar
@@ -220,11 +215,32 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     window.on_pinned_dismiss_clicked(move || {
         pinned_state.dismiss();
-        // Already on UI thread - no need for invoke_from_event_loop
         if let Some(w) = weak_window.upgrade() {
             w.set_has_pinned_messages(false);
         }
         tracing::debug!("Pinned bar dismissed");
+    });
+
+    // Re-show dismissed pinned bar (pin button in header)
+    let pinned_state = ui_ctx.pinned_state.clone();
+    let weak_window = window.as_weak();
+    let pin_service = ui_ctx.pin_service.clone();
+    let anon_group_service = ui_ctx.anon_group_service.clone();
+
+    window.on_pinned_show_clicked(move || {
+        let state = pinned_state.get();
+        if state.pinned_message_ids.is_empty() {
+            return;
+        }
+        // Un-dismiss and reset to first pinned message
+        pinned_state.navigate_to(0);
+        pinned_state.undismiss();
+        update_pinned_ui_from_loaded_messages(
+            weak_window.clone(),
+            pinned_state.clone(),
+            pin_service.clone(),
+            anon_group_service.clone(),
+        );
     });
 
     // Go to pinned message (scroll to it in chat)
@@ -275,26 +291,75 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-/// Update pinned UI using PinService.
-fn update_pinned_ui_with_service(
+/// Update pinned UI by reading the preview from loaded UI messages first,
+/// falling back to PinService (regular channels) or AnonGroupService (private groups).
+fn update_pinned_ui_from_loaded_messages(
     weak_window: slint::Weak<MainWindow>,
     pinned_state: chatter_linux::state::PinnedState,
     pin_service: Arc<chatter_linux::services::pin_service::PinService>,
+    anon_group_service: Arc<chatter_linux::services::anon_group::AnonGroupService>,
 ) {
-    // Get state data that doesn't require DB access
     let state = pinned_state.get();
     let current_index = state.current_index as i32;
     let total_count = state.pinned_message_ids.len() as i32;
     let current_msg_id = pinned_state.current_message_id();
 
-    // Move database queries to background thread
+    // First try to get preview from currently loaded UI messages (works for all types)
+    let msg_id_str = current_msg_id.map(|id| id.to_string()).unwrap_or_default();
+    let ui_preview = weak_window.upgrade().and_then(|w| {
+        let messages = w.get_messages();
+        for i in 0..messages.row_count() {
+            if let Some(msg) = messages.row_data(i) {
+                if msg.message_id.as_str() == msg_id_str {
+                    let preview = crate::bin_ui::features::auth::inbox::utils::generate_preview_from_ui_message(&msg);
+                    if !preview.is_empty() {
+                        return Some(preview);
+                    }
+                }
+            }
+        }
+        None
+    });
+
+    if let Some(preview) = ui_preview {
+        // Already have preview from UI, update directly (already on UI thread from callback)
+        if let Some(w) = weak_window.upgrade() {
+            w.set_pinned_current_index(current_index + 1);
+            w.set_pinned_total_count(total_count);
+            w.set_pinned_message_preview(preview.into());
+            w.set_has_pinned_messages(total_count > 0);
+        }
+        return;
+    }
+
+    // Fall back to DB lookup in background thread
+    let selected_group = weak_window.upgrade()
+        .map(|w| w.get_selected_private_group_id().to_string())
+        .unwrap_or_default();
+
     std::thread::spawn(move || {
-        // Get preview text for current pinned message using PinService
         let preview = if let Some(msg_id) = current_msg_id {
-            if let Ok(Some(pinned_data)) = pin_service.get_pinned_message(&msg_id) {
-                pinned_data.preview
+            if !selected_group.is_empty() {
+                // Private group: look up from anon_group_messages
+                if let Ok(_group_id) = selected_group.parse::<chatter_linux::domain::anon_group::AnonGroupId>() {
+                    if let Ok(Some(msg)) = anon_group_service.get_message(&chatter_linux::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string())) {
+                        msg.as_text()
+                            .filter(|t| !t.is_empty())
+                            .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t })
+                            .unwrap_or_else(|| "[Pinned message]".to_string())
+                    } else {
+                        "[Pinned message]".to_string()
+                    }
+                } else {
+                    "[Pinned message]".to_string()
+                }
             } else {
-                "[Pinned message]".to_string()
+                // Regular channel/DM: use PinService
+                if let Ok(Some(pinned_data)) = pin_service.get_pinned_message(&msg_id) {
+                    pinned_data.preview
+                } else {
+                    "[Pinned message]".to_string()
+                }
             }
         } else {
             String::new()
@@ -302,7 +367,7 @@ fn update_pinned_ui_with_service(
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_window.upgrade() {
-                w.set_pinned_current_index(current_index + 1); // 1-based for display
+                w.set_pinned_current_index(current_index + 1);
                 w.set_pinned_total_count(total_count);
                 w.set_pinned_message_preview(preview.into());
                 w.set_has_pinned_messages(total_count > 0);

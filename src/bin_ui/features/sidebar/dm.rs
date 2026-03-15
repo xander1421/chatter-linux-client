@@ -64,6 +64,10 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     w.set_selected_dm_id(dm_id_for_ui);
                     w.set_selected_channel_id("".into());
                     w.set_selected_private_group_id("".into());
+                    // Clear pinned bar immediately while loading new conversation's pins
+                    w.set_has_pinned_messages(false);
+                    w.set_pinned_message_preview("".into());
+                    w.set_pinned_total_count(0);
                 }
             });
 
@@ -84,13 +88,29 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     }
                 };
 
+                // Load pinned messages for this anon DM
+                let (msg_ids, preview) = match anon_dm_service.list_pinned(&anon_dm_id) {
+                    Ok(pinned) if !pinned.is_empty() => {
+                        let ids = pinned.iter().filter_map(|m| m.id.as_str().parse().ok()).collect();
+                        let preview = pinned[0].as_text()
+                            .filter(|t| !t.is_empty())
+                            .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t })
+                            .unwrap_or_else(|| "[Pinned message]".to_string());
+                        (ids, preview)
+                    }
+                    _ => (vec![], String::new()),
+                };
+                let channel_id = anon_dm_id.to_string().parse()
+                    .unwrap_or_else(|_| chatter_linux::domain::ids::ChannelId::new());
+                super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
+
                 // Send presence update and track activity when opening anon DM
                 crate::bin_ui::features::auth::presence_integration::notify_chat_opened(
                     &ui_ctx,
                     &anon_dm_id,
                 ).await;
                 crate::bin_ui::features::auth::presence_integration::track_activity(&ui_ctx).await;
-                
+
                 load_anon_dm_into_ui(
                     weak,
                     anon_dm_id,

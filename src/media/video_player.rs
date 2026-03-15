@@ -35,7 +35,14 @@ impl VideoPlayer {
         }
 
         // Use open::that_in_background to not block the UI thread
-        open::that_in_background(path);
+        #[cfg(not(target_os = "android"))]
+        {
+            open::that_in_background(path);
+        }
+        #[cfg(target_os = "android")]
+        {
+            tracing::warn!("opening video via system player is not supported on Android: {}", path.display());
+        }
 
         Ok(())
     }
@@ -58,7 +65,15 @@ impl VideoPlayer {
             )));
         }
 
-        open::with_in_background(path, app);
+        #[cfg(not(target_os = "android"))]
+        {
+            open::with_in_background(path, app);
+        }
+        #[cfg(target_os = "android")]
+        {
+            let _ = app;
+            tracing::warn!("opening video with specific app is not supported on Android: {}", path.display());
+        }
 
         Ok(())
     }

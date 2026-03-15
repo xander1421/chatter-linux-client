@@ -241,7 +241,6 @@ impl ServiceContainer {
         ));
 
         // 18. Local AI actor for GPU-accelerated inference
-        // Always spawned - feature gating happens inside the actor
         let local_ai = LocalAIActorHandle::spawn();
 
         // 19. Local AI service (high-level API wrapping the actor)

@@ -13,11 +13,12 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_login(move |username: slint::SharedString, password: slint::SharedString| {
+    window.on_login(move |username: slint::SharedString, password: slint::SharedString, server_url: slint::SharedString| {
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
         let username = username.to_string();
         let password = password.to_string();
+        let server_url = server_url.to_string();
 
         tokio::spawn(async move {
             // Set loading state
@@ -28,6 +29,34 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     w.set_login_error("".into());
                 }
             });
+
+            // Update server URL and connect if different from current
+            if ui_ctx.grpc_pool.endpoint() != server_url {
+                if let Err(e) = ui_ctx.grpc_pool.set_url(&server_url) {
+                    let error_msg = format!("Invalid Server URL: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_login_loading(false);
+                            w.set_login_error(error_msg.into());
+                        }
+                    });
+                    return;
+                }
+            }
+
+            // Ensure we are connected to the selected server
+            if !ui_ctx.grpc_pool.is_connected() {
+                if let Err(e) = ui_ctx.grpc_pool.connect().await {
+                    let error_msg = format!("Failed to connect to server: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_login_loading(false);
+                            w.set_login_error(error_msg.into());
+                        }
+                    });
+                    return;
+                }
+            }
 
             // Use pre-built auth service from UIContext
             let auth_service = &ui_ctx.auth_service;
@@ -116,6 +145,10 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     }
 
                     // Start inbox provider with InboxEventProcessor
+                    // Ensure post-boot services are initialized (may have been
+                    // skipped if initial server connection failed on startup)
+                    ui_ctx.ensure_call_service();
+
                     // The processor handles protocol concerns (receipts, convergence, sender keys)
                     // and emits DomainEvent for UI updates
                     {

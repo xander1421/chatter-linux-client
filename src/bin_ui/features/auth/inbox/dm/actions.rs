@@ -229,8 +229,11 @@ pub fn handle_dm_reaction(
                     let mut updated_msg = msg.clone();
                     let new_summary =
                         update_reaction_summary(&msg.reaction_summary.to_string(), &emoji, remove);
-                    updated_msg.reaction_summary = new_summary.into();
-                    updated_msg.has_reactions = !updated_msg.reaction_summary.is_empty();
+                    updated_msg.reaction_summary = new_summary.clone().into();
+                    updated_msg.has_reactions = !new_summary.is_empty();
+                    updated_msg.reactions = slint::ModelRc::new(VecModel::from(
+                        crate::bin_ui::converters::parse_reaction_summary_to_entries(&new_summary),
+                    ));
 
                     if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>()
                     {

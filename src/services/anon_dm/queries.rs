@@ -105,4 +105,19 @@ impl AnonDmService {
             sent_timestamp,
         )?)
     }
+
+    /// Set pin state for a message by conversation_id and sent_at timestamp.
+    pub fn set_message_pinned(
+        &self,
+        conversation_id: &AnonDmId,
+        sent_timestamp: u64,
+        pinned: bool,
+    ) -> Result<bool, AnonDmError> {
+        Ok(self.anon_dm_repo.set_message_pinned_by_timestamp(conversation_id, sent_timestamp, pinned)?)
+    }
+
+    /// List all pinned messages for a conversation.
+    pub fn list_pinned(&self, conversation_id: &AnonDmId) -> Result<Vec<crate::domain::anon_dm::AnonDmMessage>, AnonDmError> {
+        Ok(self.anon_dm_repo.list_pinned(conversation_id)?)
+    }
 }

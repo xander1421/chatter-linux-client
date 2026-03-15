@@ -26,7 +26,8 @@ use crate::system::{Directories, Keyring};
 use super::ContextError;
 
 /// Default server URL if CHATTER_SERVER_URL is not set.
-pub(crate) const DEFAULT_SERVER_URL: &str = "http://localhost:50051";
+// Tunnel: "https://seeker-dance-ignored-clusters.trycloudflare.com"
+pub(crate) const DEFAULT_SERVER_URL: &str = "https://seeker-dance-ignored-clusters.trycloudflare.com";
 
 /// Environment variable for server URL.
 pub(crate) const SERVER_URL_ENV: &str = "CHATTER_SERVER_URL";

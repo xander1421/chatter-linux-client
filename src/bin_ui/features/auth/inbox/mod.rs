@@ -1134,7 +1134,9 @@ pub async fn handle_inbox_event(
                 Some(content::Content::Reaction(reaction)) => {
                     anon_group_handlers::handle_anon_group_reaction(
                         weak_window,
+                        ui_ctx,
                         anon_group_id,
+                        peer_id,
                         reaction.emoji.clone(),
                         reaction.remove,
                         reaction.target_sent_timestamp,
@@ -1145,6 +1147,7 @@ pub async fn handle_inbox_event(
                 Some(content::Content::Pin(pin)) => {
                     anon_group_handlers::handle_anon_group_pin(
                         weak_window,
+                        &ui_ctx.anon_group_service,
                         ui_ctx.pinned_state.clone(),
                         anon_group_id,
                         pin.target_sent_timestamp,
@@ -1159,6 +1162,41 @@ pub async fn handle_inbox_event(
                         .as_ref()
                         .map(|dm| dm.body.clone())
                         .unwrap_or_default();
+
+                    // Persist edit to DB (must happen before UI update to avoid data loss on channel switch)
+                    let service = ui_ctx.anon_group_service.clone();
+                    let gid = anon_group_id;
+                    let pid = peer_id;
+                    let ts = edit.target_sent_timestamp;
+                    let text = new_body.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        match service.update_message_text_by_sender(&gid, &pid, ts, &text) {
+                            Ok(true) => {
+                                tracing::info!(
+                                    group_id = %gid,
+                                    sender_id = %pid,
+                                    target_timestamp = ts,
+                                    "Persisted anon group edit to DB"
+                                );
+                            }
+                            Ok(false) => {
+                                tracing::debug!(
+                                    group_id = %gid,
+                                    sender_id = %pid,
+                                    target_timestamp = ts,
+                                    "Edit target not found or sender mismatch"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    error = %e,
+                                    "Failed to persist anon group edit to DB"
+                                );
+                            }
+                        }
+                    });
+
+                    // Update UI immediately
                     anon_group_handlers::handle_anon_group_edit(
                         weak_window,
                         anon_group_id,
@@ -1183,6 +1221,24 @@ pub async fn handle_inbox_event(
                     let text = data_msg.body.clone();
                     let has_text = !text.is_empty();
                     let has_attachments = !data_msg.attachments.is_empty();
+                    let quote = data_msg.quote.clone();
+                    // Extract reply display info from quote (resolve UUID to display name)
+                    let has_quote = quote.is_some();
+                    let quote_sender_name = quote.as_ref().map(|q| {
+                        // Try to resolve author UUID to display name
+                        if let Ok(author_id) = q.author_aci.parse::<chatter_linux::domain::UserId>() {
+                            // Try group member name first, then user service
+                            ui_ctx.anon_group_service
+                                .get_member_display_name(&anon_group_id, &author_id)
+                                .ok()
+                                .flatten()
+                                .filter(|n| !n.is_empty())
+                                .unwrap_or_else(|| ui_ctx.user_service.get_display_name(&author_id))
+                        } else {
+                            q.author_aci.clone()
+                        }
+                    }).unwrap_or_default();
+                    let quote_preview = quote.as_ref().map(|q| q.text.clone()).unwrap_or_default();
 
                     if !has_text && !has_attachments {
                         tracing::debug!(
@@ -1258,14 +1314,35 @@ pub async fn handle_inbox_event(
                             Vec::new()
                         };
 
-                        // Store message with attachments
-                        match anon_service.store_message_with_attachments(
-                            &anon_group_id,
-                            &peer_id_clone,
-                            &text,
-                            &attachment_ids,
-                            sent_at,
-                        ) {
+                        // Store message with attachments (and quote metadata if reply)
+                        let store_result = if let Some(ref q) = quote {
+                            let content_json = serde_json::json!({
+                                "text": text,
+                                "quote": {
+                                    "author_id": q.author_aci,
+                                    "author_name": quote_sender_name,
+                                    "timestamp": q.id,
+                                    "preview": q.text,
+                                }
+                            }).to_string();
+                            anon_service.store_message_with_content_json(
+                                &anon_group_id,
+                                &peer_id_clone,
+                                3,
+                                &content_json,
+                                &attachment_ids,
+                                sent_at,
+                            )
+                        } else {
+                            anon_service.store_message_with_attachments(
+                                &anon_group_id,
+                                &peer_id_clone,
+                                &text,
+                                &attachment_ids,
+                                sent_at,
+                            )
+                        };
+                        match store_result {
                             Ok(message_id) => {
                                 tracing::debug!(
                                     group_id = %anon_group_id,
@@ -1318,9 +1395,13 @@ pub async fn handle_inbox_event(
                                                     attachments: slint::ModelRc::new(slint::VecModel::from(slint_attachments)),
                                                     has_reactions: false,
                                                     reaction_summary: "".into(),
+                                                    reactions: slint::ModelRc::default(),
                                                     reply_count: 0,
                                                     reply_count_text: "".into(),
                                                     is_thread_reply: false,
+                                    is_reply: has_quote,
+                                    reply_to_sender_name: quote_sender_name.clone().into(),
+                                    reply_to_preview: quote_preview.clone().into(),
                                                     show_sender: true,
                                                     delivery_status: "delivered".into(),
                                                     is_pinned: false,
@@ -1370,6 +1451,60 @@ pub async fn handle_inbox_event(
                         "Received anon group receipt (not yet implemented in UI)"
                     );
                     // TODO: Implement receipt handling for anon groups if needed
+                }
+
+                // Handle anonymous group call offer
+                Some(content::Content::AnonCallOffer(offer)) => {
+                    tracing::info!(
+                        group_id = %anon_group_id,
+                        sender_id = %peer_id,
+                        room_name = %offer.room_name,
+                        "Received anonymous group call offer"
+                    );
+                    ui_ctx.event_bus.emit_domain(chatter_linux::inbox::DomainEvent::AnonGroupCallOfferReceived {
+                        group_id: anon_group_id,
+                        sender_id: peer_id,
+                        call_room_id: offer.call_room_id.clone(),
+                        room_name: offer.room_name.clone(),
+                        call_type: offer.call_type,
+                        caller_display_name: offer.caller_display_name.clone(),
+                        call_encryption_key: offer.call_encryption_key.clone(),
+                        timestamp: offer.timestamp,
+                    });
+                }
+
+                // Handle anonymous group call answer
+                Some(content::Content::AnonCallAnswer(answer)) => {
+                    tracing::info!(
+                        group_id = %anon_group_id,
+                        sender_id = %peer_id,
+                        accepted = answer.accepted,
+                        "Received anonymous group call answer"
+                    );
+                    ui_ctx.event_bus.emit_domain(chatter_linux::inbox::DomainEvent::AnonGroupCallAnswerReceived {
+                        group_id: anon_group_id,
+                        sender_id: peer_id,
+                        call_room_id: answer.call_room_id.clone(),
+                        accepted: answer.accepted,
+                        callee_display_name: answer.callee_display_name.clone(),
+                        timestamp: answer.timestamp,
+                    });
+                }
+
+                // Handle anonymous group call hangup
+                Some(content::Content::AnonCallHangup(hangup)) => {
+                    tracing::info!(
+                        group_id = %anon_group_id,
+                        sender_id = %peer_id,
+                        "Received anonymous group call hangup"
+                    );
+                    ui_ctx.event_bus.emit_domain(chatter_linux::inbox::DomainEvent::AnonGroupCallHangupReceived {
+                        group_id: anon_group_id,
+                        sender_id: peer_id,
+                        call_room_id: hangup.call_room_id.clone(),
+                        reason: hangup.reason,
+                        timestamp: hangup.timestamp,
+                    });
                 }
 
                 _ => {

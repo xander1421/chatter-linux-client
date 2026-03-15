@@ -7,7 +7,7 @@ use crate::domain::anon_group::{
 };
 use crate::domain::{AttachmentId, UserId};
 use crate::services::AttachmentService;
-use crate::storage::serialization::db_serialize;
+use crate::services::gateway::shared;
 
 use super::{AnonGroupError, AnonGroupService};
 
@@ -37,6 +37,8 @@ impl AnonGroupService {
             delivery_status: String::new(),
             sent_at,
             created_at: Utc::now(),
+            is_pinned: false,
+            is_read: false,
         };
 
         self.anon_group_repo.insert_message(&message)?;
@@ -83,29 +85,10 @@ impl AnonGroupService {
         attachment_ids: &[AttachmentId],
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
-        // Determine content type: 1=text, 2=attachment only, 3=mixed
-        let has_text = !text.is_empty();
-        let has_attachments = !attachment_ids.is_empty();
-
-        let (content_type, content_json) = match (has_text, has_attachments) {
-            (true, false) => (1, serde_json::json!({ "text": text }).to_string()),
-            (false, true) => (
-                2,
-                serde_json::json!({ "attachments": attachment_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>() })
-                    .to_string(),
-            ),
-            (true, true) => (
-                3,
-                serde_json::json!({ "text": text, "attachments": attachment_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>() })
-                    .to_string(),
-            ),
-            (false, false) => (0, "{}".to_string()),
-        };
-
-        // Serialize attachment IDs to blob
-        let attachment_ids_vec: Vec<_> = attachment_ids.to_vec();
-        let attachments_blob =
-            db_serialize(&attachment_ids_vec).unwrap_or_else(|_| vec![8, 0, 0, 0, 0, 0, 0, 0]);
+        // Determine content type and build JSON
+        let content_type = shared::determine_content_type(!text.is_empty(), !attachment_ids.is_empty());
+        let content_json = shared::build_content_json(text, attachment_ids);
+        let attachments_blob = shared::serialize_attachment_ids(attachment_ids);
 
         let message = DomainAnonGroupMessage {
             id: AnonGroupMessageId::new(),
@@ -120,6 +103,8 @@ impl AnonGroupService {
             delivery_status: String::new(),
             sent_at,
             created_at: Utc::now(),
+            is_pinned: false,
+            is_read: false,
         };
 
         self.anon_group_repo.insert_message(&message)?;
@@ -131,6 +116,48 @@ impl AnonGroupService {
             attachment_ids.len()
         );
         Ok(message.id)
+    }
+
+    /// Store a message with explicit content_json (used for replies with quote metadata).
+    pub fn store_message_with_content_json(
+        &self,
+        group_id: &AnonGroupId,
+        sender_id: &UserId,
+        content_type: i32,
+        content_json: &str,
+        attachment_ids: &[AttachmentId],
+        sent_at: u64,
+    ) -> Result<AnonGroupMessageId, AnonGroupError> {
+        let attachments_blob = shared::serialize_attachment_ids(attachment_ids);
+
+        let message = DomainAnonGroupMessage {
+            id: AnonGroupMessageId::new(),
+            group_id: *group_id,
+            sender_id: *sender_id,
+            content_type,
+            content_json: content_json.to_string(),
+            attachments_blob,
+            is_deleted: false,
+            reaction_counts: Vec::new(),
+            current_user_reactions: Vec::new(),
+            delivery_status: String::new(),
+            sent_at,
+            created_at: Utc::now(),
+            is_pinned: false,
+            is_read: false,
+        };
+
+        self.anon_group_repo.insert_message(&message)?;
+        Ok(message.id)
+    }
+
+    /// Get a message by group_id and sent_at timestamp (any sender).
+    pub fn get_message_by_timestamp(
+        &self,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+    ) -> Result<Option<DomainAnonGroupMessage>, AnonGroupError> {
+        Ok(self.anon_group_repo.get_message_by_timestamp(group_id, sent_timestamp)?)
     }
 
     /// Create attachment records from pointers.
@@ -204,6 +231,27 @@ impl AnonGroupService {
         Ok(self.anon_group_repo.get_message_count(group_id)?)
     }
 
+    /// Set pin state for a message by group_id and sent_at timestamp.
+    pub fn set_message_pinned(
+        &self,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+        pinned: bool,
+    ) -> Result<bool, AnonGroupError> {
+        Ok(self.anon_group_repo.set_message_pinned_by_timestamp(group_id, sent_timestamp, pinned)?)
+    }
+
+    /// List all pinned messages for a group.
+    pub fn list_pinned(&self, group_id: &AnonGroupId) -> Result<Vec<DomainAnonGroupMessage>, AnonGroupError> {
+        Ok(self.anon_group_repo.list_pinned(group_id)?)
+    }
+
+    /// Mark all messages as read for a group.
+    pub fn mark_as_read(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        self.anon_group_repo.mark_as_read(group_id)?;
+        Ok(())
+    }
+
     /// Delete a message (soft delete).
     pub fn delete_message(&self, id: &AnonGroupMessageId) -> Result<(), AnonGroupError> {
         self.anon_group_repo.delete_message(id)?;
@@ -223,5 +271,37 @@ impl AnonGroupService {
         new_text: &str,
     ) -> Result<bool, AnonGroupError> {
         Ok(self.anon_group_repo.update_message_text_by_sender(group_id, sender_id, sent_timestamp, new_text)?)
+    }
+
+    /// Add a reaction to a message in the DB.
+    pub fn add_reaction(
+        &self,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, AnonGroupError> {
+        Ok(self.anon_group_repo.add_reaction(group_id, sent_timestamp, user_id, emoji)?)
+    }
+
+    /// Remove a reaction from a message in the DB.
+    pub fn remove_reaction(
+        &self,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, AnonGroupError> {
+        Ok(self.anon_group_repo.remove_reaction(group_id, sent_timestamp, user_id, emoji)?)
+    }
+
+    /// Get all reaction counts for a group's messages.
+    ///
+    /// Returns a map of sent_at -> Vec<(emoji, count)>.
+    pub fn get_all_reaction_counts(
+        &self,
+        group_id: &AnonGroupId,
+    ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonGroupError> {
+        Ok(self.anon_group_repo.get_all_reaction_counts(group_id)?)
     }
 }

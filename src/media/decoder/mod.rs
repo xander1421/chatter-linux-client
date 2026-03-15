@@ -142,7 +142,7 @@ pub fn create_decoder() -> Result<Box<dyn VideoDecoder>, MediaError> {
 
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
-        Err(MediaError::UnsupportedFormat("Video decoding not implemented for this platform".to_string()))
+        Err(MediaError::InvalidFormat("Video decoding not implemented for this platform".to_string()))
     }
 }
 

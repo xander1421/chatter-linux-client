@@ -127,13 +127,14 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     window.on_register(
-        move |username: slint::SharedString, password: slint::SharedString, display_name: slint::SharedString, pin: slint::SharedString| {
+        move |username: slint::SharedString, password: slint::SharedString, display_name: slint::SharedString, pin: slint::SharedString, server_url: slint::SharedString| {
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
             let username = username.to_string();
             let password = password.to_string();
             let display_name = display_name.to_string();
             let pin = pin.to_string();
+            let server_url = server_url.to_string();
 
             tokio::spawn(async move {
                 // Validate PIN is exactly 6 digits
@@ -155,6 +156,34 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         w.set_register_error("".into());
                     }
                 });
+
+                // Update server URL and connect if different from current
+                if ui_ctx.grpc_pool.endpoint() != server_url {
+                    if let Err(e) = ui_ctx.grpc_pool.set_url(&server_url) {
+                        let error_msg = format!("Invalid Server URL: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_register_loading(false);
+                                w.set_register_error(error_msg.into());
+                            }
+                        });
+                        return;
+                    }
+                }
+
+                // Ensure we are connected to the selected server
+                if !ui_ctx.grpc_pool.is_connected() {
+                    if let Err(e) = ui_ctx.grpc_pool.connect().await {
+                        let error_msg = format!("Failed to connect to server: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_register_loading(false);
+                                w.set_register_error(error_msg.into());
+                            }
+                        });
+                        return;
+                    }
+                }
 
                 // Use pre-built auth service from UIContext
                 let auth_service = &ui_ctx.auth_service;
@@ -233,6 +262,10 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             &ui_ctx,
                         );
                         tracing::debug!("Anon DM request handler spawned");
+
+                        // Ensure post-boot services are initialized (may have been
+                        // skipped if initial server connection failed on startup)
+                        ui_ctx.ensure_call_service();
 
                         // Start inbox provider with InboxEventProcessor
                         // The processor handles protocol concerns and emits DomainEvent

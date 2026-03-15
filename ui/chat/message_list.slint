@@ -8,10 +8,10 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItem } from "message_item.slint";
-import { MessageAttachmentData, MessageItemData } from "types.slint";
+import { MessageAttachmentData, MessageItemData, ReactionEntry } from "types.slint";
 
 // Re-export types for parent components
-export { MessageAttachmentData, MessageItemData }
+export { MessageAttachmentData, MessageItemData, ReactionEntry }
 
 export component MessageList inherits Rectangle {
     // Properties
@@ -204,9 +204,13 @@ export component MessageList inherits Rectangle {
                 audio-elapsed: root.audio-elapsed;
                 has-reactions: item.has-reactions;
                 reaction-summary: item.reaction-summary;
+                reactions: item.reactions;
                 reply-count: item.reply-count;
                 reply-count-text: item.reply-count-text;
                 is-thread-reply: item.is-thread-reply;
+                is-reply: item.is-reply;
+                reply-to-sender-name: item.reply-to-sender-name;
+                reply-to-preview: item.reply-to-preview;
                 show-sender: item.show-sender;
                 delivery-status: item.delivery-status;
 

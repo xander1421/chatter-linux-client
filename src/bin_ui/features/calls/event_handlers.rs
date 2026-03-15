@@ -18,8 +18,7 @@ use super::key_exchange::handle_call_key_answer;
 /// and completes the ephemeral key exchange for the caller.
 pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let call_service = ui_ctx.call_service.clone();
-    let identity_manager = ui_ctx.identity_manager.clone();
-    let key_store = ui_ctx.key_store.clone();
+    let signal_service = ui_ctx.signal_service.clone();
     let mut event_rx = ui_ctx.event_bus.subscribe_domain();
     let weak = window.as_weak();
 
@@ -47,16 +46,15 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<UIContext>
                     };
 
                     // Handle the answer on the UI thread
-                    if let Some(w) = weak.upgrade() {
+                    if weak.upgrade().is_some() {
                         handle_call_key_answer(
-                            &w.as_weak(),
+                            &weak,
                             &service,
-                            &identity_manager,
-                            &key_store,
+                            &signal_service,
                             ephemeral_public_key,
                             call_id,
                             peer_id,
-                        );
+                        ).await;
                     }
                 }
                 DomainEvent::GroupCallKeyReceived {

@@ -3,13 +3,19 @@
 //! Cross-platform system integration features.
 
 pub mod antidebug;
-pub mod autostart;
-pub mod clipboard;
 pub mod directories;
-pub mod keyring;
-pub mod notifications;
-pub mod open;
 pub mod platform;
+
+// Desktop-only modules (not available on Android)
+#[cfg(not(target_os = "android"))]
+pub mod autostart;
+#[cfg(not(target_os = "android"))]
+pub mod clipboard;
+pub mod keyring;
+#[cfg(not(target_os = "android"))]
+pub mod notifications;
+#[cfg(not(target_os = "android"))]
+pub mod open;
 
 // Linux-only modules
 #[cfg(target_os = "linux")]
@@ -20,11 +26,15 @@ pub mod tray;
 pub mod tray_windows;
 
 pub use antidebug::{check_debugger, init_protection as init_antidebug, periodic_check as antidebug_check, DebuggerStatus};
+#[cfg(not(target_os = "android"))]
 pub use autostart::AutostartManager;
+#[cfg(not(target_os = "android"))]
 pub use clipboard::{Clipboard, ImageData};
 pub use directories::Directories;
 pub use keyring::Keyring;
+#[cfg(not(target_os = "android"))]
 pub use notifications::DesktopNotifications;
+#[cfg(not(target_os = "android"))]
 pub use open::ExternalOpener;
 
 #[cfg(target_os = "linux")]

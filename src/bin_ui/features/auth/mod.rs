@@ -24,7 +24,4 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     login::wire_login(window, ui_ctx);
     register::wire_register(window, ui_ctx);
     logout::wire_logout(window, ui_ctx);
-
-    // Channel bootstrap is now handled by ChannelBootstrapService in the service layer
-    // Started automatically in main.rs via AppContext::start_channel_bootstrap_service()
 }

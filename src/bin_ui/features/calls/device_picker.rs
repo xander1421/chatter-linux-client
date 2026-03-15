@@ -7,8 +7,13 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_linux::app::UIContext;
-use chatter_linux::calls::{AudioCapture, ScreenCapture, ScreenSourceType};
-use crate::{AudioDeviceData, MainWindow, ScreenSourceData};
+use chatter_linux::calls::AudioCapture;
+#[cfg(not(target_os = "android"))]
+use chatter_linux::calls::{ScreenCapture, ScreenSourceType};
+use crate::AudioDeviceData;
+#[cfg(not(target_os = "android"))]
+use crate::ScreenSourceData;
+use crate::MainWindow;
 
 /// Wire device picker callbacks for audio device and screen source selection.
 pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
@@ -75,10 +80,13 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         }
     });
 
-    // Show screen source picker
+    // Show screen source picker (desktop only)
     window.on_show_screen_source_picker({
         let weak = weak.clone();
         move || {
+            #[cfg(target_os = "android")]
+            { tracing::warn!("Screen source picker not available on Android"); return; }
+            #[cfg(not(target_os = "android"))]
             if let Some(w) = weak.upgrade() {
                 // Enumerate screen sources using LiveKit's desktop_capturer
                 match ScreenCapture::list_sources() {

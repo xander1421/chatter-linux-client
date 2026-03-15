@@ -4,9 +4,10 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model};
+use slint::{ComponentHandle, Model, ModelRc};
 
 use chatter_linux::app::UIContext;
+#[cfg(not(target_os = "android"))]
 use chatter_linux::calls::ScreenCapture;
 use chatter_linux::inbox::handlers::DomainEvent;
 use crate::MainWindow;
@@ -62,15 +63,16 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         }
     });
 
-    // Toggle screen share
+    // Toggle screen share (desktop only)
     window.on_call_toggle_screen_share({
         let call_service = call_service.clone();
         let weak = window.as_weak();
         move || {
-            let call_service = call_service.clone();
-            let weak = weak.clone();
+            let _call_service = call_service.clone();
+            let _weak = weak.clone();
+            #[cfg(not(target_os = "android"))]
             slint::spawn_local(async move {
-                if let Some(service) = call_service.get() {
+                if let Some(service) = _call_service.get() {
                     let is_sharing = service.is_screen_sharing().await;
                     let new_state = !is_sharing;
 
@@ -82,7 +84,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     tracing::error!("Failed to start screen share: {}", e);
                                 } else {
                                     tracing::info!("Screen share started");
-                                    if let Some(w) = weak.upgrade() {
+                                    if let Some(w) = _weak.upgrade() {
                                         w.set_call_is_screen_sharing(true);
                                     }
                                 }
@@ -95,12 +97,14 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         // Stop screen share
                         service.stop_screen_share();
                         tracing::info!("Screen share stopped");
-                        if let Some(w) = weak.upgrade() {
+                        if let Some(w) = _weak.upgrade() {
                             w.set_call_is_screen_sharing(false);
                         }
                     }
                 }
             }).unwrap();
+            #[cfg(target_os = "android")]
+            tracing::warn!("Screen sharing not available on Android");
         }
     });
 
@@ -227,9 +231,13 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     attachments: slint::ModelRc::default(),
                                     has_reactions: false,
                                     reaction_summary: "".into(),
+                                    reactions: ModelRc::default(),
                                     reply_count: 0,
                                     reply_count_text: "".into(),
                                     is_thread_reply: false,
+                                    is_reply: false,
+                                    reply_to_sender_name: "".into(),
+                                    reply_to_preview: "".into(),
                                     show_sender: false,
                                     delivery_status: "".into(),
                                     is_pinned: false,

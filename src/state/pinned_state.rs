@@ -141,6 +141,13 @@ impl PinnedState {
         });
     }
 
+    /// Un-dismiss the pinned bar (re-show it).
+    pub fn undismiss(&self) {
+        self.store.update(|state| {
+            state.is_dismissed = false;
+        });
+    }
+
     /// Check if the pinned bar is dismissed.
     #[must_use]
     pub fn is_dismissed(&self) -> bool {

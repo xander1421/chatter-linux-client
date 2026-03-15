@@ -195,6 +195,11 @@ pub struct AttachmentService {
 }
 
 impl AttachmentService {
+    /// Get the attachment repository.
+    pub fn attachment_repo(&self) -> Arc<AttachmentRepository> {
+        self.attachment_repo.clone()
+    }
+
     /// Create a new AttachmentService.
     pub fn new(attachment_repo: Arc<AttachmentRepository>) -> Self {
         Self { attachment_repo }

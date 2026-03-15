@@ -32,8 +32,9 @@ use super::interceptors::AuthInterceptor;
 /// ```
 pub struct GrpcClientPool {
     channel: Arc<RwLock<Option<Channel>>>,
-    endpoint: Endpoint,
+    endpoint: Arc<RwLock<Endpoint>>,
     auth: AuthInterceptor,
+    timeout: Option<Duration>,
 }
 
 impl GrpcClientPool {
@@ -82,6 +83,18 @@ impl GrpcClientPool {
     /// * `server_url` - Server URL
     /// * `timeout` - Request timeout (None for no timeout, suitable for streaming)
     fn with_timeout(server_url: &str, timeout: Option<Duration>) -> Result<Self, NetworkError> {
+        let endpoint = Self::create_endpoint(server_url, timeout)?;
+
+        Ok(Self {
+            channel: Arc::new(RwLock::new(None)),
+            endpoint: Arc::new(RwLock::new(endpoint)),
+            auth: AuthInterceptor::new(),
+            timeout,
+        })
+    }
+
+    /// Helper to create an endpoint with standard settings.
+    fn create_endpoint(server_url: &str, timeout: Option<Duration>) -> Result<Endpoint, NetworkError> {
         let mut endpoint = Endpoint::from_shared(server_url.to_string())
             .map_err(|e| NetworkError::ConnectionFailed(format!("invalid URL: {}", e)))?
             .connect_timeout(Duration::from_secs(10))
@@ -90,21 +103,39 @@ impl GrpcClientPool {
             .keep_alive_timeout(Duration::from_secs(10))
             .keep_alive_while_idle(true)
             .concurrency_limit(256)
-            // HTTP/2 window sizes for large uploads
-            // Adaptive window is disabled to prevent unbounded growth
-            // Fixed windows provide predictable memory usage
-            .initial_stream_window_size(2 * 1024 * 1024) // 2MB per-stream window
-            .initial_connection_window_size(8 * 1024 * 1024); // 8MB connection window (bounded)
+            .initial_stream_window_size(2 * 1024 * 1024)
+            .initial_connection_window_size(8 * 1024 * 1024);
 
         if let Some(t) = timeout {
             endpoint = endpoint.timeout(t);
         }
 
-        Ok(Self {
-            channel: Arc::new(RwLock::new(None)),
-            endpoint,
-            auth: AuthInterceptor::new(),
-        })
+        Ok(endpoint)
+    }
+
+    /// Update the server URL.
+    ///
+    /// Disconnects any existing connection and updates the endpoint.
+    /// Call `connect()` again after this to re-establish the connection.
+    ///
+    /// # Arguments
+    ///
+    /// * `server_url` - New server URL
+    ///
+    /// # Errors
+    ///
+    /// Returns `NetworkError::ConnectionFailed` if the URL is invalid.
+    pub fn set_url(&self, server_url: &str) -> Result<(), NetworkError> {
+        let new_endpoint = Self::create_endpoint(server_url, self.timeout)?;
+        
+        // Disconnect first
+        self.disconnect();
+        
+        // Update endpoint
+        *self.endpoint.write() = new_endpoint;
+        
+        tracing::info!("gRPC pool URL updated to: {}", server_url);
+        Ok(())
     }
 
     /// Connect to the server.
@@ -116,8 +147,9 @@ impl GrpcClientPool {
     ///
     /// Returns `NetworkError::ConnectionFailed` if the connection fails.
     pub async fn connect(&self) -> Result<(), NetworkError> {
-        let channel = self
-            .endpoint
+        let endpoint = self.endpoint.read().clone();
+        
+        let channel = endpoint
             .connect()
             .await
             .map_err(|e| NetworkError::ConnectionFailed(format!("connection failed: {}", e)))?;
@@ -176,15 +208,15 @@ impl GrpcClientPool {
     }
 
     /// Get the configured server URL.
-    pub fn server_url(&self) -> &str {
-        self.endpoint.uri().host().unwrap_or("unknown")
+    pub fn server_url(&self) -> String {
+        self.endpoint.read().uri().host().unwrap_or("unknown").to_string()
     }
 
     /// Get the full endpoint URL string.
     ///
     /// Returns the complete URL including scheme and port.
     pub fn endpoint(&self) -> String {
-        self.endpoint.uri().to_string()
+        self.endpoint.read().uri().to_string()
     }
 
     /// Get auth info (user_id, device_id, token) from the auth interceptor.

@@ -6,10 +6,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
-use libsignal_protocol::IdentityKey;
 
 use chatter_linux::app::UIContext;
-use chatter_linux::crypto::{EphemeralCallKey, derive_call_key_ephemeral};
+use chatter_linux::crypto::EphemeralCallKey;
 use chatter_linux::domain::ids::{CallId, UserId};
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
@@ -22,9 +21,9 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let ctx_session_service = ui_ctx.session_service.clone();
     let ctx_message_service = ui_ctx.message_service.clone();
     let ctx_mailbox_manager = ui_ctx.mailbox_manager.clone();
-    let ctx_identity_manager = ui_ctx.identity_manager.clone();
-    let ctx_key_store = ui_ctx.key_store.clone();
+    let ctx_signal_service = ui_ctx.signal_service.clone();
     let ctx_anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let ctx_anon_group_service = ui_ctx.anon_group_service.clone();
 
     // Accept call callback
     window.on_accept_incoming_call({
@@ -33,9 +32,9 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let session_service = ctx_session_service.clone();
         let message_service = ctx_message_service.clone();
         let mailbox_manager = ctx_mailbox_manager.clone();
-        let identity_manager = ctx_identity_manager.clone();
-        let key_store = ctx_key_store.clone();
+        let signal_service = ctx_signal_service.clone();
         let anon_dm_service = ctx_anon_dm_service.clone();
+        let anon_group_service = ctx_anon_group_service.clone();
 
         move |call_id| {
             let call_id_str = call_id.to_string();
@@ -50,6 +49,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 // Handle anonymous call acceptance
                 let weak = weak.clone();
                 let anon_dm_service = anon_dm_service.clone();
+                let anon_group_service = anon_group_service.clone();
                 let call_service = call_service.clone();
                 
                 slint::spawn_local(async move {
@@ -119,20 +119,45 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     // Use our own display name (not the caller's)
                     let my_display_name = anon_dm_service.get_my_display_name().unwrap_or_else(|| "Anonymous".to_string());
 
-                    // Send accept answer
-                    if let Err(e) = anon_dm_service.send_call_answer(
-                        &pending.conversation_id,
-                        &pending.call_room_id,
-                        true,  // accepted = true
-                        Some(&token),
-                        None,  // decline_reason (not applicable for accept)
-                        Some(&my_display_name), // Our display name, not the caller's
-                    ).await {
-                        tracing::error!("Failed to send call accept: {}", e);
-                        if let Some(w) = weak.upgrade() {
-                            w.set_incoming_call_visible(false);
+                    // Send accept answer - route through DM or group service
+                    // Check if conversation_id is an actual anon DM or a synthetic ID from a group
+                    let is_group_call = anon_dm_service.get_conversation(&pending.conversation_id)
+                        .ok().flatten().is_none();
+
+                    if is_group_call {
+                        // Route through anon group service
+                        let group_id = chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(
+                            pending.conversation_id.as_bytes()
+                        ).expect("conversation_id bytes are valid");
+                        if let Err(e) = anon_group_service.send_call_answer(
+                            &group_id,
+                            &pending.call_room_id,
+                            true,
+                            Some(&token),
+                            Some(&my_display_name),
+                        ).await {
+                            tracing::error!("Failed to send group call accept: {}", e);
+                            if let Some(w) = weak.upgrade() {
+                                w.set_incoming_call_visible(false);
+                            }
+                            return;
                         }
-                        return;
+                    } else {
+                        // Route through anon DM service
+                        if let Err(e) = anon_dm_service.send_call_answer(
+                            &pending.conversation_id,
+                            &pending.call_room_id,
+                            true,
+                            Some(&token),
+                            None,
+                            Some(&my_display_name),
+                        ).await {
+                            tracing::error!("Failed to send call accept: {}", e);
+                            if let Some(w) = weak.upgrade() {
+                                w.set_incoming_call_visible(false);
+                            }
+                            return;
+                        }
                     }
 
                     tracing::info!("Anonymous call accept sent, joining LiveKit room");
@@ -298,8 +323,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let session_service = session_service.clone();
             let message_service = message_service.clone();
             let mailbox_manager = mailbox_manager.clone();
-            let identity_manager = identity_manager.clone();
-            let key_store = key_store.clone();
+            let signal_service = signal_service.clone();
 
             slint::spawn_local(async move {
                 // Get incoming call data to extract caller's ephemeral key and caller ID
@@ -354,7 +378,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 // =============================================================
                 // 1. Generate our ephemeral keypair
                 // 2. Compute ECDH(our_ephemeral, caller_ephemeral)
-                // 3. Derive call key with identity binding
+                // 3. Delegate identity lookup + key derivation to Signal service
                 // 4. Send answer with our ephemeral public key
                 // 5. Join the call with derived key
                 // =============================================================
@@ -363,52 +387,14 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 let our_ephemeral = EphemeralCallKey::generate();
                 let our_ephemeral_pk = our_ephemeral.public_key_bytes();
 
-                // Compute ECDH
-                let ephemeral_shared = our_ephemeral.diffie_hellman(&caller_ephemeral_pk);
-
-                // Get identity keys for HKDF binding
-                let our_identity = match identity_manager.get_identity() {
-                    Ok(Some((_reg_id, identity))) => identity,
-                    Ok(None) => {
-                        tracing::error!("No local identity key available");
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to get our identity key: {}", e);
-                        return;
-                    }
-                };
-
-                // Get caller's identity key from storage (address format: "user_id:device_id")
-                let caller_address = format!("{}:1", caller_id);
-                let caller_identity = match key_store.get_identity(&caller_address) {
-                    Ok(Some(bytes)) => {
-                        match IdentityKey::decode(&bytes) {
-                            Ok(key) => key,
-                            Err(e) => {
-                                tracing::error!("Failed to decode caller identity key: {}", e);
-                                return;
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        tracing::error!("No identity key stored for caller {}", caller_id);
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to get caller identity key: {}", e);
-                        return;
-                    }
-                };
-
-                // Derive call key (we are callee, so we_are_caller = false)
-                let encryption_key = match derive_call_key_ephemeral(
-                    &ephemeral_shared,
-                    &our_identity,
-                    &caller_identity,
-                    &call_id_str,
+                // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
+                let encryption_key = match signal_service.actor.complete_call_key_exchange(
+                    our_ephemeral.private_key_bytes(),
+                    caller_ephemeral_pk,
+                    caller_id,
+                    call_id_str.clone(),
                     false, // we_are_caller = false (we're the callee)
-                ) {
+                ).await {
                     Ok(key) => key,
                     Err(e) => {
                         tracing::error!("Failed to derive call key: {}", e);
@@ -597,18 +583,38 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             slint::spawn_local(async move {
                 // Get stored offer details from pending state (consume it since we're declining)
                 if let Some(pending) = ui_ctx.anon_dm_service.take_pending_anon_call(&call_id_str) {
-                    // Send decline answer using the conversation ID from the pending call
-                    if let Err(e) = ui_ctx.anon_dm_service.send_call_answer(
-                        &pending.conversation_id,
-                        &pending.call_room_id,
-                        false, // accepted = false for decline
-                        None,  // No token needed for decline
-                        None,  // decline_reason (use default)
-                        Some(&pending.display_name), // display_name
-                    ).await {
-                        tracing::error!("Failed to send anonymous call decline: {}", e);
+                    // Route decline through DM or group service
+                    let is_group_call = ui_ctx.anon_dm_service.get_conversation(&pending.conversation_id)
+                        .ok().flatten().is_none();
+
+                    if is_group_call {
+                        let group_id = chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(
+                            pending.conversation_id.as_bytes()
+                        ).expect("conversation_id bytes are valid");
+                        if let Err(e) = ui_ctx.anon_group_service.send_call_answer(
+                            &group_id,
+                            &pending.call_room_id,
+                            false,
+                            None,
+                            Some(&pending.display_name),
+                        ).await {
+                            tracing::error!("Failed to send group call decline: {}", e);
+                        } else {
+                            tracing::info!("Group call decline sent for {}", call_id_str);
+                        }
                     } else {
-                        tracing::info!("Anonymous call decline sent for {}", call_id_str);
+                        if let Err(e) = ui_ctx.anon_dm_service.send_call_answer(
+                            &pending.conversation_id,
+                            &pending.call_room_id,
+                            false,
+                            None,
+                            None,
+                            Some(&pending.display_name),
+                        ).await {
+                            tracing::error!("Failed to send anonymous call decline: {}", e);
+                        } else {
+                            tracing::info!("Anonymous call decline sent for {}", call_id_str);
+                        }
                     }
                 } else {
                     tracing::warn!("No pending anonymous call state found for decline: {}", call_id_str);

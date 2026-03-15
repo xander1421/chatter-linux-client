@@ -330,6 +330,8 @@ pub struct AnonDmMessage {
     pub sent_at: u64,
     /// When this message was stored locally.
     pub created_at: DateTime<Utc>,
+    /// Whether this message is pinned.
+    pub is_pinned: bool,
 }
 
 impl AnonDmMessage {
@@ -357,6 +359,7 @@ impl AnonDmMessage {
             delivery_status: String::new(),
             sent_at,
             created_at: Utc::now(),
+            is_pinned: false,
         }
     }
 

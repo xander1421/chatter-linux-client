@@ -272,13 +272,71 @@ impl UIContext {
         }
     }
 
+    /// Initialize the call service if not already set.
+    ///
+    /// Safe to call multiple times — uses `get_or_init` internally.
+    pub fn ensure_call_service(&self) {
+        use crate::services::call_worker::CallWorkerHandle;
+
+        self.call_service.get_or_init(|| {
+            let call_client = crate::network::grpc::CallClient::new(
+                self.grpc_pool.channel(),
+                self.grpc_pool.auth_clone(),
+            );
+            CallWorkerHandle::spawn(call_client)
+        });
+    }
+
+    /// Initialize the device inbox provider if not already set.
+    ///
+    /// This is safe to call multiple times — uses `get_or_init` internally.
+    /// Called automatically by `start_inbox_provider()`.
+    pub fn ensure_device_inbox_provider(&self) {
+        use crate::inbox::DeviceInboxProvider;
+        use crate::mailbox::AnonDmPoller;
+
+        self.device_inbox_provider.get_or_init(|| {
+            let message_client = crate::network::grpc::message_client::MessageClient::new(
+                self.grpc_pool.channel(),
+                self.grpc_pool.auth_clone(),
+            );
+            let mailbox_client = crate::network::grpc::mailbox_client::MailboxClient::new(
+                self.grpc_pool.channel(),
+                self.grpc_pool.auth_clone(),
+            );
+            let pipeline = std::sync::Arc::new(crate::network::validation::MessageValidationPipeline::new());
+
+            let anon_dm_poller = std::sync::Arc::new(AnonDmPoller::new(
+                self.anon_dm_service.anon_dm_repo(),
+            ));
+
+            std::sync::Arc::new(
+                DeviceInboxProvider::with_event_bus(
+                    crate::inbox::InboxConfig::default(),
+                    std::sync::Arc::new(tokio::sync::Mutex::new(message_client)),
+                    std::sync::Arc::new(tokio::sync::Mutex::new(mailbox_client)),
+                    pipeline,
+                    self.message_gateway.clone(),
+                    self.database.clone(),
+                    self.grpc_pool.clone(),
+                    self.attachment_service.attachment_repo(),
+                    Some(self.event_bus.clone()),
+                )
+                .with_anon_dm_polling(anon_dm_poller, self.anon_dm_service.pairwise_service()),
+            )
+        });
+    }
+
     /// Start the inbox provider and return a receiver for inbox events.
     ///
     /// This should be called after login/register to enable real-time events
     /// (friend requests, DM messages, etc.).
     ///
-    /// Returns None if the provider is not initialized or already running.
+    /// Auto-initializes the provider if it hasn't been set up yet (e.g., when
+    /// the initial server connection failed but login/register succeeded later).
     pub async fn start_inbox_provider(&self) -> Option<tokio::sync::broadcast::Receiver<crate::inbox::InboxEvent>> {
+        // Auto-initialize if not yet set (handles dev mode + offline startup)
+        self.ensure_device_inbox_provider();
         let provider = self.device_inbox_provider.get()?.clone();
 
         match provider.start().await {

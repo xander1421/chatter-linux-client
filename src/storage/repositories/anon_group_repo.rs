@@ -580,8 +580,8 @@ impl AnonGroupRepository {
     pub fn insert_message(&self, message: &AnonGroupMessage) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO anon_group_messages (id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO anon_group_messages (id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_read)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 message.id.as_str(),
                 message.group_id.as_bytes().as_slice(),
@@ -593,6 +593,7 @@ impl AnonGroupRepository {
                 message.sent_at as i64,
                 message.created_at.to_rfc3339(),
                 message.delivery_status,
+                message.is_read as i32,
             ],
         )?;
         Ok(())
@@ -602,7 +603,7 @@ impl AnonGroupRepository {
     pub fn get_message(&self, id: &AnonGroupMessageId) -> Result<Option<AnonGroupMessage>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
              FROM anon_group_messages WHERE id = ?1",
         )?;
 
@@ -632,7 +633,7 @@ impl AnonGroupRepository {
 
         let messages = if let Some(before_nanos) = before_ns {
             let mut stmt = conn.prepare(
-                "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status
+                "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
                  FROM anon_group_messages
                  WHERE group_id = ?1 AND sent_at < ?2 AND is_deleted = 0
                  ORDER BY sent_at DESC, sender_id DESC
@@ -650,7 +651,7 @@ impl AnonGroupRepository {
             msgs
         } else {
             let mut stmt = conn.prepare(
-                "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status
+                "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
                  FROM anon_group_messages
                  WHERE group_id = ?1 AND is_deleted = 0
                  ORDER BY sent_at DESC, sender_id DESC
@@ -700,7 +701,7 @@ impl AnonGroupRepository {
     pub fn get_latest_message(&self, group_id: &AnonGroupId) -> Result<Option<AnonGroupMessage>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
              FROM anon_group_messages
              WHERE group_id = ?1 AND is_deleted = 0
              ORDER BY sent_at DESC, sender_id DESC
@@ -729,7 +730,7 @@ impl AnonGroupRepository {
         let conn = self.db.read_connection()?;
 
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
              FROM anon_group_messages
              WHERE group_id = ?1 AND sender_id = ?2 AND sent_at = ?3 AND is_deleted = 0
              LIMIT 1",
@@ -749,6 +750,75 @@ impl AnonGroupRepository {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Database(e)),
         }
+    }
+
+    /// Get a message by group_id and sent_at timestamp (any sender).
+    ///
+    /// Used for looking up quoted messages by timestamp.
+    pub fn get_message_by_timestamp(
+        &self,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+    ) -> Result<Option<AnonGroupMessage>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let result = conn.query_row(
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
+             FROM anon_group_messages
+             WHERE group_id = ?1 AND sent_at = ?2 AND is_deleted = 0
+             LIMIT 1",
+            params![group_id.as_bytes().as_slice(), sent_timestamp as i64],
+            row_to_message,
+        );
+        match result {
+            Ok(msg) => Ok(Some(msg)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Set the pinned state of a message by group_id and sent_at timestamp.
+    pub fn set_message_pinned_by_timestamp(
+        &self,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+        pinned: bool,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE anon_group_messages SET is_pinned = ?1
+             WHERE group_id = ?2 AND sent_at = ?3 AND is_deleted = 0",
+            params![
+                pinned as i32,
+                group_id.as_bytes().as_slice(),
+                sent_timestamp as i64,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// List all pinned messages for a group, ordered by sent_at DESC.
+    pub fn list_pinned(&self, group_id: &AnonGroupId) -> Result<Vec<AnonGroupMessage>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
+             FROM anon_group_messages
+             WHERE group_id = ?1 AND is_pinned = 1 AND is_deleted = 0
+             ORDER BY sent_at DESC",
+        )?;
+        let messages = stmt
+            .query_map(params![group_id.as_bytes().as_slice()], row_to_message)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(messages)
+    }
+
+    /// Mark all messages as read for a group.
+    pub fn mark_as_read(&self, group_id: &AnonGroupId) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE anon_group_messages SET is_read = 1 WHERE group_id = ?1 AND is_read = 0",
+            params![group_id.as_bytes().as_slice()],
+        )?;
+        Ok(())
     }
 
     /// Soft delete a message by sender timestamp (for incoming delete-for-everyone).
@@ -824,12 +894,154 @@ impl AnonGroupRepository {
             params![
                 content_json,
                 group_id.as_bytes().as_slice(),
-                sender_id.to_string(),
+                sender_id.as_bytes().as_slice(),
                 sent_timestamp as i64,
             ],
         )?;
 
         Ok(rows > 0)
+    }
+
+    // ========================================================================
+    // Reactions
+    // ========================================================================
+
+    /// Add a reaction to a message (by sent_at timestamp).
+    ///
+    /// Uses INSERT OR IGNORE to handle duplicates gracefully (UNIQUE constraint
+    /// on message_id, user_id, emoji).
+    pub fn add_reaction(
+        &self,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+
+        // Look up message_id by group_id + sent_at
+        let message_id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM anon_group_messages WHERE group_id = ?1 AND sent_at = ?2 LIMIT 1",
+                params![group_id.as_bytes().as_slice(), sent_timestamp as i64],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let Some(message_id) = message_id else {
+            tracing::debug!(
+                group_id = %group_id,
+                sent_timestamp,
+                "Cannot add reaction: message not found"
+            );
+            return Ok(false);
+        };
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let rows = conn.execute(
+            "INSERT OR IGNORE INTO anon_group_reactions (id, message_id, user_id, emoji, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, message_id, user_id.to_string(), emoji, now],
+        )?;
+
+        Ok(rows > 0)
+    }
+
+    /// Remove a reaction from a message (by sent_at timestamp).
+    pub fn remove_reaction(
+        &self,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+
+        // Look up message_id by group_id + sent_at
+        let message_id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM anon_group_messages WHERE group_id = ?1 AND sent_at = ?2 LIMIT 1",
+                params![group_id.as_bytes().as_slice(), sent_timestamp as i64],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let Some(message_id) = message_id else {
+            return Ok(false);
+        };
+
+        let rows = conn.execute(
+            "DELETE FROM anon_group_reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3",
+            params![message_id, user_id.to_string(), emoji],
+        )?;
+
+        Ok(rows > 0)
+    }
+
+    /// Get reaction counts for a message (by sent_at timestamp).
+    ///
+    /// Returns a list of (emoji, count) pairs.
+    pub fn get_reaction_counts(
+        &self,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+    ) -> Result<Vec<(String, u32)>, StorageError> {
+        let conn = self.db.read_connection()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT r.emoji, COUNT(*) as cnt
+             FROM anon_group_reactions r
+             JOIN anon_group_messages m ON r.message_id = m.id
+             WHERE m.group_id = ?1 AND m.sent_at = ?2
+             GROUP BY r.emoji
+             ORDER BY cnt DESC",
+        )?;
+
+        let mut rows = stmt.query(params![
+            group_id.as_bytes().as_slice(),
+            sent_timestamp as i64,
+        ])?;
+
+        let mut counts = Vec::new();
+        while let Some(row) = rows.next()? {
+            let emoji: String = row.get(0)?;
+            let count: u32 = row.get(1)?;
+            counts.push((emoji, count));
+        }
+
+        Ok(counts)
+    }
+
+    /// Get all reaction counts for messages in a group.
+    ///
+    /// Returns a map of sent_at -> Vec<(emoji, count)>.
+    /// Used when loading messages to populate reaction_counts.
+    pub fn get_all_reaction_counts(
+        &self,
+        group_id: &AnonGroupId,
+    ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, StorageError> {
+        let conn = self.db.read_connection()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT m.sent_at, r.emoji, COUNT(*) as cnt
+             FROM anon_group_reactions r
+             JOIN anon_group_messages m ON r.message_id = m.id
+             WHERE m.group_id = ?1
+             GROUP BY m.sent_at, r.emoji
+             ORDER BY m.sent_at, cnt DESC",
+        )?;
+
+        let mut rows = stmt.query(params![group_id.as_bytes().as_slice()])?;
+
+        let mut map: std::collections::HashMap<u64, Vec<(String, u32)>> = std::collections::HashMap::new();
+        while let Some(row) = rows.next()? {
+            let sent_at: i64 = row.get(0)?;
+            let emoji: String = row.get(1)?;
+            let count: u32 = row.get(2)?;
+            map.entry(sent_at as u64).or_default().push((emoji, count));
+        }
+
+        Ok(map)
     }
 
     // ========================================================================
@@ -1199,6 +1411,11 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMessage>
 
     let sent_at: i64 = row.get(7)?;
 
+    // is_pinned is column index 10 (added in v039 migration)
+    let is_pinned: bool = row.get::<_, i32>(10).unwrap_or(0) != 0;
+    // is_read is column index 11 (added in v040 migration)
+    let is_read: bool = row.get::<_, i32>(11).unwrap_or(0) != 0;
+
     Ok(AnonGroupMessage {
         id: AnonGroupMessageId::from_string(row.get(0)?),
         group_id,
@@ -1212,5 +1429,7 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMessage>
         delivery_status: row.get(9)?,
         sent_at: sent_at as u64,
         created_at: parse_datetime(&row.get::<_, String>(8)?),
+        is_pinned,
+        is_read,
     })
 }

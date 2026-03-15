@@ -38,6 +38,8 @@ pub mod v035_message_delivery_status;
 pub mod v036_call_room_tokens;
 pub mod v037_sender_key_rotation;
 pub mod v038_anon_group_owner_id;
+pub mod v039_anon_group_pinned;
+pub mod v040_anon_message_parity;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -79,6 +81,8 @@ pub use v035_message_delivery_status::V035MessageDeliveryStatus;
 pub use v036_call_room_tokens::V036CallRoomTokens;
 pub use v037_sender_key_rotation::V037SenderKeyRotation;
 pub use v038_anon_group_owner_id::V038AnonGroupOwnerId;
+pub use v039_anon_group_pinned::V039AnonGroupPinned;
+pub use v040_anon_message_parity::V040AnonMessageParity;
 
 /// Trait for database migrations.
 ///
@@ -235,4 +239,6 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V036CallRoomTokens)
         .register(V037SenderKeyRotation)
         .register(V038AnonGroupOwnerId)
+        .register(V039AnonGroupPinned)
+        .register(V040AnonMessageParity)
 }

@@ -16,10 +16,11 @@ use crate::domain::anon_dm::AnonDmId;
 use crate::domain::UserId;
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 use crate::domain::ids::ChannelId;
-use crate::proto::content_v1::{self, typing_message, receipt_message, anon_dm_presence, Content};
+use crate::proto::content_v1::{self, anon_dm_presence, Content};
 use crate::services::anon_dm::AnonDmService;
 
 use super::{DomainEvent, HandlerContext, HandlerError, HandlerOutcome, HandlerResult, InboxHandler};
+use super::base_anon::{self, AnonContentService};
 
 // ============================================================================
 // AnonDmHandler
@@ -43,6 +44,50 @@ impl AnonDmHandler {
         Self { service }
     }
 
+}
+
+/// Bridge between the shared `AnonContentService` trait and `AnonDmService`.
+struct DmContentBridge<'a>(&'a AnonDmService);
+
+impl AnonContentService for DmContentBridge<'_> {
+    type Id = AnonDmId;
+
+    fn delete_message_by_timestamp(&self, id: &AnonDmId, sender_id: &UserId, ts: u64) -> Result<bool, String> {
+        self.0.delete_message_by_timestamp(id, sender_id, ts).map_err(|e| e.to_string())
+    }
+
+    fn update_message_text_by_sender(&self, id: &AnonDmId, sender_id: &UserId, ts: u64, text: &str) -> Result<bool, String> {
+        self.0.update_message_text_by_sender(id, sender_id, ts, text).map_err(|e| e.to_string())
+    }
+
+    fn store_message(&self, id: &AnonDmId, sender_id: &UserId, content_type: i32, content_json: &str, sent_at: u64) -> Result<String, String> {
+        self.0.store_message(id, sender_id, content_type, content_json, sent_at)
+            .map(|id| id.as_str().to_string())
+            .map_err(|e| e.to_string())
+    }
+
+    fn message_received_event(&self, id: AnonDmId, sender_id: UserId, message_id: String, inner_content: Content, sent_at: u64) -> DomainEvent {
+        DomainEvent::AnonDmMessageReceived {
+            conversation_id: id,
+            sender_id,
+            message_id: crate::domain::anon_dm::AnonDmMessageId::from_string(message_id),
+            inner_content,
+            sent_at,
+        }
+    }
+
+    fn message_edited_event(&self, id: AnonDmId, message_timestamp: u64, new_text: String) -> DomainEvent {
+        DomainEvent::AnonDmMessageEdited {
+            conversation_id: id,
+            message_timestamp,
+            new_text,
+        }
+    }
+
+    fn label(&self) -> &'static str { "anon DM" }
+}
+
+impl AnonDmHandler {
     /// Extract sender UserId from processed message.
     fn get_sender_id(&self, message: &ProcessedMessage) -> Result<UserId, HandlerError> {
         message
@@ -377,36 +422,8 @@ impl AnonDmHandler {
     }
 
     /// Handle a typing indicator.
-    fn handle_typing(
-        &self,
-        conversation_id: AnonDmId,
-        sender_id: UserId,
-        typing: &content_v1::TypingMessage,
-        ctx: &HandlerContext,
-    ) -> HandlerResult {
-        // Convert AnonDmId to ChannelId for the event (reuse existing event types)
-        let channel_id: ChannelId = conversation_id.into();
-
-        let event = if typing.action == typing_message::Action::Started as i32 {
-            DomainEvent::TypingStarted {
-                channel_id,
-                user_id: sender_id,
-            }
-        } else {
-            DomainEvent::TypingStopped {
-                channel_id,
-                user_id: sender_id,
-            }
-        };
-        ctx.emit(event);
-
-        tracing::debug!(
-            "Received typing indicator from {} in anon DM {}",
-            sender_id,
-            conversation_id
-        );
-
-        Ok(HandlerOutcome::Processed)
+    fn handle_typing(&self, id: AnonDmId, sender_id: UserId, typing: &content_v1::TypingMessage, ctx: &HandlerContext) -> HandlerResult {
+        base_anon::handle_typing(id, sender_id, typing, ctx, &DmContentBridge(&self.service))
     }
 
     /// Handle a presence update.
@@ -531,133 +548,18 @@ impl AnonDmHandler {
     }
 
     /// Handle a reaction.
-    fn handle_reaction(
-        &self,
-        conversation_id: AnonDmId,
-        sender_id: UserId,
-        reaction: &content_v1::Reaction,
-        ctx: &HandlerContext,
-    ) -> HandlerResult {
-        // For anon DMs, we emit the standard reaction event
-        // The message ID is derived from the target_sent_timestamp
-        let message_id = crate::domain::MessageId::from_timestamp(reaction.target_sent_timestamp);
-        let author_id = UserId::from_str(&reaction.target_author_aci)
-            .unwrap_or(sender_id);
-
-        let event = if reaction.remove {
-            DomainEvent::ReactionRemoved {
-                message_id,
-                author_id,
-                reactor_id: sender_id,
-                emoji: reaction.emoji.clone(),
-                timestamp: reaction.timestamp,
-            }
-        } else {
-            DomainEvent::ReactionAdded {
-                message_id,
-                author_id,
-                reactor_id: sender_id,
-                emoji: reaction.emoji.clone(),
-                timestamp: reaction.timestamp,
-            }
-        };
-        ctx.emit(event);
-
-        tracing::debug!(
-            "Received reaction {} from {} in anon DM {}",
-            reaction.emoji,
-            sender_id,
-            conversation_id
-        );
-
-        Ok(HandlerOutcome::Processed)
+    fn handle_reaction(&self, id: AnonDmId, sender_id: UserId, reaction: &content_v1::Reaction, ctx: &HandlerContext) -> HandlerResult {
+        base_anon::handle_reaction(id, sender_id, reaction, ctx, &DmContentBridge(&self.service))
     }
 
     /// Handle a read receipt.
-    fn handle_receipt(
-        &self,
-        conversation_id: AnonDmId,
-        sender_id: UserId,
-        receipt: &content_v1::ReceiptMessage,
-        ctx: &HandlerContext,
-    ) -> HandlerResult {
-        if receipt.r#type == receipt_message::Type::Read as i32 {
-            let channel_id: ChannelId = conversation_id.into();
-            ctx.emit(DomainEvent::MessagesRead {
-                reader_id: sender_id,
-                message_timestamps: receipt.timestamps.clone(),
-                receipt_timestamp: receipt.timestamp,
-                channel_id: Some(channel_id),
-            });
-
-            tracing::debug!(
-                "Received read receipt for {} messages from {} in anon DM {}",
-                receipt.timestamps.len(),
-                sender_id,
-                conversation_id
-            );
-        } else if receipt.r#type == receipt_message::Type::Delivery as i32 {
-            ctx.emit(DomainEvent::MessagesDelivered {
-                recipient_id: sender_id,
-                message_timestamps: receipt.timestamps.clone(),
-                receipt_timestamp: receipt.timestamp,
-            });
-
-            tracing::debug!(
-                "Received delivery receipt for {} messages from {} in anon DM {}",
-                receipt.timestamps.len(),
-                sender_id,
-                conversation_id
-            );
-        }
-
-        Ok(HandlerOutcome::Processed)
+    fn handle_receipt(&self, id: AnonDmId, sender_id: UserId, receipt: &content_v1::ReceiptMessage, ctx: &HandlerContext) -> HandlerResult {
+        base_anon::handle_receipt(id, sender_id, receipt, ctx, &DmContentBridge(&self.service))
     }
 
     /// Handle a delete-for-everyone message.
-    fn handle_delete(
-        &self,
-        conversation_id: AnonDmId,
-        sender_id: UserId,
-        target_sent_timestamp: u64,
-        ctx: &HandlerContext,
-    ) -> HandlerResult {
-        // Delete the message from our local store
-        match self.service.delete_message_by_timestamp(&conversation_id, &sender_id, target_sent_timestamp) {
-            Ok(true) => {
-                tracing::info!(
-                    "Deleted message at timestamp {} from {} in anon DM {}",
-                    target_sent_timestamp,
-                    sender_id,
-                    conversation_id
-                );
-            }
-            Ok(false) => {
-                tracing::debug!(
-                    "Message at timestamp {} not found for deletion in anon DM {}",
-                    target_sent_timestamp,
-                    conversation_id
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to delete message at timestamp {} in anon DM {}: {}",
-                    target_sent_timestamp,
-                    conversation_id,
-                    e
-                );
-            }
-        }
-
-        // Emit event for UI to update
-        let message_id = crate::domain::MessageId::from_timestamp(target_sent_timestamp);
-        ctx.emit(DomainEvent::MessageDeleted {
-            message_id,
-            author_id: sender_id,
-            channel_id: Some(conversation_id.into()),
-        });
-
-        Ok(HandlerOutcome::Processed)
+    fn handle_delete(&self, id: AnonDmId, sender_id: UserId, target_sent_timestamp: u64, ctx: &HandlerContext) -> HandlerResult {
+        base_anon::handle_delete(id, sender_id, target_sent_timestamp, ctx, &DmContentBridge(&self.service))
     }
 
     /// Handle a pin/unpin message.
@@ -668,6 +570,18 @@ impl AnonDmHandler {
         pin: &content_v1::PinMessage,
         ctx: &HandlerContext,
     ) -> HandlerResult {
+        let pinned = !pin.unpin;
+
+        // Persist pin state to database
+        if let Err(e) = self.service.set_message_pinned(&conversation_id, pin.target_sent_timestamp, pinned) {
+            tracing::error!(
+                error = %e,
+                conversation_id = %conversation_id,
+                timestamp = pin.target_sent_timestamp,
+                "Failed to persist anon DM pin state"
+            );
+        }
+
         let message_id = crate::domain::MessageId::from_timestamp(pin.target_sent_timestamp);
         let channel_id: ChannelId = conversation_id.into();
 
@@ -699,108 +613,13 @@ impl AnonDmHandler {
     }
 
     /// Handle an edit message.
-    ///
-    /// Only updates the message if sender_id matches the message author.
-    /// This ensures users can only edit their own messages.
-    fn handle_edit(
-        &self,
-        conversation_id: AnonDmId,
-        sender_id: UserId,
-        edit: &content_v1::EditMessage,
-        ctx: &HandlerContext,
-    ) -> HandlerResult {
-        let target_timestamp = edit.target_sent_timestamp;
-        let new_text = edit
-            .data_message
-            .as_ref()
-            .map(|dm| dm.body.clone())
-            .unwrap_or_default();
-
-        // Update the message in the database (only if sender is the author)
-        match self.service.update_message_text_by_sender(&conversation_id, &sender_id, target_timestamp, &new_text) {
-            Ok(true) => {
-                tracing::info!(
-                    sender_id = %sender_id,
-                    conversation_id = %conversation_id,
-                    target_timestamp = target_timestamp,
-                    "Updated message text (edit from peer)"
-                );
-                // Emit event for UI to update
-                ctx.emit(DomainEvent::AnonDmMessageEdited {
-                    conversation_id,
-                    message_timestamp: target_timestamp,
-                    new_text,
-                });
-            }
-            Ok(false) => {
-                // Either message not found or sender is not the author (security check)
-                tracing::debug!(
-                    sender_id = %sender_id,
-                    conversation_id = %conversation_id,
-                    target_timestamp = target_timestamp,
-                    "Edit ignored: message not found or sender not author"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    sender_id = %sender_id,
-                    conversation_id = %conversation_id,
-                    target_timestamp = target_timestamp,
-                    error = %e,
-                    "Failed to update message text"
-                );
-            }
-        }
-
-        Ok(HandlerOutcome::Processed)
+    fn handle_edit(&self, id: AnonDmId, sender_id: UserId, edit: &content_v1::EditMessage, ctx: &HandlerContext) -> HandlerResult {
+        base_anon::handle_edit(id, sender_id, edit, ctx, &DmContentBridge(&self.service))
     }
 
     /// Handle a regular data message (text, etc.).
-    fn handle_data_message(
-        &self,
-        conversation_id: AnonDmId,
-        sender_id: UserId,
-        inner_content: &Content,
-        ctx: &HandlerContext,
-    ) -> HandlerResult {
-        // Determine content type and JSON representation for storage
-        let (content_type, content_json) = Self::content_to_storage(inner_content);
-
-        // Use sender's timestamp for consistent ordering across devices
-        let sent_at = inner_content.timestamp;
-
-        // Store the message
-        let message_id = match self.service.store_message(
-            &conversation_id,
-            &sender_id,
-            content_type,
-            &content_json,
-            sent_at,
-        ) {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::error!("Failed to store anonymous DM message: {}", e);
-                return Err(HandlerError::parse_failed(format!("storage error: {}", e)));
-            }
-        };
-
-        tracing::debug!(
-            "Received and stored anonymous DM message {} from {} in conversation {}",
-            message_id,
-            sender_id,
-            conversation_id
-        );
-
-        // Emit event for UI with the stored message ID and sent_at for ordering
-        ctx.emit(DomainEvent::AnonDmMessageReceived {
-            conversation_id,
-            sender_id,
-            message_id,
-            inner_content: inner_content.clone(),
-            sent_at,
-        });
-
-        Ok(HandlerOutcome::Processed)
+    fn handle_data_message(&self, id: AnonDmId, sender_id: UserId, inner_content: &Content, ctx: &HandlerContext) -> HandlerResult {
+        base_anon::handle_data_message(id, sender_id, inner_content, ctx, &DmContentBridge(&self.service))
     }
 
     /// Handle an anonymous call offer.
@@ -889,33 +708,6 @@ impl AnonDmHandler {
         Ok(HandlerOutcome::Processed)
     }
 
-    /// Convert Content proto to storage format (content_type, content_json).
-    fn content_to_storage(content: &Content) -> (i32, String) {
-        match &content.content {
-            Some(content_v1::content::Content::DataMessage(data_msg)) => {
-                // Text message
-                (1, serde_json::json!({ "text": data_msg.body }).to_string())
-            }
-            Some(content_v1::content::Content::Attachment(att)) => {
-                // Attachment message
-                (2, serde_json::json!({
-                    "caption": att.caption,
-                    "channel_id": att.channel_id,
-                }).to_string())
-            }
-            Some(content_v1::content::Content::Reaction(reaction)) => {
-                (3, serde_json::json!({
-                    "emoji": reaction.emoji,
-                    "target_sent_timestamp": reaction.target_sent_timestamp,
-                    "remove": reaction.remove,
-                }).to_string())
-            }
-            _ => {
-                // Unknown content type - store as empty JSON
-                (0, "{}".to_string())
-            }
-        }
-    }
 }
 
 #[async_trait::async_trait]

@@ -538,6 +538,10 @@ pub struct AnonGroupMessage {
     pub sent_at: u64,
     /// When this message was stored locally.
     pub created_at: DateTime<Utc>,
+    /// Whether this message is pinned.
+    pub is_pinned: bool,
+    /// Whether we've read this message.
+    pub is_read: bool,
 }
 
 impl AnonGroupMessage {
@@ -564,6 +568,8 @@ impl AnonGroupMessage {
             delivery_status: String::new(),
             sent_at,
             created_at: Utc::now(),
+            is_pinned: false,
+            is_read: false,
         }
     }
 

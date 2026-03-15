@@ -14,7 +14,8 @@ use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
-use crate::proto::content_v1::{AttachmentPointer, Content, DataMessage, content};
+use crate::proto::content_v1::AttachmentPointer;
+use crate::services::gateway::builders::build_data_message_content_with_channel;
 use crate::services::attachment::AttachmentService;
 use crate::services::current_user::CurrentUserProvider;
 use crate::util::time::TimestampNanos;
@@ -110,17 +111,12 @@ impl MessageService {
             if require_encryption {
                 // Build a proper Content proto with DataMessage including attachments
                 let sent_at = TimestampNanos::now().as_u64();
-                let content_proto = Content {
-                    timestamp: sent_at,
-                    content: Some(content::Content::DataMessage(DataMessage {
-                        body: trimmed_text.to_string(),
-                        timestamp: sent_at,
-                        channel_id: channel_id.to_string(),
-                        attachments: attachment_pointers.clone(),
-                        ..Default::default()
-                    })),
-                    ..Default::default()
-                };
+                let content_proto = build_data_message_content_with_channel(
+                    trimmed_text,
+                    attachment_pointers.clone(),
+                    &channel_id.to_string(),
+                    sent_at,
+                );
                 let plaintext = content_proto.encode_to_vec();
 
                 // Use pairwise encryption (Double Ratchet sealed sender) per NDSS '21

@@ -14,33 +14,12 @@ use rusqlite::{Connection, OpenFlags};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 /// Number of reader connections in the pool.
 const READER_POOL_SIZE: usize = 4;
 
 /// SQLCipher database connection pool.
-///
-/// Provides thread-safe access to an encrypted SQLite database with
-/// separate reader and writer connections for improved concurrency.
-///
-/// # Architecture
-///
-/// - **Writer**: Single connection protected by Mutex (serializes writes)
-/// - **Readers**: Pool of read-only connections for concurrent SELECT queries
-/// - **WAL mode**: Enables multiple concurrent readers while writing
-///
-/// # Usage
-///
-/// ```ignore
-/// // For writes (INSERT, UPDATE, DELETE)
-/// let conn = db.connection()?;
-/// conn.execute("INSERT INTO ...", [])?;
-///
-/// // For reads (SELECT) - concurrent access
-/// let conn = db.read_connection()?;
-/// let mut stmt = conn.prepare("SELECT * FROM ...")?;
-/// ```
 pub struct Database {
     /// Writer connection with mutex for thread-safe access.
     writer: Arc<Mutex<Connection>>,
@@ -51,25 +30,16 @@ pub struct Database {
 }
 
 /// Pool of read-only connections for concurrent database reads.
-///
-/// Connections are created lazily up to `READER_POOL_SIZE`, then reused.
-/// Each connection is initialized with the SQLCipher passphrase.
 struct ReaderPool {
     /// Available reader connections.
     available: Mutex<VecDeque<Connection>>,
     /// Path for creating new connections.
     path: PathBuf,
-    /// Passphrase for new connections (zeroized on drop).
-    passphrase: Mutex<String>,
+    /// Passphrase for new connections.
+    /// Wrapped in Zeroizing to ensure memory is cleared on drop.
+    passphrase: Mutex<Zeroizing<String>>,
     /// Current number of connections (available + in-use).
     count: Mutex<usize>,
-}
-
-impl Drop for ReaderPool {
-    fn drop(&mut self) {
-        // Zeroize passphrase on drop
-        self.passphrase.lock().zeroize();
-    }
 }
 
 impl ReaderPool {
@@ -77,22 +47,14 @@ impl ReaderPool {
         Self {
             available: Mutex::new(VecDeque::with_capacity(READER_POOL_SIZE)),
             path,
-            passphrase: Mutex::new(passphrase),
+            passphrase: Mutex::new(Zeroizing::new(passphrase)),
             count: Mutex::new(0),
         }
     }
 
-    /// Get a copy of the passphrase for opening new connections.
-    fn get_passphrase(&self) -> String {
-        self.passphrase.lock().clone()
-    }
-
     /// Acquire a reader connection from the pool.
-    ///
-    /// Returns an existing connection if available, otherwise creates a new one
-    /// (up to READER_POOL_SIZE). If pool is exhausted, waits for a connection.
     fn acquire(&self) -> Result<PooledReader<'_>, StorageError> {
-        // Try to get an available connection
+        // ... (existing logic)
         {
             let mut available = self.available.lock();
             if let Some(conn) = available.pop_front() {
@@ -103,7 +65,6 @@ impl ReaderPool {
             }
         }
 
-        // Check if we can create a new connection
         let should_create = {
             let count = self.count.lock();
             *count < READER_POOL_SIZE
@@ -118,8 +79,6 @@ impl ReaderPool {
             });
         }
 
-        // Pool exhausted - spin wait for a connection
-        // This should be rare with proper pool sizing
         loop {
             std::thread::yield_now();
             let mut available = self.available.lock();
@@ -134,31 +93,25 @@ impl ReaderPool {
 
     /// Return a connection to the pool.
     fn release(&self, conn: Connection) {
-        let mut available = self.available.lock();
-        available.push_back(conn);
+        self.available.lock().push_back(conn);
     }
 
     /// Open a new read-only SQLCipher connection.
     fn open_reader(&self) -> Result<Connection, StorageError> {
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-
         let conn = Connection::open_with_flags(&self.path, flags)?;
 
-        // Set SQLCipher encryption key
+        // Set SQLCipher encryption key using a reference to avoid heap copies
         let passphrase = self.passphrase.lock();
-        conn.pragma_update(None, "key", &*passphrase)
+        conn.pragma_update(None, "key", &**passphrase)
             .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
 
-        // Verify the key
+        // ... (rest of verification and optimizations)
         conn.execute_batch("SELECT count(*) FROM sqlite_master;")
             .map_err(|e| StorageError::Encryption(format!("Invalid reader key: {}", e)))?;
-
-        // Set WAL mode for reads
         conn.pragma_update(None, "journal_mode", "WAL")?;
-
-        // Performance optimizations for large BLOB reads
-        conn.pragma_update(None, "cache_size", "-65536")?; // 64MB cache
-        conn.pragma_update(None, "mmap_size", "268435456")?; // 256MB mmap
+        conn.pragma_update(None, "cache_size", "-65536")?;
+        conn.pragma_update(None, "mmap_size", "268435456")?;
 
         Ok(conn)
     }
@@ -285,25 +238,14 @@ impl Database {
     }
 
     /// Open a fresh read-only connection for streaming BLOB access.
-    ///
-    /// Unlike `read_connection()`, this connection is NOT pooled and must be
-    /// closed by the caller. Use this for long-lived BLOB streaming where you
-    /// need to hold the connection open for an extended period.
-    ///
-    /// # Use Case
-    ///
-    /// For streaming large attachments (e.g., 200MB video), you need to hold
-    /// a connection open while reading chunks. Using a pooled connection would
-    /// block other readers, so we open a dedicated connection instead.
     pub fn open_reader_connection(&self) -> Result<Connection, StorageError> {
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
 
         let conn = Connection::open_with_flags(&self.path, flags)?;
 
-        // Set SQLCipher encryption key from the reader pool
-        // We need to get the passphrase from the pool
-        let passphrase = self.readers.get_passphrase();
-        conn.pragma_update(None, "key", &passphrase)
+        // Set SQLCipher encryption key using a reference from the reader pool
+        let passphrase = self.readers.passphrase.lock();
+        conn.pragma_update(None, "key", &**passphrase)
             .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
 
         // Verify the key

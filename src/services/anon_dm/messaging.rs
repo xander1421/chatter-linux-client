@@ -4,6 +4,7 @@ use crate::proto::content_v1::{self, AnonDmMessage, AnonDmPresence, AnonDmProfil
 use crate::services::gateway::builders::{
     build_typing_content, build_reaction_content, build_read_receipt_content,
     build_delete_for_everyone_content, build_pin_content, build_edit_content,
+    build_data_message_content_with_quote,
 };
 use crate::util::time::TimestampNanos;
 
@@ -56,23 +57,15 @@ impl AnonDmService {
         .ok()
         .flatten()
         .map(|msg| {
-            let text = msg.as_text().unwrap_or_default();
-            if text.chars().count() > 100 {
-                format!("{}...", text.chars().take(97).collect::<String>())
-            } else {
-                text
-            }
+            crate::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or_default())
         })
         .unwrap_or_default();
 
-        let quote = crate::proto::content_v1::Quote {
-            id: reply_to_timestamp,
-            author_aci: reply_to_sender.to_string(),
-            text: preview_text,
-            attachments: vec![],
-            r#type: 0, // NORMAL
-            author_aci_binary: vec![],
-        };
+        let quote = crate::services::gateway::shared::build_quote(
+            &reply_to_sender.to_string(),
+            reply_to_timestamp,
+            &preview_text,
+        );
 
         self.send_with_attachments_and_quote(conversation_id, text, attachments, Some(quote)).await
     }
@@ -85,8 +78,7 @@ impl AnonDmService {
         attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
         quote: Option<crate::proto::content_v1::Quote>,
     ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
-        use crate::domain::AttachmentId;
-        use crate::proto::content_v1::DataMessage;
+        use crate::services::gateway::shared;
 
         let current_user = self.current_user_id()?;
 
@@ -101,40 +93,52 @@ impl AnonDmService {
         }
 
         // Extract attachment IDs from pointers before moving them
-        let attachment_ids: Vec<AttachmentId> = attachments
-            .iter()
-            .filter_map(|ptr| {
-                if ptr.cdn_key.is_empty() {
-                    None
-                } else {
-                    Some(AttachmentId::from_cdn_key(&ptr.cdn_key))
-                }
-            })
-            .collect();
+        let attachment_ids = shared::extract_attachment_ids(&attachments);
 
         // Create DataMessage content with attachments and optional quote
         let sent_at = TimestampNanos::now().as_u64();
-        let data_message = DataMessage {
-            body: text.to_string(),
-            attachments,
-            quote,
-            ..Default::default()
-        };
-        let inner_content = Content {
-            content: Some(content_v1::content::Content::DataMessage(data_message)),
-            ephemeral_reply_to: None,
-            timestamp: sent_at,
-            padding: Vec::new(),
+        let inner_content = build_data_message_content_with_quote(text, attachments, quote.clone(), sent_at);
+
+        // Store message locally with quote metadata in content_json
+        let content_json = if let Some(q) = quote.as_ref() {
+            // Resolve author display name from conversation
+            let author_name = if let Ok(author_uid) = q.author_aci.parse::<crate::domain::UserId>() {
+                self.anon_dm_repo.get_conversation(conversation_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|dm| {
+                        if dm.peer_id == author_uid { dm.peer_display_name } else { None }
+                    })
+                    .unwrap_or_else(|| q.author_aci.clone())
+            } else {
+                q.author_aci.clone()
+            };
+            shared::build_reply_content_json(text, &q.author_aci, &author_name, q.id, &q.text)
+        } else {
+            shared::build_content_json(text, &attachment_ids)
         };
 
-        // Store message locally with attachment IDs
-        let message_id = self.store_message_with_attachments(
-            conversation_id,
-            &current_user,
-            text,
-            &attachment_ids,
+        let content_type = shared::determine_content_type(!text.is_empty(), !attachment_ids.is_empty());
+        let attachments_blob = shared::serialize_attachment_ids(&attachment_ids);
+
+        let message = crate::domain::anon_dm::AnonDmMessage {
+            id: crate::domain::anon_dm::AnonDmMessageId::new(),
+            conversation_id: *conversation_id,
+            sender_id: current_user,
+            content_type,
+            content_json,
+            attachments_blob,
+            is_deleted: false,
+            is_read: false,
+            reaction_counts: Vec::new(),
+            current_user_reactions: Vec::new(),
+            delivery_status: String::new(),
             sent_at,
-        )?;
+            created_at: chrono::Utc::now(),
+            is_pinned: false,
+        };
+        self.anon_dm_repo.insert_message(&message)?;
+        let message_id = message.id;
 
         // Send to peer
         self.send_message(conversation_id, inner_content).await?;
