@@ -6,9 +6,8 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_linux::app::UIContext;
-use chatter_linux::domain::anon_dm::AnonDmId;
-use chatter_linux::domain::anon_group::AnonGroupId;
 use chatter_linux::domain::UserId;
+use chatter_linux::state::ActiveConversation;
 
 use crate::MainWindow;
 
@@ -68,27 +67,17 @@ pub fn wire_reply_message(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
 /// Wire forward-message-action callback from context menu.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
 pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let message_service = ui_ctx.message_service.clone();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
+    let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
     // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
     window.on_forward_message_action(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
-        let message_service = message_service.clone();
-        let anon_dm_service = anon_dm_service.clone();
-        let anon_group_service = anon_group_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
-        // Get conversation context (quick UI reads)
-        let (selected_dm_id, selected_private_group_id) = weak
-            .upgrade()
-            .map(|w| {
-                (w.get_selected_dm_id().to_string(), w.get_selected_private_group_id().to_string())
-            })
-            .unwrap_or_default();
+        let conversation = ui_ctx.chat_state.active_conversation();
 
         // Move service lookups to background task
         tokio::spawn(async move {
@@ -111,32 +100,26 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<UIContext>)
             };
 
             // Signal-style lookup with conversation-aware routing (now in background)
-            let preview = if let Some(anon_dm_id_str) = selected_dm_id.strip_prefix("anon_dm:") {
-                // Anon DM lookup
-                let anon_dm_id: AnonDmId = match anon_dm_id_str.parse() {
-                    Ok(id) => id,
-                    Err(_) => return,
-                };
-                match anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
-                    Ok(Some(msg)) => chatter_linux::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or_default()),
-                    _ => "Message".to_string(),
+            let preview = match conversation {
+                ActiveConversation::AnonDm(anon_dm_id) => {
+                    match ui_ctx.anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
+                        Ok(Some(msg)) => chatter_linux::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or_default()),
+                        _ => "Message".to_string(),
+                    }
                 }
-            } else if !selected_private_group_id.is_empty() {
-                // Anon group lookup
-                let anon_group_id: AnonGroupId = match selected_private_group_id.parse() {
-                    Ok(id) => id,
-                    Err(_) => return,
-                };
-                match anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
-                    Ok(Some(msg)) => chatter_linux::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or_default()),
-                    _ => "Message".to_string(),
+                ActiveConversation::AnonGroup(anon_group_id) => {
+                    match ui_ctx.anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
+                        Ok(Some(msg)) => chatter_linux::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or_default()),
+                        _ => "Message".to_string(),
+                    }
                 }
-            } else {
-                // Regular message lookup
-                match message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                    Ok(Some(msg)) => chatter_linux::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or("").to_string()),
-                    _ => "Message".to_string(),
+                ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+                    match ui_ctx.message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
+                        Ok(Some(msg)) => chatter_linux::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or("").to_string()),
+                        _ => "Message".to_string(),
+                    }
                 }
+                ActiveConversation::None => return,
             };
 
             let _ = slint::invoke_from_event_loop(move || {
@@ -157,26 +140,15 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<UIContext>)
 /// Wire copy-message callback to copy message text to clipboard.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
 pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let message_service = ui_ctx.message_service.clone();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
     window.on_copy_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
-        let message_service = message_service.clone();
-        let anon_dm_service = anon_dm_service.clone();
-        let anon_group_service = anon_group_service.clone();
+        let ui_ctx = ui_ctx.clone();
 
-        // Get conversation context (quick UI reads)
-        let (selected_dm_id, selected_private_group_id) = weak_window
-            .upgrade()
-            .map(|w| {
-                (w.get_selected_dm_id().to_string(), w.get_selected_private_group_id().to_string())
-            })
-            .unwrap_or_default();
+        let conversation = ui_ctx.chat_state.active_conversation();
 
         // Move service lookups and clipboard to background thread
         std::thread::spawn(move || {
@@ -199,60 +171,55 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             };
 
             // Signal-style lookup with conversation-aware routing (now in background)
-            let text: Option<String> = if let Some(anon_dm_id_str) = selected_dm_id.strip_prefix("anon_dm:") {
-                // Anon DM lookup
-                let anon_dm_id: AnonDmId = match anon_dm_id_str.parse() {
-                    Ok(id) => id,
-                    Err(_) => return,
-                };
-                match anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
-                    Ok(Some(msg)) => msg.as_text(),
-                    _ => {
-                        tracing::error!("Anon DM message not found for copy");
-                        return;
+            let text: Option<String> = match conversation {
+                ActiveConversation::AnonDm(anon_dm_id) => {
+                    match ui_ctx.anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
+                        Ok(Some(msg)) => msg.as_text(),
+                        _ => {
+                            tracing::error!("Anon DM message not found for copy");
+                            return;
+                        }
                     }
                 }
-            } else if !selected_private_group_id.is_empty() {
-                // Anon group lookup
-                let anon_group_id: AnonGroupId = match selected_private_group_id.parse() {
-                    Ok(id) => id,
-                    Err(_) => return,
-                };
-                match anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
-                    Ok(Some(msg)) => msg.as_text(),
-                    _ => {
-                        tracing::error!("Anon group message not found for copy");
-                        return;
+                ActiveConversation::AnonGroup(anon_group_id) => {
+                    match ui_ctx.anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
+                        Ok(Some(msg)) => msg.as_text(),
+                        _ => {
+                            tracing::error!("Anon group message not found for copy");
+                            return;
+                        }
                     }
                 }
-            } else {
-                // Regular message lookup
-                let message = match message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                    Ok(Some(msg)) => msg,
-                    Ok(None) => {
-                        tracing::error!(
-                            sender_id = %target_sender_id,
-                            timestamp = target_sent_timestamp,
-                            "Message not found for copy (Signal-style lookup)"
-                        );
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to look up message for copy");
-                        return;
-                    }
-                };
+                ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+                    // Regular message lookup
+                    let message = match ui_ctx.message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
+                        Ok(Some(msg)) => msg,
+                        Ok(None) => {
+                            tracing::error!(
+                                sender_id = %target_sender_id,
+                                timestamp = target_sent_timestamp,
+                                "Message not found for copy (Signal-style lookup)"
+                            );
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to look up message for copy");
+                            return;
+                        }
+                    };
 
-                // Extract text from message content
-                use chatter_linux::domain::message::MessageContent;
-                match &message.content {
-                    MessageContent::Text(s) => Some(s.clone()),
-                    MessageContent::Mixed(m) => m.text.clone(),
-                    _ => {
-                        tracing::debug!("Cannot copy non-text message content");
-                        return;
+                    // Extract text from message content
+                    use chatter_linux::domain::message::MessageContent;
+                    match &message.content {
+                        MessageContent::Text(s) => Some(s.clone()),
+                        MessageContent::Mixed(m) => m.text.clone(),
+                        _ => {
+                            tracing::debug!("Cannot copy non-text message content");
+                            return;
+                        }
                     }
                 }
+                ActiveConversation::None => return,
             };
 
             let text = match text {
@@ -290,31 +257,14 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 /// Wire download-message callback from context menu.
 /// Downloads all attachments from a message to the user's Downloads folder.
 pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let message_service = ui_ctx.message_service.clone();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
-    let grpc_pool = ui_ctx.grpc_pool.clone();
-    let runtime_handle = ui_ctx.runtime_handle.clone();
-    let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_download_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
-        let message_service = message_service.clone();
-        let anon_dm_service = anon_dm_service.clone();
-        let anon_group_service = anon_group_service.clone();
-        let attachment_service = attachment_service.clone();
-        let grpc_pool = grpc_pool.clone();
-        let runtime_handle = runtime_handle.clone();
+        let ui_ctx = ui_ctx.clone();
 
-        // Get conversation context
-        let (selected_dm_id, selected_private_group_id) = weak_window
-            .upgrade()
-            .map(|w| {
-                (w.get_selected_dm_id().to_string(), w.get_selected_private_group_id().to_string())
-            })
-            .unwrap_or_default();
+        let conversation = ui_ctx.chat_state.active_conversation();
 
         std::thread::spawn(move || {
             // Parse sender_id for Signal-style lookup
@@ -336,59 +286,47 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             };
 
             // Look up message to get attachment IDs (Signal-style with conversation-aware routing)
-            let attachment_ids = if let Some(anon_dm_id_str) = selected_dm_id.strip_prefix("anon_dm:") {
-                // Anon DM lookup
-                let anon_dm_id: AnonDmId = match anon_dm_id_str.parse() {
-                    Ok(id) => id,
-                    Err(e) => {
-                        tracing::error!(error = %e, "Invalid anon DM ID for download");
-                        return;
-                    }
-                };
-                match anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
-                    Ok(Some(msg)) => msg.attachment_ids(),
-                    Ok(None) => {
-                        tracing::error!("Anon DM message not found for download");
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to look up anon DM message for download");
-                        return;
+            let attachment_ids = match conversation {
+                ActiveConversation::AnonDm(anon_dm_id) => {
+                    match ui_ctx.anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
+                        Ok(Some(msg)) => msg.attachment_ids(),
+                        Ok(None) => {
+                            tracing::error!("Anon DM message not found for download");
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to look up anon DM message for download");
+                            return;
+                        }
                     }
                 }
-            } else if !selected_private_group_id.is_empty() {
-                // Anon group lookup
-                let anon_group_id: AnonGroupId = match selected_private_group_id.parse() {
-                    Ok(id) => id,
-                    Err(e) => {
-                        tracing::error!(error = %e, "Invalid anon group ID for download");
-                        return;
-                    }
-                };
-                match anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
-                    Ok(Some(msg)) => msg.attachment_ids(),
-                    Ok(None) => {
-                        tracing::error!("Anon group message not found for download");
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to look up anon group message for download");
-                        return;
+                ActiveConversation::AnonGroup(anon_group_id) => {
+                    match ui_ctx.anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
+                        Ok(Some(msg)) => msg.attachment_ids(),
+                        Ok(None) => {
+                            tracing::error!("Anon group message not found for download");
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to look up anon group message for download");
+                            return;
+                        }
                     }
                 }
-            } else {
-                // Regular message
-                match message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                    Ok(Some(msg)) => msg.attachments,
-                    Ok(None) => {
-                        tracing::error!("Message not found for download");
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to look up message for download");
-                        return;
+                ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+                    match ui_ctx.message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
+                        Ok(Some(msg)) => msg.attachments,
+                        Ok(None) => {
+                            tracing::error!("Message not found for download");
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "Failed to look up message for download");
+                            return;
+                        }
                     }
                 }
+                ActiveConversation::None => return,
             };
 
             if attachment_ids.is_empty() {
@@ -399,7 +337,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let download_dir = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
 
             for att_id in attachment_ids {
-                let attachment = match attachment_service.get(&att_id) {
+                let attachment = match ui_ctx.attachment_service.get(&att_id) {
                     Ok(Some(att)) => att,
                     Ok(None) => {
                         tracing::warn!("Attachment {} not found", att_id);
@@ -419,23 +357,20 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     && attachment.remote_url.is_some()
                     && attachment.encryption_key.is_some();
 
-                let attachment_service_clone = attachment_service.clone();
-                let grpc_pool_clone = grpc_pool.clone();
-                let att_id_clone = att_id;
-                let dest_path_clone = dest_path.clone();
-
                 if needs_download {
                     // Download first, then save
-                    runtime_handle.spawn(async move {
-                        match attachment_service_clone.download_to_filesystem(&grpc_pool_clone, &att_id_clone).await {
+                    let attachment_service = ui_ctx.attachment_service.clone();
+                    let grpc_pool = ui_ctx.grpc_pool.clone();
+                    ui_ctx.runtime_handle.spawn(async move {
+                        match attachment_service.download_to_filesystem(&grpc_pool, &att_id).await {
                             Ok(()) => {
                                 // Now decrypt and save
-                                match attachment_service_clone.decrypt_auto(&att_id_clone) {
+                                match attachment_service.decrypt_auto(&att_id) {
                                     Ok(buffer) => {
-                                        if let Err(e) = std::fs::write(&dest_path_clone, buffer.as_slice()) {
+                                        if let Err(e) = std::fs::write(&dest_path, buffer.as_slice()) {
                                             tracing::error!(error = %e, "Failed to save attachment");
                                         } else {
-                                            tracing::info!("Downloaded attachment to {}", dest_path_clone.display());
+                                            tracing::info!("Downloaded attachment to {}", dest_path.display());
                                         }
                                     }
                                     Err(e) => {
@@ -450,7 +385,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     });
                 } else {
                     // Already downloaded, just decrypt and save
-                    match attachment_service.decrypt_auto(&att_id) {
+                    match ui_ctx.attachment_service.decrypt_auto(&att_id) {
                         Ok(buffer) => {
                             if let Err(e) = std::fs::write(&dest_path, buffer.as_slice()) {
                                 tracing::error!(error = %e, "Failed to save attachment");
