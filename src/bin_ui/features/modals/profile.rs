@@ -601,36 +601,41 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     // Change avatar with file picker
     let weak_window = window.as_weak();
     window.on_edit_profile_change_avatar(move || {
-        let weak = weak_window.clone();
-        
-        tokio::spawn(async move {
-            let config = chatter_linux::media::FilePickerConfig::new()
-                .with_title("Select Profile Picture")
-                .with_filter(chatter_linux::media::FileFilter::images());
-            
-            if let Some(path) = chatter_linux::media::FilePicker::pick_file(config).await {
-                match std::fs::read(&path) {
-                    Ok(data) => {
-                        // Store the path for later use
-                        PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = Some(path.clone()));
-                        
-                        // Create the image on the UI thread
-                        let _ = slint::invoke_from_event_loop(move || {
-                            // Process image on UI thread where it's safe
-                            match chatter_linux::media::ImageProcessor::memory_to_slint_image(&data) {
-                                Ok(slint_img) => {
-                                    if let Some(w) = weak.upgrade() {
-                                        w.set_edit_profile_avatar(slint_img);
+        #[cfg(not(target_os = "android"))]
+        {
+            let weak = weak_window.clone();
+
+            tokio::spawn(async move {
+                let config = chatter_linux::media::FilePickerConfig::new()
+                    .with_title("Select Profile Picture")
+                    .with_filter(chatter_linux::media::FileFilter::images());
+
+                if let Some(path) = chatter_linux::media::FilePicker::pick_file(config).await {
+                    match std::fs::read(&path) {
+                        Ok(data) => {
+                            // Store the path for later use
+                            PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = Some(path.clone()));
+
+                            // Create the image on the UI thread
+                            let _ = slint::invoke_from_event_loop(move || {
+                                // Process image on UI thread where it's safe
+                                match chatter_linux::media::ImageProcessor::memory_to_slint_image(&data) {
+                                    Ok(slint_img) => {
+                                        if let Some(w) = weak.upgrade() {
+                                            w.set_edit_profile_avatar(slint_img);
+                                        }
                                     }
+                                    Err(e) => tracing::error!("Failed to decode avatar image: {}", e),
                                 }
-                                Err(e) => tracing::error!("Failed to decode avatar image: {}", e),
-                            }
-                        });
+                            });
+                        }
+                        Err(e) => tracing::error!("Failed to read avatar file: {}", e),
                     }
-                    Err(e) => tracing::error!("Failed to read avatar file: {}", e),
                 }
-            }
-        });
+            });
+        }
+        #[cfg(target_os = "android")]
+        tracing::warn!("File picker not supported on Android");
     });
 }
 

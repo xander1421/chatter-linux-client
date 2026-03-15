@@ -15,7 +15,7 @@ mod bin_ui;
 
 /// Android entry point - called by android-activity glue.
 #[cfg(target_os = "android")]
-#[no_mangle]
+#[unsafe(no_mangle)]
 fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // Set up the Slint Android platform backend
     slint::platform::set_platform(Box::new(
@@ -34,6 +34,10 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
 async fn main() {
     app_main().await;
 }
+
+/// Android: dummy main (android_main is the real entry point).
+#[cfg(target_os = "android")]
+fn main() {}
 
 /// Shared application logic for all platforms.
 async fn app_main() {

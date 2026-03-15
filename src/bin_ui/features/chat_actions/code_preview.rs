@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use slint::ComponentHandle;
 
 use chatter_linux::media::code_preview::CodeViewState;
+#[cfg(not(target_os = "android"))]
 use chatter_linux::media::{FilePicker, FilePickerConfig};
+#[cfg(not(target_os = "android"))]
 use chatter_linux::system::ExternalOpener;
 
 use crate::bin_ui::preview_state;
@@ -142,6 +144,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
 
     // Open code in external editor - uses Save As for secure export
     window.on_open_code_external(|| {
+        #[cfg(not(target_os = "android"))]
         if let Some(content) = preview_state::get_code_preview_content() {
             let filename = content.filename.clone();
             let data = content.data.clone();
@@ -170,5 +173,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
         } else {
             tracing::warn!("No code content available for external open");
         }
+        #[cfg(target_os = "android")]
+        tracing::warn!("Open external not supported on Android");
     });
 }

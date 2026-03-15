@@ -171,47 +171,52 @@ pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let call_service = call_service.clone();
         let weak = weak.clone();
         move |source_id| {
-            let source_id_str = source_id.to_string();
-            tracing::info!("Screen source selected: {}", source_id_str);
+            #[cfg(target_os = "android")]
+            { let _ = source_id; tracing::warn!("Screen source selection not available on Android"); return; }
+            #[cfg(not(target_os = "android"))]
+            {
+                let source_id_str = source_id.to_string();
+                tracing::info!("Screen source selected: {}", source_id_str);
 
-            // Parse source_id as u64
-            let source_id_u64: u64 = match source_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid screen source ID '{}': {}", source_id_str, e);
-                    return;
-                }
-            };
+                // Parse source_id as u64
+                let source_id_u64: u64 = match source_id_str.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("Invalid screen source ID '{}': {}", source_id_str, e);
+                        return;
+                    }
+                };
 
-            if let Some(service) = call_service.get() {
-                let service = service.clone();
-                let weak = weak.clone();
-                let source_id_display = source_id_str.clone();
+                if let Some(service) = call_service.get() {
+                    let service = service.clone();
+                    let weak = weak.clone();
+                    let source_id_display = source_id_str.clone();
 
-                slint::spawn_local(async move {
-                    // Find the selected source in the list
-                    match ScreenCapture::list_sources() {
-                        Ok(sources) => {
-                            if let Some(source) = sources.into_iter().find(|s| s.id == source_id_u64) {
-                                // Start screen share with the selected source
-                                if let Err(e) = service.publish_screen_share(source).await {
-                                    tracing::error!("Failed to start screen share: {}", e);
-                                } else {
-                                    tracing::info!("Screen share started with source: {}", source_id_display);
-                                    if let Some(w) = weak.upgrade() {
-                                        w.set_call_is_screen_sharing(true);
-                                        w.set_selected_screen_source_id(source_id_display.into());
+                    slint::spawn_local(async move {
+                        // Find the selected source in the list
+                        match ScreenCapture::list_sources() {
+                            Ok(sources) => {
+                                if let Some(source) = sources.into_iter().find(|s| s.id == source_id_u64) {
+                                    // Start screen share with the selected source
+                                    if let Err(e) = service.publish_screen_share(source).await {
+                                        tracing::error!("Failed to start screen share: {}", e);
+                                    } else {
+                                        tracing::info!("Screen share started with source: {}", source_id_display);
+                                        if let Some(w) = weak.upgrade() {
+                                            w.set_call_is_screen_sharing(true);
+                                            w.set_selected_screen_source_id(source_id_display.into());
+                                        }
                                     }
+                                } else {
+                                    tracing::error!("Selected screen source not found: {}", source_id_display);
                                 }
-                            } else {
-                                tracing::error!("Selected screen source not found: {}", source_id_display);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to enumerate screen sources: {}", e);
                             }
                         }
-                        Err(e) => {
-                            tracing::error!("Failed to enumerate screen sources: {}", e);
-                        }
-                    }
-                }).unwrap();
+                    }).unwrap();
+                }
             }
         }
     });

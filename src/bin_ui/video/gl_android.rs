@@ -184,7 +184,7 @@ fn connect_gl_context_android(
             let context = gst_gl::GLContext::new(&display);
 
             // Try to create and fill info
-            if let Err(e) = context.create(None, &gst_gl::GLContext::NONE) {
+            if let Err(e) = context.create(gst_gl::GLContext::NONE) {
                 tracing::warn!("Failed to create GStreamer GL context on Android: {}", e);
                 // Fall back to letting GStreamer handle context sharing
             }
@@ -225,12 +225,14 @@ fn setup_appsink_callbacks(state: &mut GLVideoState) {
                 let mut buffer = sample.buffer_owned().unwrap();
 
                 // Set GL sync point if we have a context
-                if let Some(ref gl_ctx) = gst_gl_context {
-                    if let Some(context) = (buffer.n_memory() > 0)
+                if let Some(ref _gl_ctx) = gst_gl_context {
+                    // Extract GL context from buffer memory, cloning to release borrow
+                    let gl_context = (buffer.n_memory() > 0)
                         .then(|| buffer.peek_memory(0))
                         .and_then(|m| m.downcast_memory_ref::<gst_gl::GLBaseMemory>())
-                        .map(|m| m.context())
-                    {
+                        .map(|m| m.context().clone());
+
+                    if let Some(context) = gl_context {
                         if let Some(meta) = buffer.meta::<gst_gl::GLSyncMeta>() {
                             meta.set_sync_point(&context);
                         } else {

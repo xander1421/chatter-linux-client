@@ -11,7 +11,10 @@ use chatter_linux::app::UIContext;
 use chatter_linux::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
 use chatter_linux::domain::ids::AttachmentId;
 use chatter_linux::media::code_preview::CodeViewState;
-use chatter_linux::media::{FilePicker, FilePickerConfig, ImageProcessor};
+#[cfg(not(target_os = "android"))]
+use chatter_linux::media::{FilePicker, FilePickerConfig};
+use chatter_linux::media::ImageProcessor;
+#[cfg(not(target_os = "android"))]
 use chatter_linux::system::ExternalOpener;
 
 use crate::bin_ui::audio_state;
@@ -123,6 +126,7 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
             if has_legacy_local_path && attachment.status == AttachmentStatus::Ready {
                 tracing::warn!("Using legacy filesystem path for attachment {} - consider re-downloading", att_id);
+                #[cfg(not(target_os = "android"))]
                 if let Some(ref local_path) = attachment.local_path {
                     let path = std::path::PathBuf::from(local_path);
                     let filename = attachment.metadata.name.clone();
@@ -615,6 +619,7 @@ fn display_pdf_from_buffer(
 ///
 /// NOTE: This may be called from a background thread, so we use block_on
 /// for the async file picker.
+#[cfg(not(target_os = "android"))]
 fn save_file_from_buffer(
     secure_buffer: chatter_linux::crypto::SecureBuffer,
     filename: &str,
@@ -659,6 +664,14 @@ fn save_file_from_buffer(
     } else {
         tracing::debug!("Save As dialog cancelled");
     }
+}
+
+#[cfg(target_os = "android")]
+fn save_file_from_buffer(
+    _secure_buffer: chatter_linux::crypto::SecureBuffer,
+    _filename: &str,
+) {
+    tracing::warn!("Save file not supported on Android");
 }
 
 /// Handle attachment that needs to be downloaded first.

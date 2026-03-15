@@ -97,19 +97,24 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            use chatter_linux::system::Clipboard;
-            match Clipboard::new() {
-                Ok(mut clipboard) => {
-                    if let Err(e) = clipboard.set_text(&fingerprint) {
-                        tracing::error!("Failed to copy fingerprint to clipboard: {}", e);
-                    } else {
-                        tracing::info!("Fingerprint copied to clipboard");
+            #[cfg(not(target_os = "android"))]
+            {
+                use chatter_linux::system::Clipboard;
+                match Clipboard::new() {
+                    Ok(mut clipboard) => {
+                        if let Err(e) = clipboard.set_text(&fingerprint) {
+                            tracing::error!("Failed to copy fingerprint to clipboard: {}", e);
+                        } else {
+                            tracing::info!("Fingerprint copied to clipboard");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to access clipboard: {}", e);
                     }
                 }
-                Err(e) => {
-                    tracing::error!("Failed to access clipboard: {}", e);
-                }
             }
+            #[cfg(target_os = "android")]
+            tracing::warn!("Clipboard not supported on Android");
         });
     });
 

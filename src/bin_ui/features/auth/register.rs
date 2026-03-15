@@ -7,6 +7,7 @@ use lazy_static::lazy_static;
 use slint::{ComponentHandle, Image};
 
 use chatter_linux::app::UIContext;
+#[cfg(not(target_os = "android"))]
 use chatter_linux::media::{FileFilter, FilePicker, FilePickerConfig};
 
 lazy_static! {
@@ -72,57 +73,62 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     window.on_register_select_avatar({
         let weak = weak_window.clone();
         move || {
-            let weak = weak.clone();
-            tokio::spawn(async move {
-                let config = FilePickerConfig {
-                    title: Some("Select Avatar".to_string()),
-                    filters: vec![FileFilter {
-                        name: "Images".to_string(),
-                        extensions: vec!["jpg".to_string(), "jpeg".to_string(), "png".to_string(), "webp".to_string()],
-                    }],
-                    ..Default::default()
-                };
+            #[cfg(not(target_os = "android"))]
+            {
+                let weak = weak.clone();
+                tokio::spawn(async move {
+                    let config = FilePickerConfig {
+                        title: Some("Select Avatar".to_string()),
+                        filters: vec![FileFilter {
+                            name: "Images".to_string(),
+                            extensions: vec!["jpg".to_string(), "jpeg".to_string(), "png".to_string(), "webp".to_string()],
+                        }],
+                        ..Default::default()
+                    };
 
-                if let Some(path) = FilePicker::pick_file(config).await {
-                    match std::fs::read(&path) {
-                        Ok(bytes) => {
-                            // Store bytes for registration
-                            if let Ok(mut guard) = SELECTED_AVATAR.lock() {
-                                *guard = Some(bytes.clone());
-                            }
-
-                            // Decode image BEFORE invoke_from_event_loop (already in tokio::spawn)
-                            let decoded = image::load_from_memory(&bytes).ok().map(|img| {
-                                let rgba = img.to_rgba8();
-                                let (w_img, h_img) = rgba.dimensions();
-                                (rgba.into_raw(), w_img, h_img)
-                            });
-
-                            // Update UI preview
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak.upgrade() {
-                                    // Reset default index
-                                    w.set_register_selected_default_idx(-1);
-
-                                    // Create slint::Image from pre-decoded pixels
-                                    if let Some((pixels, width, height)) = decoded {
-                                        let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                                            &pixels, width, height,
-                                        );
-                                        w.set_register_avatar_source(Image::from_rgba8(buffer));
-                                        w.set_register_has_avatar(true);
-                                    } else {
-                                        tracing::error!("Failed to decode selected avatar for preview");
-                                    }
+                    if let Some(path) = FilePicker::pick_file(config).await {
+                        match std::fs::read(&path) {
+                            Ok(bytes) => {
+                                // Store bytes for registration
+                                if let Ok(mut guard) = SELECTED_AVATAR.lock() {
+                                    *guard = Some(bytes.clone());
                                 }
-                            });
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to read selected avatar file: {}", e);
+
+                                // Decode image BEFORE invoke_from_event_loop (already in tokio::spawn)
+                                let decoded = image::load_from_memory(&bytes).ok().map(|img| {
+                                    let rgba = img.to_rgba8();
+                                    let (w_img, h_img) = rgba.dimensions();
+                                    (rgba.into_raw(), w_img, h_img)
+                                });
+
+                                // Update UI preview
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(w) = weak.upgrade() {
+                                        // Reset default index
+                                        w.set_register_selected_default_idx(-1);
+
+                                        // Create slint::Image from pre-decoded pixels
+                                        if let Some((pixels, width, height)) = decoded {
+                                            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                                &pixels, width, height,
+                                            );
+                                            w.set_register_avatar_source(Image::from_rgba8(buffer));
+                                            w.set_register_has_avatar(true);
+                                        } else {
+                                            tracing::error!("Failed to decode selected avatar for preview");
+                                        }
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to read selected avatar file: {}", e);
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
+            #[cfg(target_os = "android")]
+            tracing::warn!("File picker not supported on Android");
         }
     });
 

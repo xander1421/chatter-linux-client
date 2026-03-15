@@ -2,7 +2,9 @@
 //!
 //! Handles PDF file viewing and export.
 
+#[cfg(not(target_os = "android"))]
 use chatter_linux::media::{FilePicker, FilePickerConfig};
+#[cfg(not(target_os = "android"))]
 use chatter_linux::system::ExternalOpener;
 
 use crate::bin_ui::preview_state;
@@ -18,6 +20,7 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
 
     // Open PDF in external viewer - uses Save As for secure export
     window.on_open_pdf_external(|| {
+        #[cfg(not(target_os = "android"))]
         if let Some(content) = preview_state::get_pdf_preview_content() {
             // Show Save As dialog then open with system handler
             let filename = content.filename.clone();
@@ -47,5 +50,7 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
         } else {
             tracing::warn!("No PDF content available for external open");
         }
+        #[cfg(target_os = "android")]
+        tracing::warn!("Open external not supported on Android");
     });
 }

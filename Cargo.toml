@@ -241,7 +241,7 @@ debug = false
 package = "com.chatter.client"
 label = "Chatter"
 icon = "assets/icon.png"
-min_sdk_version = 24
+min_sdk_version = 26
 target_sdk_version = 34
 permissions = [
     "android.permission.INTERNET",
