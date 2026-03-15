@@ -518,6 +518,56 @@ impl MessageService {
         }
     }
 
+    /// Send a DM with pre-uploaded attachment pointers.
+    ///
+    /// Like `send_dm_with_files` but skips the upload step — caller provides
+    /// already-uploaded `AttachmentPointer`s and their `AttachmentId`s.
+    /// Used when attachments are pre-uploaded via `upload_pending_attachments()`.
+    pub async fn send_dm_with_pointers(
+        &self,
+        peer_id: &UserId,
+        dm_channel_id: &ChannelId,
+        text: &str,
+        attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
+        attachment_ids: Vec<crate::domain::AttachmentId>,
+        mailbox_manager: &MailboxManager,
+    ) -> Result<DmSendResult, MessageError> {
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+
+        let result_attachment_ids = attachment_ids.clone();
+
+        match self
+            .send_dm_msg(SendDmMsgParams {
+                peer_id,
+                text,
+                attachment_pointers,
+                attachment_ids,
+                dm_channel_id,
+                mailbox_manager,
+                sent_at,
+            })
+            .await
+        {
+            Ok(message) => Ok(DmSendResult {
+                message: Some(message),
+                attachment_ids: result_attachment_ids,
+                gif_attachment_ids: vec![],
+                sent_at,
+                bootstrap_initiated: false,
+            }),
+            Err(MessageError::BootstrapInitiated) => {
+                Ok(DmSendResult {
+                    message: None,
+                    attachment_ids: result_attachment_ids,
+                    gif_attachment_ids: vec![],
+                    sent_at,
+                    bootstrap_initiated: true,
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// Send pending messages after bootstrap completes.
     pub async fn send_pending_messages(
         &self,

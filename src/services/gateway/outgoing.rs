@@ -409,31 +409,29 @@ async fn route_channel_dm(
     peer_id: &UserId,
     dm_channel_id: &ChannelId,
     text: &str,
-    _attachment_pointers: Vec<AttachmentPointer>,
+    attachment_pointers: Vec<AttachmentPointer>,
     file_paths: Vec<PathBuf>,
     quote: Option<QuoteIntent>,
 ) -> Result<SendResult, MessageError> {
-    // TODO: Use attachment_pointers when pre-uploaded (step 3 of gateway refactor)
-    // For now, file_paths are still used for DM/Channel upload path
-    let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
-
-    let dm_result = if let Some(q) = quote {
-        message_service
-            .send_dm_with_reply(
-                peer_id,
-                dm_channel_id,
-                text,
-                path_refs,
-                &q.author_id,
-                q.timestamp,
-                q.preview_text.as_deref().unwrap_or(""),
-                mailbox_manager,
-            )
-            .await?
+    // Use pre-uploaded pointers if available, otherwise upload from file paths
+    let dm_result = if !attachment_pointers.is_empty() {
+        let attachment_ids = attachment_pointers.iter()
+            .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key))
+            .collect();
+        message_service.send_dm_with_pointers(
+            peer_id, dm_channel_id, text, attachment_pointers, attachment_ids, mailbox_manager,
+        ).await?
     } else {
-        message_service
-            .send_dm_with_files(peer_id, dm_channel_id, text, path_refs, mailbox_manager)
-            .await?
+        let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
+        if let Some(q) = quote {
+            message_service.send_dm_with_reply(
+                peer_id, dm_channel_id, text, path_refs,
+                &q.author_id, q.timestamp, q.preview_text.as_deref().unwrap_or(""),
+                mailbox_manager,
+            ).await?
+        } else {
+            message_service.send_dm_with_files(peer_id, dm_channel_id, text, path_refs, mailbox_manager).await?
+        }
     };
 
     Ok(SendResult {
@@ -456,26 +454,28 @@ async fn route_channel(
     group_fanout: Option<&GroupFanout>,
     channel_id: &ChannelId,
     text: &str,
-    _attachment_pointers: Vec<AttachmentPointer>,
+    attachment_pointers: Vec<AttachmentPointer>,
     file_paths: Vec<PathBuf>,
     thread_id: Option<MessageId>,
     mentioned_integrations: Vec<IntegrationId>,
     targets_ai_bot: bool,
 ) -> Result<SendResult, MessageError> {
-    // TODO: Use attachment_pointers when pre-uploaded (step 3 of gateway refactor)
-    let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
-
-    let message = message_service
-        .send_with_files(
-            group_fanout,
-            channel_id,
-            text,
-            path_refs,
-            thread_id.as_ref(),
-            mentioned_integrations,
-            targets_ai_bot,
-        )
-        .await?;
+    // Use pre-uploaded pointers if available, otherwise upload from file paths
+    let message = if !attachment_pointers.is_empty() {
+        let attachment_ids = attachment_pointers.iter()
+            .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key))
+            .collect();
+        message_service.send_with_pointers(
+            group_fanout, channel_id, text, attachment_pointers, attachment_ids,
+            thread_id.as_ref(), mentioned_integrations, targets_ai_bot,
+        ).await?
+    } else {
+        let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
+        message_service.send_with_files(
+            group_fanout, channel_id, text, path_refs,
+            thread_id.as_ref(), mentioned_integrations, targets_ai_bot,
+        ).await?
+    };
 
     let sent_at = message.sent_at;
     let attachment_ids = message.attachments.clone();

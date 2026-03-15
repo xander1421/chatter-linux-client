@@ -273,6 +273,33 @@ impl MessageService {
         .await
     }
 
+    /// Send a message with pre-uploaded attachment pointers.
+    ///
+    /// Like `send_with_files` but skips the upload step.
+    pub async fn send_with_pointers(
+        &self,
+        group_fanout: Option<&GroupFanout>,
+        channel_id: &ChannelId,
+        text: &str,
+        attachment_pointers: Vec<AttachmentPointer>,
+        attachment_ids: Vec<AttachmentId>,
+        thread_id: Option<&MessageId>,
+        mentioned_integrations: Vec<IntegrationId>,
+        targets_ai_bot: bool,
+    ) -> Result<Message, MessageError> {
+        self.send(
+            group_fanout,
+            channel_id,
+            text,
+            attachment_ids,
+            attachment_pointers,
+            thread_id,
+            mentioned_integrations,
+            targets_ai_bot,
+        )
+        .await
+    }
+
     /// Send control content to a group channel (typing indicators, reactions, etc.)
     ///
     /// Per NDSS '21: Uses pairwise sealed sender encryption for each member.
