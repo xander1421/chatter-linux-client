@@ -64,6 +64,11 @@ impl ConversationHandle {
         &self.conversation
     }
 
+    /// Get the UIContext reference.
+    pub fn ui_ctx(&self) -> &Arc<UIContext> {
+        &self.ui_ctx
+    }
+
     // ========================================================================
     // Ephemeral operations (reaction, typing, pin, edit, delete)
     // ========================================================================
