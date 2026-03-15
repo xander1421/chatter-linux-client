@@ -19,7 +19,7 @@ use crate::state::store::Store;
 /// Replaces the pattern of checking `get_selected_dm_id()` string prefixes
 /// and `get_selected_private_group_id().is_empty()` scattered across 109 sites.
 /// Set once at sidebar selection time, read everywhere.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ActiveConversation {
     /// No conversation selected.
     None,
@@ -60,6 +60,11 @@ impl ActiveConversation {
     /// Check if any conversation is active.
     pub fn is_active(&self) -> bool {
         !matches!(self, Self::None)
+    }
+
+    /// Check if this is an anonymous conversation (AnonDm or AnonGroup).
+    pub fn is_anon(&self) -> bool {
+        matches!(self, Self::AnonDm(_) | Self::AnonGroup(_))
     }
 }
 

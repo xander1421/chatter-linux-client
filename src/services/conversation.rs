@@ -1,13 +1,14 @@
 //! Polymorphic conversation operations.
 //!
-//! The `ConversationOps` trait provides a unified API for messaging operations
-//! across all conversation types (Channel, DM, Anon DM, Anon Group).
+//! `ConversationHandle` wraps `ActiveConversation` + `UIContext` to provide
+//! a single API for messaging operations across all conversation types
+//! (Channel, DM, Anon DM, Anon Group).
 //!
 //! # Usage
 //!
 //! ```ignore
-//! let ops = ConversationOps::from_active(conversation, ui_ctx);
-//! ops.send_reaction("👍", &author, timestamp, false).await?;
+//! let handle = ConversationHandle::current(&ui_ctx);
+//! handle.send_reaction("👍", &author, timestamp, false).await?;
 //! ```
 //!
 //! This eliminates the 4-way match blocks in the chat UI layer.
@@ -40,6 +41,7 @@ pub enum ConversationError {
 /// Wraps `ActiveConversation` + `UIContext` to provide a single API
 /// for all conversation types. The correct service is dispatched
 /// internally based on the conversation variant.
+#[derive(Clone)]
 pub struct ConversationHandle {
     conversation: ActiveConversation,
     ui_ctx: Arc<UIContext>,
@@ -62,11 +64,6 @@ impl ConversationHandle {
     /// Get the underlying conversation variant.
     pub fn conversation(&self) -> &ActiveConversation {
         &self.conversation
-    }
-
-    /// Get the UIContext reference.
-    pub fn ui_ctx(&self) -> &Arc<UIContext> {
-        &self.ui_ctx
     }
 
     // ========================================================================
@@ -247,6 +244,108 @@ impl ConversationHandle {
         }
     }
 
+    /// Delete-for-me: delete locally + sync to own devices.
+    pub async fn delete_for_me(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> ConversationResult {
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                self.ui_ctx.anon_dm_service
+                    .delete_message_by_timestamp(id, target_author, target_sent_timestamp)
+                    .map(|_| ())
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::AnonGroup(id) => {
+                self.ui_ctx.anon_group_service
+                    .delete_message_by_timestamp(id, target_author, target_sent_timestamp)
+                    .map(|_| ())
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::Dm { peer_id, .. } => {
+                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
+                let content = crate::services::build_delete_for_me_content(
+                    &peer_id.to_string(), &author_aci, target_sent_timestamp,
+                );
+                self.send_dm_content(content, peer_id).await?;
+                self.ui_ctx.message_service.delete_message_local(&msg.id)
+                    .map_err(ConversationError::Message)
+            }
+            ActiveConversation::Channel(channel_id) => {
+                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
+                let content = crate::services::build_delete_for_me_content(
+                    &channel_id.to_string(), &author_aci, target_sent_timestamp,
+                );
+                self.send_channel_content(content, channel_id).await?;
+                self.ui_ctx.message_service.delete_message_local(&msg.id)
+                    .map_err(ConversationError::Message)
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
+    /// Get message text by sender + timestamp across any conversation type.
+    pub fn get_message_text(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> ConversationResult<Option<String>> {
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                match self.ui_ctx.anon_dm_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                    Ok(Some(msg)) => Ok(msg.as_text()),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(ConversationError::Other(e.to_string())),
+                }
+            }
+            ActiveConversation::AnonGroup(id) => {
+                match self.ui_ctx.anon_group_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                    Ok(Some(msg)) => Ok(msg.as_text()),
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(ConversationError::Other(e.to_string())),
+                }
+            }
+            ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                Ok(msg.as_text().map(|s| s.to_string()))
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
+    /// Check if a message is owned by the current user.
+    pub fn is_own_message(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> ConversationResult<bool> {
+        let current_user_id = self.ui_ctx.auth_state.get().current_user_id;
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                match self.ui_ctx.anon_dm_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                    Ok(Some(msg)) => Ok(Some(msg.sender_id) == current_user_id),
+                    Ok(None) => Err(ConversationError::Other("Message not found".into())),
+                    Err(e) => Err(ConversationError::Other(e.to_string())),
+                }
+            }
+            ActiveConversation::AnonGroup(id) => {
+                match self.ui_ctx.anon_group_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                    Ok(Some(msg)) => Ok(Some(msg.sender_id) == current_user_id),
+                    Ok(None) => Err(ConversationError::Other("Message not found".into())),
+                    Err(e) => Err(ConversationError::Other(e.to_string())),
+                }
+            }
+            ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                Ok(msg.sender_id == current_user_id)
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
     // ========================================================================
     // Internal helpers
     // ========================================================================
@@ -287,6 +386,6 @@ impl ConversationHandle {
             .send_control(channel_id, content, None)
             .await
             .map(|_| ())
-            .map_err(|e| ConversationError::Other(format!("Channel send failed: {}", e)))
+            .map_err(ConversationError::Message)
     }
 }

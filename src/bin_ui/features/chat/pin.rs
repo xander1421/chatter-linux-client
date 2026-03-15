@@ -79,7 +79,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         }).unwrap_or((false, String::new(), String::new()));
 
         let unpin = is_currently_pinned;
-        let handle = ConversationHandle::new(conversation.clone(), ui_ctx.clone());
+        let handle = ConversationHandle::new(conversation, ui_ctx.clone());
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 

@@ -34,8 +34,8 @@ struct OutgoingTypingState {
     pause_timer: Timer,
     /// Last time we called bumpTyping (for throttling)
     last_bump: Instant,
-    /// Conversation identifier string (for comparison on switch)
-    conversation_id: String,
+    /// Active conversation (typed, no string serialization)
+    conversation: ActiveConversation,
 }
 
 thread_local! {
@@ -51,22 +51,11 @@ pub fn clear_outgoing_typing() {
     OUTGOING_TYPING.with(|state_cell| {
         if let Some(state) = state_cell.borrow_mut().take() {
             tracing::debug!(
-                conversation_id = %state.conversation_id,
+                conversation = ?state.conversation,
                 "TYPING_SEND: Clearing typing state on message send"
             );
         }
     });
-}
-
-/// Get a stable string key for a conversation (for timer state tracking).
-fn conversation_key(conversation: &ActiveConversation) -> String {
-    match conversation {
-        ActiveConversation::AnonDm(id) => format!("anon_dm:{}", id),
-        ActiveConversation::AnonGroup(id) => format!("anon_group:{}", id),
-        ActiveConversation::Dm { peer_id, .. } => format!("dm:{}", peer_id),
-        ActiveConversation::Channel(id) => format!("ch:{}", id),
-        ActiveConversation::None => String::new(),
-    }
 }
 
 /// Wire typing indicator callback for DM and channel conversations.
@@ -96,19 +85,18 @@ pub fn wire_typing_changed(window: &crate::MainWindow, ui_ctx: &Arc<UIContext>) 
             }
         }
 
-        let conv_key = conversation_key(&conversation);
         let handle = ConversationHandle::new(conversation, ui_ctx.clone());
 
         if is_typing {
-            bump_typing(&conv_key, handle);
+            bump_typing(conversation, handle);
         } else {
             // User explicitly stopped typing — clear state and send STOPPED
             OUTGOING_TYPING.with(|state_cell| {
                 let state = state_cell.borrow_mut().take();
                 if let Some(state) = state {
-                    if state.conversation_id == conv_key {
+                    if state.conversation == conversation {
                         tracing::debug!(
-                            conversation_id = %conv_key,
+                            conversation = ?conversation,
                             "TYPING_SEND: User stopped typing explicitly"
                         );
                         tokio::spawn(async move {
@@ -126,12 +114,12 @@ pub fn wire_typing_changed(window: &crate::MainWindow, ui_ctx: &Arc<UIContext>) 
 /// Uses `ConversationHandle` for polymorphic dispatch, replacing the
 /// three separate `bump_typing` / `bump_typing_anon_dm` / `bump_typing_anon_group`
 /// implementations that were previously 608 lines combined.
-fn bump_typing(conversation_id: &str, handle: ConversationHandle) {
+fn bump_typing(conversation: ActiveConversation, handle: ConversationHandle) {
     OUTGOING_TYPING.with(|state_cell| {
         let mut state_opt = state_cell.borrow_mut();
 
         let needs_new_state = match &*state_opt {
-            Some(state) => state.conversation_id != conversation_id,
+            Some(state) => state.conversation != conversation,
             None => true,
         };
 
@@ -139,13 +127,10 @@ fn bump_typing(conversation_id: &str, handle: ConversationHandle) {
             // Send STOPPED for old conversation if switching
             if let Some(old_state) = state_opt.take() {
                 tracing::debug!(
-                    old = %old_state.conversation_id,
-                    new = %conversation_id,
+                    old = ?old_state.conversation,
+                    new = ?conversation,
                     "TYPING_SEND: Switching conversation, sending STOPPED for old"
                 );
-                // We can't reuse `handle` for the old conversation since it points
-                // to the new one. The old timers being dropped will stop them.
-                // The receiver's typing state will time out naturally.
             }
 
             // Create new state with timers
@@ -154,14 +139,11 @@ fn bump_typing(conversation_id: &str, handle: ConversationHandle) {
 
             // Send initial STARTED
             tracing::info!(
-                conversation_id = %conversation_id,
+                conversation = ?conversation,
                 "TYPING_SEND: Starting typing (first keystroke)"
             );
 
-            let handle_send = ConversationHandle::new(
-                handle.conversation().clone(),
-                handle.ui_ctx().clone(),
-            );
+            let handle_send = handle.clone();
             tokio::spawn(async move {
                 let _ = handle_send.send_typing(true).await;
             });
@@ -170,13 +152,13 @@ fn bump_typing(conversation_id: &str, handle: ConversationHandle) {
             setup_refresh_timer(&refresh_timer, &handle);
 
             // Set up pause timer (sends STOPPED after 3s)
-            setup_pause_timer(&pause_timer, conversation_id, &handle);
+            setup_pause_timer(&pause_timer, conversation, &handle);
 
             *state_opt = Some(OutgoingTypingState {
                 _refresh_timer: refresh_timer,
                 pause_timer,
                 last_bump: Instant::now(),
-                conversation_id: conversation_id.to_string(),
+                conversation,
             });
         } else {
             // Same conversation — just reset pause timer (throttled)
@@ -190,26 +172,20 @@ fn bump_typing(conversation_id: &str, handle: ConversationHandle) {
             state.last_bump = now;
 
             // Reset pause timer
-            setup_pause_timer(&state.pause_timer, conversation_id, &handle);
+            setup_pause_timer(&state.pause_timer, conversation, &handle);
         }
     });
 }
 
 /// Set up refresh timer — re-sends STARTED every 10s.
 fn setup_refresh_timer(timer: &Timer, handle: &ConversationHandle) {
-    let handle = ConversationHandle::new(
-        handle.conversation().clone(),
-        handle.ui_ctx().clone(),
-    );
+    let handle = handle.clone();
 
     timer.start(
         TimerMode::Repeated,
         Duration::from_millis(TYPING_REFRESH_MS),
         move || {
-            let handle = ConversationHandle::new(
-                handle.conversation().clone(),
-                handle.ui_ctx().clone(),
-            );
+            let handle = handle.clone();
             tokio::spawn(async move {
                 let _ = handle.send_typing(true).await;
             });
@@ -218,30 +194,23 @@ fn setup_refresh_timer(timer: &Timer, handle: &ConversationHandle) {
 }
 
 /// Set up pause timer — sends STOPPED after 3s and clears state.
-fn setup_pause_timer(timer: &Timer, conversation_id: &str, handle: &ConversationHandle) {
-    let conv_id = conversation_id.to_string();
-    let handle = ConversationHandle::new(
-        handle.conversation().clone(),
-        handle.ui_ctx().clone(),
-    );
+fn setup_pause_timer(timer: &Timer, conversation: ActiveConversation, handle: &ConversationHandle) {
+    let handle = handle.clone();
 
     timer.start(
         TimerMode::SingleShot,
         Duration::from_millis(TYPING_PAUSE_MS),
         move || {
             tracing::debug!(
-                conversation_id = %conv_id,
+                conversation = ?conversation,
                 "TYPING_SEND: Pause timer fired - sending STOPPED"
             );
 
             OUTGOING_TYPING.with(|state_cell| {
                 let state = state_cell.borrow_mut().take();
                 if let Some(state) = state {
-                    if state.conversation_id == conv_id {
-                        let handle = ConversationHandle::new(
-                            handle.conversation().clone(),
-                            handle.ui_ctx().clone(),
-                        );
+                    if state.conversation == conversation {
+                        let handle = handle.clone();
                         tokio::spawn(async move {
                             let _ = handle.send_typing(false).await;
                         });

@@ -25,7 +25,7 @@ path = "src/lib.rs"
 # ============================================================================
 # UI Framework - Slint (cross-platform, mobile-friendly)
 # ============================================================================
-slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility"] }
+slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility", "backend-android-activity-06"] }
 i-slint-backend-winit = { version = "1.15.1", optional = true }
 winit = { version = "0.30", optional = true }
 
@@ -264,7 +264,7 @@ desktop = ["dep:i-slint-backend-winit", "dep:winit", "dep:rfd", "dep:arboard", "
 # Local AI - requires CUDA/cuDNN for GPU acceleration
 local-ai = ["dep:mistralrs"]
 # Mobile feature - disables heavy desktop-only dependencies
-mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "slint/backend-android-activity-06"]
+mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity"]
 
 [profile.release]
 lto = true

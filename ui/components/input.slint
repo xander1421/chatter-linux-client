@@ -48,12 +48,7 @@ export component Input inherits Rectangle {
             border-color: border-col;
             opacity: disabled ? 0.5 : 1.0;
 
-            // Click anywhere in the container to focus input
-            TouchArea {
-                clicked => { input.focus(); }
-            }
-
-            // Placeholder text (rendered behind input, non-interactive)
+            // Placeholder text (shown when empty)
             if root.text == "" && !focused: Text {
                 x: Spacing.md;
                 width: parent.width - Spacing.md * 2;

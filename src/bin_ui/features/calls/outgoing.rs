@@ -2,7 +2,6 @@
 //!
 //! Handles starting voice and video calls.
 
-use std::str::FromStr;
 use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
@@ -140,22 +139,6 @@ async fn start_call_impl(
     anon_group_service: Arc<chatter_linux::services::anon_group::AnonGroupService>,
     conversation: ActiveConversation,
 ) {
-    // Derive channel_id_str, channel_name, is_dm, is_private_group from ActiveConversation
-    let channel_name = weak.upgrade()
-        .map(|w| w.get_channel_name().to_string())
-        .unwrap_or_default();
-
-    let (channel_id_str, is_dm, is_private_group) = match &conversation {
-        ActiveConversation::Channel(id) => (id.to_string(), false, false),
-        ActiveConversation::Dm { channel_id, .. } => (channel_id.to_string(), true, false),
-        ActiveConversation::AnonDm(id) => (format!("anon_dm:{}", id), true, false),
-        ActiveConversation::AnonGroup(id) => (id.to_string(), false, true),
-        ActiveConversation::None => {
-            tracing::warn!("No channel, DM, or private group selected for call");
-            return;
-        }
-    };
-
     // Get current user ID and display name
     let user_id = match session_service.current_user_id() {
         Some(id) => id,
@@ -174,33 +157,38 @@ async fn start_call_impl(
         CallType::Group => "Group Call",
     };
 
-    // Handle private group calls separately (they use AnonGroupId, not ChannelId)
-    if is_private_group {
-        start_private_group_call(
-            weak,
-            &channel_id_str,
-            &display_name,
-            user_id,
-            is_video_call,
-            call_type_str,
-            anon_dm_service,
-            anon_group_service,
-        ).await;
-        return;
+    // Dispatch directly on the typed enum — no string serialization
+    match conversation {
+        ActiveConversation::AnonGroup(id) => {
+            start_private_group_call(
+                weak,
+                &id.to_string(),
+                &display_name,
+                user_id,
+                is_video_call,
+                call_type_str,
+                anon_dm_service,
+                anon_group_service,
+            ).await;
+            return;
+        }
+        ActiveConversation::None => {
+            tracing::warn!("No channel, DM, or private group selected for call");
+            return;
+        }
+        _ => {} // Channel, Dm, AnonDm — handled below
     }
 
-    // Determine if this is an anonymous DM from the conversation enum
-    let is_anon_dm = matches!(conversation, ActiveConversation::AnonDm(_));
+    let channel_name = weak.upgrade()
+        .map(|w| w.get_channel_name().to_string())
+        .unwrap_or_default();
 
-    // For anon DMs, strip the "anon_dm:" prefix we added above
-    let channel_id_to_parse = channel_id_str
-        .strip_prefix("anon_dm:")
-        .unwrap_or(&channel_id_str);
+    let is_dm = matches!(conversation, ActiveConversation::Dm { .. } | ActiveConversation::AnonDm(_));
 
-    let channel_id = match ChannelId::from_str(channel_id_to_parse) {
-        Ok(id) => id,
-        Err(e) => {
-            tracing::error!("Invalid channel ID: {}", e);
+    let channel_id = match conversation.channel_id() {
+        Some(id) => id,
+        None => {
+            tracing::error!("No channel ID for conversation");
             return;
         }
     };
@@ -219,16 +207,8 @@ async fn start_call_impl(
         // =================================================================
 
         // Get peer ID - different lookup for anon DMs vs regular DMs
-        let peer_id = if is_anon_dm {
+        let peer_id = if let ActiveConversation::AnonDm(anon_dm_id) = conversation {
             // For anon DMs, look up the conversation to get peer_id
-            use chatter_linux::domain::anon_dm::AnonDmId;
-            let anon_dm_id: AnonDmId = match channel_id_to_parse.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid anon DM ID: {}", e);
-                    return;
-                }
-            };
             match anon_dm_service.get_conversation(&anon_dm_id) {
                 Ok(Some(dm)) => dm.peer_id,
                 Ok(None) => {
@@ -256,9 +236,7 @@ async fn start_call_impl(
         };
 
         // Handle anonymous DM calls differently
-        if is_anon_dm {
-            use chatter_linux::domain::anon_dm::AnonDmId;
-            let anon_dm_id: AnonDmId = channel_id_to_parse.parse().unwrap(); // Already validated above
+        if let ActiveConversation::AnonDm(anon_dm_id) = conversation {
             
             // Get a blind signature token for the call (request more if needed)
             let token = match anon_dm_service.get_available_call_room_token() {
@@ -390,7 +368,7 @@ async fn start_call_impl(
                         
                         let call_data = ActiveCallData {
                             call_id: offer_result.room_name.clone().into(),
-                            channel_id: channel_id_str.clone().into(),
+                            channel_id: channel_id.to_string().into(),
                             title: format!("Calling...").into(),
                             is_video_call,
                             is_anonymous_call: true,
@@ -467,7 +445,7 @@ async fn start_call_impl(
                         &call.id.to_string(),
                         ephemeral_public,
                         call_type_str,
-                        &channel_id_str,
+                        &channel_id.to_string(),
                     );
 
                     // Send via regular DM
@@ -516,7 +494,7 @@ async fn start_call_impl(
                         // Placeholder verification (will update when connected)
                         let call_data = ActiveCallData {
                             call_id: call.id.to_string().into(),
-                            channel_id: channel_id_str.clone().into(),
+                            channel_id: channel_id.to_string().into(),
                             title: if channel_name.is_empty() { format!("Calling...").into() } else { channel_name.into() },
                             is_video_call,
                             is_anonymous_call: false,
@@ -574,13 +552,13 @@ async fn start_call_impl(
                 // Distribute group_key to all channel members via pairwise sealed sender.
                 // This ensures all members have the same AES-256 key for E2EE media.
                 // =============================================================
-                let channel_id_clone = channel_id.clone();
+                let channel_id_clone = channel_id;
                 let message_service_clone = message_service.clone();
                 let channel_service_clone = channel_service.clone();
                 let mailbox_manager_clone = mailbox_manager.clone();
                 let call_id_str = call.id.to_string();
                 let channel_id_str = channel_id_clone.to_string();
-                let group_key_arr = group_key.clone();
+                let group_key_arr = group_key;
 
                 let channel_id_str_for_spawn = channel_id_str.clone();
                 let _ = slint::spawn_local(async move {

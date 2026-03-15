@@ -6,6 +6,7 @@ use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::UserId;
+use chatter_linux::services::conversation::ConversationHandle;
 use chatter_linux::state::ActiveConversation;
 
 use crate::MainWindow;
@@ -16,22 +17,22 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let ui_ctx = Arc::clone(ui_ctx);
     let weak_window = window.as_weak();
 
-    // Callback signature: (sender_id, timestamp_ns, x, y) - Signal-style identification with click position
     window.on_more_clicked(move |sender_id: SharedString, timestamp_ns: SharedString, click_x: f32, click_y: f32| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = Arc::clone(&ui_ctx);
         let weak = weak_window.clone();
-        // Store click position for context menu placement
         let menu_x = click_x;
         let menu_y = click_y;
 
-        // Determine conversation type from state (no string parsing)
         let conversation = ui_ctx.chat_state.active_conversation();
+        if matches!(conversation, ActiveConversation::None) {
+            return;
+        }
 
-        // Move service lookups to background task
+        let handle = ConversationHandle::new(conversation, ui_ctx.clone());
+
         tokio::spawn(async move {
-            // Parse sender_id for Signal-style lookup
             let target_sender_id: UserId = match sender_id_str.parse() {
                 Ok(id) => id,
                 Err(e) => {
@@ -39,8 +40,6 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     return;
                 }
             };
-
-            // Parse timestamp for Signal-style lookup
             let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
                 Ok(ts) => ts,
                 Err(e) => {
@@ -49,172 +48,86 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            match conversation {
-                ActiveConversation::AnonDm(anon_dm_id) => {
-                    // Anon DM message lookup (now in background)
-                    let message = match ui_ctx.anon_dm_service.get_message_by_sender_timestamp(
-                        &anon_dm_id,
-                        &target_sender_id,
-                        target_sent_timestamp,
-                    ) {
-                        Ok(Some(msg)) => msg,
-                        Ok(None) => {
-                            tracing::error!(
-                                sender_id = %target_sender_id,
-                                timestamp = target_sent_timestamp,
-                                conversation_id = %anon_dm_id,
-                                "Anon DM message not found for context menu"
-                            );
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to look up anon DM message for context menu");
-                            return;
-                        }
-                    };
-
-                    // Check if this is the current user's own message
-                    let current_user_id = ui_ctx.auth_state.get().current_user_id;
-                    let is_own_message = Some(message.sender_id) == current_user_id;
-
-                    // Show context menu - pin state and attachments check happens on UI thread
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            // Check pin state and attachments from UI model (must be on UI thread)
-                            let (is_pinned, has_attachments) = {
-                                let model = w.get_messages();
-                                let mut pinned = false;
-                                let mut attachments = false;
-                                for i in 0..model.row_count() {
-                                    if let Some(m) = model.row_data(i) {
-                                        if m.sender_id.as_str() == sender_id_str.as_str()
-                                            && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
-                                        {
-                                            pinned = m.is_pinned;
-                                            attachments = m.has_attachments;
-                                            break;
-                                        }
-                                    }
-                                }
-                                (pinned, attachments)
-                            };
-
-                            w.set_context_menu_sender_id(sender_id_str.into());
-                            w.set_context_menu_timestamp_ns(timestamp_ns_str.into());
-                            w.set_context_menu_is_own_message(is_own_message);
-                            w.set_context_menu_is_pinned(is_pinned);
-                            w.set_context_menu_has_attachments(has_attachments);
-                            w.set_context_menu_x(menu_x);
-                            w.set_context_menu_y(menu_y);
-                            w.set_context_menu_visible(true);
-                        }
-                    });
+            let is_own_message = match handle.is_own_message(&target_sender_id, target_sent_timestamp) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to look up message for context menu");
+                    return;
                 }
+            };
 
-                ActiveConversation::AnonGroup(anon_group_id) => {
-                    // Anon group message lookup (now in background)
-                    let message = match ui_ctx.anon_group_service.get_message_by_sender_timestamp(
-                        &anon_group_id,
-                        &target_sender_id,
-                        target_sent_timestamp,
-                    ) {
-                        Ok(Some(msg)) => msg,
-                        Ok(None) => {
-                            tracing::error!(
-                                sender_id = %target_sender_id,
-                                timestamp = target_sent_timestamp,
-                                group_id = %anon_group_id,
-                                "Anon group message not found for context menu"
-                            );
-                            return;
+            if conversation.is_anon() {
+                // Anon conversations: get pin state and attachments from UI model
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        let (is_pinned, has_attachments) = find_message_ui_state(
+                            &w, &sender_id_str, &timestamp_ns_str,
+                        );
+                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, is_pinned, has_attachments, menu_x, menu_y);
+                    }
+                });
+            } else {
+                // DM/Channel: get pin state and attachments from service data
+                let msg = match handle.conversation() {
+                    ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+                        match ui_ctx.message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
+                            Ok(Some(msg)) => msg,
+                            Ok(None) => {
+                                tracing::error!("Message not found for context menu");
+                                return;
+                            }
+                            Err(e) => {
+                                tracing::error!(error = %e, "Failed to look up message for context menu");
+                                return;
+                            }
                         }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to look up anon group message for context menu");
-                            return;
-                        }
-                    };
+                    }
+                    _ => return,
+                };
 
-                    // Check if this is the current user's own message
-                    let current_user_id = ui_ctx.auth_state.get().current_user_id;
-                    let is_own_message = Some(message.sender_id) == current_user_id;
+                let is_pinned = msg.is_pinned;
+                let has_attachments = !msg.attachments.is_empty();
 
-                    // Show context menu - pin state and attachments check happens on UI thread
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            // Check pin state and attachments from UI model (must be on UI thread)
-                            let (is_pinned, has_attachments) = {
-                                let model = w.get_messages();
-                                let mut pinned = false;
-                                let mut attachments = false;
-                                for i in 0..model.row_count() {
-                                    if let Some(m) = model.row_data(i) {
-                                        if m.sender_id.as_str() == sender_id_str.as_str()
-                                            && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
-                                        {
-                                            pinned = m.is_pinned;
-                                            attachments = m.has_attachments;
-                                            break;
-                                        }
-                                    }
-                                }
-                                (pinned, attachments)
-                            };
-
-                            w.set_context_menu_sender_id(sender_id_str.into());
-                            w.set_context_menu_timestamp_ns(timestamp_ns_str.into());
-                            w.set_context_menu_is_own_message(is_own_message);
-                            w.set_context_menu_is_pinned(is_pinned);
-                            w.set_context_menu_has_attachments(has_attachments);
-                            w.set_context_menu_x(menu_x);
-                            w.set_context_menu_y(menu_y);
-                            w.set_context_menu_visible(true);
-                        }
-                    });
-                }
-
-                ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
-                    // Regular message lookup via message_service (now in background)
-                    let message = match ui_ctx.message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg,
-                        Ok(None) => {
-                            tracing::error!(
-                                sender_id = %target_sender_id,
-                                timestamp = target_sent_timestamp,
-                                "Message not found for context menu (Signal-style lookup)"
-                            );
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to look up message for context menu");
-                            return;
-                        }
-                    };
-
-                    // Check if this is the current user's own message
-                    let current_user_id = ui_ctx.auth_state.get().current_user_id.clone();
-                    let is_own_message = message.sender_id == current_user_id;
-
-                    // Check if message is pinned and has attachments (from service data)
-                    let is_pinned = message.is_pinned;
-                    let has_attachments = !message.attachments.is_empty();
-
-                    // Show context menu with Signal-style IDs
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_context_menu_sender_id(sender_id_str.into());
-                            w.set_context_menu_timestamp_ns(timestamp_ns_str.into());
-                            w.set_context_menu_is_own_message(is_own_message);
-                            w.set_context_menu_is_pinned(is_pinned);
-                            w.set_context_menu_has_attachments(has_attachments);
-                            w.set_context_menu_x(menu_x);
-                            w.set_context_menu_y(menu_y);
-                            w.set_context_menu_visible(true);
-                        }
-                    });
-                }
-
-                ActiveConversation::None => return,
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, is_pinned, has_attachments, menu_x, menu_y);
+                    }
+                });
             }
         });
     });
+}
+
+/// Find pin state and attachment info from the UI message model.
+fn find_message_ui_state(w: &MainWindow, sender_id: &str, timestamp_ns: &str) -> (bool, bool) {
+    let model = w.get_messages();
+    for i in 0..model.row_count() {
+        if let Some(m) = model.row_data(i) {
+            if m.sender_id.as_str() == sender_id && m.timestamp_ns.as_str() == timestamp_ns {
+                return (m.is_pinned, m.has_attachments);
+            }
+        }
+    }
+    (false, false)
+}
+
+/// Set all context menu properties on the window.
+fn set_context_menu(
+    w: &MainWindow,
+    sender_id: String,
+    timestamp_ns: String,
+    is_own_message: bool,
+    is_pinned: bool,
+    has_attachments: bool,
+    menu_x: f32,
+    menu_y: f32,
+) {
+    w.set_context_menu_sender_id(sender_id.into());
+    w.set_context_menu_timestamp_ns(timestamp_ns.into());
+    w.set_context_menu_is_own_message(is_own_message);
+    w.set_context_menu_is_pinned(is_pinned);
+    w.set_context_menu_has_attachments(has_attachments);
+    w.set_context_menu_x(menu_x);
+    w.set_context_menu_y(menu_y);
+    w.set_context_menu_visible(true);
 }
