@@ -41,6 +41,10 @@ pub enum OutgoingIntent {
         peer_id: UserId,
         dm_channel_id: ChannelId,
         text: String,
+        /// Pre-uploaded attachment pointers. If empty and file_paths is set,
+        /// the gateway uploads them. Prefer pre-uploading via
+        /// `upload_pending_attachments()` for consistency with anon paths.
+        attachment_pointers: Vec<AttachmentPointer>,
         file_paths: Vec<PathBuf>,
         quote: Option<QuoteIntent>,
     },
@@ -49,6 +53,8 @@ pub enum OutgoingIntent {
     Channel {
         channel_id: ChannelId,
         text: String,
+        /// Pre-uploaded attachment pointers. See ChannelDm docs.
+        attachment_pointers: Vec<AttachmentPointer>,
         file_paths: Vec<PathBuf>,
         thread_id: Option<MessageId>,
         mentioned_integrations: Vec<IntegrationId>,
@@ -186,6 +192,7 @@ pub async fn route_outgoing(
             peer_id,
             dm_channel_id,
             text,
+            attachment_pointers,
             file_paths,
             quote,
         } => {
@@ -195,6 +202,7 @@ pub async fn route_outgoing(
                 &peer_id,
                 &dm_channel_id,
                 &text,
+                attachment_pointers,
                 file_paths,
                 quote,
             )
@@ -204,6 +212,7 @@ pub async fn route_outgoing(
         OutgoingIntent::Channel {
             channel_id,
             text,
+            attachment_pointers,
             file_paths,
             thread_id,
             mentioned_integrations,
@@ -214,6 +223,7 @@ pub async fn route_outgoing(
                 services.group_fanout,
                 &channel_id,
                 &text,
+                attachment_pointers,
                 file_paths,
                 thread_id,
                 mentioned_integrations,
@@ -399,9 +409,12 @@ async fn route_channel_dm(
     peer_id: &UserId,
     dm_channel_id: &ChannelId,
     text: &str,
+    _attachment_pointers: Vec<AttachmentPointer>,
     file_paths: Vec<PathBuf>,
     quote: Option<QuoteIntent>,
 ) -> Result<SendResult, MessageError> {
+    // TODO: Use attachment_pointers when pre-uploaded (step 3 of gateway refactor)
+    // For now, file_paths are still used for DM/Channel upload path
     let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
 
     let dm_result = if let Some(q) = quote {
@@ -443,11 +456,13 @@ async fn route_channel(
     group_fanout: Option<&GroupFanout>,
     channel_id: &ChannelId,
     text: &str,
+    _attachment_pointers: Vec<AttachmentPointer>,
     file_paths: Vec<PathBuf>,
     thread_id: Option<MessageId>,
     mentioned_integrations: Vec<IntegrationId>,
     targets_ai_bot: bool,
 ) -> Result<SendResult, MessageError> {
+    // TODO: Use attachment_pointers when pre-uploaded (step 3 of gateway refactor)
     let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
 
     let message = message_service

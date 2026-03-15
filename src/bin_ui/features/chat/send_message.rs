@@ -289,6 +289,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         peer_id,
                         dm_channel_id,
                         text: text.clone(),
+                        attachment_pointers: vec![],
                         file_paths,
                         quote,
                     };
@@ -500,6 +501,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         let intent = chatter_linux::services::gateway::OutgoingIntent::Channel {
                             channel_id,
                             text: text.clone(),
+                            attachment_pointers: vec![],
                             file_paths,
                             thread_id: None,
                             mentioned_integrations: vec![],
