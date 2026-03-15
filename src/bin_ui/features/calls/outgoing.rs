@@ -12,6 +12,7 @@ use chatter_linux::crypto::EphemeralCallKey;
 use chatter_linux::domain::call::CallType;
 use chatter_linux::domain::ids::ChannelId;
 use chatter_linux::services::CallWorkerHandle;
+use chatter_linux::state::ActiveConversation;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 use super::key_exchange::{set_pending_call, PendingOutgoingCall};
@@ -27,6 +28,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let ctx_channel_service = ui_ctx.channel_service.clone();
     let ctx_anon_dm_service = ui_ctx.anon_dm_service.clone();
     let ctx_anon_group_service = ui_ctx.anon_group_service.clone();
+    let ctx_chat_state = ui_ctx.chat_state.clone();
 
     // Start voice call
     window.on_start_voice_call({
@@ -38,6 +40,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let channel_service = ctx_channel_service.clone();
         let anon_dm_service = ctx_anon_dm_service.clone();
         let anon_group_service = ctx_anon_group_service.clone();
+        let chat_state = ctx_chat_state.clone();
 
         move || {
             let weak = weak.clone();
@@ -47,6 +50,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let channel_service = channel_service.clone();
             let anon_dm_service = anon_dm_service.clone();
             let anon_group_service = anon_group_service.clone();
+            let conversation = chat_state.active_conversation();
 
             // Get the call service from OnceLock
             let call_service = match call_service.get() {
@@ -68,6 +72,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     channel_service,
                     anon_dm_service,
                     anon_group_service,
+                    conversation,
                 ).await;
             }).unwrap();
         }
@@ -83,6 +88,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let channel_service = ctx_channel_service.clone();
         let anon_dm_service = ctx_anon_dm_service.clone();
         let anon_group_service = ctx_anon_group_service.clone();
+        let chat_state = ctx_chat_state.clone();
 
         move || {
             let weak = weak.clone();
@@ -92,6 +98,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let channel_service = channel_service.clone();
             let anon_dm_service = anon_dm_service.clone();
             let anon_group_service = anon_group_service.clone();
+            let conversation = chat_state.active_conversation();
 
             // Get the call service from OnceLock
             let call_service = match call_service.get() {
@@ -113,6 +120,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     channel_service,
                     anon_dm_service,
                     anon_group_service,
+                    conversation,
                 ).await;
             }).unwrap();
         }
@@ -130,31 +138,23 @@ async fn start_call_impl(
     channel_service: Arc<chatter_linux::services::channel::ChannelService>,
     anon_dm_service: Arc<chatter_linux::services::anon_dm::AnonDmService>,
     anon_group_service: Arc<chatter_linux::services::anon_group::AnonGroupService>,
+    conversation: ActiveConversation,
 ) {
-    // Get current channel ID and name from the window
-    // Check selected-channel-id, selected-dm-id, and selected-private-group-id
-    let (channel_id_str, channel_name, is_dm, is_private_group) = if let Some(w) = weak.upgrade() {
-        let channel_id = w.get_selected_channel_id().to_string();
-        let dm_id = w.get_selected_dm_id().to_string();
-        let private_group_id = w.get_selected_private_group_id().to_string();
+    // Derive channel_id_str, channel_name, is_dm, is_private_group from ActiveConversation
+    let channel_name = weak.upgrade()
+        .map(|w| w.get_channel_name().to_string())
+        .unwrap_or_default();
 
-        if !channel_id.is_empty() {
-            (channel_id, w.get_channel_name().to_string(), false, false)
-        } else if !dm_id.is_empty() {
-            (dm_id, w.get_channel_name().to_string(), true, false)
-        } else if !private_group_id.is_empty() {
-            (private_group_id, w.get_channel_name().to_string(), false, true)
-        } else {
-            (String::new(), String::new(), false, false)
+    let (channel_id_str, is_dm, is_private_group) = match &conversation {
+        ActiveConversation::Channel(id) => (id.to_string(), false, false),
+        ActiveConversation::Dm { channel_id, .. } => (channel_id.to_string(), true, false),
+        ActiveConversation::AnonDm(id) => (format!("anon_dm:{}", id), true, false),
+        ActiveConversation::AnonGroup(id) => (id.to_string(), false, true),
+        ActiveConversation::None => {
+            tracing::warn!("No channel, DM, or private group selected for call");
+            return;
         }
-    } else {
-        return;
     };
-
-    if channel_id_str.is_empty() {
-        tracing::warn!("No channel, DM, or private group selected for call");
-        return;
-    }
 
     // Get current user ID and display name
     let user_id = match session_service.current_user_id() {
@@ -189,13 +189,13 @@ async fn start_call_impl(
         return;
     }
 
-    // Handle anonymous DM IDs (prefixed with "anon_dm:")
-    // Strip the prefix to get the actual UUID
+    // Determine if this is an anonymous DM from the conversation enum
+    let is_anon_dm = matches!(conversation, ActiveConversation::AnonDm(_));
+
+    // For anon DMs, strip the "anon_dm:" prefix we added above
     let channel_id_to_parse = channel_id_str
         .strip_prefix("anon_dm:")
         .unwrap_or(&channel_id_str);
-
-    let is_anon_dm = channel_id_str.starts_with("anon_dm:");
 
     let channel_id = match ChannelId::from_str(channel_id_to_parse) {
         Ok(id) => id,

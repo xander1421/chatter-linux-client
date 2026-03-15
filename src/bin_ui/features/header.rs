@@ -7,6 +7,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use chatter_linux::app::UIContext;
+use chatter_linux::state::ActiveConversation;
 
 use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
 use crate::MainWindow;
@@ -192,10 +193,11 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
     let pin_service = ui_ctx.pin_service.clone();
     let anon_group_service = ui_ctx.anon_group_service.clone();
+    let chat_state = ui_ctx.chat_state.clone();
 
     window.on_pinned_prev_clicked(move || {
         pinned_state.navigate_prev();
-        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), pin_service.clone(), anon_group_service.clone());
+        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), pin_service.clone(), anon_group_service.clone(), chat_state.active_conversation());
     });
 
     // Next pinned message
@@ -203,10 +205,11 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
     let pin_service = ui_ctx.pin_service.clone();
     let anon_group_service = ui_ctx.anon_group_service.clone();
+    let chat_state = ui_ctx.chat_state.clone();
 
     window.on_pinned_next_clicked(move || {
         pinned_state.navigate_next();
-        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), pin_service.clone(), anon_group_service.clone());
+        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), pin_service.clone(), anon_group_service.clone(), chat_state.active_conversation());
     });
 
     // Dismiss pinned bar
@@ -226,6 +229,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
     let pin_service = ui_ctx.pin_service.clone();
     let anon_group_service = ui_ctx.anon_group_service.clone();
+    let chat_state = ui_ctx.chat_state.clone();
 
     window.on_pinned_show_clicked(move || {
         let state = pinned_state.get();
@@ -240,6 +244,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             pinned_state.clone(),
             pin_service.clone(),
             anon_group_service.clone(),
+            chat_state.active_conversation(),
         );
     });
 
@@ -298,6 +303,7 @@ fn update_pinned_ui_from_loaded_messages(
     pinned_state: chatter_linux::state::PinnedState,
     pin_service: Arc<chatter_linux::services::pin_service::PinService>,
     anon_group_service: Arc<chatter_linux::services::anon_group::AnonGroupService>,
+    conversation: ActiveConversation,
 ) {
     let state = pinned_state.get();
     let current_index = state.current_index as i32;
@@ -333,24 +339,17 @@ fn update_pinned_ui_from_loaded_messages(
     }
 
     // Fall back to DB lookup in background thread
-    let selected_group = weak_window.upgrade()
-        .map(|w| w.get_selected_private_group_id().to_string())
-        .unwrap_or_default();
-
     std::thread::spawn(move || {
         let preview = if let Some(msg_id) = current_msg_id {
-            if !selected_group.is_empty() {
+            if let ActiveConversation::AnonGroup(group_id) = conversation {
                 // Private group: look up from anon_group_messages
-                if let Ok(_group_id) = selected_group.parse::<chatter_linux::domain::anon_group::AnonGroupId>() {
-                    if let Ok(Some(msg)) = anon_group_service.get_message(&chatter_linux::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string())) {
-                        msg.as_text()
-                            .filter(|t| !t.is_empty())
-                            .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t })
-                            .unwrap_or_else(|| "[Pinned message]".to_string())
-                    } else {
-                        "[Pinned message]".to_string()
-                    }
+                if let Ok(Some(msg)) = anon_group_service.get_message(&chatter_linux::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string())) {
+                    msg.as_text()
+                        .filter(|t| !t.is_empty())
+                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t })
+                        .unwrap_or_else(|| "[Pinned message]".to_string())
                 } else {
+                    let _ = group_id; // suppress unused warning
                     "[Pinned message]".to_string()
                 }
             } else {
@@ -384,27 +383,15 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let anon_group_service = ui_ctx.anon_group_service.clone();
 
     window.on_chat_settings_clicked(move || {
-        // Check if a private group is selected
-        let selected_private_group_id = weak_window
-            .upgrade()
-            .map(|w| w.get_selected_private_group_id().to_string())
-            .unwrap_or_default();
+        let conversation = chat_state.active_conversation();
 
-        if !selected_private_group_id.is_empty() {
+        if let ActiveConversation::AnonGroup(group_id) = conversation {
             // Private group settings - move DB queries to background thread
             let anon_group_service = anon_group_service.clone();
             let user_service = user_service.clone();
             let weak = weak_window.clone();
 
             std::thread::spawn(move || {
-                let group_id: chatter_linux::domain::anon_group::AnonGroupId =
-                    match selected_private_group_id.parse() {
-                        Ok(id) => id,
-                        Err(e) => {
-                            tracing::error!("Invalid private group ID: {}", e);
-                            return;
-                        }
-                    };
 
                 // Get group info for settings modal (DB query in background)
                 let group = match anon_group_service.get_group(&group_id) {
@@ -478,9 +465,9 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         }
 
         // Regular channel settings
-        let channel_id = match chat_state.get().active_channel_id {
-            Some(id) => id,
-            None => {
+        let channel_id = match conversation {
+            ActiveConversation::Channel(id) | ActiveConversation::Dm { channel_id: id, .. } => id,
+            _ => {
                 tracing::warn!("Cannot open channel settings: no active channel");
                 return;
             }

@@ -6,7 +6,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use chatter_linux::domain::ids::AttachmentId;
 use chatter_linux::state::chat_state::PendingAttachment;
-use chatter_linux::state::ChatState;
+use chatter_linux::state::{ActiveConversation, ChatState};
 
 use crate::bin_ui::converters::pending_attachment_to_slint;
 use crate::{MainWindow, PendingAttachmentData};
@@ -97,33 +97,15 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
         let chat_state = chat_state.clone();
         tracing::debug!("Attachment clicked");
 
-        // IMPORTANT: Capture UI state BEFORE spawning async task
-        // Slint windows can only be accessed from the main UI thread
-        let has_active_channel = chat_state.get().active_channel_id.is_some();
-        let (selected_dm_id, selected_private_group_id) = weak
-            .upgrade()
-            .map(|w| {
-                (
-                    w.get_selected_dm_id().to_string(),
-                    w.get_selected_private_group_id().to_string(),
-                )
-            })
-            .unwrap_or_default();
-
-        let has_active_dm = !selected_dm_id.is_empty();
-        let has_active_private_group = !selected_private_group_id.is_empty();
+        // Check if we have an active conversation BEFORE opening file picker
+        let conversation = chat_state.active_conversation();
 
         tracing::info!(
-            has_active_channel = has_active_channel,
-            has_active_dm = has_active_dm,
-            selected_dm_id = %selected_dm_id,
-            has_active_private_group = has_active_private_group,
-            selected_private_group_id = %selected_private_group_id,
+            conversation = ?conversation,
             "Attachment clicked - checking context"
         );
 
-        // Check if we have an active conversation BEFORE opening file picker
-        if !has_active_channel && !has_active_dm && !has_active_private_group {
+        if matches!(conversation, ActiveConversation::None) {
             tracing::warn!("Cannot upload: no active conversation selected");
             return;
         }

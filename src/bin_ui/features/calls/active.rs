@@ -10,6 +10,7 @@ use chatter_linux::app::UIContext;
 #[cfg(not(target_os = "android"))]
 use chatter_linux::calls::ScreenCapture;
 use chatter_linux::inbox::handlers::DomainEvent;
+use chatter_linux::state::ActiveConversation;
 use crate::MainWindow;
 
 use super::call_history::create_call_history_message;
@@ -115,6 +116,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let channel_service = ui_ctx.channel_service.clone();
     let user_service = ui_ctx.user_service.clone();
     let anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let chat_state = ui_ctx.chat_state.clone();
 
     // End call
     window.on_call_end({
@@ -125,6 +127,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let channel_service = channel_service.clone();
         let user_service = user_service.clone();
         let anon_dm_service = anon_dm_service.clone();
+        let chat_state = chat_state.clone();
 
         move || {
             tracing::info!("End call");
@@ -137,6 +140,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let channel_service = channel_service.clone();
             let user_service = user_service.clone();
             let anon_dm_service_clone = anon_dm_service.clone();
+            let conversation = chat_state.active_conversation();
             
             // Get call info before the async block
             let (call_id_str, is_anonymous) = if let Some(w) = weak.upgrade() {
@@ -204,10 +208,9 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     }
 
                     // Push call bubble to UI if viewing this conversation
-                    let conv_id_str = format!("anon_dm:{}", pending_anon.conversation_id);
-                    if let Some(w) = weak.upgrade() {
-                        let selected_dm = w.get_selected_dm_id().to_string();
-                        if selected_dm == conv_id_str {
+                    let is_viewing = matches!(conversation, ActiveConversation::AnonDm(id) if id == pending_anon.conversation_id);
+                    if is_viewing {
+                        if let Some(w) = weak.upgrade() {
                             let messages = w.get_messages();
                             if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
                                 let msg_item = crate::MessageItemData {
@@ -250,8 +253,8 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         }
                     }
 
-                        // State already consumed by take_pending_anon_call
-                        return; // Don't process regular call logic
+                    // State already consumed by take_pending_anon_call
+                    return; // Don't process regular call logic
                     }
                 }
                 

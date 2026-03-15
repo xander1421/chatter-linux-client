@@ -9,7 +9,7 @@ use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 use slint::ComponentHandle;
 use winit::event::WindowEvent;
 
-use chatter_linux::state::ChatState;
+use chatter_linux::state::{ActiveConversation, ChatState};
 
 use super::attachments::process_and_add_file;
 use crate::MainWindow;
@@ -54,18 +54,7 @@ fn handle_dropped_file(
     tracing::info!("File dropped: {:?}", path);
 
     // Check if we have an active conversation
-    let has_active_channel = chat_state.get().active_channel_id.is_some();
-
-    let (has_active_dm, has_active_private_group) = weak
-        .upgrade()
-        .map(|w| {
-            let dm_id = w.get_selected_dm_id().to_string();
-            let pg_id = w.get_selected_private_group_id().to_string();
-            (!dm_id.is_empty(), !pg_id.is_empty())
-        })
-        .unwrap_or((false, false));
-
-    if !has_active_channel && !has_active_dm && !has_active_private_group {
+    if matches!(chat_state.active_conversation(), ActiveConversation::None) {
         tracing::warn!("File dropped but no active conversation - ignoring");
         return;
     }
