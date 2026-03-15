@@ -208,20 +208,14 @@ pub async fn handle_inbox_event(
             dm::handle_dm_unread_count(weak_window, channel_id, peer_id, unread_count);
         }
         InboxEvent::DmTyping { peer_id, action } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                action,
-                action_name = if action == 1 { "STARTED" } else { "STOPPED" },
-                "INBOX_EVENT: Received DmTyping event, calling handler"
-            );
-            dm::handle_dm_typing(weak_window, peer_id, action);
+            unified_actions::handle_typing(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), action == 1);
         }
         InboxEvent::DmReceipt {
             peer_id,
             receipt_type,
             timestamps,
         } => {
-            dm::handle_dm_receipt(weak_window, peer_id, receipt_type, timestamps);
+            unified_actions::handle_receipt(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), receipt_type, timestamps);
         }
         InboxEvent::DmReaction {
             peer_id,
@@ -230,7 +224,7 @@ pub async fn handle_inbox_event(
             target_sent_timestamp,
             ..
         } => {
-            dm::handle_dm_reaction(weak_window, peer_id, emoji, remove, target_sent_timestamp);
+            unified_actions::handle_reaction(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), emoji, remove, target_sent_timestamp);
         }
         InboxEvent::DmPin {
             peer_id,
@@ -238,27 +232,29 @@ pub async fn handle_inbox_event(
             unpin,
             ..
         } => {
-            dm::handle_dm_pin(weak_window, peer_id, ui_ctx.pinned_state.clone(), target_sent_timestamp, unpin);
+            unified_actions::handle_pin(weak_window, &ui_ctx.chat_state, &ui_ctx.pinned_state, unified_actions::EventSource::Peer(peer_id), target_sent_timestamp, !unpin);
         }
         InboxEvent::DmEdit {
             peer_id,
             target_sent_timestamp,
             new_body,
         } => {
-            dm::handle_dm_edit(weak_window, peer_id, target_sent_timestamp, new_body);
+            unified_actions::handle_edit(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), target_sent_timestamp, new_body);
         }
         InboxEvent::DmDeleteForMe {
             conversation_id,
             target_sent_timestamp,
             ..
         } => {
-            dm::handle_dm_delete_for_me(weak_window, conversation_id, target_sent_timestamp);
+            if let Ok(channel_id) = conversation_id.parse() {
+                unified_actions::handle_delete(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Channel(channel_id), target_sent_timestamp);
+            }
         }
         InboxEvent::DmDeleteForEveryone {
             peer_id,
             target_sent_timestamp,
         } => {
-            dm::handle_dm_delete_for_everyone(weak_window, peer_id, target_sent_timestamp);
+            unified_actions::handle_delete(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), target_sent_timestamp);
         }
         InboxEvent::ChannelTyping {
             channel_id,
