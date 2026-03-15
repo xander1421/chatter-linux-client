@@ -7,81 +7,19 @@
 //! Similar to anonymous groups (NDSS'21 style) but for 1:1 conversations.
 
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
 
-use super::{UserId, ChannelId};
+use super::UserId;
+use super::anon_primitives::{AnonId, AnonMessageId};
+
+/// Phantom marker for DM types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DmMarker;
 
 /// Unique identifier for an anonymous DM conversation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AnonDmId(Uuid);
+pub type AnonDmId = AnonId<DmMarker>;
 
-impl AnonDmId {
-    /// Create a new random conversation ID.
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-
-    /// Create from a UUID.
-    pub fn from_uuid(uuid: Uuid) -> Self {
-        Self(uuid)
-    }
-
-    /// Create from raw bytes (16 bytes).
-    pub fn from_bytes(bytes: [u8; 16]) -> Self {
-        Self(Uuid::from_bytes(bytes))
-    }
-
-    /// Try to create from a byte slice.
-    pub fn try_from_slice(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != 16 {
-            return None;
-        }
-        let mut arr = [0u8; 16];
-        arr.copy_from_slice(bytes);
-        Some(Self::from_bytes(arr))
-    }
-
-    /// Get the underlying UUID.
-    pub fn as_uuid(&self) -> &Uuid {
-        &self.0
-    }
-
-    /// Get as raw bytes.
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        self.0.as_bytes()
-    }
-
-    /// Get as byte vector.
-    pub fn to_vec(&self) -> Vec<u8> {
-        self.0.as_bytes().to_vec()
-    }
-}
-
-impl Default for AnonDmId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for AnonDmId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::str::FromStr for AnonDmId {
-    type Err = uuid::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(Uuid::parse_str(s)?))
-    }
-}
-
-impl From<AnonDmId> for ChannelId {
-    fn from(anon_dm_id: AnonDmId) -> Self {
-        ChannelId::from_uuid(anon_dm_id.0)
-    }
-}
+/// Unique identifier for an anonymous DM message.
+pub type AnonDmMessageId = AnonMessageId<DmMarker>;
 
 /// Status of an anonymous DM conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -262,39 +200,6 @@ impl AnonDmMailbox {
     /// Check if this mailbox has expired.
     pub fn is_expired(&self) -> bool {
         Utc::now() > self.expires_at
-    }
-}
-
-/// Unique identifier for an anonymous DM message.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AnonDmMessageId(String);
-
-impl AnonDmMessageId {
-    /// Create a new message ID.
-    pub fn new() -> Self {
-        Self(Uuid::new_v4().to_string())
-    }
-
-    /// Create from a string.
-    pub fn from_string(s: String) -> Self {
-        Self(s)
-    }
-
-    /// Get the ID as a string.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for AnonDmMessageId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for AnonDmMessageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
     }
 }
 

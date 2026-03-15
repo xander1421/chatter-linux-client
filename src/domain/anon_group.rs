@@ -6,80 +6,18 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::ids::ChannelId;
 use super::UserId;
+use super::anon_primitives::{AnonId, AnonMessageId};
+
+/// Phantom marker for Group types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct GroupMarker;
 
 /// Unique identifier for an anonymous group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct AnonGroupId(Uuid);
+pub type AnonGroupId = AnonId<GroupMarker>;
 
-impl AnonGroupId {
-    /// Create a new random group ID.
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-
-    /// Create from a UUID.
-    pub fn from_uuid(uuid: Uuid) -> Self {
-        Self(uuid)
-    }
-
-    /// Create from raw bytes (16 bytes).
-    pub fn from_bytes(bytes: [u8; 16]) -> Self {
-        Self(Uuid::from_bytes(bytes))
-    }
-
-    /// Try to create from a byte slice.
-    pub fn try_from_slice(bytes: &[u8]) -> Option<Self> {
-        if bytes.len() != 16 {
-            return None;
-        }
-        let mut arr = [0u8; 16];
-        arr.copy_from_slice(bytes);
-        Some(Self::from_bytes(arr))
-    }
-
-    /// Get the underlying UUID.
-    pub fn as_uuid(&self) -> &Uuid {
-        &self.0
-    }
-
-    /// Get as raw bytes.
-    pub fn as_bytes(&self) -> &[u8; 16] {
-        self.0.as_bytes()
-    }
-
-    /// Get as byte vector.
-    pub fn to_vec(&self) -> Vec<u8> {
-        self.0.as_bytes().to_vec()
-    }
-}
-
-impl Default for AnonGroupId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for AnonGroupId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::str::FromStr for AnonGroupId {
-    type Err = uuid::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(Uuid::parse_str(s)?))
-    }
-}
-
-impl From<AnonGroupId> for ChannelId {
-    fn from(anon_group_id: AnonGroupId) -> Self {
-        ChannelId::from_uuid(anon_group_id.0)
-    }
-}
+/// Unique identifier for an anonymous group message.
+pub type AnonGroupMessageId = AnonMessageId<GroupMarker>;
 
 /// Status of an anonymous group (local view).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -474,39 +412,6 @@ impl AnonGroupPending {
 // ============================================================================
 // AnonGroupMessage
 // ============================================================================
-
-/// Unique identifier for an anonymous group message.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AnonGroupMessageId(String);
-
-impl AnonGroupMessageId {
-    /// Create a new message ID.
-    pub fn new() -> Self {
-        Self(uuid::Uuid::new_v4().to_string())
-    }
-
-    /// Create from a string.
-    pub fn from_string(s: String) -> Self {
-        Self(s)
-    }
-
-    /// Get the ID as a string.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl Default for AnonGroupMessageId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Display for AnonGroupMessageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
 
 use crate::domain::message::ReactionCount;
 
