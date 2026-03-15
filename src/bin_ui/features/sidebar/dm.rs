@@ -54,6 +54,23 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         // Clear inline GIF animations to free memory
         crate::bin_ui::gif_state::clear_inline_gifs();
 
+        // Look up peer_id BEFORE spawning (we're on UI thread here)
+        let peer_id_for_dm = if !dm_id_str.starts_with("anon_dm:") {
+            weak.upgrade().and_then(|w| {
+                let conversations = w.get_dm_conversations();
+                for i in 0..conversations.row_count() {
+                    if let Some(item) = conversations.row_data(i) {
+                        if item.channel_id.as_str() == dm_id_str {
+                            return item.user_id.to_string().parse::<chatter_linux::domain::UserId>().ok();
+                        }
+                    }
+                }
+                None
+            })
+        } else {
+            None
+        };
+
         tokio::spawn(async move {
             // dm_id is now the channel_id directly (from DMListItemData.channel_id)
             let weak_loading = weak.clone();
@@ -136,8 +153,13 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
             // Update chat state
             chat_state.set_active_channel(channel_id);
-            // Regular DMs use server-managed ChannelIds (peer_id resolved at send time)
-            chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::Channel(channel_id));
+            if let Some(peer_id) = peer_id_for_dm {
+                chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::Dm { channel_id, peer_id });
+            } else {
+                // Fallback if peer lookup fails (shouldn't happen for real DMs)
+                chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::Channel(channel_id));
+                tracing::warn!(channel_id = %channel_id, "Could not resolve peer_id for DM — falling back to Channel");
+            }
 
             // Get current user ID for is_own detection
             let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string());

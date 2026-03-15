@@ -23,6 +23,7 @@ use chatter_linux::state::chat_state::PendingAttachment;
 use crate::MainWindow;
 
 /// Look up the peer's user_id from a DM channel_id using the conversations model.
+#[allow(dead_code)]
 pub fn get_peer_id_from_dm_channel(window: &MainWindow, channel_id: &str) -> Option<String> {
     let conversations = window.get_dm_conversations();
     let count = conversations.row_count();
