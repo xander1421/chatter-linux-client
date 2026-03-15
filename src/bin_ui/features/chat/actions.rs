@@ -99,28 +99,15 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<UIContext>)
                 }
             };
 
-            // Signal-style lookup with conversation-aware routing (now in background)
-            let preview = match conversation {
-                ActiveConversation::AnonDm(anon_dm_id) => {
-                    match ui_ctx.anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => chatter_linux::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or_default()),
-                        _ => "Message".to_string(),
-                    }
-                }
-                ActiveConversation::AnonGroup(anon_group_id) => {
-                    match ui_ctx.anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => chatter_linux::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or_default()),
-                        _ => "Message".to_string(),
-                    }
-                }
-                ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
-                    match ui_ctx.message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => chatter_linux::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or("").to_string()),
-                        _ => "Message".to_string(),
-                    }
-                }
-                ActiveConversation::None => return,
-            };
+            // Lookup message text via ConversationHandle (polymorphic across all types)
+            let handle = chatter_linux::services::conversation::ConversationHandle::new(
+                conversation, ui_ctx.clone(),
+            );
+            let preview = handle.get_message_text(&target_sender_id, target_sent_timestamp)
+                .ok()
+                .flatten()
+                .map(|t| chatter_linux::services::gateway::shared::truncate_preview(&t))
+                .unwrap_or_else(|| "Message".to_string());
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {

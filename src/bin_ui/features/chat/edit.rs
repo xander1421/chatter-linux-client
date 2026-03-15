@@ -21,9 +21,7 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     window.on_edit_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
-        let message_service = ui_ctx.message_service.clone();
-        let anon_dm_service = ui_ctx.anon_dm_service.clone();
-        let anon_group_service = ui_ctx.anon_group_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
         let conversation = ui_ctx.chat_state.active_conversation();
@@ -40,27 +38,13 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 Err(_) => return,
             };
 
-            // Get message text based on conversation type (now in background)
-            let text = match conversation {
-                ActiveConversation::AnonDm(anon_dm_id) => {
-                    match anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg.as_text(),
-                        _ => return,
-                    }
-                }
-                ActiveConversation::AnonGroup(anon_group_id) => {
-                    match anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg.as_text(),
-                        _ => return,
-                    }
-                }
-                ActiveConversation::Channel(_) | ActiveConversation::Dm { .. } => {
-                    match message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg.as_text().map(|s| s.to_string()),
-                        _ => return,
-                    }
-                }
-                ActiveConversation::None => return,
+            // Get message text via ConversationHandle (polymorphic across all types)
+            let handle = chatter_linux::services::conversation::ConversationHandle::new(
+                conversation, ui_ctx.clone(),
+            );
+            let text = match handle.get_message_text(&target_sender_id, target_sent_timestamp) {
+                Ok(t) => t,
+                Err(_) => return,
             };
 
             if let Some(text) = text {
