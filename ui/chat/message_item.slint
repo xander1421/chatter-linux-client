@@ -338,6 +338,11 @@ export component MessageItem inherits Rectangle {
                 // Limit bubble width to 70% of container
                 max-width: root.width * 0.7;
 
+                // Wrapper for bubble + absolutely positioned reactions
+                Rectangle {
+                    width: bubble.width;
+                    height: bubble.height + (root.has-reactions ? 11px : 0);
+
                 bubble := Rectangle {
                     property <bool> bubble-hovered: bubble-touch.has-hover;
 
@@ -828,51 +833,52 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
-                        // Reactions row - bottom-left of bubble
-                        if root.has-reactions: HorizontalLayout {
-                            alignment: start;
+                    }
+                }
 
-                            Rectangle {
-                                height: 22px;
-                                width: reactions-row.preferred-width + 8px;
-                                background: Colors.surface-hover;
-                                border-radius: 11px;
-                                border-width: 1px;
-                                border-color: Colors.text-muted.with-alpha(0.15);
+                // Reactions pill - straddling bubble's bottom corner
+                // Half inside / half outside on both X and Y
+                if root.has-reactions: Rectangle {
+                    height: 22px;
+                    width: reactions-row.preferred-width + 8px;
+                    background: Colors.surface-hover;
+                    border-radius: 11px;
+                    border-width: 1px;
+                    border-color: Colors.text-muted.with-alpha(0.15);
+                    x: root.is-own ? bubble.width - self.width / 2 : -self.width / 2;
+                    y: bubble.height - self.height / 2;
 
-                                reactions-row := HorizontalLayout {
-                                    padding-left: 6px;
-                                    padding-right: 6px;
-                                    spacing: 6px;
-                                    alignment: center;
+                    reactions-row := HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        spacing: 6px;
+                        alignment: center;
 
-                                    for reaction in root.reactions: HorizontalLayout {
-                                        spacing: 2px;
-                                        alignment: center;
+                        for reaction in root.reactions: HorizontalLayout {
+                            spacing: 2px;
+                            alignment: center;
 
-                                        Text {
-                                            text: reaction.emoji;
-                                            font-size: 12px;
-                                            vertical-alignment: center;
-                                        }
+                            Text {
+                                text: reaction.emoji;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
 
-                                        if reaction.count > 1: Text {
-                                            text: reaction.count;
-                                            color: Colors.text-secondary;
-                                            font-size: 10px;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-                                }
-
-                                TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
-                                }
+                            if reaction.count > 1: Text {
+                                text: reaction.count;
+                                color: Colors.text-secondary;
+                                font-size: 10px;
+                                vertical-alignment: center;
                             }
                         }
                     }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
+                    }
                 }
+                } // end wrapper
 
                 // Thread replies indicator (below bubble)
                 if root.reply-count > 0: HorizontalLayout {

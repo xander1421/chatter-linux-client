@@ -88,6 +88,9 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     }
                 };
 
+                // Set typed active conversation
+                chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::AnonDm(anon_dm_id));
+
                 // Load pinned messages for this anon DM
                 let (msg_ids, preview) = match anon_dm_service.list_pinned(&anon_dm_id) {
                     Ok(pinned) if !pinned.is_empty() => {
@@ -133,6 +136,8 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
             // Update chat state
             chat_state.set_active_channel(channel_id);
+            // Regular DMs use server-managed ChannelIds (peer_id resolved at send time)
+            chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::Channel(channel_id));
 
             // Get current user ID for is_own detection
             let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string());

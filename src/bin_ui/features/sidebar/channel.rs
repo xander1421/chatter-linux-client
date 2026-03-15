@@ -80,6 +80,7 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
 
             // Update chat state
             chat_state.set_active_channel(channel_id);
+            chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::Channel(channel_id));
 
             // Get current user ID from user service
             let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string());

@@ -198,6 +198,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
     let attachment_service = ui_ctx.attachment_service.clone();
     let auth_state = ui_ctx.auth_state.clone();
     let pinned_state = ui_ctx.pinned_state.clone();
+    let chat_state = ui_ctx.chat_state.clone();
     let weak_window = window.as_weak();
 
     window.on_private_group_selected(move |group_id: SharedString| {
@@ -208,6 +209,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
         let attachment_service = attachment_service.clone();
         let auth_state = auth_state.clone();
         let pinned_state = pinned_state.clone();
+        let chat_state = chat_state.clone();
 
         // Stop any playing audio when switching
         stop_audio_playback();
@@ -222,6 +224,9 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
                     return;
                 }
             };
+
+            // Set typed active conversation
+            chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::AnonGroup(group_id));
 
             // Load pinned messages for this group from DB
             let (msg_ids, preview) = match anon_group_service.list_pinned(&group_id) {

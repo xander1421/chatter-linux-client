@@ -1,0 +1,38 @@
+Setting up local Android build environment...
+info: component rust-std for target aarch64-linux-android is up to date
+info: component rust-std for target armv7-linux-androideabi is up to date
+info: component rust-std for target i686-linux-android is up to date
+info: component rust-std for target x86_64-linux-android is up to date
+Starting local Android Build for ARM64...
+Already configuring "src/main.rs"
+Already configuring "src/bin/test_thumbnail.rs"
+Using package `chatter-linux` in `/home/alex/Documents/chatter/linux-client/Cargo.toml`
+ Downloading crates ...
+  Downloaded jni-sys-macros v0.4.1
+  Downloaded jni-macros v0.22.2
+  Downloaded jni-sys v0.4.1
+  Downloaded jni v0.22.3
+  Downloaded simd_cesu8 v1.1.1
+   Compiling same-file v1.0.6
+   Compiling jni-macros v0.22.2
+   Compiling simdutf8 v0.1.5
+   Compiling jni-sys-macros v0.4.1
+   Compiling android-activity v0.5.2
+   Compiling android-activity v0.6.0 (https://github.com/rust-mobile/android-activity?branch=main#43de2770)
+   Compiling i-slint-backend-selector v1.15.1
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `i_slint_backend_android_activity`
+   --> /home/alex/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/i-slint-backend-selector-1.15.1/api.rs:396:13
+    |
+396 |             i_slint_backend_android_activity::set_requested_graphics_api(
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `i_slint_backend_android_activity`
+    |
+    = help: if you wanted to use a crate named `i_slint_backend_android_activity`, use `cargo add i_slint_backend_android_activity` to add it to your `Cargo.toml`
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `i-slint-backend-selector` (lib) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+Error: Command `AR_aarch64-linux-android=/home/alex/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar CARGO_ENCODED_RUSTFLAGS=-Clink-arg=--target=aarch64-linux-android23\u{1f}-L\u{1f}/home/alex/Documents/chatter/linux-client/target/cargo-apk-temp-extra-link-libraries CARGO_TARGET_AARCH64_LINUX_ANDROID_AR=/home/alex/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=/home/alex/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang CC_aarch64-linux-android=/home/alex/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang CFLAGS_aarch64-linux-android=--target=aarch64-linux-android23 CXXFLAGS_aarch64-linux-android=--target=aarch64-linux-android23 CXX_aarch64-linux-android=/home/alex/Android/Sdk/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++ cargo build --target aarch64-linux-android --release --features mobile` had a non-zero exit code.
+---------------------------------------------------
+Build complete! Your APK should be located at:
+./target/release/apk/chatter-linux.apk
+---------------------------------------------------

@@ -5,8 +5,63 @@
 use std::path::PathBuf;
 use tokio::sync::broadcast;
 
-use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
+use crate::domain::anon_dm::AnonDmId;
+use crate::domain::anon_group::AnonGroupId;
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use crate::state::store::Store;
+
+// ============================================================================
+// Active Conversation (typed, replaces string parsing)
+// ============================================================================
+
+/// The currently active conversation, fully typed.
+///
+/// Replaces the pattern of checking `get_selected_dm_id()` string prefixes
+/// and `get_selected_private_group_id().is_empty()` scattered across 109 sites.
+/// Set once at sidebar selection time, read everywhere.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ActiveConversation {
+    /// No conversation selected.
+    None,
+    /// A server-managed channel (public/private).
+    Channel(ChannelId),
+    /// A server-managed DM (Signal Protocol, pairwise).
+    Dm {
+        channel_id: ChannelId,
+        peer_id: UserId,
+    },
+    /// An anonymous DM (NDSS'21 mailbox, pairwise).
+    AnonDm(AnonDmId),
+    /// An anonymous group (NDSS'21 mailbox, fanout).
+    AnonGroup(AnonGroupId),
+}
+
+impl Default for ActiveConversation {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl ActiveConversation {
+    /// Get the ChannelId for this conversation (if applicable).
+    ///
+    /// Channels and DMs have server-assigned ChannelIds.
+    /// Anon types can be converted to synthetic ChannelIds.
+    pub fn channel_id(&self) -> Option<ChannelId> {
+        match self {
+            Self::Channel(id) => Some(*id),
+            Self::Dm { channel_id, .. } => Some(*channel_id),
+            Self::AnonDm(id) => Some((*id).into()),
+            Self::AnonGroup(id) => Some((*id).into()),
+            Self::None => None,
+        }
+    }
+
+    /// Check if any conversation is active.
+    pub fn is_active(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
 
 /// Maximum number of concurrent thread panels allowed.
 const MAX_OPEN_THREADS: usize = 3;
@@ -105,6 +160,8 @@ impl ThreadPanel {
 pub struct ChatStateData {
     /// Currently selected channel ID.
     pub active_channel_id: Option<ChannelId>,
+    /// Typed active conversation (replaces string-based dispatch).
+    pub active_conversation: ActiveConversation,
     /// Open thread panels (max 3 concurrent).
     pub open_threads: Vec<ThreadPanel>,
     /// Index of the focused thread panel (0, 1, or 2), if any.
@@ -190,6 +247,22 @@ impl ChatState {
             state.active_channel_id = None;
             state.active_thread_index = None;
         });
+    }
+
+    /// Set the typed active conversation.
+    ///
+    /// Also updates `active_channel_id` for backward compatibility.
+    pub fn set_active_conversation(&self, conversation: ActiveConversation) {
+        self.store.update(|state| {
+            state.active_channel_id = conversation.channel_id();
+            state.active_conversation = conversation;
+            state.active_thread_index = None;
+        });
+    }
+
+    /// Get the current active conversation.
+    pub fn active_conversation(&self) -> ActiveConversation {
+        self.store.get().active_conversation
     }
 
     /// Open a thread panel.
