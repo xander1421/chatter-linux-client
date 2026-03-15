@@ -112,17 +112,17 @@ pub enum CallChannelId {
 }
 
 /// Quote/reply context for channel DM outgoing messages.
+/// Quote/reply context for outgoing messages (all conversation types).
 pub struct QuoteIntent {
     pub author_id: UserId,
     pub timestamp: u64,
-    pub preview_text: String,
+    /// Preview text for the quoted message. None for anon paths where
+    /// the recipient already has the message locally.
+    pub preview_text: Option<String>,
 }
 
-/// Quote/reply context for anonymous (DM and group) outgoing messages.
-pub struct AnonQuoteIntent {
-    pub author_id: UserId,
-    pub timestamp: u64,
-}
+/// Alias for backward compatibility.
+pub type AnonQuoteIntent = QuoteIntent;
 
 // =============================================================================
 // Result
@@ -339,6 +339,26 @@ pub struct OutgoingServices<'a> {
     pub anon_group_service: Option<&'a AnonGroupService>,
 }
 
+impl<'a> OutgoingServices<'a> {
+    /// Build from UIContext — fills all service references, eliminating
+    /// the per-branch Some/None assembly in send_message.rs.
+    ///
+    /// `group_fanout` is optional because it's a post-boot service.
+    pub fn from_ctx(
+        ctx: &'a crate::app::UIContext,
+        group_fanout: Option<&'a GroupFanout>,
+    ) -> Self {
+        Self {
+            message_service: &ctx.message_service,
+            mailbox_manager: &ctx.mailbox_manager,
+            user_service: Some(&ctx.user_service),
+            group_fanout,
+            anon_dm_service: Some(&ctx.anon_dm_service),
+            anon_group_service: Some(&ctx.anon_group_service),
+        }
+    }
+}
+
 impl SendResult {
     fn empty() -> Self {
         Self {
@@ -393,7 +413,7 @@ async fn route_channel_dm(
                 path_refs,
                 &q.author_id,
                 q.timestamp,
-                &q.preview_text,
+                q.preview_text.as_deref().unwrap_or(""),
                 mailbox_manager,
             )
             .await?

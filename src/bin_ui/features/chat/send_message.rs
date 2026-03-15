@@ -160,6 +160,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         Some(chatter_linux::services::gateway::AnonQuoteIntent {
                             author_id: reply.sender_id,
                             timestamp: reply.timestamp,
+                            preview_text: None,
                         })
                     } else {
                         None
@@ -269,7 +270,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         Some(chatter_linux::services::gateway::QuoteIntent {
                             author_id: reply.sender_id,
                             timestamp: reply.timestamp,
-                            preview_text,
+                            preview_text: Some(preview_text),
                         })
                     } else {
                         None
@@ -384,6 +385,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         Some(chatter_linux::services::gateway::AnonQuoteIntent {
                             author_id: reply.sender_id,
                             timestamp: reply.timestamp,
+                            preview_text: None,
                         })
                     } else {
                         None
