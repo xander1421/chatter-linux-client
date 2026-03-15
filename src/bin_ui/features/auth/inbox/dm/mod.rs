@@ -13,16 +13,7 @@ mod download;
 mod friends;
 mod receive;
 
-// Re-export all public handlers
-pub use actions::{
-    handle_dm_delete_for_everyone,
-    handle_dm_delete_for_me,
-    handle_dm_edit,
-    handle_dm_pin,
-    handle_dm_reaction,
-    handle_dm_receipt,
-    handle_dm_typing,
-};
+// DM action handlers now unified in unified_actions.rs
 pub use download::auto_download_attachments;
 pub use friends::handle_friend_accepted;
 pub use receive::{handle_dm_received, handle_dm_unread_count};
