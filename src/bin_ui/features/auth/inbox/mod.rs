@@ -28,6 +28,7 @@ pub mod dm;
 pub mod domain_handler;
 mod pin_persistence;
 pub mod typing;
+pub(crate) mod unified_actions;
 pub mod utils;
 
 pub use anon_group_events::spawn_anon_group_event_handler;
@@ -57,7 +58,6 @@ use crate::bin_ui::features::chat::{send_dm_delivery_receipt, send_channel_deliv
 use crate::MainWindow;
 
 // Re-export public items
-pub use channel_handlers::update_channel_sidebar_preview;
 pub use utils::update_reaction_summary;
 
 /// Handle inbox events and update UI accordingly.
@@ -1425,7 +1425,13 @@ pub async fn handle_inbox_event(
                                         }
 
                                         // Update sidebar preview and move to top
-                                        update_private_group_sidebar(&w, &group_id_str, &text_clone, &chrono::Utc::now().format("%H:%M").to_string());
+                                        crate::bin_ui::features::sidebar::update_sidebar_preview(
+                                            &w,
+                                            chatter_linux::state::ActiveConversation::AnonGroup(anon_group_id),
+                                            &text_clone,
+                                            &chrono::Utc::now().format("%H:%M").to_string(),
+                                            true,
+                                        );
                                     }
                                 });
                             }
@@ -1779,40 +1785,3 @@ pub async fn handle_inbox_event(
     }
 }
 
-/// Update the private group sidebar preview and move it to the top.
-fn update_private_group_sidebar(
-    window: &MainWindow,
-    group_id_str: &str,
-    preview: &str,
-    timestamp_str: &str,
-) {
-    let groups = window.get_private_groups();
-    let mut group_vec: Vec<crate::PrivateGroupListItemData> = Vec::new();
-    let mut updated_item = None;
-
-    // Find and update the group entry
-    for i in 0..groups.row_count() {
-        if let Some(group) = groups.row_data(i) {
-            if group.group_id.as_str() == group_id_str {
-                let mut updated = group.clone();
-                let truncated = if preview.chars().count() > 50 {
-                    let truncated: String = preview.chars().take(47).collect();
-                    format!("{}...", truncated)
-                } else {
-                    preview.to_string()
-                };
-                updated.last_message = truncated.into();
-                updated.timestamp = timestamp_str.into();
-                updated_item = Some(updated);
-            } else {
-                group_vec.push(group);
-            }
-        }
-    }
-
-    if let Some(item) = updated_item {
-        // Move to top
-        group_vec.insert(0, item);
-        window.set_private_groups(slint::ModelRc::new(slint::VecModel::from(group_vec)));
-    }
-}
