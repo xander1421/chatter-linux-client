@@ -372,6 +372,14 @@ export component MessageItem inherits Rectangle {
 
                     bubble-touch := TouchArea {
                         mouse-cursor: pointer;
+                        pointer-event(event) => {
+                            // Right-click opens context menu at cursor position
+                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                                root.more-clicked(root.sender-id, root.timestamp-ns,
+                                    self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y);
+                            }
+                        }
                     }
 
                     bubble-content := VerticalLayout {
@@ -845,7 +853,7 @@ export component MessageItem inherits Rectangle {
                     border-radius: 11px;
                     border-width: 1px;
                     border-color: Colors.text-muted.with-alpha(0.15);
-                    x: root.is-own ? bubble.width - self.width / 2 : -self.width / 2;
+                    x: root.is-own ? -self.width / 2 : bubble.width - self.width / 2;
                     y: bubble.height - self.height / 2;
 
                     reactions-row := HorizontalLayout {

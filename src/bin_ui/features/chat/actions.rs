@@ -139,7 +139,6 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
         // Move service lookups and clipboard to background thread
         std::thread::spawn(move || {
-            // Parse sender_id for Signal-style lookup
             let target_sender_id: UserId = match sender_id_str.parse() {
                 Ok(id) => id,
                 Err(e) => {
@@ -147,8 +146,6 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     return;
                 }
             };
-
-            // Parse timestamp for Signal-style lookup
             let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
                 Ok(ts) => ts,
                 Err(e) => {
@@ -157,62 +154,18 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            // Signal-style lookup with conversation-aware routing (now in background)
-            let text: Option<String> = match conversation {
-                ActiveConversation::AnonDm(anon_dm_id) => {
-                    match ui_ctx.anon_dm_service.get_message_by_sender_timestamp(&anon_dm_id, &target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg.as_text(),
-                        _ => {
-                            tracing::error!("Anon DM message not found for copy");
-                            return;
-                        }
-                    }
-                }
-                ActiveConversation::AnonGroup(anon_group_id) => {
-                    match ui_ctx.anon_group_service.get_message_by_sender_timestamp(&anon_group_id, &target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg.as_text(),
-                        _ => {
-                            tracing::error!("Anon group message not found for copy");
-                            return;
-                        }
-                    }
-                }
-                ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
-                    // Regular message lookup
-                    let message = match ui_ctx.message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                        Ok(Some(msg)) => msg,
-                        Ok(None) => {
-                            tracing::error!(
-                                sender_id = %target_sender_id,
-                                timestamp = target_sent_timestamp,
-                                "Message not found for copy (Signal-style lookup)"
-                            );
-                            return;
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to look up message for copy");
-                            return;
-                        }
-                    };
-
-                    // Extract text from message content
-                    use chatter_linux::domain::message::MessageContent;
-                    match &message.content {
-                        MessageContent::Text(s) => Some(s.clone()),
-                        MessageContent::Mixed(m) => m.text.clone(),
-                        _ => {
-                            tracing::debug!("Cannot copy non-text message content");
-                            return;
-                        }
-                    }
-                }
-                ActiveConversation::None => return,
-            };
-
-            let text = match text {
-                Some(t) => t,
-                None => {
+            // Lookup message text via ConversationHandle (polymorphic across all types)
+            let handle = chatter_linux::services::conversation::ConversationHandle::new(
+                conversation, ui_ctx.clone(),
+            );
+            let text = match handle.get_message_text(&target_sender_id, target_sent_timestamp) {
+                Ok(Some(t)) => t,
+                Ok(None) => {
                     tracing::debug!("No text content to copy");
+                    return;
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to look up message for copy");
                     return;
                 }
             };

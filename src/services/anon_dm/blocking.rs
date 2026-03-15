@@ -55,8 +55,8 @@ impl AnonDmService {
     // Rate Limiting
     // ========================================================================
 
-    /// Default rate limit: 30 messages per minute per conversation.
-    const RATE_LIMIT_MESSAGES: u32 = 30;
+    /// Default rate limit: 100 messages per minute per conversation.
+    const RATE_LIMIT_MESSAGES: u32 = 100;
     /// Default rate limit window: 1 minute.
     const RATE_LIMIT_WINDOW: chrono::Duration = chrono::Duration::minutes(1);
 

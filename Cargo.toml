@@ -89,7 +89,7 @@ keyring = { version = "3", default-features = false }  # Secret Service on Linux
 notify-rust = { version = "4", optional = true }  # Desktop notifications (desktop only)
 directories = "6"                     # XDG directories (cross-platform)
 dirs = "5"                            # Home directory detection
-arboard = { version = "3", optional = true }  # Clipboard (desktop only)
+arboard = { version = "3", features = ["wayland-data-control"], optional = true }  # Clipboard (desktop only)
 
 # ============================================================================
 # Serialization
