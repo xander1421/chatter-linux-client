@@ -370,6 +370,22 @@ impl<'a> OutgoingServices<'a> {
 }
 
 impl SendResult {
+    /// Get a unified message ID string (works for all conversation types).
+    pub fn message_id_string(&self) -> String {
+        if let Some(ref msg) = self.message {
+            msg.id.to_string()
+        } else if let Some(ref anon_id) = self.anon_message_id {
+            anon_id.clone()
+        } else {
+            String::new()
+        }
+    }
+
+    /// Check if this was a text-only send (no attachments).
+    pub fn is_text_only(&self) -> bool {
+        self.attachment_ids.is_empty()
+    }
+
     fn empty() -> Self {
         Self {
             sent_at: crate::util::time::TimestampNanos::now().as_u64(),
