@@ -12,5 +12,3 @@ pub use assertions::*;
 pub use config::*;
 pub use fixtures::*;
 
-// Re-export Slint types for UI tests
-slint::include_modules!();
