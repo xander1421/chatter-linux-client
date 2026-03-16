@@ -3,12 +3,12 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, SharedString};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::UserId;
 
-use crate::MainWindow;
+use crate::{ForwardTarget, MainWindow};
 
 /// Wire reply-message callback from context menu.
 /// Gets sender name and preview from the UI message model directly.
@@ -111,6 +111,53 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<UIContext>)
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     w.set_forward_message_preview(preview.into());
+
+                    // Populate forward targets from sidebar data
+                    let mut targets: Vec<ForwardTarget> = Vec::new();
+
+                    // Add DM conversations
+                    let dms = w.get_dm_conversations();
+                    for i in 0..dms.row_count() {
+                        if let Some(dm) = dms.row_data(i) {
+                            targets.push(ForwardTarget {
+                                id: dm.channel_id.clone(),
+                                name: dm.display_name.clone(),
+                                avatar_url: dm.avatar_url.clone(),
+                                target_type: "dm".into(),
+                            });
+                        }
+                    }
+
+                    // Add channels
+                    let channels = w.get_channels();
+                    for i in 0..channels.row_count() {
+                        if let Some(ch) = channels.row_data(i) {
+                            targets.push(ForwardTarget {
+                                id: ch.channel_id.clone(),
+                                name: ch.name.clone(),
+                                avatar_url: "".into(),
+                                target_type: "channel".into(),
+                            });
+                        }
+                    }
+
+                    // Add private groups
+                    let groups = w.get_private_groups();
+                    for i in 0..groups.row_count() {
+                        if let Some(g) = groups.row_data(i) {
+                            targets.push(ForwardTarget {
+                                id: g.group_id.clone(),
+                                name: g.name.clone(),
+                                avatar_url: "".into(),
+                                target_type: "channel".into(),
+                            });
+                        }
+                    }
+
+                    w.set_forward_targets(ModelRc::from(
+                        std::rc::Rc::new(VecModel::from(targets)),
+                    ));
+
                     w.set_active_modal("forward-message".into());
                     tracing::debug!(
                         sender_id = %sender_id_str,
@@ -267,9 +314,8 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 if needs_download {
                     // Download first, then save
                     let attachment_service = ui_ctx.attachment_service.clone();
-                    let grpc_pool = ui_ctx.grpc_pool.clone();
                     ui_ctx.runtime_handle.spawn(async move {
-                        match attachment_service.download_to_filesystem(&grpc_pool, &att_id).await {
+                        match attachment_service.download_to_filesystem(&att_id).await {
                             Ok(()) => {
                                 // Now decrypt and save
                                 match attachment_service.decrypt_auto(&att_id) {

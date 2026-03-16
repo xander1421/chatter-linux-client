@@ -11,7 +11,6 @@ use chatter_linux::domain::ids::AttachmentId;
 use chatter_linux::media::ImageProcessor;
 use chatter_linux::proto::content_v1::AttachmentPointer;
 use chatter_linux::services::attachment::AttachmentService;
-use chatter_linux::network::grpc::GrpcClientPool;
 
 use crate::MainWindow;
 
@@ -25,7 +24,6 @@ use crate::MainWindow;
 pub async fn download_attachments(
     pointers: Vec<AttachmentPointer>,
     attachment_service: Arc<AttachmentService>,
-    grpc_pool: Arc<GrpcClientPool>,
     weak_window: slint::Weak<MainWindow>,
     conversation_id: String,
 ) {
@@ -67,7 +65,7 @@ pub async fn download_attachments(
 
         // Download encrypted content to filesystem
         match attachment_service
-            .download_to_filesystem(&grpc_pool, &att_id)
+            .download_to_filesystem(&att_id)
             .await
         {
             Ok(()) => {

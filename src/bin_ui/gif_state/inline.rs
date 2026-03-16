@@ -657,7 +657,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
         let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
-        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new(attachment_repo));
+        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new_local(attachment_repo));
 
         // Create a dummy window weak reference (will be None when upgraded)
         // We can't create a real MainWindow in tests, but the function handles None gracefully
@@ -691,7 +691,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
         let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
-        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new(attachment_repo));
+        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new_local(attachment_repo));
 
         let window_weak: slint::Weak<crate::MainWindow> = slint::Weak::default();
 
@@ -717,7 +717,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
         let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
         let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
-        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new(attachment_repo));
+        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new_local(attachment_repo));
 
         let window_weak: slint::Weak<crate::MainWindow> = slint::Weak::default();
 

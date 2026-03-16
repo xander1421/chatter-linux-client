@@ -168,8 +168,6 @@ pub async fn handle_inbox_event(
                 channel_id,
                 timestamp,
                 ui_ctx.message_service.clone(),
-                ui_ctx.group_coordinator.clone(),
-                ui_ctx.runtime_handle.clone(),
             );
         }
         InboxEvent::MessageReceived { message_id, .. } => {
@@ -331,50 +329,25 @@ pub async fn handle_inbox_event(
                 "Group mailbox announcement received - storing member mailbox"
             );
 
-            // Store the member's mailbox using GroupMailboxManager
-            use chatter_linux::mailbox::group::MemberMailbox;
-            use chrono::{Utc, Duration};
-
-            let mailbox_manager = ui_ctx.group_mailbox_manager.clone();
-
-            // Convert mailbox_pk to fixed-size array
+            // Store via service layer
             if mailbox_pk.len() == 32 {
                 let mut pk_array = [0u8; 32];
                 pk_array.copy_from_slice(&mailbox_pk);
 
-                let member_mailbox = MemberMailbox::new(
-                    member_id,
-                    pk_array,
-                    Some(Utc::now() + Duration::days(7)),
-                );
+                match ui_ctx.channel_service.store_member_mailbox(&channel_id, &member_id, &pk_array) {
+                    Ok(is_new) => {
+                        tracing::info!(
+                            channel_id = %channel_id,
+                            member_id = %member_id,
+                            is_new,
+                            "Stored member mailbox for group fanout"
+                        );
 
-                let already_have_mailbox = mailbox_manager
-                    .load_group_state(&channel_id)
-                    .ok()
-                    .flatten()
-                    .map(|state| state.get_member_mailbox(&member_id).is_some())
-                    .unwrap_or(false);
-
-                if let Err(e) = mailbox_manager.save_member_mailbox(&channel_id, &member_mailbox) {
-                    tracing::error!(
-                        channel_id = %channel_id,
-                        member_id = %member_id,
-                        error = %e,
-                        "Failed to store member mailbox"
-                    );
-                } else {
-                    tracing::info!(
-                        channel_id = %channel_id,
-                        member_id = %member_id,
-                        already_have_mailbox,
-                        "Successfully stored member mailbox for group fanout"
-                    );
-
-                    if !already_have_mailbox {
-                        let message_service = ui_ctx.message_service.clone();
-                        let channel_id_clone = channel_id;
-                        let member_id_clone = member_id;
-                        tokio::spawn(async move {
+                        if is_new {
+                            let message_service = ui_ctx.message_service.clone();
+                            let channel_id_clone = channel_id;
+                            let member_id_clone = member_id;
+                            tokio::spawn(async move {
                                 if let Err(e) = message_service
                                     .respond_with_mailbox_to_member(&channel_id_clone, &member_id_clone)
                                     .await
@@ -385,19 +358,16 @@ pub async fn handle_inbox_event(
                                         error = %e,
                                         "Failed to respond with our mailbox to new member"
                                     );
-                                } else {
-                                    tracing::info!(
-                                        channel_id = %channel_id_clone,
-                                        member_id = %member_id_clone,
-                                        "Responded with our mailbox to new member"
-                                    );
                                 }
                             });
-                    } else {
-                        tracing::debug!(
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
                             channel_id = %channel_id,
                             member_id = %member_id,
-                            "Skipping mailbox response (already have their mailbox, avoiding ping-pong)"
+                            error = %e,
+                            "Failed to store member mailbox"
                         );
                     }
                 }
@@ -532,7 +502,7 @@ pub async fn handle_inbox_event(
             let mut identity_warning = String::new();
             let is_identity_verified;
 
-            match ui_ctx.key_store.get_identity_by_uuid(&peer_id.to_string()) {
+            match ui_ctx.signal_service.get_peer_identity(&peer_id.to_string()) {
                 Ok(Some(_trusted_key)) => {
                     is_identity_verified = true;
                 }

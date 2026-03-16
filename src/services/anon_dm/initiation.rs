@@ -3,7 +3,6 @@ use crate::domain::private_friend_code::PrivateFriendCode;
 use crate::domain::UserId;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::proto::content_v1::{self, AnonDmRequest, Content};
-use crate::network::grpc::anonymous_client::AnonymousMessageClient;
 use crate::util::time::TimestampNanos;
 
 use super::{AnonDmError, AnonDmService};
@@ -230,7 +229,7 @@ impl AnonDmService {
         // Send to recipient's device inbox using anonymous credential
         // The ECIES ciphertext goes in the sealed_body, but we're NOT using
         // sealed sender here - we're using raw ECIES + anonymous credential
-        let mut anon_client = AnonymousMessageClient::new(self.grpc_pool.channel());
+        let mut anon_client = self.grpc_pool.anonymous_message_client();
 
         // Use a custom envelope type for ECIES messages
         // Set timestamp to current time in nanoseconds for server validation
@@ -242,8 +241,7 @@ impl AnonDmService {
         let sealed_message = SealedSenderMessage {
             sealed_body: ecies_message.to_bytes(),
             timestamp: timestamp_nanos,
-            // server_key_id defaults to 0 - not used for ECIES envelopes
-            ..Default::default()
+            server_key_id: 1,
         };
 
         // Use envelope_type=4 (ECIES_INIT) so receiver knows to use HPKE decryption

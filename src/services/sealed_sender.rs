@@ -13,8 +13,6 @@ use crate::domain::UserId;
 use crate::mailbox::token_manager::{MailboxToken, TokenManager};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::mailbox_client::MailboxClient;
-use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::signal_service::SignalService;
 use crate::util::time::TimestampNanos;
@@ -105,10 +103,7 @@ impl SealedSenderService {
         };
 
         // 4. Send with credential
-        let mut message_client = MessageClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
+        let mut message_client = self.grpc_pool.message_client();
 
         message_client
             .send_sealed_message_with_credential(
@@ -140,10 +135,7 @@ impl SealedSenderService {
             Ok(Some(token)) => Some(token),
             Ok(None) => {
                 // Request new tokens
-                let mut mailbox_client = MailboxClient::new(
-                    self.grpc_pool.channel(),
-                    self.grpc_pool.auth_clone(),
-                );
+                let mut mailbox_client = self.grpc_pool.mailbox_client();
 
                 match token_manager.request_tokens(&mut mailbox_client, 5).await {
                     Ok(count) if count > 0 => {

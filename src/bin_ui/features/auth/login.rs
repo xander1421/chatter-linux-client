@@ -31,8 +31,8 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             });
 
             // Update server URL and connect if different from current
-            if ui_ctx.grpc_pool.endpoint() != server_url {
-                if let Err(e) = ui_ctx.grpc_pool.set_url(&server_url) {
+            if ui_ctx.auth_service.endpoint() != server_url {
+                if let Err(e) = ui_ctx.auth_service.set_server_url(&server_url) {
                     let error_msg = format!("Invalid Server URL: {}", e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -45,8 +45,8 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             }
 
             // Ensure we are connected to the selected server
-            if !ui_ctx.grpc_pool.is_connected() {
-                if let Err(e) = ui_ctx.grpc_pool.connect().await {
+            if !ui_ctx.auth_service.is_connected() {
+                if let Err(e) = ui_ctx.auth_service.connect().await {
                     let error_msg = format!("Failed to connect to server: {}", e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -78,11 +78,7 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     // to avoid race condition where inbox emits events before handlers subscribe.
 
                     // Spawn DM bootstrap handler for processing incoming key exchanges
-                    let _bootstrap_handle = chatter_linux::inbox::spawn_dm_bootstrap_handler_from_bus(
-                        ui_ctx.database.clone(),
-                        ui_ctx.grpc_pool.clone(),
-                        &ui_ctx.event_bus,
-                    );
+                    let _bootstrap_handle = ui_ctx.dm_bootstrap_service.spawn_handler(&ui_ctx.event_bus);
                     tracing::debug!("DM bootstrap handler spawned");
 
                     // Restart channel event stream to use new authentication credentials

@@ -5,12 +5,11 @@
 
 use std::sync::Arc;
 
-use crate::crypto::signal::IdentityKeyManager;
 use crate::inbox::DeviceInboxProvider;
 use crate::services::CallWorkerHandle;
 use crate::storage::KeyStore;
 use crate::events::EventBus;
-use crate::mailbox::group::{GroupCoordinator, GroupFanout, GroupMailboxManager};
+use crate::mailbox::group::GroupFanout;
 use crate::mailbox::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::ai_service::AIService;
@@ -93,17 +92,14 @@ pub struct UIContext {
     // Event bus
     pub event_bus: EventBus,
 
-    // Infrastructure (needed for network operations)
-    pub grpc_pool: Arc<GrpcClientPool>,
-    pub database: Arc<Database>,
+    // Infrastructure (internal — UI code uses service methods instead)
+    pub(crate) grpc_pool: Arc<GrpcClientPool>,
+    pub(crate) database: Arc<Database>,
     pub directories: Directories,
-    pub group_coordinator: Arc<GroupCoordinator>,
-    pub group_mailbox_manager: Arc<GroupMailboxManager>,
-    pub token_manager: Arc<TokenManager>,
+    pub(crate) token_manager: Arc<TokenManager>,
 
-    // Crypto (needed for calls ephemeral key exchange)
-    pub identity_manager: Arc<IdentityKeyManager>,
-    pub key_store: Arc<KeyStore>,
+    // Crypto (internal — accessed via SignalService)
+    pub(crate) key_store: Arc<KeyStore>,
 
     // Post-boot services (initialized via AppContext after grpc connect)
     pub group_fanout: Arc<std::sync::OnceLock<Arc<GroupFanout>>>,
@@ -164,12 +160,9 @@ impl UIContext {
             grpc_pool: infra.grpc_pool.clone(),
             database: infra.database.clone(),
             directories: infra.directories.clone(),
-            group_coordinator: infra.group_coordinator.clone(),
-            group_mailbox_manager: infra.group_mailbox_manager.clone(),
             token_manager: infra.token_manager.clone(),
 
             // Crypto
-            identity_manager: infra.identity_manager.clone(),
             key_store: infra.key_store.clone(),
 
             // Post-boot services (shared OnceLock with AppContext)
@@ -195,9 +188,83 @@ impl UIContext {
 
     /// Create a GIF client for server-side GIF search.
     pub fn gif_client(&self) -> Option<crate::network::grpc::GifClient> {
-        self.grpc_pool.try_channel().map(|channel| {
-            crate::network::grpc::GifClient::new(channel, self.grpc_pool.auth_clone())
-        })
+        if self.grpc_pool.is_connected() {
+            Some(self.grpc_pool.gif_client())
+        } else {
+            None
+        }
+    }
+
+    /// Fetch trending GIFs using an anonymous token if available.
+    ///
+    /// Handles the full token lifecycle: acquire → set anonymous auth → request → mark used → restore.
+    pub async fn trending_gifs(&self, limit: u32) -> Vec<crate::proto::chat_v1::GifResult> {
+        let mut client = match self.gif_client() {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+
+        let token = self.token_manager.get_available_token().ok().flatten();
+        let unblinded = token.as_ref().map(|t| crate::mailbox::blind_signature::UnblindedToken {
+            public_key: t.public_key.clone(),
+            signature: t.signature.clone(),
+            created_at: 0,
+        });
+
+        let interceptor = self.grpc_pool.auth_clone();
+        let old_mode = interceptor.current_mode();
+        if let Some(ref t) = unblinded {
+            interceptor.set_anonymous(t.clone());
+        }
+
+        let result = match client.trending(limit as i32, unblinded).await {
+            Ok(results) => {
+                if let Some(t) = token {
+                    let _ = self.token_manager.mark_token_used(&t.id);
+                }
+                results
+            }
+            Err(_) => Vec::new(),
+        };
+
+        interceptor.set_mode(old_mode);
+        result
+    }
+
+    /// Search GIFs using an anonymous token if available.
+    ///
+    /// Handles the full token lifecycle: acquire → set anonymous auth → request → mark used → restore.
+    pub async fn search_gifs(&self, query: &str, limit: u32) -> Vec<crate::proto::chat_v1::GifResult> {
+        let mut client = match self.gif_client() {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+
+        let token = self.token_manager.get_available_token().ok().flatten();
+        let unblinded = token.as_ref().map(|t| crate::mailbox::blind_signature::UnblindedToken {
+            public_key: t.public_key.clone(),
+            signature: t.signature.clone(),
+            created_at: 0,
+        });
+
+        let interceptor = self.grpc_pool.auth_clone();
+        let old_mode = interceptor.current_mode();
+        if let Some(ref t) = unblinded {
+            interceptor.set_anonymous(t.clone());
+        }
+
+        let result = match client.search(query, limit as i32, unblinded).await {
+            Ok(results) => {
+                if let Some(t) = token {
+                    let _ = self.token_manager.mark_token_used(&t.id);
+                }
+                results
+            }
+            Err(_) => Vec::new(),
+        };
+
+        interceptor.set_mode(old_mode);
+        result
     }
 
     /// Pre-fetch anonymous tokens for sealed sender messaging.
@@ -222,10 +289,7 @@ impl UIContext {
             target_count
         );
 
-        let mut mailbox_client = crate::network::grpc::mailbox_client::MailboxClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
+        let mut mailbox_client = self.grpc_pool.mailbox_client();
 
         let fetched = self.token_manager.request_tokens(&mut mailbox_client, needed).await?;
         tracing::info!("Pre-fetched {} anonymous tokens", fetched);
@@ -236,11 +300,7 @@ impl UIContext {
     ///
     /// Notifies the server that the call was declined without joining.
     pub async fn decline_call(&self, call_id: &str) -> Result<(), crate::error::NetworkError> {
-        let mut call_client = crate::network::grpc::CallClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
-
+        let mut call_client = self.grpc_pool.call_client();
         call_client.leave_call(call_id).await
     }
 
@@ -249,10 +309,7 @@ impl UIContext {
     /// Generates and uploads new one-time prekeys, then queries for the updated count.
     /// Returns the number of prekeys now available on the server.
     pub async fn refresh_prekeys(&self, count: u32) -> Result<u32, crate::error::ServiceError> {
-        let mut auth_client = crate::network::grpc::auth_client::AuthClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
+        let mut auth_client = self.grpc_pool.auth_client();
 
         let uploaded = self.signal_service.refresh_prekeys(&mut auth_client, count).await?;
         tracing::info!("Uploaded {} new prekeys", uploaded);
@@ -279,11 +336,7 @@ impl UIContext {
         use crate::services::call_worker::CallWorkerHandle;
 
         self.call_service.get_or_init(|| {
-            let call_client = crate::network::grpc::CallClient::new(
-                self.grpc_pool.channel(),
-                self.grpc_pool.auth_clone(),
-            );
-            CallWorkerHandle::spawn(call_client)
+            CallWorkerHandle::spawn(self.grpc_pool.call_client())
         });
     }
 
@@ -296,14 +349,8 @@ impl UIContext {
         use crate::mailbox::AnonDmPoller;
 
         self.device_inbox_provider.get_or_init(|| {
-            let message_client = crate::network::grpc::message_client::MessageClient::new(
-                self.grpc_pool.channel(),
-                self.grpc_pool.auth_clone(),
-            );
-            let mailbox_client = crate::network::grpc::mailbox_client::MailboxClient::new(
-                self.grpc_pool.channel(),
-                self.grpc_pool.auth_clone(),
-            );
+            let message_client = self.grpc_pool.message_client();
+            let mailbox_client = self.grpc_pool.mailbox_client();
             let pipeline = std::sync::Arc::new(crate::network::validation::MessageValidationPipeline::new());
 
             let anon_dm_poller = std::sync::Arc::new(AnonDmPoller::new(

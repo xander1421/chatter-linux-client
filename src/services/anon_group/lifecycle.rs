@@ -11,7 +11,6 @@ use crate::domain::anon_group::{
     AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupPending, AnonGroupRole,
 };
 use crate::domain::UserId;
-use crate::network::grpc::mailbox_client::MailboxClient;
 use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::settings_keys;
 
@@ -234,7 +233,7 @@ impl AnonGroupService {
             Ok(None) => {
                 // Request new tokens from server
                 let mut mailbox_client =
-                    MailboxClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone());
+                    self.grpc_pool.mailbox_client();
                 self.token_manager
                     .request_tokens(&mut mailbox_client, 5)
                     .await
@@ -264,7 +263,7 @@ impl AnonGroupService {
         // Register the mailbox with the server using the blind signature
         let ttl_seconds = 30 * 24 * 60 * 60; // 30 days in seconds
         let mut mailbox_client =
-            MailboxClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone());
+            self.grpc_pool.mailbox_client();
 
         let response = mailbox_client
             .create_ephemeral_mailbox(

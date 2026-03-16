@@ -31,10 +31,7 @@ impl AnonGroupService {
         peer_id: UserId,
         content: Content,
     ) -> Result<(), AnonGroupError> {
-        let mut auth_client = crate::network::grpc::AuthClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
+        let mut auth_client = self.grpc_pool.auth_client();
 
         let params = SendDmContentParams {
             auth_client: &mut auth_client,

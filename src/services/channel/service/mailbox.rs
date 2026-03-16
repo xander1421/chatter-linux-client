@@ -110,4 +110,38 @@ impl ChannelService {
             }
         }
     }
+
+    /// Store a member's mailbox public key for a group channel.
+    ///
+    /// Called when receiving a group mailbox announcement from a peer.
+    /// Returns true if this was a new mailbox (not already known).
+    pub fn store_member_mailbox(
+        &self,
+        channel_id: &ChannelId,
+        member_id: &crate::domain::ids::UserId,
+        mailbox_pk: &[u8; 32],
+    ) -> Result<bool, ChannelError> {
+        use crate::mailbox::group::MemberMailbox;
+
+        let already_known = self.group_coordinator
+            .mailbox_manager()
+            .load_group_state(channel_id)
+            .ok()
+            .flatten()
+            .map(|state| state.get_member_mailbox(member_id).is_some())
+            .unwrap_or(false);
+
+        let member_mailbox = MemberMailbox::new(
+            *member_id,
+            *mailbox_pk,
+            Some(chrono::Utc::now() + chrono::Duration::days(7)),
+        );
+
+        self.group_coordinator
+            .mailbox_manager()
+            .save_member_mailbox(channel_id, &member_mailbox)
+            .map_err(|e| ChannelError::InvalidInput(format!("Failed to store member mailbox: {}", e)))?;
+
+        Ok(!already_known)
+    }
 }

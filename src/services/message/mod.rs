@@ -228,18 +228,15 @@ impl MessageService {
     // ─────────────────────────────────────────────────────────────────────────────
 
     pub(crate) fn message_client(&self) -> MessageClient {
-        MessageClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+        self.grpc_pool.message_client()
     }
 
     pub(crate) fn auth_client(&self) -> AuthClient {
-        AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+        self.grpc_pool.auth_client()
     }
 
     pub(crate) fn channel_client(&self) -> ChannelClient {
-        ChannelClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        )
+        self.grpc_pool.channel_client()
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

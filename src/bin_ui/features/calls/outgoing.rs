@@ -61,18 +61,26 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             };
 
             slint::spawn_local(async move {
-                start_call_impl(
-                    weak,
-                    call_service,
-                    session_service,
-                    CallType::Voice,
-                    message_service,
-                    mailbox_manager,
-                    channel_service,
-                    anon_dm_service,
-                    anon_group_service,
-                    conversation,
-                ).await;
+                if tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    start_call_impl(
+                        weak.clone(),
+                        call_service,
+                        session_service,
+                        CallType::Voice,
+                        message_service,
+                        mailbox_manager,
+                        channel_service,
+                        anon_dm_service,
+                        anon_group_service,
+                        conversation,
+                    ),
+                ).await.is_err() {
+                    tracing::error!("Call setup timed out");
+                    if let Some(w) = weak.upgrade() {
+                        w.set_active_call_visible(false);
+                    }
+                }
             }).unwrap();
         }
     });
@@ -109,18 +117,26 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             };
 
             slint::spawn_local(async move {
-                start_call_impl(
-                    weak,
-                    call_service,
-                    session_service,
-                    CallType::Video,
-                    message_service,
-                    mailbox_manager,
-                    channel_service,
-                    anon_dm_service,
-                    anon_group_service,
-                    conversation,
-                ).await;
+                if tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    start_call_impl(
+                        weak.clone(),
+                        call_service,
+                        session_service,
+                        CallType::Video,
+                        message_service,
+                        mailbox_manager,
+                        channel_service,
+                        anon_dm_service,
+                        anon_group_service,
+                        conversation,
+                    ),
+                ).await.is_err() {
+                    tracing::error!("Call setup timed out");
+                    if let Some(w) = weak.upgrade() {
+                        w.set_active_call_visible(false);
+                    }
+                }
             }).unwrap();
         }
     });

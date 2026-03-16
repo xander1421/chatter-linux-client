@@ -773,46 +773,7 @@ mod tests {
 
     fn create_handlers() -> EventHandlers {
         let (msg, chat, pinned, user, presence, streaming, offline) = create_test_stores();
-        // For tests, create a mock MessageService
-        use crate::storage::Database;
-        use crate::storage::repositories::*;
-        use crate::network::grpc::client_pool::GrpcClientPool;
-        use crate::services::signal_service::SignalService;
-        use crate::storage::KeyStore;
-        use crate::mailbox::group::GroupMailboxManager;
-        use crate::crypto::signal::SesameManager;
-        use crate::mailbox::token_manager::TokenManager;
-        
-        let db = Database::in_memory().unwrap();
-        let settings_repo = Arc::new(SettingsRepository::new(db.clone()));
-        let message_repo = Arc::new(MessageRepository::new(db.clone()));
-        let channel_repo = Arc::new(ChannelRepository::new(db.clone()));
-        let attachment_repo = Arc::new(AttachmentRepository::new(db.clone()));
-        let user_repo = Arc::new(UserRepository::new(db.clone()));
-        let search_index = Arc::new(SearchIndex::new(db.clone()));
-        let key_store = Arc::new(KeyStore::new(db.clone()));
-        let signal_service = Arc::new(SignalService::new(key_store.clone(), settings_repo.clone()));
-        let grpc_pool = Arc::new(GrpcClientPool::new("https://test.example.com", None).unwrap());
-        let group_mailbox_manager = Arc::new(GroupMailboxManager::new(db.clone()));
-        let sesame_manager = Arc::new(SesameManager::new(db.clone()).unwrap());
-        let token_manager = Arc::new(TokenManager::new(db.clone()).unwrap());
-        
-        let message_service = Arc::new(MessageService::new(
-            grpc_pool,
-            db,
-            settings_repo,
-            message_repo,
-            channel_repo,
-            attachment_repo,
-            user_repo,
-            signal_service,
-            group_mailbox_manager,
-            sesame_manager,
-            search_index,
-            token_manager,
-        ));
-        
-        EventHandlers::new(msg, chat, pinned, user, presence, streaming, offline, message_service)
+        EventHandlers::new(msg, chat, pinned, user, presence, streaming, offline)
     }
 
     fn create_test_message(channel_id: ChannelId) -> Message {

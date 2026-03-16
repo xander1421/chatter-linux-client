@@ -30,7 +30,6 @@ use super::transfer_status::update_attachment_transfer_status;
 /// Wire the view attachment callback.
 pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let attachment_service = ui_ctx.attachment_service.clone();
-    let grpc_pool = ui_ctx.grpc_pool.clone();
     let tokio_handle = ui_ctx.runtime_handle.clone();
     let weak_window = window.as_weak();
 
@@ -38,7 +37,6 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let attachment_id_str = attachment_id.to_string();
         let attachment_service = attachment_service.clone();
         let attachment_service_for_download = attachment_service.clone();
-        let grpc_pool = grpc_pool.clone();
         let weak = weak_window.clone();
         let handle = tokio_handle.clone();
 
@@ -113,7 +111,6 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     handle,
                     weak,
                     attachment_service_for_download,
-                    grpc_pool,
                     attachment,
                     att_id,
                 );
@@ -679,7 +676,6 @@ fn handle_download_attachment(
     handle: tokio::runtime::Handle,
     weak: slint::Weak<MainWindow>,
     attachment_service: Arc<chatter_linux::services::attachment::AttachmentService>,
-    grpc_pool: Arc<chatter_linux::network::grpc::client_pool::GrpcClientPool>,
     attachment: chatter_linux::domain::attachment::Attachment,
     att_id: AttachmentId,
 ) {
@@ -717,7 +713,7 @@ fn handle_download_attachment(
     let attachment_service_for_task = attachment_service.clone();
 
     handle.spawn(async move {
-        match attachment_service_for_task.download_to_filesystem(&grpc_pool, &att_id).await {
+        match attachment_service_for_task.download_to_filesystem(&att_id).await {
             Ok(()) => {
                 tracing::info!(
                     cdn_key = %cdn_key,

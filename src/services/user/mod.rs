@@ -134,7 +134,7 @@ impl UserService {
 
     /// Create a user client for network operations.
     fn user_client(&self) -> UserClient {
-        UserClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+        self.grpc_pool.user_client()
     }
 
     // ========================================================================

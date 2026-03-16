@@ -12,7 +12,6 @@ use tokio::sync::watch;
 use crate::inbox::events::{FriendRequestInfo, InboxEvent};
 use crate::proto::chat_v1::FriendStatus;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::user_client::UserClient;
 use crate::proto::chat_v1::{friend_requests_filter, user_event};
 
 /// Spawn the user events stream handler.
@@ -42,7 +41,7 @@ pub async fn spawn_user_events_stream(
             }
 
             // Subscribe to user events stream
-            let mut user_client = UserClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+            let mut user_client = grpc_pool.user_client();
 
             match user_client.stream_user_events(&user_id).await {
                 Ok(mut stream) => {
@@ -153,7 +152,7 @@ async fn refresh_friend_requests(
     grpc_pool: &Arc<GrpcClientPool>,
     event_tx: &broadcast::Sender<InboxEvent>,
 ) {
-    let mut user_client = UserClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+    let mut user_client = grpc_pool.user_client();
 
     // Fetch received requests
     let received = match user_client

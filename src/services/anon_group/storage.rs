@@ -167,7 +167,7 @@ impl AnonGroupService {
         &self,
         pointers: &[crate::proto::content_v1::AttachmentPointer],
     ) -> Vec<AttachmentId> {
-        let attachment_service = AttachmentService::new(self.attachment_repo.clone());
+        let attachment_service = AttachmentService::new_local(self.attachment_repo.clone());
         attachment_service.create_from_pointers(pointers)
     }
 

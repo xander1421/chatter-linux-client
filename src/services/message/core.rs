@@ -227,7 +227,7 @@ impl MessageService {
         targets_ai_bot: bool,
     ) -> Result<Message, MessageError> {
         // Upload attachments with encryption
-        let attachment_service = AttachmentService::new(self.attachment_repo.clone());
+        let attachment_service = AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone());
         let mut attachment_ids = Vec::with_capacity(file_paths.len());
         let mut attachment_pointers = Vec::with_capacity(file_paths.len());
 
@@ -237,7 +237,7 @@ impl MessageService {
                 "Encrypting and uploading attachment to CDN"
             );
 
-            match attachment_service.upload_to_cdn_encrypted(&self.grpc_pool, file_path).await {
+            match attachment_service.upload_to_cdn_encrypted(file_path).await {
                 Ok(result) => {
                     tracing::info!(
                         cdn_key = %result.cdn_key,

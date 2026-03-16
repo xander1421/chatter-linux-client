@@ -84,7 +84,7 @@ impl MessageService {
 
         let dm_bootstrap = DmBootstrap::new(self.database.clone());
         let mut mailbox_client =
-            MailboxClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+            grpc_pool.mailbox_client();
 
         match dm_bootstrap.initiate_dm(*peer_id, &mut mailbox_client).await {
             Ok(bootstrap_result) => {
@@ -336,7 +336,7 @@ impl MessageService {
             Ok(None) => {
                 // No tokens available - request new ones from server
                 tracing::info!(peer_id = %peer_id, "No tokens available, requesting from server");
-                let mut mailbox_client = MailboxClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+                let mut mailbox_client = grpc_pool.mailbox_client();
                 if let Err(e) = token_manager.request_tokens(&mut mailbox_client, 5).await {
                     tracing::error!(peer_id = %peer_id, error = %e, "Failed to request anonymous tokens");
                     return Err(MessageError::DmError(format!("Failed to get anonymous token: {}", e)));
@@ -352,7 +352,7 @@ impl MessageService {
         };
 
         // Send to peer's device inbox via MessageClient
-        let mut message_client = MessageClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let mut message_client = grpc_pool.message_client();
 
         let sealed_msg = SealedSenderMessage {
             sealed_body: sealed_ciphertext,

@@ -219,6 +219,70 @@ impl GrpcClientPool {
         self.endpoint.read().uri().to_string()
     }
 
+    // ========================================================================
+    // Client factories — eliminate repeated `Client::new(channel(), auth_clone())`
+    // ========================================================================
+
+    /// Create an authenticated AuthClient.
+    pub fn auth_client(&self) -> super::AuthClient {
+        super::AuthClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an authenticated MessageClient.
+    pub fn message_client(&self) -> super::MessageClient {
+        super::MessageClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an authenticated MailboxClient.
+    pub fn mailbox_client(&self) -> super::MailboxClient {
+        super::MailboxClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an authenticated FileClient.
+    pub fn file_client(&self) -> super::FileClient {
+        super::FileClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an authenticated ChannelClient.
+    pub fn channel_client(&self) -> super::ChannelClient {
+        super::ChannelClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an authenticated CallClient.
+    pub fn call_client(&self) -> super::CallClient {
+        super::CallClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an authenticated UserClient.
+    pub fn user_client(&self) -> super::UserClient {
+        super::UserClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an authenticated GifClient.
+    pub fn gif_client(&self) -> super::GifClient {
+        super::GifClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an authenticated IntegrationClient.
+    pub fn integration_client(&self) -> super::IntegrationClient {
+        super::IntegrationClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an anonymous mailbox client (no auth headers).
+    pub fn anonymous_mailbox_client(&self) -> super::AnonymousMailboxClient {
+        super::AnonymousMailboxClient::new(self.channel())
+    }
+
+    /// Create an anonymous message client (no auth headers).
+    pub fn anonymous_message_client(&self) -> super::AnonymousMessageClient {
+        super::AnonymousMessageClient::new(self.channel())
+    }
+
+    /// Create an anonymous auth client (no auth headers).
+    pub fn anonymous_auth_client(&self) -> super::AnonymousAuthClient {
+        super::AnonymousAuthClient::new(self.channel())
+    }
+
     /// Get auth info (user_id, device_id, token) from the auth interceptor.
     ///
     /// # Panics

@@ -595,7 +595,7 @@ mod tests {
 
     #[test]
     fn test_anon_group_new_as_owner() {
-        let group = AnonGroup::new_as_owner("Test Group".to_string());
+        let group = AnonGroup::new_as_owner("Test Group".to_string(), UserId::new());
         assert_eq!(group.name, "Test Group");
         assert_eq!(group.my_role, AnonGroupRole::Owner);
         assert!(!group.bootstrap_complete);
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn test_anon_group_from_invite() {
         let id = AnonGroupId::new();
-        let group = AnonGroup::from_invite(id, "Invited Group".to_string());
+        let group = AnonGroup::from_invite(id, "Invited Group".to_string(), UserId::new());
         assert_eq!(group.id, id);
         assert_eq!(group.my_role, AnonGroupRole::Member);
         assert!(!group.is_owner());
@@ -678,7 +678,7 @@ mod tests {
 
     #[test]
     fn test_anon_group_is_blocked() {
-        let mut group = AnonGroup::new_as_owner("Test".to_string());
+        let mut group = AnonGroup::new_as_owner("Test".to_string(), UserId::new());
         assert!(!group.is_blocked());
         group.status = AnonGroupStatus::Blocked;
         assert!(group.is_blocked());
@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn test_anon_group_is_muted() {
-        let mut group = AnonGroup::new_as_owner("Test".to_string());
+        let mut group = AnonGroup::new_as_owner("Test".to_string(), UserId::new());
         assert!(!group.is_muted());
         group.status = AnonGroupStatus::Muted;
         assert!(group.is_muted());
@@ -694,7 +694,7 @@ mod tests {
 
     #[test]
     fn test_anon_group_is_ready() {
-        let mut group = AnonGroup::new_as_owner("Test".to_string());
+        let mut group = AnonGroup::new_as_owner("Test".to_string(), UserId::new());
         // Not ready - bootstrap not complete
         assert!(!group.is_ready());
 

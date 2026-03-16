@@ -3,8 +3,6 @@ use prost::Message as ProstMessage;
 use uuid::Uuid;
 use crate::domain::anon_dm::{AnonDmId, AnonDmMailbox};
 use crate::domain::UserId;
-use crate::network::grpc::anonymous_client::AnonymousMessageClient;
-use crate::network::grpc::mailbox_client::MailboxClient;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::proto::content_v1::Content;
 use crate::proto::mailbox_v1::EnvelopeType;
@@ -50,7 +48,7 @@ impl AnonDmService {
         };
 
         // Send to device inbox using ANONYMOUS client (no auth headers)
-        let mut anon_client = AnonymousMessageClient::new(self.grpc_pool.channel());
+        let mut anon_client = self.grpc_pool.anonymous_message_client();
 
         anon_client
             .send_with_anonymous_credential(
@@ -83,10 +81,7 @@ impl AnonDmService {
             Ok(Some(token)) => Ok(token),
             Ok(None) => {
                 // Request new tokens from server
-                let mut mailbox_client = MailboxClient::new(
-                    self.grpc_pool.channel(),
-                    self.grpc_pool.auth_clone(),
-                );
+                let mut mailbox_client = self.grpc_pool.mailbox_client();
                 self.token_manager
                     .request_tokens(&mut mailbox_client, 5)
                     .await
@@ -171,10 +166,7 @@ impl AnonDmService {
             Ok(Some(token)) => token,
             Ok(None) => {
                 // Request new tokens from server
-                let mut mailbox_client = MailboxClient::new(
-                    self.grpc_pool.channel(),
-                    self.grpc_pool.auth_clone(),
-                );
+                let mut mailbox_client = self.grpc_pool.mailbox_client();
                 self.token_manager
                     .request_tokens(&mut mailbox_client, 5)
                     .await
@@ -202,10 +194,7 @@ impl AnonDmService {
 
         // Register the mailbox with the server using the blind signature
         let ttl_seconds = 30 * 24 * 60 * 60; // 30 days
-        let mut mailbox_client = MailboxClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
+        let mut mailbox_client = self.grpc_pool.mailbox_client();
 
         let response = mailbox_client
             .create_ephemeral_mailbox(

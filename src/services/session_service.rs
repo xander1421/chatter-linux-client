@@ -59,7 +59,7 @@ impl SessionService {
 
     /// Create an auth client for network operations.
     fn auth_client(&self) -> AuthClient {
-        AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+        self.grpc_pool.auth_client()
     }
 
     /// Check if a user is currently logged in.

@@ -311,6 +311,7 @@ fn test_system_message_user_joined() {
         current_user_reactions: Vec::new(),
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
+        delivery_status: String::new(),
     };
 
     message_repo.insert(&msg).unwrap();
@@ -356,6 +357,7 @@ fn test_system_message_user_left() {
         current_user_reactions: Vec::new(),
         mentioned_integrations: Vec::new(),
         targets_ai_bot: false,
+        delivery_status: String::new(),
     };
 
     message_repo.insert(&msg).unwrap();

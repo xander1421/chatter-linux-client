@@ -588,14 +588,12 @@ pub(crate) fn trigger_channel_attachment_download(
 
     let weak = weak_window.clone();
     let attachment_service = ui_ctx.attachment_service.clone();
-    let grpc_pool = ui_ctx.grpc_pool.clone();
     let channel_str = channel_id.to_string();
 
     tokio::spawn(async move {
         download_attachments(
             attachments,
             attachment_service,
-            grpc_pool,
             weak,
             channel_str,
         ).await;

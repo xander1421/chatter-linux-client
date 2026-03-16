@@ -28,6 +28,13 @@ impl SignalService {
         self.actor.get_identity_private_key().await
     }
 
+    /// Check if we have a trusted identity key for a peer.
+    ///
+    /// Returns `Some(key_bytes)` if trusted, `None` if unknown peer.
+    pub fn get_peer_identity(&self, peer_id: &str) -> Result<Option<Vec<u8>>, crate::error::StorageError> {
+        self.key_store.get_identity_by_uuid(peer_id)
+    }
+
     /// Generate and upload new one-time prekeys.
     pub async fn refresh_prekeys(
         &self,

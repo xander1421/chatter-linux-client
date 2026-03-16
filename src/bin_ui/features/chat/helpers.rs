@@ -9,8 +9,6 @@ use slint::Model;
 use chatter_linux::domain::attachment::Attachment;
 use chatter_linux::domain::ids::ChannelId;
 use chatter_linux::domain::UserId;
-use chatter_linux::mailbox::group::GroupCoordinator;
-use chatter_linux::network::grpc::client_pool::GrpcClientPool;
 use chatter_linux::proto::content_v1::{AttachmentPointer, Content};
 use chatter_linux::services::attachment::AttachmentService;
 use chatter_linux::services::{
@@ -156,7 +154,6 @@ pub async fn send_channel_content(
     content: Content,
     channel_id: &ChannelId,
     message_service: Arc<MessageService>,
-    _group_coordinator: Arc<GroupCoordinator>,
 ) -> Result<(), String> {
     message_service
         .send_control(channel_id, content, None)
@@ -169,8 +166,6 @@ pub fn send_channel_read_receipts(
     channel_id: ChannelId,
     message_timestamps: Vec<u64>,
     message_service: Arc<MessageService>,
-    group_coordinator: Arc<GroupCoordinator>,
-    _runtime_handle: tokio::runtime::Handle,
 ) {
     if message_timestamps.is_empty() {
         return;
@@ -181,7 +176,7 @@ pub fn send_channel_read_receipts(
             message_timestamps.clone(),
             Some(&channel_id.to_string()),
         );
-        let _ = send_channel_content(content, &channel_id, message_service, group_coordinator).await;
+        let _ = send_channel_content(content, &channel_id, message_service).await;
     });
 }
 
@@ -190,15 +185,13 @@ pub fn send_channel_delivery_receipt(
     channel_id: ChannelId,
     message_timestamp: u64,
     message_service: Arc<MessageService>,
-    group_coordinator: Arc<GroupCoordinator>,
-    _runtime_handle: tokio::runtime::Handle,
 ) {
     tokio::spawn(async move {
         let content = build_delivery_receipt_content_with_channel(
             vec![message_timestamp],
             Some(&channel_id.to_string()),
         );
-        let _ = send_channel_content(content, &channel_id, message_service, group_coordinator).await;
+        let _ = send_channel_content(content, &channel_id, message_service).await;
     });
 }
 
@@ -326,7 +319,6 @@ pub struct UploadedAttachments {
 pub async fn upload_pending_attachments(
     pending: &[PendingAttachment],
     attachment_service: &AttachmentService,
-    grpc_pool: &Arc<GrpcClientPool>,
     context: &str,
 ) -> UploadedAttachments {
     let mut pointers = Vec::with_capacity(pending.len());
@@ -343,7 +335,7 @@ pub async fn upload_pending_attachments(
         }
 
         // Upload to CDN with encryption
-        match attachment_service.upload_to_cdn_encrypted(grpc_pool, &att.path).await {
+        match attachment_service.upload_to_cdn_encrypted(&att.path).await {
             Ok(res) => {
                 pointers.push(res.to_attachment_pointer());
                 if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) {

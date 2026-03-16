@@ -24,8 +24,6 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
     let message_service = ui_ctx.message_service.clone();
     let user_service = ui_ctx.user_service.clone();
     let attachment_service = ui_ctx.attachment_service.clone();
-    let group_coordinator = ui_ctx.group_coordinator.clone();
-    let runtime_handle = ui_ctx.runtime_handle.clone();
     let pin_service = ui_ctx.pin_service.clone();
     let pinned_state = ui_ctx.pinned_state.clone();
 
@@ -43,8 +41,6 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
         let message_service = message_service.clone();
         let user_service = user_service.clone();
         let attachment_service = attachment_service.clone();
-        let group_coordinator = group_coordinator.clone();
-        let runtime_handle = runtime_handle.clone();
         let pin_service = pin_service.clone();
         let pinned_state = pinned_state.clone();
 
@@ -126,8 +122,6 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
                     channel_id,
                     message_timestamps,
                     message_service,
-                    group_coordinator,
-                    runtime_handle,
                 );
             }
         });

@@ -29,7 +29,6 @@ pub async fn auto_download_attachments(
     attachment_download::download_attachments(
         pointers,
         ui_ctx.attachment_service.clone(),
-        ui_ctx.grpc_pool.clone(),
         weak_window,
         peer_id,
     ).await;

@@ -140,6 +140,16 @@ impl AnonDmService {
         self.anon_dm_repo.insert_message(&message)?;
         let message_id = message.id;
 
+        // NDSS '21 decorrelation: if this message carries attachment pointers,
+        // delay the anonymous mailbox send so the server can't trivially
+        // correlate the authenticated CDN upload with this anonymous write.
+        // The message is already visible in the UI (optimistic insert above).
+        if !attachment_ids.is_empty() {
+            crate::mailbox::timing::TimingObfuscation::with_defaults()
+                .delay_for_attachment_decorrelation()
+                .await;
+        }
+
         // Send to peer
         self.send_message(conversation_id, inner_content).await?;
 

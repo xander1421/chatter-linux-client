@@ -165,7 +165,10 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string());
 
             // Load pinned messages for this DM channel
-            if let Ok(pinned_messages) = pin_service.load_pinned_for_channel(&channel_id).await {
+            if let Ok(Ok(pinned_messages)) = tokio::time::timeout(
+                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                pin_service.load_pinned_for_channel(&channel_id),
+            ).await {
                 if !pinned_messages.is_empty() {
                     let message_ids: Vec<_> = pinned_messages.iter().map(|p| p.message_id).collect();
                     pinned_state.set_pinned_messages(channel_id, message_ids);

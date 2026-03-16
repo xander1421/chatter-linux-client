@@ -8,7 +8,6 @@ use crate::mailbox::TokenManager;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
-use crate::network::grpc::MailboxClient;
 use crate::proto::chat_v1::{self, SealedSenderMessage};
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::storage::repositories::settings_repo::keys;
@@ -93,10 +92,7 @@ impl MessageService {
                             };
 
                             // Create a fresh message client for the anonymous send
-                            let mut message_client = MessageClient::new(
-                                self.grpc_pool.channel(),
-                                self.grpc_pool.auth_clone(),
-                            );
+                            let mut message_client = self.grpc_pool.message_client();
 
                             // Send with anonymous credential (NDSS '21 blind signature)
                             match message_client
@@ -248,10 +244,7 @@ impl MessageService {
             timestamp,
         };
 
-        let mut message_client = MessageClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
+        let mut message_client = self.grpc_pool.message_client();
 
         message_client
             .send_sealed_message_with_credential(
@@ -362,10 +355,7 @@ impl MessageService {
                             };
 
                             // Create a fresh message client for the anonymous send
-                            let mut message_client = MessageClient::new(
-                                self.grpc_pool.channel(),
-                                self.grpc_pool.auth_clone(),
-                            );
+                            let mut message_client = self.grpc_pool.message_client();
 
                             // Send with anonymous credential (NDSS '21 blind signature)
                             match message_client
@@ -509,10 +499,7 @@ impl MessageService {
         };
 
         // Create a fresh message client for the anonymous send
-        let mut message_client = MessageClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
+        let mut message_client = self.grpc_pool.message_client();
 
         // Send with anonymous credential (NDSS '21 blind signature)
         message_client
@@ -605,10 +592,7 @@ impl MessageService {
         };
 
         // Create a fresh message client for the anonymous send
-        let mut message_client = MessageClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
+        let mut message_client = self.grpc_pool.message_client();
 
         // Send with anonymous credential (NDSS '21 blind signature)
         message_client
@@ -968,10 +952,7 @@ impl MessageService {
                     recipient_id = %recipient_id,
                     "No tokens for SKDM send, requesting from server"
                 );
-                let mut mailbox_client = MailboxClient::new(
-                    self.grpc_pool.channel(),
-                    self.grpc_pool.auth_clone(),
-                );
+                let mut mailbox_client = self.grpc_pool.mailbox_client();
                 match token_manager.request_tokens(&mut mailbox_client, 5).await {
                     Ok(_) => token_manager.get_available_token().ok().flatten(),
                     Err(e) => {

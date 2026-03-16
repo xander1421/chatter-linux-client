@@ -79,7 +79,7 @@ impl AIService {
 
     /// Create an IntegrationClient for internal use.
     fn client(&self) -> IntegrationClient {
-        IntegrationClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+        self.grpc_pool.integration_client()
     }
 
     // ========================================================================

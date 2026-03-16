@@ -8,5 +8,6 @@ pub mod converters;
 pub mod features;
 pub mod gif_state;
 pub mod preview_state;
+pub mod ui_helpers;
 pub mod video;
 pub mod video_state;

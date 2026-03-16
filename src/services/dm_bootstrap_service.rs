@@ -36,6 +36,11 @@ pub struct DmBootstrapService {
     channel_repo: Arc<ChannelRepository>,
     grpc_pool: Arc<GrpcClientPool>,
     mailbox_manager: Arc<MailboxManager>,
+    /// Shared database handle for spawning bootstrap event handler.
+    ///
+    /// TODO: Refactor `spawn_dm_bootstrap_handler_from_bus` to take pre-built
+    /// services (SignalService, KeyStore) instead of raw Database, then remove this.
+    database: Arc<crate::storage::Database>,
     /// Temporary storage for messages that need to be shown in UI during bootstrap
     pending_ui_messages: Arc<Mutex<HashMap<UserId, Vec<String>>>>,
 }
@@ -46,14 +51,28 @@ impl DmBootstrapService {
         channel_repo: Arc<ChannelRepository>,
         grpc_pool: Arc<GrpcClientPool>,
         mailbox_manager: Arc<MailboxManager>,
+        database: Arc<crate::storage::Database>,
     ) -> Self {
         Self {
             message_service,
             channel_repo,
             grpc_pool,
             mailbox_manager,
+            database,
             pending_ui_messages: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Spawn the DM bootstrap event handler.
+    ///
+    /// Listens for domain events (e.g., incoming prekey messages) and handles
+    /// session establishment. Returns a `JoinHandle` for the background task.
+    pub fn spawn_handler(&self, event_bus: &crate::events::EventBus) -> tokio::task::JoinHandle<()> {
+        crate::inbox::spawn_dm_bootstrap_handler_from_bus(
+            self.database.clone(),
+            self.grpc_pool.clone(),
+            event_bus,
+        )
     }
     
     /// Store a message to be shown in UI during bootstrap

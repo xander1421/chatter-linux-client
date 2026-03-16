@@ -137,6 +137,7 @@ impl ServiceContainer {
             infra.channel_repo.clone(),
             infra.grpc_pool.clone(),
             mailbox_manager.clone(),
+            infra.database.clone(),
         ));
 
         // 6. Auth service
@@ -173,7 +174,7 @@ impl ServiceContainer {
         ));
 
         // 10. Attachment service
-        let attachment_service = Arc::new(AttachmentService::new(infra.attachment_repo.clone()));
+        let attachment_service = Arc::new(AttachmentService::new(infra.attachment_repo.clone(), infra.grpc_pool.clone()));
 
         // 11. Channel event service (for member join/leave)
         let channel_event_service = Arc::new(ChannelEventService::new(

@@ -9,8 +9,6 @@ use zeroize::Zeroize;
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
 use crate::domain::ids::AttachmentId;
-use crate::network::grpc::file_client::FileClient;
-use crate::network::grpc::GrpcClientPool;
 use crate::proto::content_v1::AttachmentPointer;
 
 use super::{attachment_file_path, ensure_attachments_dir, AttachmentError, AttachmentService, DownloadResult, CHUNK_SIZE};
@@ -31,8 +29,7 @@ impl AttachmentService {
     #[allow(dead_code)]
     pub async fn download_file(
         &self,
-        grpc_pool: &GrpcClientPool,
-        attachment_id: &AttachmentId,
+                attachment_id: &AttachmentId,
         download_dir: &Path,
     ) -> Result<DownloadResult, AttachmentError> {
         // Check if we already have this attachment locally
@@ -84,7 +81,7 @@ impl AttachmentService {
         let local_path = download_dir.join(&filename);
 
         // Create file client and download
-        let mut file_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let mut file_client = self.grpc_pool().file_client();
         let attachment_id_str = attachment_id.to_string();
 
         let mut chunk_stream = file_client
@@ -198,8 +195,7 @@ impl AttachmentService {
     #[allow(dead_code)]
     pub async fn download_from_cdn_encrypted(
         &self,
-        grpc_pool: &GrpcClientPool,
-        pointer: &AttachmentPointer,
+                pointer: &AttachmentPointer,
         download_dir: &Path,
     ) -> Result<DownloadResult, AttachmentError> {
         use crate::crypto::attachment_crypto::AttachmentCrypto;
@@ -230,7 +226,7 @@ impl AttachmentService {
         );
 
         // Get presigned download URL
-        let mut file_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let mut file_client = self.grpc_pool().file_client();
         let download_response = file_client
             .get_attachment_download_url(&pointer.cdn_key)
             .await
@@ -347,8 +343,7 @@ impl AttachmentService {
     /// Files are stored at: `~/.local/share/chatter/attachments/{attachment_id}.enc`
     pub async fn download_to_filesystem(
         &self,
-        grpc_pool: &GrpcClientPool,
-        attachment_id: &AttachmentId,
+                attachment_id: &AttachmentId,
     ) -> Result<(), AttachmentError> {
         // Get attachment with CDN key
         let attachment = self
@@ -370,7 +365,7 @@ impl AttachmentService {
         );
 
         // Get presigned download URL
-        let mut file_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let mut file_client = self.grpc_pool().file_client();
         let download_response = file_client
             .get_attachment_download_url(cdn_key)
             .await

@@ -249,6 +249,9 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
             &uak,
             Some(prekey_bundle),
             Vec::new(), // No additional one-time prekeys for tests
+            "",         // No challenge ID for tests
+            &[],        // No challenge response for tests
+            &[0u8; 32], // Empty registration lock for tests
         )
         .await?;
 

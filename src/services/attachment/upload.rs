@@ -7,8 +7,6 @@ use sha2::{Digest, Sha256};
 use crate::crypto::attachment_crypto::AttachmentCrypto;
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
 use crate::domain::ids::{AttachmentId, ChannelId};
-use crate::network::grpc::file_client::FileClient;
-use crate::network::grpc::GrpcClientPool;
 use crate::proto::chat_v1::FileChunk;
 
 use super::{attachment_file_path, ensure_attachments_dir, AttachmentError, AttachmentService, CdnUploadResult, UploadResult, CHUNK_SIZE};
@@ -20,8 +18,7 @@ impl AttachmentService {
     /// Returns the attachment details on success.
     pub async fn upload_file(
         &self,
-        grpc_pool: &GrpcClientPool,
-        file_path: &Path,
+                file_path: &Path,
         channel_id: &ChannelId,
     ) -> Result<UploadResult, AttachmentError> {
         // Read file metadata
@@ -59,7 +56,7 @@ impl AttachmentService {
         tracing::debug!("Starting upload with transfer_id={}", transfer_id);
 
         // Create file client
-        let mut file_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let mut file_client = self.grpc_pool().file_client();
 
         // Create chunks with auth tags
         let chunks: Vec<FileChunk> = file_content
@@ -127,7 +124,7 @@ impl AttachmentService {
                     );
 
                     // Verify upload by checking channel files
-                    self.verify_upload(grpc_pool, channel_id, &filename, file_size).await?
+                    self.verify_upload(channel_id, &filename, file_size).await?
                 } else {
                     return Err(AttachmentError::NetworkError(format!("Upload failed: {}", e)));
                 }
@@ -197,12 +194,11 @@ impl AttachmentService {
     /// Used as fallback when h2 protocol errors occur.
     pub(crate) async fn verify_upload(
         &self,
-        grpc_pool: &GrpcClientPool,
-        channel_id: &ChannelId,
+                channel_id: &ChannelId,
         filename: &str,
         file_size: u64,
     ) -> Result<crate::proto::chat_v1::FileMetadata, AttachmentError> {
-        let mut verify_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let mut verify_client = self.grpc_pool().file_client();
 
         let response = verify_client
             .list_channel_files(&channel_id.to_string(), 20, 0)
@@ -244,8 +240,7 @@ impl AttachmentService {
     /// Returns a `CdnUploadResult` with all data needed for AttachmentPointer.
     pub async fn upload_to_cdn_encrypted(
         &self,
-        grpc_pool: &GrpcClientPool,
-        file_path: &Path,
+                file_path: &Path,
     ) -> Result<CdnUploadResult, AttachmentError> {
         // Read file content
         let file_content = tokio::fs::read(file_path)
@@ -285,7 +280,7 @@ impl AttachmentService {
         );
 
         // Get presigned upload URL
-        let mut file_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let mut file_client = self.grpc_pool().file_client();
         let upload_response = file_client
             .get_attachment_upload_url(encrypted_size)
             .await
@@ -427,8 +422,7 @@ impl AttachmentService {
     /// The encrypted content is stored on the local filesystem after upload.
     pub async fn upload_bytes_to_cdn_encrypted(
         &self,
-        grpc_pool: &GrpcClientPool,
-        content: &[u8],
+                content: &[u8],
         filename: &str,
         mime_type: &str,
     ) -> Result<CdnUploadResult, AttachmentError> {
@@ -454,7 +448,7 @@ impl AttachmentService {
         );
 
         // Get presigned upload URL
-        let mut file_client = FileClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+        let mut file_client = self.grpc_pool().file_client();
         let upload_response = file_client
             .get_attachment_upload_url(encrypted_size)
             .await

@@ -245,7 +245,7 @@ impl DeviceInboxProvider {
         pairwise_service: Arc<PairwiseService>,
     ) -> Self {
         // Create anonymous mailbox client (no JWT auth, challenge-response only)
-        let anon_client = AnonymousMailboxClient::new(self.grpc_pool.channel());
+        let anon_client = self.grpc_pool.anonymous_mailbox_client();
         self.anon_dm_poller = Some(poller);
         self.pairwise_service = Some(pairwise_service);
         self.anon_mailbox_client = Some(Arc::new(tokio::sync::Mutex::new(anon_client)));

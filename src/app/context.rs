@@ -89,14 +89,8 @@ impl AppContext {
     /// Initialize the device inbox provider (call after grpc connect).
     pub fn init_device_inbox_provider(&self) {
         self.device_inbox_provider.get_or_init(|| {
-            let message_client = crate::network::grpc::message_client::MessageClient::new(
-                self.infrastructure.grpc_pool.channel(),
-                self.infrastructure.grpc_pool.auth_clone(),
-            );
-            let mailbox_client = crate::network::grpc::mailbox_client::MailboxClient::new(
-                self.infrastructure.grpc_pool.channel(),
-                self.infrastructure.grpc_pool.auth_clone(),
-            );
+            let message_client = self.infrastructure.grpc_pool.message_client();
+            let mailbox_client = self.infrastructure.grpc_pool.mailbox_client();
             let pipeline = Arc::new(crate::network::validation::MessageValidationPipeline::new());
 
             // Create anonymous DM poller for stranger messaging
@@ -129,10 +123,7 @@ impl AppContext {
     /// Initialize the group fanout (call after grpc connect).
     pub fn init_group_fanout(&self) {
         self.infrastructure.group_fanout.get_or_init(|| {
-            let mailbox_client = crate::network::grpc::mailbox_client::MailboxClient::new(
-                self.infrastructure.grpc_pool.channel(),
-                self.infrastructure.grpc_pool.auth_clone(),
-            );
+            let mailbox_client = self.infrastructure.grpc_pool.mailbox_client();
             Arc::new(GroupFanout::new(
                 self.infrastructure.group_mailbox_manager.clone(),
                 Arc::new(tokio::sync::Mutex::new(mailbox_client)),
@@ -148,11 +139,7 @@ impl AppContext {
     /// Initialize the call worker (call after grpc connect).
     pub fn init_call_service(&self) {
         self.call_service.get_or_init(|| {
-            let call_client = crate::network::grpc::CallClient::new(
-                self.infrastructure.grpc_pool.channel(),
-                self.infrastructure.grpc_pool.auth_clone(),
-            );
-            CallWorkerHandle::spawn(call_client)
+            CallWorkerHandle::spawn(self.infrastructure.grpc_pool.call_client())
         });
     }
 

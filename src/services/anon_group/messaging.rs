@@ -67,6 +67,15 @@ impl AnonGroupService {
         let message_id =
             self.store_message_with_attachments(group_id, &current_user, text, &attachment_ids, sent_at)?;
 
+        // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
+        // so the server can't correlate the authenticated upload with this write.
+        // Message is already visible in UI (optimistic insert above).
+        if !attachment_ids.is_empty() {
+            crate::mailbox::timing::TimingObfuscation::with_defaults()
+                .delay_for_attachment_decorrelation()
+                .await;
+        }
+
         // Send to all members
         self.send_message(group_id, inner_content).await?;
 
@@ -139,6 +148,13 @@ impl AnonGroupService {
             &attachment_ids,
             sent_at,
         )?;
+
+        // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
+        if !attachment_ids.is_empty() {
+            crate::mailbox::timing::TimingObfuscation::with_defaults()
+                .delay_for_attachment_decorrelation()
+                .await;
+        }
 
         self.send_message(group_id, inner_content).await?;
 

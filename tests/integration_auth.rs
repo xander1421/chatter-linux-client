@@ -85,6 +85,9 @@ async fn test_register_user_stream() {
                 &uak,
                 Some(prekey_bundle),
                 Vec::new(),
+                "",         // No challenge ID for tests
+                &[],        // No challenge response for tests
+                &[0u8; 32], // Empty registration lock for tests
             )
             .await,
     );
@@ -188,6 +191,9 @@ async fn test_register_duplicate_username() {
             &dup_uak,
             Some(prekey_bundle),
             Vec::new(),
+            "",         // No challenge ID for tests
+            &[],        // No challenge response for tests
+            &[0u8; 32], // Empty registration lock for tests
         )
         .await;
 

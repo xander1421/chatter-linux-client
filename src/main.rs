@@ -102,7 +102,7 @@ async fn app_main() {
     tracing::info!("Typing indicator cleanup task started");
 
     // Connect to server (continue in offline mode if fails)
-    let _connected = match ui_ctx.grpc_pool.connect().await {
+    let _connected = match ui_ctx.auth_service.connect().await {
         Ok(()) => {
             // Initialize components that require connection
             ctx.init_device_inbox_provider();
@@ -357,7 +357,7 @@ async fn app_main() {
     }
 
     // Disconnect from server
-    ui_ctx.grpc_pool.disconnect();
+    ui_ctx.auth_service.disconnect();
     tracing::debug!("Disconnected from server");
 
     tracing::info!("Shutdown complete, exiting...");

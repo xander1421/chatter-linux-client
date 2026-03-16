@@ -67,6 +67,11 @@ impl GroupCoordinator {
         }
     }
 
+    /// Get the underlying mailbox manager.
+    pub fn mailbox_manager(&self) -> &GroupMailboxManager {
+        &self.mailbox_manager
+    }
+
     /// Setup group mailbox for a channel (on create or join).
     ///
     /// Creates an ephemeral mailbox using a blind token and prepares

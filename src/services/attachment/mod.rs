@@ -18,6 +18,7 @@ use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
 use crate::domain::attachment::{Attachment, ContentLocation};
 use crate::domain::ids::AttachmentId;
 use crate::proto::content_v1::AttachmentPointer;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::storage::repositories::AttachmentRepository;
 
 // Submodules add impl blocks to AttachmentService
@@ -190,8 +191,12 @@ pub fn ensure_attachments_dir() -> std::io::Result<()> {
 }
 
 /// Attachment service for file operations.
+///
+/// The `grpc_pool` field is required for upload/download operations but
+/// optional for local-only use (storing records from incoming messages).
 pub struct AttachmentService {
     pub(crate) attachment_repo: Arc<AttachmentRepository>,
+    pub(crate) grpc_pool: Option<Arc<GrpcClientPool>>,
 }
 
 impl AttachmentService {
@@ -200,9 +205,21 @@ impl AttachmentService {
         self.attachment_repo.clone()
     }
 
-    /// Create a new AttachmentService.
-    pub fn new(attachment_repo: Arc<AttachmentRepository>) -> Self {
-        Self { attachment_repo }
+    /// Get the gRPC pool, panics if not configured (upload/download requires it).
+    pub(crate) fn grpc_pool(&self) -> &GrpcClientPool {
+        self.grpc_pool.as_ref().expect("AttachmentService: grpc_pool required for network operations")
+    }
+
+    /// Create a new AttachmentService with network capability.
+    pub fn new(attachment_repo: Arc<AttachmentRepository>, grpc_pool: Arc<GrpcClientPool>) -> Self {
+        Self { attachment_repo, grpc_pool: Some(grpc_pool) }
+    }
+
+    /// Create a local-only AttachmentService (no upload/download).
+    ///
+    /// Used by services that only need to store attachment records from incoming messages.
+    pub fn new_local(attachment_repo: Arc<AttachmentRepository>) -> Self {
+        Self { attachment_repo, grpc_pool: None }
     }
 
     /// Get an attachment by ID from local storage.

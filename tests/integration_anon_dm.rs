@@ -197,6 +197,7 @@ async fn test_anon_dm_message_text() {
         conversation_id,
         sender_id,
         "Hello from a stranger!",
+        0, // sent_at timestamp
     );
 
     assert_eq!(msg.conversation_id, conversation_id);
@@ -231,11 +232,13 @@ async fn test_anon_dm_request_serialization() {
         conversation_id: conversation_id.clone(),
         initiator_mailbox_pk: initiator_mailbox_pk.clone(),
         intro_message: "Hey, I saw your public profile!".to_string(),
-        profile_key: Some(vec![0u8; 32]), // Optional profile key
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64,
+        profile_key: Some(vec![0u8; 32]), // Optional profile key
+        encrypted_display_name: None,
+        encrypted_avatar: None,
     };
 
     let content = Content {
@@ -283,11 +286,14 @@ async fn test_anon_dm_accept_serialization() {
     let accept = AnonDmAccept {
         conversation_id: conversation_id.clone(),
         responder_mailbox_pk: responder_mailbox_pk.clone(),
-        profile_key: Some(vec![0u8; 32]),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64,
+        responder_display_name: String::new(),
+        profile_key: Some(vec![0u8; 32]),
+        encrypted_display_name: None,
+        encrypted_avatar: None,
     };
 
     let content = Content {

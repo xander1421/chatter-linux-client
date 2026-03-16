@@ -328,13 +328,13 @@ impl MessageService {
         mailbox_manager: &MailboxManager,
     ) -> Result<DmSendResult, MessageError> {
         // Upload attachments with encryption
-        let attachment_service = AttachmentService::new(self.attachment_repo.clone());
+        let attachment_service = AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone());
         let mut attachment_ids = Vec::with_capacity(file_paths.len());
         let mut attachment_pointers = Vec::with_capacity(file_paths.len());
         let mut gif_attachment_ids = Vec::new();
         
         for path in file_paths {
-            match attachment_service.upload_to_cdn_encrypted(&self.grpc_pool, path).await {
+            match attachment_service.upload_to_cdn_encrypted(path).await {
                 Ok(result) => {
                     attachment_ids.push(result.attachment_id);
                     
@@ -420,7 +420,7 @@ impl MessageService {
         mailbox_manager: &MailboxManager,
     ) -> Result<DmSendResult, MessageError> {
         // Upload attachments with encryption
-        let attachment_service = AttachmentService::new(self.attachment_repo.clone());
+        let attachment_service = AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone());
         let mut attachment_ids = Vec::with_capacity(file_paths.len());
         let mut attachment_pointers = Vec::with_capacity(file_paths.len());
         let mut gif_attachment_ids = Vec::new();
@@ -438,7 +438,7 @@ impl MessageService {
                 "Encrypting and uploading DM attachment to CDN"
             );
 
-            match attachment_service.upload_to_cdn_encrypted(&self.grpc_pool, file_path).await {
+            match attachment_service.upload_to_cdn_encrypted(file_path).await {
                 Ok(result) => {
                     tracing::info!(
                         cdn_key = %result.cdn_key,

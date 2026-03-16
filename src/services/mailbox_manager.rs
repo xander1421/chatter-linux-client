@@ -489,7 +489,7 @@ impl MailboxManager {
 
     /// Helper to create a MailboxClient from the pool.
     fn create_mailbox_client(&self) -> MailboxClient {
-        MailboxClient::new(self.client_pool.channel(), self.client_pool.auth_clone())
+        self.client_pool.mailbox_client()
     }
 
     /// Get the number of tokens currently available in the pool.

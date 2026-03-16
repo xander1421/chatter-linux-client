@@ -74,12 +74,12 @@ impl ChannelService {
 
     /// Create a channel client for network operations.
     pub(crate) fn channel_client(&self) -> ChannelClient {
-        ChannelClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+        self.grpc_pool.channel_client()
     }
 
     /// Create a mailbox client for network operations.
     pub(crate) fn mailbox_client(&self) -> MailboxClient {
-        MailboxClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+        self.grpc_pool.mailbox_client()
     }
 
     // ==================== Create Operations ====================

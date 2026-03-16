@@ -8,7 +8,6 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_linux::app::UIContext;
 
 use crate::{GifData, MainWindow};
-use chatter_linux::mailbox::blind_signature::UnblindedToken;
 
 pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
@@ -94,7 +93,6 @@ async fn download_and_send_gif(
     // Upload directly to our CDN (encrypts and stores encrypted on filesystem)
     let upload_result = ui_ctx.attachment_service
         .upload_bytes_to_cdn_encrypted(
-            &ui_ctx.grpc_pool,
             &bytes,
             &filename,
             "image/gif",
@@ -289,81 +287,23 @@ fn load_gif_previews(
 }
 
 async fn fetch_trending_gifs_raw(ui_ctx: &UIContext) -> Vec<RawGifData> {
-    let mut client = match ui_ctx.gif_client() {
-        Some(c) => c,
-        None => return Vec::new(),
-    };
-
-    let token = ui_ctx.token_manager.get_available_token().ok().flatten();
-    let unblinded = token.as_ref().map(|t| UnblindedToken {
-        public_key: t.public_key.clone(),
-        signature: t.signature.clone(),
-        created_at: 0,
-    });
-
-    let interceptor = ui_ctx.grpc_pool.auth_clone();
-    let old_mode = interceptor.current_mode();
-    if let Some(t) = unblinded.clone() {
-        interceptor.set_anonymous(t);
-    }
-
-    let result = match client.trending(20, unblinded).await {
-        Ok(results) => {
-            if let Some(t) = token {
-                let _ = ui_ctx.token_manager.mark_token_used(&t.id);
-            }
-            results
-                .into_iter()
-                .map(|r| {
-                    let width = r.dims.first().copied().unwrap_or(0) as u32;
-                    let height = r.dims.get(1).copied().unwrap_or(0) as u32;
-                    (r.id, r.preview_url, r.url, width, height)
-                })
-                .collect()
-        }
-        Err(_) => Vec::new(),
-    };
-
-    interceptor.set_mode(old_mode);
-    result
+    ui_ctx.trending_gifs(20).await
+        .into_iter()
+        .map(|r| {
+            let width = r.dims.first().copied().unwrap_or(0) as u32;
+            let height = r.dims.get(1).copied().unwrap_or(0) as u32;
+            (r.id, r.preview_url, r.url, width, height)
+        })
+        .collect()
 }
 
 async fn search_gifs_raw(query: &str, ui_ctx: &UIContext) -> Vec<RawGifData> {
-    let mut client = match ui_ctx.gif_client() {
-        Some(c) => c,
-        None => return Vec::new(),
-    };
-
-    let token = ui_ctx.token_manager.get_available_token().ok().flatten();
-    let unblinded = token.as_ref().map(|t| UnblindedToken {
-        public_key: t.public_key.clone(),
-        signature: t.signature.clone(),
-        created_at: 0,
-    });
-
-    let interceptor = ui_ctx.grpc_pool.auth_clone();
-    let old_mode = interceptor.current_mode();
-    if let Some(t) = unblinded.clone() {
-        interceptor.set_anonymous(t);
-    }
-
-    let result = match client.search(query, 20, unblinded).await {
-        Ok(results) => {
-            if let Some(t) = token {
-                let _ = ui_ctx.token_manager.mark_token_used(&t.id);
-            }
-            results
-                .into_iter()
-                .map(|r| {
-                    let width = r.dims.first().copied().unwrap_or(0) as u32;
-                    let height = r.dims.get(1).copied().unwrap_or(0) as u32;
-                    (r.id, r.preview_url, r.url, width, height)
-                })
-                .collect()
-        }
-        Err(_) => Vec::new(),
-    };
-
-    interceptor.set_mode(old_mode);
-    result
+    ui_ctx.search_gifs(query, 20).await
+        .into_iter()
+        .map(|r| {
+            let width = r.dims.first().copied().unwrap_or(0) as u32;
+            let height = r.dims.get(1).copied().unwrap_or(0) as u32;
+            (r.id, r.preview_url, r.url, width, height)
+        })
+        .collect()
 }

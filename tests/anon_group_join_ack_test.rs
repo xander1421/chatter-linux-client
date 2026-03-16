@@ -64,6 +64,9 @@ fn test_anon_group_join_ack_content_serialization() {
         group_id: group_id.clone(),
         joiner_mailbox_pk: joiner_mailbox_pk.clone(),
         timestamp,
+        profile_key: None,
+        encrypted_display_name: None,
+        encrypted_avatar: None,
     };
 
     let content = Content {
@@ -101,6 +104,9 @@ fn test_sealed_sender_result_has_join_ack_variant() {
         group_id: group_id.clone(),
         joiner_mailbox_pk: joiner_mailbox_pk.clone(),
         timestamp,
+        profile_key: None,
+        encrypted_display_name: None,
+        encrypted_avatar: None,
     };
 
     // Verify we can pattern match on it
@@ -110,6 +116,7 @@ fn test_sealed_sender_result_has_join_ack_variant() {
             group_id: g,
             joiner_mailbox_pk: pk,
             timestamp: t,
+            ..
         } => {
             assert_eq!(s, sender_id);
             assert_eq!(g, group_id);
@@ -172,6 +179,9 @@ fn test_inbox_event_has_join_ack_variant() {
         group_id: group_id.clone(),
         joiner_mailbox_pk: joiner_mailbox_pk.clone(),
         timestamp,
+        profile_key: None,
+        encrypted_display_name: None,
+        encrypted_avatar: None,
     };
 
     // Verify we can pattern match
@@ -181,6 +191,7 @@ fn test_inbox_event_has_join_ack_variant() {
             group_id: g,
             joiner_mailbox_pk: pk,
             timestamp: t,
+            ..
         } => {
             assert_eq!(p, peer_id);
             assert_eq!(g, group_id);

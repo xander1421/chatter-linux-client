@@ -10,7 +10,6 @@ use tokio::sync::broadcast;
 
 use crate::inbox::events::{FriendRequestInfo, InboxEvent};
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::user_client::UserClient;
 use crate::proto::chat_v1::friend_requests_filter;
 
 /// Minimum interval between friend request polls (30 seconds).
@@ -61,7 +60,7 @@ pub async fn poll_friend_requests(
         return;
     }
 
-    let mut user_client = UserClient::new(grpc_pool.channel(), grpc_pool.auth_clone());
+    let mut user_client = grpc_pool.user_client();
 
     // Fetch received requests
     let received = match user_client

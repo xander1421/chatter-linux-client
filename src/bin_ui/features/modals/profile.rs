@@ -62,8 +62,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            match user_service.send_friend_request(&friend_id, None).await {
-                Ok(_) => {
+            match tokio::time::timeout(
+                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                user_service.send_friend_request(&friend_id, None),
+            ).await {
+                Ok(Ok(_)) => {
                     tracing::info!("Friend request sent to {}", friend_id);
 
                     // Refresh sent requests list via UserService
@@ -104,8 +107,16 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         }
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!("Failed to send friend request: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                }
+                Err(_) => {
+                    tracing::error!("Friend request timed out");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -154,8 +165,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            match user_service.remove_friend(&friend_id).await {
-                Ok(()) => {
+            match tokio::time::timeout(
+                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                user_service.remove_friend(&friend_id),
+            ).await {
+                Ok(Ok(())) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -164,8 +178,16 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         }
                     });
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!("Failed to remove friend: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                }
+                Err(_) => {
+                    tracing::error!("Remove friend timed out");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -214,8 +236,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            match user_service.block_user(&user_id).await {
-                Ok(()) => {
+            match tokio::time::timeout(
+                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                user_service.block_user(&user_id),
+            ).await {
+                Ok(Ok(())) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -225,8 +250,16 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         }
                     });
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!("Failed to block user: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                }
+                Err(_) => {
+                    tracing::error!("Block user timed out");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -275,8 +308,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            match user_service.unblock_user(&user_id).await {
-                Ok(()) => {
+            match tokio::time::timeout(
+                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                user_service.unblock_user(&user_id),
+            ).await {
+                Ok(Ok(())) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -285,8 +321,16 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         }
                     });
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!("Failed to unblock user: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_loading(false);
+                        }
+                    });
+                }
+                Err(_) => {
+                    tracing::error!("Unblock user timed out");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_profile_loading(false);
@@ -483,13 +527,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let weak_window = window.as_weak();
     let user_service_save = user_service.clone();
     let attachment_service = ui_ctx.attachment_service.clone();
-    let grpc_pool = ui_ctx.grpc_pool.clone();
     let ui_ctx_save = ui_ctx.clone();
     window.on_edit_profile_save(move |display_name: slint::SharedString, bio: slint::SharedString| {
         let weak = weak_window.clone();
         let user_service = user_service_save.clone();
         let attachment_service = attachment_service.clone();
-        let grpc_pool = grpc_pool.clone();
         let ui_ctx = ui_ctx_save.clone();
         let display_name = display_name.to_string();
         let bio = bio.to_string();
@@ -510,7 +552,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             // 1. Upload avatar if needed
             let mut avatar_url = None;
             if let Some(path) = pending_avatar {
-                match attachment_service.upload_to_cdn_encrypted(&grpc_pool, &path).await {
+                match attachment_service.upload_to_cdn_encrypted(&path).await {
                     Ok(result) => {
                         avatar_url = Some(result.cdn_key);
                         tracing::info!("Uploaded new avatar to CDN: {}", avatar_url.as_ref().unwrap());

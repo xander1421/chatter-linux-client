@@ -187,6 +187,38 @@ impl TimingObfuscation {
         Duration::from_millis(jittered_ms.max(1.0) as u64)
     }
 
+    /// Decorrelation delay after authenticated CDN upload, before anonymous
+    /// mailbox metadata send.
+    ///
+    /// Prevents the server from correlating "User A uploaded 5MB at t=0"
+    /// with "anonymous mailbox write at t=0.2s". The message is already
+    /// shown in the UI (optimistic display), so this delay is invisible
+    /// to the user — it only affects the network send.
+    ///
+    /// Uses 500ms–3s range: long enough that the server can't trivially
+    /// pair upload→mailbox_write across thousands of concurrent users,
+    /// short enough that delivery isn't noticeably delayed.
+    pub async fn delay_for_attachment_decorrelation(&self) {
+        if !self.config.enabled {
+            return;
+        }
+
+        let delay = {
+            let mut rng = rand::rng();
+            // Exponential distribution, mean ~1.5s, clamped to [500ms, 3s].
+            let u: f64 = rng.random::<f64>().max(1e-10);
+            let exp_secs = -u.ln() * 1.5;
+            let clamped = exp_secs.clamp(0.5, 3.0);
+            Duration::from_secs_f64(clamped)
+        };
+
+        tracing::debug!(
+            delay_secs = delay.as_secs_f64(),
+            "Timing obfuscation: attachment decorrelation delay"
+        );
+        sleep(delay).await;
+    }
+
     /// Generate a random delay for batch operations.
     ///
     /// Used between operations in a batch to prevent timing patterns.
@@ -360,5 +392,37 @@ mod tests {
 
         let disabled = TimingObfuscation::new(TimingConfig::disabled());
         assert!(!disabled.is_enabled());
+    }
+
+    #[tokio::test]
+    async fn test_attachment_decorrelation_delay_bounds() {
+        let timing = TimingObfuscation::with_defaults();
+
+        let start = std::time::Instant::now();
+        timing.delay_for_attachment_decorrelation().await;
+        let elapsed = start.elapsed();
+
+        // Should be in [500ms, 3s] range
+        assert!(
+            elapsed.as_millis() >= 450, // small buffer for test scheduling
+            "decorrelation delay too short: {}ms",
+            elapsed.as_millis()
+        );
+        assert!(
+            elapsed.as_millis() <= 3500, // small buffer
+            "decorrelation delay too long: {}ms",
+            elapsed.as_millis()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_attachment_decorrelation_disabled_is_instant() {
+        let timing = TimingObfuscation::new(TimingConfig::disabled());
+
+        let start = std::time::Instant::now();
+        timing.delay_for_attachment_decorrelation().await;
+        let elapsed = start.elapsed();
+
+        assert!(elapsed.as_millis() < 10);
     }
 }

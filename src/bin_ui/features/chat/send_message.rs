@@ -25,7 +25,6 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let message_service = ui_ctx.message_service.clone();
     let chat_state = ui_ctx.chat_state.clone();
     let auth_state = ui_ctx.auth_state.clone();
-    let grpc_pool = ui_ctx.grpc_pool.clone();
     let mailbox_manager = ui_ctx.mailbox_manager.clone();
     let channel_service = ui_ctx.channel_service.clone();
     let attachment_service = ui_ctx.attachment_service.clone();
@@ -86,7 +85,6 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
         let message_service = message_service.clone();
         let auth_state = auth_state.clone();
-        let grpc_pool = grpc_pool.clone();
         let mailbox_manager = mailbox_manager.clone();
         let attachment_service = attachment_service.clone();
         let anon_group_service = anon_group_service.clone();
@@ -145,9 +143,18 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
 
             // 2. Upload attachments (shared — all types pre-upload now)
-            let uploaded = super::helpers::upload_pending_attachments(
-                &pending_attachments, &attachment_service, &grpc_pool, "send",
-            ).await;
+            let uploaded = match tokio::time::timeout(
+                crate::bin_ui::ui_helpers::UI_UPLOAD_TIMEOUT,
+                super::helpers::upload_pending_attachments(
+                    &pending_attachments, &attachment_service, "send",
+                ),
+            ).await {
+                Ok(u) => u,
+                Err(_) => {
+                    tracing::error!("Attachment upload timed out");
+                    return;
+                }
+            };
 
             // 3. Build quote context (shared)
             let quote = if is_reply {
@@ -236,10 +243,17 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             };
 
             // 6. Route through gateway (shared)
-            let result = match gateway::route_outgoing(intent, &services).await {
-                Ok(r) => r,
-                Err(e) => {
+            let result = match tokio::time::timeout(
+                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                gateway::route_outgoing(intent, &services),
+            ).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => {
                     gateway::shared::handle_send_error(&e, "send");
+                    return;
+                }
+                Err(_) => {
+                    tracing::error!("Message send timed out");
                     return;
                 }
             };

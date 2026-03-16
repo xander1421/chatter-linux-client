@@ -407,7 +407,7 @@ fn dispatch_dm_content(
 
             // Create attachment records from pointers (service layer responsibility)
             if !attachments.is_empty() {
-                let attachment_service = AttachmentService::new(attachment_repo.clone());
+                let attachment_service = AttachmentService::new_local(attachment_repo.clone());
                 let created_ids = attachment_service.create_from_pointers(&attachments);
                 tracing::debug!(
                     peer_id = %peer_id,

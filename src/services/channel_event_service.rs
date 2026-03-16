@@ -15,7 +15,6 @@ use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::message_repo::MessageRepository;
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::channel_client::ChannelClient;
 use crate::proto::chat_v1::channel_event;
 use crate::events::EventBus;
 use crate::inbox::DomainEvent;
@@ -87,10 +86,7 @@ impl ChannelEventService {
     
     /// Run the event stream with automatic retry on failure.
     async fn run_stream_with_retry(&self) -> Result<(), ChannelEventError> {
-        let mut channel_client = ChannelClient::new(
-            self.grpc_pool.channel(),
-            self.grpc_pool.auth_clone(),
-        );
+        let mut channel_client = self.grpc_pool.channel_client();
         
         // Stream events for all channels
         let mut stream = channel_client

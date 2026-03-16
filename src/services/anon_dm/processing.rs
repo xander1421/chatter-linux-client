@@ -140,7 +140,7 @@ impl AnonDmService {
                 if has_text || has_attachments {
                     // Create attachment records from pointers if any
                     let attachment_ids = if has_attachments {
-                        let attachment_service = AttachmentService::new(self.attachment_repo.clone());
+                        let attachment_service = AttachmentService::new_local(self.attachment_repo.clone());
                         let ids = attachment_service.create_from_pointers(&data_msg.attachments);
                         tracing::info!(
                             conversation_id = %conversation_id,

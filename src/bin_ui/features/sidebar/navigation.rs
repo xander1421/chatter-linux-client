@@ -81,6 +81,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<UIContext>) 
 pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let auth_state = ui_ctx.auth_state.clone();
     let privacy_state = ui_ctx.privacy_state.clone();
+    let signal_service = ui_ctx.signal_service.clone();
 
     let weak_window = window.as_weak();
 
@@ -88,6 +89,7 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>
         let weak = weak_window.clone();
         let auth_state = auth_state.clone();
         let privacy_state = privacy_state.clone();
+        let signal_service = signal_service.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
@@ -107,6 +109,23 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>
                 w.set_settings_typing_indicators(privacy.global_typing_indicators);
 
                 w.set_active_modal("settings".into());
+            }
+        });
+
+        // Fetch identity fingerprint asynchronously and set it on the UI
+        let weak_fp = weak_window.clone();
+        tokio::spawn(async move {
+            match signal_service.get_identity_fingerprint().await {
+                Ok(fingerprint) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_fp.upgrade() {
+                            w.set_settings_identity_fingerprint(fingerprint.into());
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load identity fingerprint for settings: {}", e);
+                }
             }
         });
     });

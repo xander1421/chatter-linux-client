@@ -70,6 +70,8 @@ fn create_test_anon_dm(peer_id: UserId) -> AnonDm {
         status: AnonDmStatus::Active,
         peer_mailbox_pk: None,
         peer_profile_key: None,
+        peer_display_name: None,
+        peer_avatar: None,
         created_at: now,
         updated_at: now,
         last_message_at: None,
@@ -79,7 +81,7 @@ fn create_test_anon_dm(peer_id: UserId) -> AnonDm {
 
 /// Create a test AnonGroup using the constructor.
 fn create_test_anon_group(name: &str) -> AnonGroup {
-    AnonGroup::new_as_owner(name.to_string())
+    AnonGroup::new_as_owner(name.to_string(), chatter_linux::domain::UserId::new())
 }
 
 // ============================================================================

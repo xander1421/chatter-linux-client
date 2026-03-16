@@ -126,9 +126,19 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                     if is_group_call {
                         // Route through anon group service
-                        let group_id = chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(
+                        let group_id = match chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(
                             pending.conversation_id.as_bytes()
-                        ).expect("conversation_id bytes are valid");
+                        ) {
+                            Some(id) => id,
+                            None => {
+                                tracing::error!("Invalid group conversation_id bytes (expected 16 bytes, got {})",
+                                    pending.conversation_id.as_bytes().len());
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_incoming_call_visible(false);
+                                }
+                                return;
+                            }
+                        };
                         if let Err(e) = anon_group_service.send_call_answer(
                             &group_id,
                             &pending.call_room_id,

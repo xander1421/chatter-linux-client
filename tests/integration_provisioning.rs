@@ -328,7 +328,7 @@ async fn test_list_provisioning_sessions() {
     let found = list_response
         .sessions
         .iter()
-        .any(|s| s.uuid == start_response.provisioning_uuid);
+        .any(|s| s.provisioning_uuid == start_response.provisioning_uuid);
     assert!(found, "Created session should be in the list");
 }
 

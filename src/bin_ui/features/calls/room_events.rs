@@ -59,7 +59,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             // Check if participant already exists (e.g. pre-populated placeholder)
                             let existing: Vec<CallParticipantData> =
                                 (0..data.participants.row_count())
-                                    .map(|i| data.participants.row_data(i).unwrap())
+                                    .map(|i| data.participants.row_data(i).unwrap_or_default())
                                     .collect();
                             let already_has_remote = existing.iter().any(|p| {
                                 let uid = p.user_id.as_str();
@@ -148,7 +148,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 let participants: Vec<CallParticipantData> =
                                     (0..data.participants.row_count())
                                         .map(|i| {
-                                            let mut p = data.participants.row_data(i).unwrap();
+                                            let mut p = data.participants.row_data(i).unwrap_or_default();
                                             if p.user_id.to_string() == identity {
                                                 // Always set is_video_enabled for any video track
                                                 // (camera or screen share) so the tile shows video

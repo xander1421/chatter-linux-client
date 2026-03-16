@@ -19,7 +19,6 @@ use std::sync::Arc;
 use crate::domain::UserId;
 use crate::error::NetworkError;
 use crate::mailbox::token_manager::MailboxToken;
-use crate::network::grpc::anonymous_client::AnonymousAuthClient;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::signal_service::SignalService;
@@ -69,7 +68,7 @@ impl PairwiseService {
 
     /// Create an auth client for key fetching.
     pub fn auth_client(&self) -> AuthClient {
-        AuthClient::new(self.grpc_pool.channel(), self.grpc_pool.auth_clone())
+        self.grpc_pool.auth_client()
     }
 
     /// Encrypt plaintext for a peer using Signal Protocol (Sealed Sender).
@@ -225,7 +224,7 @@ impl PairwiseService {
         let device_id = 1u32;
 
         // Fetch prekey bundle ANONYMOUSLY using blind signature token
-        let mut anon_auth = AnonymousAuthClient::new(self.grpc_pool.channel());
+        let mut anon_auth = self.grpc_pool.anonymous_auth_client();
         let bundle_response = anon_auth
             .get_pre_key_bundle_anonymous(
                 &peer_id_str,

@@ -384,4 +384,125 @@ mod tests {
         let err = result.unwrap_err();
         assert!(matches!(err, MailboxError::InvalidServerKey(_)));
     }
+
+    /// Simulates a malicious server attempting to correlate blinded messages
+    /// with their original plaintexts via bit-pattern matching.
+    ///
+    /// Generates 1,000 distinct Ed25519 public keys, blinds each one, then
+    /// checks that a server seeing only the blinded messages cannot determine
+    /// which plaintext produced which blinded output. The server's strategy:
+    ///
+    /// 1. **Byte-prefix matching** — do any blinded messages share leading
+    ///    bytes with the plaintext that produced them?
+    /// 2. **Hamming-distance bias** — is the hamming distance between a
+    ///    blinded message and its source plaintext statistically closer than
+    ///    between that blinded message and a random other plaintext?
+    /// 3. **Duplicate detection** — do identical plaintexts produce identical
+    ///    blinded outputs? (They must not, since blinding uses fresh randomness.)
+    #[test]
+    fn test_blind_signature_no_correlation() {
+        use blind_rsa_signatures::KeyPair;
+        use rand::Rng;
+
+        const N: usize = 1_000;
+
+        // Generate server keypair (the "malicious server" has the secret key)
+        let kp = KeyPair::generate(2048).expect("RSA keygen");
+        let server_pk = ServerPublicKey {
+            inner: kp.pk,
+            key_id: "test-key".to_string(),
+            valid_until: u64::MAX,
+        };
+
+        // Generate N distinct 32-byte "Ed25519 public keys"
+        let mut rng = rand::rng();
+        let plaintexts: Vec<[u8; 32]> = (0..N)
+            .map(|_| {
+                let mut buf = [0u8; 32];
+                rng.fill(&mut buf);
+                buf
+            })
+            .collect();
+
+        // Blind each plaintext
+        let blinded: Vec<Vec<u8>> = plaintexts
+            .iter()
+            .map(|pt| {
+                let op = blind_key(&server_pk, pt).expect("blinding");
+                op.blinded_message
+            })
+            .collect();
+
+        // --- Attack 1: byte-prefix correlation ---
+        // Check that no blinded message shares a 4-byte prefix with its plaintext.
+        let prefix_matches = plaintexts
+            .iter()
+            .zip(blinded.iter())
+            .filter(|(pt, bm)| bm.len() >= 4 && bm[..4] == pt[..4])
+            .count();
+        // With 256^4 possible prefixes, expected matches ≈ 0 for 1,000 samples.
+        // Allow at most 1 as a fluke (p ≈ 2^-32 per trial).
+        assert!(
+            prefix_matches <= 1,
+            "Too many prefix matches ({prefix_matches}/1000) — blinding may leak plaintext bits"
+        );
+
+        // --- Attack 2: hamming-distance bias ---
+        // For each blinded message, compare hamming distance to its own plaintext
+        // vs. hamming distance to a random other plaintext. If blinding is sound,
+        // both distributions should be indistinguishable (centered around 50% of bits).
+        let compare_len = 32; // compare over plaintext length
+        let mut own_distances: Vec<u32> = Vec::with_capacity(N);
+        let mut other_distances: Vec<u32> = Vec::with_capacity(N);
+
+        for i in 0..N {
+            let bm = &blinded[i];
+            if bm.len() < compare_len {
+                continue;
+            }
+            // Distance to own plaintext
+            let own_dist: u32 = plaintexts[i]
+                .iter()
+                .zip(bm.iter())
+                .map(|(a, b)| (a ^ b).count_ones())
+                .sum();
+            own_distances.push(own_dist);
+
+            // Distance to a different plaintext (next one, wrapping)
+            let other = &plaintexts[(i + 1) % N];
+            let other_dist: u32 = other
+                .iter()
+                .zip(bm.iter())
+                .map(|(a, b)| (a ^ b).count_ones())
+                .sum();
+            other_distances.push(other_dist);
+        }
+
+        let own_mean = own_distances.iter().sum::<u32>() as f64 / own_distances.len() as f64;
+        let other_mean =
+            other_distances.iter().sum::<u32>() as f64 / other_distances.len() as f64;
+
+        // Both means should be close to 128 (half of 256 bits). Allow 10% tolerance.
+        // A biased blinding scheme would show own_mean significantly lower than other_mean.
+        let diff = (own_mean - other_mean).abs();
+        assert!(
+            diff < 10.0,
+            "Hamming distance bias detected: own_mean={own_mean:.1}, other_mean={other_mean:.1}, \
+             diff={diff:.1} — blinding may be leaking information"
+        );
+
+        // --- Attack 3: duplicate blinded outputs from identical plaintexts ---
+        // Blind the same plaintext twice; the outputs must differ.
+        let fixed_pt = [0xABu8; 32];
+        let blind1 = blind_key(&server_pk, &fixed_pt)
+            .expect("blinding")
+            .blinded_message;
+        let blind2 = blind_key(&server_pk, &fixed_pt)
+            .expect("blinding")
+            .blinded_message;
+        assert_ne!(
+            blind1, blind2,
+            "Identical plaintexts produced identical blinded messages — randomness failure"
+        );
+    }
 }

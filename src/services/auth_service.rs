@@ -157,6 +157,35 @@ impl AuthService {
         }
     }
 
+    // ========================================================================
+    // Connection management (delegates to grpc_pool)
+    // ========================================================================
+
+    /// Get the current server endpoint URL.
+    pub fn endpoint(&self) -> String {
+        self.grpc_pool.endpoint()
+    }
+
+    /// Update the server URL. Disconnects any existing connection.
+    pub fn set_server_url(&self, url: &str) -> Result<(), NetworkError> {
+        self.grpc_pool.set_url(url)
+    }
+
+    /// Check if connected to the server.
+    pub fn is_connected(&self) -> bool {
+        self.grpc_pool.is_connected()
+    }
+
+    /// Connect to the server.
+    pub async fn connect(&self) -> Result<(), NetworkError> {
+        self.grpc_pool.connect().await
+    }
+
+    /// Disconnect from the server.
+    pub fn disconnect(&self) {
+        self.grpc_pool.disconnect();
+    }
+
     /// Create an auth client for making gRPC calls.
     /// Returns None if not connected to server.
     pub fn try_auth_client(&self) -> Option<AuthClient> {

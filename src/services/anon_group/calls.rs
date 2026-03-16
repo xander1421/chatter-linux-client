@@ -41,12 +41,10 @@ impl AnonGroupService {
 
     /// Request new call room tokens from the server.
     pub async fn request_call_room_tokens(&self, count: u32) -> Result<u32, AnonGroupError> {
-        let channel = self.grpc_pool.try_channel().ok_or_else(|| {
-            AnonGroupError::CryptoError("No gRPC connection available".to_string())
-        })?;
-        let auth = self.grpc_pool.auth_clone();
-
-        let mut client = crate::network::grpc::MailboxClient::new(channel, auth);
+        if !self.grpc_pool.is_connected() {
+            return Err(AnonGroupError::CryptoError("No gRPC connection available".to_string()));
+        }
+        let mut client = self.grpc_pool.mailbox_client();
         self.token_manager
             .request_call_room_tokens(&mut client, count)
             .await

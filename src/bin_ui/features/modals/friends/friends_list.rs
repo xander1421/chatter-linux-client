@@ -95,8 +95,11 @@ pub(crate) fn wire_remove_friend(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            match user_service.remove_friend(&friend_id).await {
-                Ok(_) => {
+            match tokio::time::timeout(
+                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                user_service.remove_friend(&friend_id),
+            ).await {
+                Ok(Ok(_)) => {
                     tracing::info!("Removed friend {}", user_id_str);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -104,8 +107,16 @@ pub(crate) fn wire_remove_friend(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         }
                     });
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!("Failed to remove friend: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friends_loading(false);
+                        }
+                    });
+                }
+                Err(_) => {
+                    tracing::error!("Remove friend timed out");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);
@@ -148,8 +159,11 @@ pub(crate) fn wire_unblock_user(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            match user_service.unblock_user(&blocked_user_id).await {
-                Ok(_) => {
+            match tokio::time::timeout(
+                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                user_service.unblock_user(&blocked_user_id),
+            ).await {
+                Ok(Ok(_)) => {
                     tracing::info!("Unblocked user {}", user_id_str);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -157,8 +171,16 @@ pub(crate) fn wire_unblock_user(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         }
                     });
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!("Failed to unblock user: {}", e);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friends_loading(false);
+                        }
+                    });
+                }
+                Err(_) => {
+                    tracing::error!("Unblock user timed out");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);

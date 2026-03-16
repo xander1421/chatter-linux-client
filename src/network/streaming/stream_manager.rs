@@ -71,8 +71,6 @@ use tokio_stream::StreamExt;
 
 use crate::network::connection::ConnectionStateMachine;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::message_client::MessageClient;
-use crate::network::grpc::user_client::UserClient;
 use crate::network::streaming::message_stream::MessageEventRouter;
 use crate::network::streaming::presence_stream::PresenceRouter;
 
@@ -245,15 +243,13 @@ impl StreamManager {
     /// - Typing indicators
     /// - Read receipts
     async fn start_message_events_stream(&self) -> Result<(), NetworkError> {
-        let channel = self.pool.channel();
-        let auth = self.pool.auth_clone();
+        let mut client = self.pool.message_client();
         let mut shutdown_rx = self.shutdown_receiver();
         let router = Arc::clone(&self.message_router);
 
         let (shutdown_tx, mut shutdown_oneshot) = oneshot::channel();
 
         let task = tokio::spawn(async move {
-            let mut client = MessageClient::new(channel, auth);
 
             // Start global events stream (all user's channels)
             let stream_result = client.stream_global_events(vec![], None).await;
@@ -309,15 +305,13 @@ impl StreamManager {
     ///
     /// Receives real-time presence updates for friends.
     async fn start_presence_stream(&self) -> Result<(), NetworkError> {
-        let channel = self.pool.channel();
-        let auth = self.pool.auth_clone();
+        let mut client = self.pool.user_client();
         let mut shutdown_rx = self.shutdown_receiver();
         let router = Arc::clone(&self.presence_router);
 
         let (shutdown_tx, mut shutdown_oneshot) = oneshot::channel();
 
         let task = tokio::spawn(async move {
-            let mut client = UserClient::new(channel, auth);
 
             let stream_result = client.stream_presence().await;
 
