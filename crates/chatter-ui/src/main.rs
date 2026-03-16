@@ -163,10 +163,7 @@ async fn app_main() {
             weak_window.clone(),
             &ui_ctx,
         );
-        let _pin_persistence_handle = bin_ui::features::auth::inbox::spawn_pin_persistence_handler(
-            ui_ctx.event_bus.clone(),
-            ui_ctx.message_service.clone(),
-        );
+        // Pin persistence is now spawned by start_inbox()
 
         // Subscribe to DomainEvent for UI updates (sidebar, message list, etc.)
         {

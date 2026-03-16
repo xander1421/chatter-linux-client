@@ -81,6 +81,18 @@ impl AppContext {
         })
     }
 
+    /// Create a new AppContext with an optional server URL override.
+    ///
+    /// If `server_url` is `Some(url)`, that URL is used instead of the
+    /// `CHATTER_SERVER_URL` environment variable or the built-in default.
+    pub fn with_config(server_url: Option<String>) -> Result<Self, ContextError> {
+        if let Some(url) = server_url {
+            // SAFETY: Called before any threads are spawned (single-threaded init).
+            unsafe { std::env::set_var(super::infrastructure::SERVER_URL_ENV, &url); }
+        }
+        Self::new()
+    }
+
     /// Get the UI context - the primary API for UI code.
     pub fn ui_context(&self) -> Arc<UIContext> {
         self.ui_context.clone()

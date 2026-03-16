@@ -20,10 +20,7 @@ use chatter_core::app::UIContext;
 
 use crate::MainWindow;
 
-pub use helpers::{
-    get_dm_channel_from_peer, send_channel_delivery_receipt, send_channel_read_receipts,
-    send_dm_delivery_receipt, send_dm_read_receipts,
-};
+pub use helpers::get_dm_channel_from_peer;
 
 /// Wire chat callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {

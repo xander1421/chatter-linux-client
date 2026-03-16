@@ -1,25 +1,46 @@
-//! Chatter Linux Client Library
+//! Chatter Core — secure messaging SDK.
 //!
-//! Native Linux desktop client for Chatter secure messaging.
+//! Start with [`client::ChatterClient`] and the [`prelude`] module.
 
-pub mod app;
-pub mod calls;
+// ── Public API ──────────────────────────────────────────────────────────────
+
+pub mod client;
+pub mod prelude;
 pub mod domain;
-pub mod crypto;
-pub mod storage;
-pub mod network;
-pub mod services;
-pub mod sync;
-pub mod inbox;
-pub mod mailbox;
-pub mod media;
-pub mod system;
+pub mod events;
 pub mod state;
+pub mod error;
+pub mod service_types;
+pub mod wire;
+pub mod media;
+pub mod calls;
+pub mod crypto;
+pub mod system;
+
+// ── Internal modules ────────────────────────────────────────────────────────
+
+#[doc(hidden)]
+pub mod app;
+#[doc(hidden)]
+pub mod storage;
+#[doc(hidden)]
+pub mod network;
+#[doc(hidden)]
+pub mod services;
+#[doc(hidden)]
+pub mod sync;
+#[doc(hidden)]
+pub mod inbox;
+#[doc(hidden)]
+pub mod mailbox;
+#[doc(hidden)]
 pub mod ui;
 #[cfg(feature = "local-ai")]
+#[doc(hidden)]
 pub mod local_ai;
-pub mod events;
-pub mod error;
+#[doc(hidden)]
 pub mod util;
+#[doc(hidden)]
 pub mod proto;
+#[doc(hidden)]
 pub mod config;

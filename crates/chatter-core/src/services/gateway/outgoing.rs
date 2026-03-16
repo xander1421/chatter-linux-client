@@ -15,6 +15,7 @@
 //! 2. Add a match arm in `route_outgoing`
 //! 3. Map the service result to `SendResult`
 
+use std::sync::Arc;
 use std::path::PathBuf;
 
 use crate::domain::anon_dm::AnonDmId;
@@ -26,9 +27,15 @@ use crate::mailbox::CallRoomToken;
 use crate::proto::content_v1::{AttachmentPointer, anon_call_answer, anon_call_hangup};
 use crate::services::anon_dm::{AnonDmError, AnonDmService};
 use crate::services::anon_group::{AnonGroupError, AnonGroupService};
+use crate::domain::attachment::Attachment;
+use crate::domain::channel::ChannelType;
 use crate::services::mailbox_manager::MailboxManager;
+use crate::services::attachment::{AttachmentError, AttachmentService};
+use crate::services::channel::ChannelService;
 use crate::services::message::{MessageError, MessageService};
 use crate::services::user::{UserError, UserService};
+use crate::state::ActiveConversation;
+use crate::state::chat_state::PendingAttachment;
 
 // =============================================================================
 // Intent
@@ -182,6 +189,9 @@ pub enum SendError {
 
     #[error("Action not supported for this channel type")]
     UnsupportedAction,
+
+    #[error("attachment upload failed: {0}")]
+    Upload(#[from] AttachmentError),
 }
 
 // =============================================================================
@@ -392,6 +402,51 @@ impl<'a> OutgoingServices<'a> {
     }
 }
 
+/// Owned variant of [`OutgoingServices`] for use across await points.
+pub struct OwnedOutgoingServices {
+    pub message_service: Arc<MessageService>,
+    pub mailbox_manager: Arc<MailboxManager>,
+    pub user_service: Option<Arc<UserService>>,
+    pub group_fanout: Option<Arc<GroupFanout>>,
+    pub anon_dm_service: Option<Arc<AnonDmService>>,
+    pub anon_group_service: Option<Arc<AnonGroupService>>,
+}
+
+impl OwnedOutgoingServices {
+    pub fn from_client(client: &crate::client::ChatterClient) -> Self {
+        Self::from_ui_ctx(&client.ui)
+    }
+
+    pub fn from_ui_ctx(ui_ctx: &crate::app::UIContext) -> Self {
+        Self {
+            message_service: ui_ctx.message_service.clone(),
+            mailbox_manager: ui_ctx.mailbox_manager.clone(),
+            user_service: Some(ui_ctx.user_service.clone()),
+            group_fanout: ui_ctx.group_fanout.get().cloned(),
+            anon_dm_service: Some(ui_ctx.anon_dm_service.clone()),
+            anon_group_service: Some(ui_ctx.anon_group_service.clone()),
+        }
+    }
+
+    fn as_borrowed(&self) -> OutgoingServices<'_> {
+        OutgoingServices {
+            message_service: &self.message_service,
+            mailbox_manager: &self.mailbox_manager,
+            user_service: self.user_service.as_deref(),
+            group_fanout: self.group_fanout.as_deref(),
+            anon_dm_service: self.anon_dm_service.as_deref(),
+            anon_group_service: self.anon_group_service.as_deref(),
+        }
+    }
+}
+
+pub async fn route_outgoing_owned(
+    intent: OutgoingIntent,
+    services: &OwnedOutgoingServices,
+) -> Result<SendResult, SendError> {
+    route_outgoing(intent, &services.as_borrowed()).await
+}
+
 impl SendResult {
     /// Get a unified message ID string (works for all conversation types).
     pub fn message_id_string(&self) -> String {
@@ -596,4 +651,127 @@ async fn route_anon_group(
         anon_message_id: Some(message_id.as_str().to_string()),
         call_result: None,
     })
+}
+
+// =============================================================================
+// Send options + upload helpers (shared by ChatterClient and UIContext)
+// =============================================================================
+
+/// Options for [`send_message()`].
+#[derive(Debug, Default)]
+pub struct SendOptions {
+    /// Thread ID for thread replies (channels only).
+    pub thread_id: Option<MessageId>,
+    /// Integration IDs mentioned in the message (channels only).
+    pub mentioned_integrations: Vec<IntegrationId>,
+    /// Whether this message targets an AI bot (channels only).
+    pub targets_ai_bot: bool,
+}
+
+/// Result of uploading pending attachments.
+pub struct UploadedAttachments {
+    /// AttachmentPointer protos for the Content proto.
+    pub pointers: Vec<AttachmentPointer>,
+    /// Full Attachment domain objects for display.
+    pub attachments: Vec<Attachment>,
+}
+
+/// Upload pending attachments to CDN, returning pointers and display data.
+pub async fn upload_attachments(
+    pending: &[PendingAttachment],
+    attachment_service: &AttachmentService,
+) -> UploadedAttachments {
+    let mut pointers = Vec::with_capacity(pending.len());
+    let mut attachments = Vec::with_capacity(pending.len());
+
+    for att in pending {
+        if let Some(pointer) = &att.pointer {
+            pointers.push(pointer.clone());
+            if let Ok(Some(full_att)) = attachment_service.get(&att.id) {
+                attachments.push(full_att);
+            }
+            continue;
+        }
+
+        match attachment_service.upload_to_cdn_encrypted(&att.path).await {
+            Ok(res) => {
+                pointers.push(res.to_attachment_pointer());
+                if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) {
+                    attachments.push(full_att);
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    path = %att.path.display(),
+                    error = %e,
+                    "Failed to upload attachment"
+                );
+            }
+        }
+    }
+
+    UploadedAttachments { pointers, attachments }
+}
+
+/// Map `ActiveConversation` to `OutgoingIntent`.
+pub fn build_intent(
+    conversation: ActiveConversation,
+    text: &str,
+    attachment_pointers: Vec<AttachmentPointer>,
+    quote: Option<QuoteIntent>,
+    options: &SendOptions,
+    channel_service: &ChannelService,
+) -> Result<OutgoingIntent, SendError> {
+    match conversation {
+        ActiveConversation::AnonDm(id) => Ok(OutgoingIntent::AnonDm {
+            conversation_id: id,
+            text: text.to_string(),
+            attachment_pointers,
+            quote,
+        }),
+        ActiveConversation::AnonGroup(id) => Ok(OutgoingIntent::AnonGroup {
+            group_id: id,
+            text: text.to_string(),
+            attachment_pointers,
+            quote,
+        }),
+        ActiveConversation::Dm { channel_id, peer_id } => Ok(OutgoingIntent::ChannelDm {
+            peer_id,
+            dm_channel_id: channel_id,
+            text: text.to_string(),
+            attachment_pointers,
+            file_paths: vec![],
+            quote,
+        }),
+        ActiveConversation::Channel(id) => {
+            let is_saved = channel_service
+                .get_channel_local(&id)
+                .ok()
+                .flatten()
+                .map(|c| c.channel_type == ChannelType::SavedMessages)
+                .unwrap_or(false);
+
+            if is_saved {
+                let att_ids = attachment_pointers
+                    .iter()
+                    .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key))
+                    .collect();
+                Ok(OutgoingIntent::SavedMessages {
+                    text: text.to_string(),
+                    attachment_ids: att_ids,
+                })
+            } else {
+                Ok(OutgoingIntent::Channel {
+                    channel_id: id,
+                    text: text.to_string(),
+                    attachment_pointers,
+                    file_paths: vec![],
+                    thread_id: options.thread_id,
+                    mentioned_integrations: options.mentioned_integrations.clone(),
+                    targets_ai_bot: options.targets_ai_bot,
+                })
+            }
+        }
+        ActiveConversation::None => Err(SendError::UnsupportedAction),
+    }
 }

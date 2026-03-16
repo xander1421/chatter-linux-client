@@ -13,7 +13,6 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::app::UIContext;
-use chatter_core::domain::channel::ChannelType;
 use chatter_core::services::gateway;
 use chatter_core::state::ActiveConversation;
 
@@ -22,15 +21,9 @@ use super::typing::clear_outgoing_typing;
 use crate::{MainWindow, PendingAttachmentData};
 
 pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let message_service = ui_ctx.message_service.clone();
     let chat_state = ui_ctx.chat_state.clone();
     let auth_state = ui_ctx.auth_state.clone();
-    let mailbox_manager = ui_ctx.mailbox_manager.clone();
-    let channel_service = ui_ctx.channel_service.clone();
     let attachment_service = ui_ctx.attachment_service.clone();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let group_fanout = ui_ctx.group_fanout.get().cloned();
     let ui_ctx_jarvis = ui_ctx.clone();
 
     let weak_window = window.as_weak();
@@ -83,15 +76,10 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             });
         }
 
-        let message_service = message_service.clone();
         let auth_state = auth_state.clone();
-        let mailbox_manager = mailbox_manager.clone();
         let attachment_service = attachment_service.clone();
-        let anon_group_service = anon_group_service.clone();
-        let anon_dm_service = anon_dm_service.clone();
-        let channel_service = channel_service.clone();
-        let group_fanout = group_fanout.clone();
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_jarvis.clone();
 
         // Determine active conversation from chat state
         let conversation = chat_state.active_conversation();
@@ -142,110 +130,25 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
             let current_user_name = auth_state.get().display_name.unwrap_or_else(|| "Me".to_string());
 
-            // 2. Upload attachments (shared — all types pre-upload now)
-            let uploaded = match tokio::time::timeout(
-                crate::bin_ui::ui_helpers::UI_UPLOAD_TIMEOUT,
-                super::helpers::upload_pending_attachments(
-                    &pending_attachments, &attachment_service, "send",
-                ),
-            ).await {
-                Ok(u) => u,
-                Err(_) => {
-                    tracing::error!("Attachment upload timed out");
-                    return;
-                }
-            };
-
-            // 3. Build quote context (shared)
+            // 2. Build quote from reply context
             let quote = if is_reply {
                 let reply = match super::helpers::parse_reply_context(&reply_to_sender, &reply_to_timestamp) {
                     Some(r) => r,
                     None => return,
                 };
-                // For DM/Channel, look up preview text from DB; anon paths leave it None
-                let preview_text = if !conversation.is_anon() {
-                    message_service.get_by_sender_timestamp(&reply.sender_id, reply.timestamp)
-                        .ok()
-                        .flatten()
-                        .map(|msg| gateway::shared::truncate_preview(&msg.as_text().unwrap_or_default()))
-                } else {
-                    None
-                };
                 Some(gateway::QuoteIntent {
                     author_id: reply.sender_id,
                     timestamp: reply.timestamp,
-                    preview_text,
+                    preview_text: None, // send_message() fills this in
                 })
             } else {
                 None
             };
 
-            // 4. Build services (shared — from_ctx fills all references)
-            let services = gateway::OutgoingServices {
-                message_service: &message_service,
-                mailbox_manager: &mailbox_manager,
-                user_service: None,
-                group_fanout: group_fanout.as_deref(),
-                anon_dm_service: Some(&anon_dm_service),
-                anon_group_service: Some(&anon_group_service),
-            };
-
-            // 5. Build intent (per-type — thin match)
-            let intent = match conversation {
-                ActiveConversation::AnonDm(id) => gateway::OutgoingIntent::AnonDm {
-                    conversation_id: id,
-                    text: text.clone(),
-                    attachment_pointers: uploaded.pointers.clone(),
-                    quote,
-                },
-                ActiveConversation::AnonGroup(id) => gateway::OutgoingIntent::AnonGroup {
-                    group_id: id,
-                    text: text.clone(),
-                    attachment_pointers: uploaded.pointers.clone(),
-                    quote,
-                },
-                ActiveConversation::Dm { channel_id, peer_id } => gateway::OutgoingIntent::ChannelDm {
-                    peer_id,
-                    dm_channel_id: channel_id,
-                    text: text.clone(),
-                    attachment_pointers: uploaded.pointers.clone(),
-                    file_paths: vec![],
-                    quote,
-                },
-                ActiveConversation::Channel(id) => {
-                    // SavedMessages goes through its own intent
-                    let is_saved = channel_service.get_channel_local(&id)
-                        .ok().flatten()
-                        .map(|c| c.channel_type == ChannelType::SavedMessages)
-                        .unwrap_or(false);
-
-                    if is_saved {
-                        let att_ids = uploaded.pointers.iter()
-                            .map(|p| chatter_core::domain::AttachmentId::from_cdn_key(&p.cdn_key))
-                            .collect();
-                        gateway::OutgoingIntent::SavedMessages {
-                            text: text.clone(),
-                            attachment_ids: att_ids,
-                        }
-                    } else {
-                        gateway::OutgoingIntent::Channel {
-                            channel_id: id,
-                            text: text.clone(),
-                            attachment_pointers: uploaded.pointers.clone(),
-                            file_paths: vec![],
-                            thread_id: None,
-                            mentioned_integrations: vec![],
-                            targets_ai_bot: false,
-                        }
-                    }
-                }
-                ActiveConversation::None => return,
-            };
-
-            // 6. Route through gateway (shared)
+            // 3. Send via core client
             let result = match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                gateway::route_outgoing(intent, &services),
+                ui_ctx.send_message(conversation, &text, &pending_attachments, quote, None),
             ).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
@@ -281,8 +184,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             };
 
             // Attachments: always use pre-uploaded data (available for all types)
-            let mut attachment_display: Vec<_> = uploaded.attachments.iter()
-                .map(|a| attachment_to_display_data(a))
+            let mut attachment_display: Vec<_> = pending_attachments.iter()
+                .filter_map(|pa| attachment_service.get(&pa.id).ok().flatten())
+                .map(|a| attachment_to_display_data(&a))
                 .collect();
             // Bootstrap sends have no attachments yet (key exchange must complete first)
             if result.bootstrap_initiated {

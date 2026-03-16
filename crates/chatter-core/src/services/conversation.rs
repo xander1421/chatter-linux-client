@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use crate::app::UIContext;
+use crate::client::ChatterClient;
 use crate::domain::ids::{ChannelId, UserId};
 use crate::state::ActiveConversation;
 
@@ -48,16 +49,29 @@ pub struct ConversationHandle {
 }
 
 impl ConversationHandle {
-    /// Create from the current active conversation.
+    /// Create a handle for a specific conversation.
     pub fn new(conversation: ActiveConversation, ui_ctx: Arc<UIContext>) -> Self {
         Self { conversation, ui_ctx }
     }
 
-    /// Create from the current chat state.
+    /// Create from a [`ChatterClient`] (SDK entry point).
+    pub fn from_client(conversation: ActiveConversation, client: &Arc<ChatterClient>) -> Self {
+        Self { conversation, ui_ctx: client.ui_context().clone() }
+    }
+
+    /// Create for the current active conversation.
     pub fn current(ui_ctx: &Arc<UIContext>) -> Self {
         Self {
             conversation: ui_ctx.chat_state.active_conversation(),
             ui_ctx: ui_ctx.clone(),
+        }
+    }
+
+    /// Create for the current active conversation from a [`ChatterClient`].
+    pub fn current_from_client(client: &Arc<ChatterClient>) -> Self {
+        Self {
+            conversation: client.chat_state().active_conversation(),
+            ui_ctx: client.ui_context().clone(),
         }
     }
 
@@ -376,6 +390,97 @@ impl ConversationHandle {
     }
 
     // ========================================================================
+    // Receipts
+    // ========================================================================
+
+    pub async fn send_read_receipt(&self, timestamps: &[u64]) -> ConversationResult {
+        if timestamps.is_empty() { return Ok(()); }
+        match &self.conversation {
+            ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_) => Ok(()),
+            ActiveConversation::Dm { peer_id, .. } => {
+                let content = crate::services::gateway::build_read_receipt_content(timestamps.to_vec());
+                self.send_dm_content(content, peer_id).await
+            }
+            ActiveConversation::Channel(channel_id) => {
+                let content = crate::services::gateway::build_read_receipt_content_with_channel(
+                    timestamps.to_vec(), Some(&channel_id.to_string()),
+                );
+                self.send_channel_content(content, channel_id).await
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
+    pub async fn send_delivery_receipt(&self, timestamps: &[u64]) -> ConversationResult {
+        if timestamps.is_empty() { return Ok(()); }
+        match &self.conversation {
+            ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_) => Ok(()),
+            ActiveConversation::Dm { peer_id, .. } => {
+                let content = crate::services::gateway::build_delivery_receipt_content(timestamps.to_vec());
+                self.send_dm_content(content, peer_id).await
+            }
+            ActiveConversation::Channel(channel_id) => {
+                let content = crate::services::gateway::build_delivery_receipt_content_with_channel(
+                    timestamps.to_vec(), Some(&channel_id.to_string()),
+                );
+                self.send_channel_content(content, channel_id).await
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
+    /// Mark all messages in this conversation as read.
+    ///
+    /// For DM/Channel, loads recent messages from the peer and sends read receipts.
+    /// For AnonDm, marks locally + sends anon read receipt.
+    /// For AnonGroup, no-op (groups don't track read state per-user).
+    pub async fn mark_as_read(&self) -> ConversationResult {
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                if let Err(e) = self.ui_ctx.anon_dm_service.mark_as_read(id) {
+                    tracing::warn!("Failed to mark anon DM as read: {}", e);
+                }
+                // Send read receipts for peer messages
+                let current_user = self.ui_ctx.auth_state.get().current_user_id;
+                if let Ok(messages) = self.ui_ctx.anon_dm_service.get_messages(id, None, 50) {
+                    let timestamps: Vec<u64> = messages.iter()
+                        .filter(|m| current_user.map(|uid| m.sender_id != uid).unwrap_or(true))
+                        .map(|m| m.sent_at)
+                        .collect();
+                    if !timestamps.is_empty() {
+                        let _ = self.ui_ctx.anon_dm_service.send_read_receipt(id, timestamps).await;
+                    }
+                }
+                Ok(())
+            }
+            ActiveConversation::AnonGroup(_) => Ok(()),
+            ActiveConversation::Dm { channel_id, peer_id } => {
+                let my_user_id = self.ui_ctx.auth_state.get().current_user_id;
+                if let Ok(messages) = self.ui_ctx.message_service.get_messages_local(channel_id, None, 50) {
+                    let timestamps: Vec<u64> = messages.iter()
+                        .filter(|m| m.sender_id.as_ref() != my_user_id.as_ref())
+                        .map(|m| m.sent_at)
+                        .collect();
+                    self.send_read_receipt(&timestamps).await?;
+                }
+                Ok(())
+            }
+            ActiveConversation::Channel(channel_id) => {
+                let my_user_id = self.ui_ctx.auth_state.get().current_user_id.map(|id| id.to_string());
+                if let Ok(messages) = self.ui_ctx.message_service.get_messages_local(channel_id, None, 50) {
+                    let timestamps: Vec<u64> = messages.iter()
+                        .filter(|m| m.sender_id.as_ref().map(|id| id.to_string()).as_ref() != my_user_id.as_ref())
+                        .map(|m| m.sent_at)
+                        .collect();
+                    self.send_read_receipt(&timestamps).await?;
+                }
+                Ok(())
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
+    // ========================================================================
     // Internal helpers
     // ========================================================================
 
@@ -400,7 +505,7 @@ impl ConversationHandle {
         peer_id: &UserId,
     ) -> ConversationResult {
         self.ui_ctx.message_service
-            .send_dm(peer_id, content, &*self.ui_ctx.mailbox_manager)
+            .send_dm(peer_id, content, &self.ui_ctx.mailbox_manager)
             .await
             .map_err(ConversationError::Message)
     }

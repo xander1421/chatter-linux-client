@@ -10,7 +10,7 @@ use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::services::user::UserService;
 
-use crate::bin_ui::features::chat::send_dm_read_receipts;
+use chatter_core::services::conversation::ConversationHandle;
 use crate::MainWindow;
 
 use super::channel::load_channel_into_ui;
@@ -24,8 +24,6 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let user_service = ui_ctx.user_service.clone();
     let attachment_service = ui_ctx.attachment_service.clone();
     let auth_state = ui_ctx.auth_state.clone();
-    let mailbox_manager = ui_ctx.mailbox_manager.clone();
-    let runtime_handle = ui_ctx.runtime_handle.clone();
     let anon_dm_service = ui_ctx.anon_dm_service.clone();
     let pin_service = ui_ctx.pin_service.clone();
     let pinned_state = ui_ctx.pinned_state.clone();
@@ -42,8 +40,6 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let user_service = user_service.clone();
         let attachment_service = attachment_service.clone();
         let auth_state = auth_state.clone();
-        let mailbox_manager = mailbox_manager.clone();
-        let runtime_handle = runtime_handle.clone();
         let anon_dm_service = anon_dm_service.clone();
         let pin_service = pin_service.clone();
         let pinned_state = pinned_state.clone();
@@ -236,13 +232,15 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     .collect();
 
                                 if !unread_timestamps.is_empty() {
-                                    send_dm_read_receipts(
-                                        peer_id,
-                                        unread_timestamps,
-                                        message_service,
-                                        mailbox_manager,
-                                        runtime_handle,
+                                    let handle = ConversationHandle::new(
+                                        chatter_core::state::ActiveConversation::Dm { channel_id, peer_id },
+                                        ui_ctx.clone(),
                                     );
+                                    tokio::spawn(async move {
+                                        if let Err(e) = handle.send_read_receipt(&unread_timestamps).await {
+                                            tracing::warn!("Failed to send DM read receipts: {}", e);
+                                        }
+                                    });
                                 }
                             }
                         }

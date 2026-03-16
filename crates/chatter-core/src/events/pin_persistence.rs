@@ -7,21 +7,21 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
-use chatter_core::events::EventBus;
-use chatter_core::inbox::handlers::DomainEvent;
-use chatter_core::services::message::MessageService;
+use super::bus::EventBus;
+use super::DomainEvent;
+use crate::services::message::MessageService;
 
 /// Spawn a task that listens for pin events and persists them to the database.
 ///
 /// This ensures that when pin/unpin events are received from other users,
 /// the pin state is saved to the database and survives app restarts.
-pub fn spawn_pin_persistence_handler(
+pub fn spawn(
     event_bus: EventBus,
     message_service: Arc<MessageService>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut rx = event_bus.subscribe_domain();
-        
+
         loop {
             match rx.recv().await {
                 Ok(event) => {

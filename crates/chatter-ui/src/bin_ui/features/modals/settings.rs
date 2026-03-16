@@ -59,29 +59,15 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     // Read receipts toggle
-    let session_service_read = session_service.clone();
+    let ui_ctx_read = ui_ctx.clone();
     window.on_settings_read_receipts_changed(move |enabled: bool| {
-        if let Err(e) = session_service_read.set_bool_setting(
-            chatter_core::storage::settings_keys::SEND_READ_RECEIPTS,
-            enabled,
-        ) {
-            tracing::error!("Failed to save read receipts setting: {}", e);
-        } else {
-            tracing::debug!("Read receipts setting changed to: {}", enabled);
-        }
+        ui_ctx_read.set_read_receipts_enabled(enabled);
     });
 
     // Typing indicators toggle
-    let session_service_typing = session_service.clone();
+    let ui_ctx_typing = ui_ctx.clone();
     window.on_settings_typing_indicators_changed(move |enabled: bool| {
-        if let Err(e) = session_service_typing.set_bool_setting(
-            chatter_core::storage::settings_keys::SHOW_TYPING_INDICATORS,
-            enabled,
-        ) {
-            tracing::error!("Failed to save typing indicators setting: {}", e);
-        } else {
-            tracing::debug!("Typing indicators setting changed to: {}", enabled);
-        }
+        ui_ctx_typing.set_typing_indicators_enabled(enabled);
     });
 
     // Copy fingerprint

@@ -26,13 +26,11 @@ pub mod attachment_download;
 mod channel_handlers;
 pub mod dm;
 pub mod domain_handler;
-mod pin_persistence;
 pub mod typing;
 pub(crate) mod unified_actions;
 pub mod utils;
 
 pub use anon_group_events::spawn_anon_group_event_handler;
-pub use pin_persistence::spawn_pin_persistence_handler;
 
 // Legacy anon DM action handlers — now unified in unified_actions.rs
 // Kept for anon_dm_actions.rs internal use (message_deleted/edited still used by some paths)
@@ -46,7 +44,7 @@ use chatter_core::inbox::handlers::DomainEvent;
 use chatter_core::inbox::InboxEvent;
 
 use crate::bin_ui::features::calls::cleanup_call_ui_state;
-use crate::bin_ui::features::chat::{send_dm_delivery_receipt, send_channel_delivery_receipt};
+use chatter_core::services::conversation::ConversationHandle;
 use crate::MainWindow;
 
 // Re-export public items
@@ -75,13 +73,17 @@ pub async fn handle_inbox_event(
                 timestamp,
                 "DELIVERY_RECEIPT: Triggering delivery receipt for received DM"
             );
-            send_dm_delivery_receipt(
-                peer_id,
-                timestamp,
-                ui_ctx.message_service.clone(),
-                ui_ctx.mailbox_manager.clone(),
-                ui_ctx.runtime_handle.clone(),
-            );
+            {
+                let handle = ConversationHandle::new(
+                    chatter_core::state::ActiveConversation::Dm { channel_id, peer_id },
+                    ui_ctx.clone(),
+                );
+                tokio::spawn(async move {
+                    if let Err(e) = handle.send_delivery_receipt(&[timestamp]).await {
+                        tracing::warn!("Failed to send DM delivery receipt: {}", e);
+                    }
+                });
+            }
         }
         InboxEvent::DmDecryptionFailed { peer_id, error, convergence_failed } => {
             tracing::error!(
@@ -164,11 +166,17 @@ pub async fn handle_inbox_event(
             }
 
             // Send delivery receipt for channel message
-            send_channel_delivery_receipt(
-                channel_id,
-                timestamp,
-                ui_ctx.message_service.clone(),
-            );
+            {
+                let handle = ConversationHandle::new(
+                    chatter_core::state::ActiveConversation::Channel(channel_id),
+                    ui_ctx.clone(),
+                );
+                tokio::spawn(async move {
+                    if let Err(e) = handle.send_delivery_receipt(&[timestamp]).await {
+                        tracing::warn!("Failed to send channel delivery receipt: {}", e);
+                    }
+                });
+            }
         }
         InboxEvent::MessageReceived { message_id, .. } => {
             tracing::trace!("Inbox message received: {}", message_id);

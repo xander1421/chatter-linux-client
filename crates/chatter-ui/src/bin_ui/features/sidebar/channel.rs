@@ -13,12 +13,13 @@ use chatter_core::services::message::MessageService;
 use chatter_core::services::user::UserService;
 
 use crate::bin_ui::converters::{channel_type_to_string, message_to_display_data, MessageDisplayData};
-use crate::bin_ui::features::chat::send_channel_read_receipts;
+use chatter_core::services::conversation::ConversationHandle;
 use crate::MainWindow;
 
 use super::stop_audio_playback;
 
 pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+    let ui_ctx_clone = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state.clone();
     let channel_service = ui_ctx.channel_service.clone();
     let message_service = ui_ctx.message_service.clone();
@@ -36,6 +37,7 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
             "[CHANNEL_SELECTED] on_channel_selected triggered"
         );
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_clone.clone();
         let chat_state = chat_state.clone();
         let channel_service = channel_service.clone();
         let message_service = message_service.clone();
@@ -118,11 +120,15 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
 
             // Send read receipts for all loaded messages
             if !message_timestamps.is_empty() {
-                send_channel_read_receipts(
-                    channel_id,
-                    message_timestamps,
-                    message_service,
+                let handle = ConversationHandle::new(
+                    chatter_core::state::ActiveConversation::Channel(channel_id),
+                    ui_ctx.clone(),
                 );
+                tokio::spawn(async move {
+                    if let Err(e) = handle.send_read_receipt(&message_timestamps).await {
+                        tracing::warn!("Failed to send channel read receipts: {}", e);
+                    }
+                });
             }
         });
     });

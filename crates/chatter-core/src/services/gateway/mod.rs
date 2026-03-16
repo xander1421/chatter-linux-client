@@ -60,6 +60,7 @@ pub use builders::{
 pub use outgoing::{
     OutgoingIntent, QuoteIntent, AnonQuoteIntent, SendResult, SendError,
     OutgoingServices, route_outgoing,
+    OwnedOutgoingServices, route_outgoing_owned,
 };
 
 // ============================================================================

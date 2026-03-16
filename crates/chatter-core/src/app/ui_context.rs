@@ -454,4 +454,74 @@ impl UIContext {
         tracing::info!("Inbox provider started with InboxEventProcessor");
         true
     }
+
+    /// Send a message with optional attachments, quote, and options.
+    ///
+    /// Delegates to the gateway layer. Handles upload, quote preview, intent
+    /// building, and routing for all conversation types.
+    pub async fn send_message(
+        &self,
+        conversation: crate::state::ActiveConversation,
+        text: &str,
+        pending_attachments: &[crate::state::chat_state::PendingAttachment],
+        quote: Option<crate::services::gateway::outgoing::QuoteIntent>,
+        options: Option<crate::services::gateway::outgoing::SendOptions>,
+    ) -> Result<crate::services::gateway::outgoing::SendResult, crate::services::gateway::outgoing::SendError> {
+        use crate::services::gateway::outgoing::{
+            OwnedOutgoingServices, route_outgoing_owned, upload_attachments, build_intent,
+        };
+        use crate::services::gateway::shared::truncate_preview;
+
+        // 1. Upload attachments
+        let uploaded = upload_attachments(pending_attachments, &self.attachment_service).await;
+
+        // 2. Fill in quote preview if missing (for non-anon paths)
+        let quote = if let Some(mut q) = quote {
+            if q.preview_text.is_none() && !conversation.is_anon() {
+                q.preview_text = self.message_service
+                    .get_by_sender_timestamp(&q.author_id, q.timestamp)
+                    .ok()
+                    .flatten()
+                    .and_then(|m| m.as_text().map(|t| t.to_string()))
+                    .map(|t| truncate_preview(&t));
+            }
+            Some(q)
+        } else { None };
+
+        // 3. Build intent
+        let intent = build_intent(
+            conversation,
+            text,
+            uploaded.pointers,
+            quote,
+            &options.unwrap_or_default(),
+            &self.channel_service,
+        )?;
+
+        // 4. Route
+        let services = OwnedOutgoingServices::from_ui_ctx(self);
+        route_outgoing_owned(intent, &services).await
+    }
+
+    /// Enable or disable sending read receipts.
+    pub fn set_read_receipts_enabled(&self, enabled: bool) {
+        if let Err(e) = self.session_service.set_bool_setting(
+            crate::storage::settings_keys::SEND_READ_RECEIPTS, enabled,
+        ) {
+            tracing::error!("Failed to save read receipts setting: {}", e);
+        } else {
+            tracing::debug!("Read receipts setting changed to: {}", enabled);
+        }
+    }
+
+    /// Enable or disable typing indicators.
+    pub fn set_typing_indicators_enabled(&self, enabled: bool) {
+        if let Err(e) = self.session_service.set_bool_setting(
+            crate::storage::settings_keys::SHOW_TYPING_INDICATORS, enabled,
+        ) {
+            tracing::error!("Failed to save typing indicators setting: {}", e);
+        } else {
+            tracing::debug!("Typing indicators setting changed to: {}", enabled);
+        }
+    }
 }

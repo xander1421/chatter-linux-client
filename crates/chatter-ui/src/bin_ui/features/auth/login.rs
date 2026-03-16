@@ -100,45 +100,12 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     );
                     tracing::debug!("Anon group event handler spawned");
                     
-                    // Spawn pin persistence handler to save pin events to database
-                    let _pin_persistence_handle = crate::bin_ui::features::auth::inbox::spawn_pin_persistence_handler(
-                        ui_ctx.event_bus.clone(),
-                        ui_ctx.message_service.clone(),
-                    );
-                    tracing::debug!("Pin persistence handler spawned");
-
                     // Spawn anon DM request handler for processing incoming message requests
                     let _anon_dm_handle = crate::bin_ui::features::modals::spawn_anon_dm_request_handler(
                         weak.clone(),
                         &ui_ctx,
                     );
                     tracing::debug!("Anon DM request handler spawned");
-
-                    // Spawn Jarvis background observer and maintenance
-                    let _jarvis_handles = chatter_core::services::JarvisBackgroundBuilder::new(
-                        ui_ctx.jarvis_service.clone(),
-                    )
-                    .with_event_bus(ui_ctx.event_bus.clone())
-                    .spawn();
-                    tracing::debug!("Jarvis background handlers spawned");
-
-                    // Auto-load local AI model if previously configured
-                    {
-                        let local_ai = ui_ctx.local_ai_service.clone();
-                        tokio::spawn(async move {
-                            match local_ai.load_preferred_model().await {
-                                Ok(Some(info)) => {
-                                    tracing::info!("Auto-loaded local AI model: {}", info.model_id);
-                                }
-                                Ok(None) => {
-                                    tracing::debug!("No local AI model configured for auto-load");
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Failed to auto-load local AI model: {}", e);
-                                }
-                            }
-                        });
-                    }
 
                     // Start inbox provider with InboxEventProcessor
                     // Ensure post-boot services are initialized (may have been

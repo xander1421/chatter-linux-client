@@ -496,10 +496,10 @@ impl AnonDmHandler {
         }
 
         // Validate sender is part of the conversation
-        let conv = self.service.anon_dm_repo.get_conversation(&conversation_id)
+        let mut conv = self.service.anon_dm_repo.get_conversation(&conversation_id)
             .map_err(|e| HandlerError::parse_failed(format!("Failed to get conversation: {}", e)))?
             .ok_or_else(|| HandlerError::parse_failed("Unknown conversation for profile update"))?;
-        
+
         if conv.peer_id != sender_id {
             tracing::warn!(
                 "Received profile update from {} but peer is {} in conversation {}",
@@ -513,25 +513,14 @@ impl AnonDmHandler {
             sender_id, conversation_id
         );
 
-        // Update the cached conversation with new profile info
-        if let Ok(Some(mut conv)) = self.service.anon_dm_repo.get_conversation(&conversation_id) {
-            // Update peer display name if provided
-            if let Some(name) = &profile_update.display_name {
-                conv.peer_display_name = Some(name.clone());
-            }
-            
-            // Note: Avatar URL is provided but we don't have a field for URL storage
-            // We would need to download and store the avatar bytes in conv.peer_avatar
-            // For now, just log that an avatar update was received
-            if let Some(avatar_url) = &profile_update.avatar_url {
-                tracing::debug!("Received avatar URL update: {}", avatar_url);
-                // TODO: Download avatar and store in conv.peer_avatar
-            }
-            
-            // Store the updated conversation
-            if let Err(e) = self.service.anon_dm_repo.update_conversation(&conv) {
-                tracing::warn!("Failed to update anon DM conversation with new profile: {}", e);
-            }
+        // Update display name in the cached conversation
+        if let Some(name) = &profile_update.display_name {
+            conv.peer_display_name = Some(name.clone());
+        }
+
+        // Store the updated conversation (avatar download happens async in UI layer)
+        if let Err(e) = self.service.anon_dm_repo.update_conversation(&conv) {
+            tracing::warn!("Failed to update anon DM conversation with new profile: {}", e);
         }
 
         // Emit event for UI update

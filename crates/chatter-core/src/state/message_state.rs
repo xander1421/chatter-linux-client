@@ -239,6 +239,31 @@ impl MessageState {
         None
     }
 
+    /// Update delivery status for messages matching the given timestamps.
+    ///
+    /// Searches all cached channels for messages with matching `sent_at` timestamps.
+    /// Only upgrades status: "" → "sent" → "delivered" → "read" (never downgrades).
+    pub fn update_delivery_status_by_timestamps(&self, timestamps: &[u64], new_status: &str) {
+        let status_rank = |s: &str| match s {
+            "read" => 3,
+            "delivered" => 2,
+            "sent" => 1,
+            _ => 0,
+        };
+        let new_rank = status_rank(new_status);
+        let new_status = new_status.to_string();
+
+        self.store.update(|state| {
+            for messages in state.messages.values_mut() {
+                for msg in messages.iter_mut() {
+                    if timestamps.contains(&msg.sent_at) && status_rank(&msg.delivery_status) < new_rank {
+                        msg.delivery_status = new_status.clone();
+                    }
+                }
+            }
+        });
+    }
+
     /// Clear all messages for a channel.
     pub fn clear_channel(&self, channel_id: &ChannelId) {
         self.store.update(|state| {

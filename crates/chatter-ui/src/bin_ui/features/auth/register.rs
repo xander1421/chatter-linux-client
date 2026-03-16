@@ -251,13 +251,6 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         );
                         tracing::debug!("Anon group event handler spawned");
                         
-                        // Spawn pin persistence handler to save pin events to database
-                        let _pin_persistence_handle = crate::bin_ui::features::auth::inbox::spawn_pin_persistence_handler(
-                            ui_ctx.event_bus.clone(),
-                            ui_ctx.message_service.clone(),
-                        );
-                        tracing::debug!("Pin persistence handler spawned");
-
                         // Spawn anon DM request handler for processing incoming message requests
                         let _anon_dm_handle = crate::bin_ui::features::modals::spawn_anon_dm_request_handler(
                             weak.clone(),

@@ -352,7 +352,7 @@ pub async fn handle_domain_event(
             timestamp,
         } => {
             social::handle_anon_dm_profile_updated(
-                window, conversation_id, user_id, display_name, avatar_url, bio, timestamp,
+                window, ui_ctx, conversation_id, user_id, display_name, avatar_url, bio, timestamp,
             );
         }
     }

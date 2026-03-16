@@ -288,13 +288,14 @@ impl EventHandlers {
                 message_timestamps,
                 receipt_timestamp,
             } => {
-                // TODO: Services layer should update per-message delivery receipts
                 trace!(
                     ?recipient_id,
                     count = message_timestamps.len(),
                     receipt_timestamp,
-                    "Delivery receipt received (not yet tracked in state)"
+                    "Delivery receipt received"
                 );
+                self.message_state
+                    .update_delivery_status_by_timestamps(&message_timestamps, "delivered");
             }
 
             DomainEvent::ViewedReceipt {
@@ -302,13 +303,14 @@ impl EventHandlers {
                 from_user_id,
                 receipt_timestamp,
             } => {
-                // TODO: Services layer should track view-once message views
                 trace!(
                     message_timestamp,
                     ?from_user_id,
                     receipt_timestamp,
-                    "Viewed receipt received (not yet tracked in state)"
+                    "Viewed receipt received"
                 );
+                self.message_state
+                    .update_delivery_status_by_timestamps(&[message_timestamp], "read");
             }
 
             // ================================================================
