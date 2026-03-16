@@ -26,8 +26,8 @@ use crate::state::ui_state::ModalType;
 /// # Example
 ///
 /// ```ignore
-/// use chatter_linux::events::{EventBus, UiEvent};
-/// use chatter_linux::domain::ids::ChannelId;
+/// use chatter_core::events::{EventBus, UiEvent};
+/// use chatter_core::domain::ids::ChannelId;
 ///
 /// let bus = EventBus::new();
 ///

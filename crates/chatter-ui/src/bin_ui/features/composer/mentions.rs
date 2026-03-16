@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
-use chatter_linux::services::channel::ChannelService;
-use chatter_linux::services::user::UserService;
-use chatter_linux::state::ChatState;
+use chatter_core::services::channel::ChannelService;
+use chatter_core::services::user::UserService;
+use chatter_core::state::ChatState;
 
 use crate::{MainWindow, MentionSuggestion};
 

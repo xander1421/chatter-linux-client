@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::{ChannelId, UserId};
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::{ChannelId, UserId};
 use crate::MainWindow;
 
 /// Handle unread count updated event.
@@ -61,7 +61,7 @@ pub(super) fn handle_dm_bootstrap_completed(
         tokio::spawn(async move {
             for text in pending {
                 let now = chrono::Utc::now().timestamp_millis() as u64;
-                let content = chatter_linux::services::build_text_content(&text, now);
+                let content = chatter_core::services::build_text_content(&text, now);
                 if let Err(e) = msg_svc.send_dm(&peer_id, content, &*mailbox).await {
                     tracing::warn!(error = %e, "Failed to send pending message");
                 }

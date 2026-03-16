@@ -24,8 +24,8 @@ async fn test_friend_accept_creates_dm_channel_for_both_sides() {
     let pool2 = assert_ok(create_test_pool().await);
     let user2 = assert_ok(setup_authenticated_test(&pool2).await);
 
-    use chatter_linux::network::grpc::{ChannelClient, UserClient};
-    use chatter_linux::proto::chat_v1::{FriendStatus, user_event};
+    use chatter_core::network::grpc::{ChannelClient, UserClient};
+    use chatter_core::proto::chat_v1::{FriendStatus, user_event};
     use tokio_stream::StreamExt;
 
     // ========== Step 1: User1 sends friend request to User2 ==========
@@ -109,7 +109,7 @@ async fn test_friend_accept_creates_dm_channel_for_both_sides() {
     let channel2 = channel2_result.unwrap();
 
     // Verify it's a DM channel
-    use chatter_linux::proto::chat_v1::ChannelType;
+    use chatter_core::proto::chat_v1::ChannelType;
     assert_eq!(
         channel2.r#type,
         ChannelType::DirectMessage as i32,
@@ -213,8 +213,8 @@ async fn test_friend_accept_sender_gets_notification() {
     let pool2 = assert_ok(create_test_pool().await);
     let user2 = assert_ok(setup_authenticated_test(&pool2).await);
 
-    use chatter_linux::network::grpc::UserClient;
-    use chatter_linux::proto::chat_v1::FriendStatus;
+    use chatter_core::network::grpc::UserClient;
+    use chatter_core::proto::chat_v1::FriendStatus;
     use tokio_stream::StreamExt;
 
     // User1 sends friend request
@@ -235,7 +235,7 @@ async fn test_friend_accept_sender_gets_notification() {
     let mut dm_channel_id = String::new();
     while let Some(event) = accept_stream.next().await {
         if let Ok(e) = event {
-            if let Some(chatter_linux::proto::chat_v1::user_event::Event::FriendStatusChanged(status)) = e.event {
+            if let Some(chatter_core::proto::chat_v1::user_event::Event::FriendStatusChanged(status)) = e.event {
                 dm_channel_id = status.channel_id;
             }
         }
@@ -291,8 +291,8 @@ async fn test_dm_sidebar_item_has_correct_structure() {
     let pool2 = assert_ok(create_test_pool().await);
     let user2 = assert_ok(setup_authenticated_test(&pool2).await);
 
-    use chatter_linux::network::grpc::UserClient;
-    use chatter_linux::proto::chat_v1::FriendStatus;
+    use chatter_core::network::grpc::UserClient;
+    use chatter_core::proto::chat_v1::FriendStatus;
     use tokio_stream::StreamExt;
 
     // Create friendship
@@ -308,7 +308,7 @@ async fn test_dm_sidebar_item_has_correct_structure() {
     let mut dm_channel_id = String::new();
     while let Some(event) = accept_stream.next().await {
         if let Ok(e) = event {
-            if let Some(chatter_linux::proto::chat_v1::user_event::Event::FriendStatusChanged(status)) = e.event {
+            if let Some(chatter_core::proto::chat_v1::user_event::Event::FriendStatusChanged(status)) = e.event {
                 dm_channel_id = status.channel_id;
             }
         }

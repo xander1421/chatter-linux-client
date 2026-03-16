@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::proto::content_v1::AttachmentPointer;
+use chatter_core::app::UIContext;
+use chatter_core::proto::content_v1::AttachmentPointer;
 
 use crate::bin_ui::features::auth::inbox::attachment_download;
 use crate::MainWindow;

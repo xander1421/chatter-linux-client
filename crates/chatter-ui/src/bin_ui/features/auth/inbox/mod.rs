@@ -41,9 +41,9 @@ use std::sync::Arc;
 
 use slint::Model;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::inbox::handlers::DomainEvent;
-use chatter_linux::inbox::InboxEvent;
+use chatter_core::app::UIContext;
+use chatter_core::inbox::handlers::DomainEvent;
+use chatter_core::inbox::InboxEvent;
 
 use crate::bin_ui::features::calls::cleanup_call_ui_state;
 use crate::bin_ui::features::chat::{send_dm_delivery_receipt, send_channel_delivery_receipt};
@@ -661,12 +661,12 @@ pub async fn handle_inbox_event(
             let ch_id = channel_id;
             let req_id = requester_id;
             tokio::spawn(async move {
-                let skdm_result: Result<chatter_linux::proto::content_v1::SenderKeyDistribution, String> = if skdm_bytes.is_empty() {
+                let skdm_result: Result<chatter_core::proto::content_v1::SenderKeyDistribution, String> = if skdm_bytes.is_empty() {
                     msg_svc.create_sender_key_for_channel(&ch_id).await
                         .map_err(|e| e.to_string())
                 } else {
                     use prost::Message as ProstMessage;
-                    chatter_linux::proto::content_v1::SenderKeyDistribution::decode(skdm_bytes.as_slice())
+                    chatter_core::proto::content_v1::SenderKeyDistribution::decode(skdm_bytes.as_slice())
                         .map_err(|e| e.to_string())
                 };
 
@@ -720,7 +720,7 @@ pub async fn handle_inbox_event(
             );
 
             // Convert Vec<u8> to AnonGroupId and [u8; 32]
-            let anon_group_id = match chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
+            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!(
@@ -753,7 +753,7 @@ pub async fn handle_inbox_event(
                 }
             });
 
-            use chatter_linux::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
+            use chatter_core::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
 
             let inviter_display_name: Option<String> = match (&profile_key_arr, &encrypted_display_name) {
                 (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
@@ -816,7 +816,7 @@ pub async fn handle_inbox_event(
             );
 
             // Convert Vec<u8> to AnonGroupId and [u8; 32]
-            let anon_group_id = match chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
+            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid group_id length for AnonGroupJoinAck");
@@ -843,7 +843,7 @@ pub async fn handle_inbox_event(
                 }
             });
 
-            use chatter_linux::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
+            use chatter_core::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
 
             let display_name: Option<String> = match (&profile_key_arr, &encrypted_display_name) {
                 (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
@@ -901,7 +901,7 @@ pub async fn handle_inbox_event(
             );
 
             // Convert Vec<u8> to AnonGroupId
-            let anon_group_id = match chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
+            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid group_id length for AnonGroupMemberList");
@@ -938,7 +938,7 @@ pub async fn handle_inbox_event(
             );
 
             // Convert Vec<u8> to AnonGroupId
-            let anon_group_id = match chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
+            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid group_id length for AnonGroupLeave");
@@ -977,7 +977,7 @@ pub async fn handle_inbox_event(
             );
 
             // Convert Vec<u8> to AnonGroupId
-            let anon_group_id = match chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
+            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid group_id length for AnonGroupKick");
@@ -986,7 +986,7 @@ pub async fn handle_inbox_event(
             };
 
             // Convert Vec<u8> to UserId
-            let kicked_user = match chatter_linux::domain::UserId::try_from_slice(&kicked_user_id) {
+            let kicked_user = match chatter_core::domain::UserId::try_from_slice(&kicked_user_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid kicked_user_id for AnonGroupKick");
@@ -1022,7 +1022,7 @@ pub async fn handle_inbox_event(
             timestamp,
         } => {
             // Convert Vec<u8> to AnonGroupId
-            let anon_group_id = match chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
+            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid group_id length for AnonGroupUpdate");
@@ -1058,7 +1058,7 @@ pub async fn handle_inbox_event(
             inner_content,
         } => {
             // Convert Vec<u8> to AnonGroupId
-            let anon_group_id = match chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
+            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid group_id length for AnonGroupMessage");
@@ -1073,12 +1073,12 @@ pub async fn handle_inbox_event(
             );
 
             // Route based on inner content type
-            use chatter_linux::proto::content_v1::content;
+            use chatter_core::proto::content_v1::content;
 
             match &inner_content.content {
                 // Handle typing indicator
                 Some(content::Content::Typing(typing)) => {
-                    let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                    let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_typing(
                         weak_window, &ui_ctx.chat_state,
                         unified_actions::EventSource::Channel(channel_id),
@@ -1104,7 +1104,7 @@ pub async fn handle_inbox_event(
                     });
 
                     // Update UI
-                    let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                    let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_reaction(
                         weak_window, &ui_ctx.chat_state,
                         unified_actions::EventSource::Channel(channel_id),
@@ -1120,7 +1120,7 @@ pub async fn handle_inbox_event(
                     );
 
                     // Update UI
-                    let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                    let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_pin(
                         weak_window, &ui_ctx.chat_state, &ui_ctx.pinned_state,
                         unified_actions::EventSource::Channel(channel_id),
@@ -1170,7 +1170,7 @@ pub async fn handle_inbox_event(
                     });
 
                     // Update UI immediately
-                    let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                    let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_edit(
                         weak_window, &ui_ctx.chat_state,
                         unified_actions::EventSource::Channel(channel_id),
@@ -1182,7 +1182,7 @@ pub async fn handle_inbox_event(
                 Some(content::Content::DataMessage(data_msg)) => {
                     // Check for delete first
                     if let Some(delete) = &data_msg.delete {
-                        let channel_id: chatter_linux::domain::ChannelId = anon_group_id.into();
+                        let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                         unified_actions::handle_delete(
                             weak_window, &ui_ctx.chat_state,
                             unified_actions::EventSource::Channel(channel_id),
@@ -1200,7 +1200,7 @@ pub async fn handle_inbox_event(
                     let has_quote = quote.is_some();
                     let quote_sender_name = quote.as_ref().map(|q| {
                         // Try to resolve author UUID to display name
-                        if let Ok(author_id) = q.author_aci.parse::<chatter_linux::domain::UserId>() {
+                        if let Ok(author_id) = q.author_aci.parse::<chatter_core::domain::UserId>() {
                             // Try group member name first, then user service
                             ui_ctx.anon_group_service
                                 .get_member_display_name(&anon_group_id, &author_id)
@@ -1401,7 +1401,7 @@ pub async fn handle_inbox_event(
                                         // Update sidebar preview and move to top
                                         crate::bin_ui::features::sidebar::update_sidebar_preview(
                                             &w,
-                                            chatter_linux::state::ActiveConversation::AnonGroup(anon_group_id),
+                                            chatter_core::state::ActiveConversation::AnonGroup(anon_group_id),
                                             &text_clone,
                                             &chrono::Utc::now().format("%H:%M").to_string(),
                                             true,
@@ -1441,7 +1441,7 @@ pub async fn handle_inbox_event(
                         room_name = %offer.room_name,
                         "Received anonymous group call offer"
                     );
-                    ui_ctx.event_bus.emit_domain(chatter_linux::inbox::DomainEvent::AnonGroupCallOfferReceived {
+                    ui_ctx.event_bus.emit_domain(chatter_core::inbox::DomainEvent::AnonGroupCallOfferReceived {
                         group_id: anon_group_id,
                         sender_id: peer_id,
                         call_room_id: offer.call_room_id.clone(),
@@ -1461,7 +1461,7 @@ pub async fn handle_inbox_event(
                         accepted = answer.accepted,
                         "Received anonymous group call answer"
                     );
-                    ui_ctx.event_bus.emit_domain(chatter_linux::inbox::DomainEvent::AnonGroupCallAnswerReceived {
+                    ui_ctx.event_bus.emit_domain(chatter_core::inbox::DomainEvent::AnonGroupCallAnswerReceived {
                         group_id: anon_group_id,
                         sender_id: peer_id,
                         call_room_id: answer.call_room_id.clone(),
@@ -1478,7 +1478,7 @@ pub async fn handle_inbox_event(
                         sender_id = %peer_id,
                         "Received anonymous group call hangup"
                     );
-                    ui_ctx.event_bus.emit_domain(chatter_linux::inbox::DomainEvent::AnonGroupCallHangupReceived {
+                    ui_ctx.event_bus.emit_domain(chatter_core::inbox::DomainEvent::AnonGroupCallHangupReceived {
                         group_id: anon_group_id,
                         sender_id: peer_id,
                         call_room_id: hangup.call_room_id.clone(),
@@ -1520,7 +1520,7 @@ pub async fn handle_inbox_event(
             );
 
             // Convert Vec<u8> to AnonDmId
-            let anon_dm_id = match chatter_linux::domain::anon_dm::AnonDmId::try_from_slice(&conversation_id) {
+            let anon_dm_id = match chatter_core::domain::anon_dm::AnonDmId::try_from_slice(&conversation_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid conversation_id length for AnonDmRequest");
@@ -1617,7 +1617,7 @@ pub async fn handle_inbox_event(
             );
 
             // Convert Vec<u8> to AnonDmId
-            let anon_dm_id = match chatter_linux::domain::anon_dm::AnonDmId::try_from_slice(&conversation_id) {
+            let anon_dm_id = match chatter_core::domain::anon_dm::AnonDmId::try_from_slice(&conversation_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid conversation_id length for AnonDmAccept");
@@ -1696,7 +1696,7 @@ pub async fn handle_inbox_event(
             inner_content,
         } => {
             // Convert Vec<u8> to AnonDmId
-            let anon_dm_id = match chatter_linux::domain::anon_dm::AnonDmId::try_from_slice(&conversation_id) {
+            let anon_dm_id = match chatter_core::domain::anon_dm::AnonDmId::try_from_slice(&conversation_id) {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Invalid conversation_id length for AnonDmMessage");
@@ -1705,7 +1705,7 @@ pub async fn handle_inbox_event(
             };
 
             // Extract attachments - create records FIRST, then spawn download
-            if let Some(chatter_linux::proto::content_v1::content::Content::DataMessage(data_msg)) = &inner_content.content {
+            if let Some(chatter_core::proto::content_v1::content::Content::DataMessage(data_msg)) = &inner_content.content {
                 if !data_msg.attachments.is_empty() {
                     let download_pointers: Vec<_> = data_msg.attachments
                         .iter()

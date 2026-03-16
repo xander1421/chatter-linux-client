@@ -88,7 +88,7 @@ pub enum ConnectionEvent {
 /// # Example
 ///
 /// ```
-/// use chatter_linux::network::connection::{ConnectionStateMachine, ConnectionEvent};
+/// use chatter_core::network::connection::{ConnectionStateMachine, ConnectionEvent};
 ///
 /// let state_machine = ConnectionStateMachine::new();
 /// let mut receiver = state_machine.subscribe();

@@ -25,8 +25,8 @@ async fn test_create_channel_callback_flow() {
     create_channel_loading = true;
     create_channel_error = None;
 
-    use chatter_linux::network::grpc::ChannelClient;
-    use chatter_linux::proto::chat_v1::ChannelType;
+    use chatter_core::network::grpc::ChannelClient;
+    use chatter_core::proto::chat_v1::ChannelType;
     use tokio_stream::StreamExt;
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -49,7 +49,7 @@ async fn test_create_channel_callback_flow() {
             while let Some(event_result) = stream.next().await {
                 if let Ok(event) = event_result {
                     if let Some(payload) = event.event {
-                        use chatter_linux::proto::chat_v1::channel_event::Event;
+                        use chatter_core::proto::chat_v1::channel_event::Event;
                         match payload {
                             Event::ChannelCreated(channel) => {
                                 create_channel_loading = false;
@@ -94,8 +94,8 @@ async fn test_create_channel_validation_error() {
     // Simulate: on_create_channel with empty name
     create_channel_loading = true;
 
-    use chatter_linux::network::grpc::ChannelClient;
-    use chatter_linux::proto::chat_v1::ChannelType;
+    use chatter_core::network::grpc::ChannelClient;
+    use chatter_core::proto::chat_v1::ChannelType;
     use tokio_stream::StreamExt;
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -118,7 +118,7 @@ async fn test_create_channel_validation_error() {
             while let Some(event_result) = stream.next().await {
                 if let Ok(event) = event_result {
                     if let Some(payload) = event.event {
-                        use chatter_linux::proto::chat_v1::channel_event::Event;
+                        use chatter_core::proto::chat_v1::channel_event::Event;
                         if let Event::OperationFailed(e) = payload {
                             create_channel_loading = false;
                             create_channel_error = Some(e.error.map(|err| err.message).unwrap_or_default());
@@ -163,7 +163,7 @@ async fn test_profile_add_friend_callback_flow() {
     // Simulate: on_profile_add_friend callback
     profile_loading = true;
 
-    use chatter_linux::network::grpc::UserClient;
+    use chatter_core::network::grpc::UserClient;
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
@@ -205,7 +205,7 @@ async fn test_profile_block_user_callback_flow() {
     // Simulate: on_profile_block_user callback
     profile_loading = true;
 
-    use chatter_linux::network::grpc::UserClient;
+    use chatter_core::network::grpc::UserClient;
     use tokio_stream::StreamExt;
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
@@ -250,8 +250,8 @@ async fn test_friend_request_accept_callback_flow() {
     let _user2 = assert_ok(setup_authenticated_test(&pool2).await);
 
     // User1 sends request
-    use chatter_linux::network::grpc::UserClient;
-    use chatter_linux::proto::chat_v1::FriendStatus;
+    use chatter_core::network::grpc::UserClient;
+    use chatter_core::proto::chat_v1::FriendStatus;
 
     let mut user1_client = UserClient::new(pool1.channel(), pool1.auth_clone());
     let _ = user1_client
@@ -291,8 +291,8 @@ async fn test_friend_request_decline_callback_flow() {
     let _user2 = assert_ok(setup_authenticated_test(&pool2).await);
 
     // User1 sends request
-    use chatter_linux::network::grpc::UserClient;
-    use chatter_linux::proto::chat_v1::FriendStatus;
+    use chatter_core::network::grpc::UserClient;
+    use chatter_core::proto::chat_v1::FriendStatus;
 
     let mut user1_client = UserClient::new(pool1.channel(), pool1.auth_clone());
     let _ = user1_client

@@ -8,9 +8,9 @@ mod common;
 use sha2::{Digest, Sha256};
 use tokio_stream::StreamExt;
 
-use chatter_linux::error::NetworkError;
-use chatter_linux::network::grpc::AuthClient;
-use chatter_linux::proto::chat_v1::auth_event;
+use chatter_core::error::NetworkError;
+use chatter_core::network::grpc::AuthClient;
+use chatter_core::proto::chat_v1::auth_event;
 
 use common::*;
 
@@ -32,11 +32,11 @@ async fn test_register_user_stream() {
     // Encrypt display name with profile key (Phase 79 privacy)
     let encrypted_display_name = encrypt_test_display_name(&profile_key, &display_name);
     // Derive UAK from profile key for sealed sender
-    let uak = chatter_linux::crypto::derive_uak(&profile_key);
+    let uak = chatter_core::crypto::derive_uak(&profile_key);
 
     // Generate real Signal Protocol keys
-    use chatter_linux::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
-    use chatter_linux::proto::chat_v1::SignalPreKeyBundle;
+    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
@@ -138,8 +138,8 @@ async fn test_register_duplicate_username() {
     let user = assert_ok(register_test_user(&pool).await);
 
     // Generate real Signal Protocol keys for the duplicate attempt
-    use chatter_linux::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
-    use chatter_linux::proto::chat_v1::SignalPreKeyBundle;
+    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     let identity_key_pair = IdentityKeyPair::generate(&mut rand::rng());
@@ -179,7 +179,7 @@ async fn test_register_duplicate_username() {
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
     let dup_profile_key = random_profile_key();
     let dup_encrypted_name = encrypt_test_display_name(&dup_profile_key, "Duplicate User");
-    let dup_uak = chatter_linux::crypto::derive_uak(&dup_profile_key);
+    let dup_uak = chatter_core::crypto::derive_uak(&dup_profile_key);
     let result = auth_client
         .register_and_wait(
             &user.username,
@@ -365,7 +365,7 @@ async fn test_list_sessions() {
 async fn test_hardcoded_trust_root() {
     // Trust root is now hardcoded in config.rs following Signal's security model.
     // This prevents MITM attacks during registration.
-    use chatter_linux::config::TRUST_ROOT_PUBLIC_KEY_BYTES;
+    use chatter_core::config::TRUST_ROOT_PUBLIC_KEY_BYTES;
 
     // Verify the hardcoded key is valid
     assert_eq!(TRUST_ROOT_PUBLIC_KEY_BYTES.len(), 32, "Trust root must be 32 bytes");
@@ -479,8 +479,8 @@ async fn test_upload_and_get_prekey_bundle() {
     let user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a prekey bundle with real Signal keys
-    use chatter_linux::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
-    use chatter_linux::proto::chat_v1::SignalPreKeyBundle;
+    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{PreKeyRecord, SignedPreKeyRecord};
+    use chatter_core::proto::chat_v1::SignalPreKeyBundle;
     use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
     // Generate real identity key pair

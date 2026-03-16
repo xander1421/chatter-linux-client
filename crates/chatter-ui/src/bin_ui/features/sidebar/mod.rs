@@ -9,7 +9,7 @@ pub mod private_group;
 
 use std::sync::Arc;
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 
 use crate::bin_ui::audio_state;
 use crate::MainWindow;
@@ -39,9 +39,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 /// to update the pinned message bar after loading pinned messages.
 pub(crate) fn apply_pinned_ui(
     weak: &slint::Weak<MainWindow>,
-    pinned_state: &chatter_linux::state::PinnedState,
-    channel_id: chatter_linux::domain::ids::ChannelId,
-    message_ids: Vec<chatter_linux::domain::ids::MessageId>,
+    pinned_state: &chatter_core::state::PinnedState,
+    channel_id: chatter_core::domain::ids::ChannelId,
+    message_ids: Vec<chatter_core::domain::ids::MessageId>,
     preview: String,
 ) {
     if message_ids.is_empty() {
@@ -81,12 +81,12 @@ pub(crate) fn apply_pinned_ui(
 /// Pass `false` for sent messages.
 pub(crate) fn update_sidebar_preview(
     window: &MainWindow,
-    conversation: chatter_linux::state::ActiveConversation,
+    conversation: chatter_core::state::ActiveConversation,
     preview: &str,
     timestamp: &str,
     increment_unread: bool,
 ) {
-    use chatter_linux::state::ActiveConversation;
+    use chatter_core::state::ActiveConversation;
     use slint::Model;
 
     // Determine if the conversation being updated is the one currently viewed.
@@ -189,7 +189,7 @@ pub(crate) fn update_sidebar_preview(
 }
 
 /// Check if a DM conversation for a peer exists in the sidebar.
-pub(crate) fn sidebar_has_dm(window: &MainWindow, peer_id: &chatter_linux::domain::UserId) -> bool {
+pub(crate) fn sidebar_has_dm(window: &MainWindow, peer_id: &chatter_core::domain::UserId) -> bool {
     use slint::Model;
     let peer_id_str = peer_id.to_string();
     let model = window.get_dm_conversations();
@@ -204,8 +204,8 @@ pub(crate) fn sidebar_has_dm(window: &MainWindow, peer_id: &chatter_linux::domai
 /// inserted at position 0 (MRU) with unread_count = 1.
 pub(crate) fn create_dm_sidebar_entry(
     window: &MainWindow,
-    ui_ctx: &std::sync::Arc<chatter_linux::app::UIContext>,
-    peer_id: &chatter_linux::domain::UserId,
+    ui_ctx: &std::sync::Arc<chatter_core::app::UIContext>,
+    peer_id: &chatter_core::domain::UserId,
     sender_name: &str,
     preview: &str,
     timestamp: &str,

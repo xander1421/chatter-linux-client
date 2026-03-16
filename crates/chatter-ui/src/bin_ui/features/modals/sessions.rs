@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::services::session_service::Session;
+use chatter_core::app::UIContext;
+use chatter_core::services::session_service::Session;
 
 use crate::{MainWindow, SessionInfo};
 

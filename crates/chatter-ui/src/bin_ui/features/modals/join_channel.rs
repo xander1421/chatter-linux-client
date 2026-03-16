@@ -8,9 +8,9 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tokio::time::{sleep, Duration};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::channel::ChannelType;
-use chatter_linux::domain::ids::ChannelId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::channel::ChannelType;
+use chatter_core::domain::ids::ChannelId;
 
 use crate::bin_ui::converters::channel_to_slint;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;

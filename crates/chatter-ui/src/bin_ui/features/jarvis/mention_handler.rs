@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::ChannelId;
-use chatter_linux::domain::jarvis::JarvisContext;
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::ChannelId;
+use chatter_core::domain::jarvis::JarvisContext;
 use slint::Weak;
 
 use crate::MainWindow;

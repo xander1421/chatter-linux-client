@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::UserId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::UserId;
 
 use crate::{ForwardTarget, MainWindow};
 
@@ -99,13 +99,13 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<UIContext>)
             };
 
             // Lookup message text via ConversationHandle (polymorphic across all types)
-            let handle = chatter_linux::services::conversation::ConversationHandle::new(
+            let handle = chatter_core::services::conversation::ConversationHandle::new(
                 conversation, ui_ctx.clone(),
             );
             let preview = handle.get_message_text(&target_sender_id, target_sent_timestamp)
                 .ok()
                 .flatten()
-                .map(|t| chatter_linux::services::gateway::shared::truncate_preview(&t))
+                .map(|t| chatter_core::services::gateway::shared::truncate_preview(&t))
                 .unwrap_or_else(|| "Message".to_string());
 
             let _ = slint::invoke_from_event_loop(move || {
@@ -201,7 +201,7 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             };
 
             // Lookup message text via ConversationHandle (polymorphic across all types)
-            let handle = chatter_linux::services::conversation::ConversationHandle::new(
+            let handle = chatter_core::services::conversation::ConversationHandle::new(
                 conversation, ui_ctx.clone(),
             );
             let text = match handle.get_message_text(&target_sender_id, target_sent_timestamp) {
@@ -272,7 +272,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             };
 
             // Look up attachment IDs via ConversationHandle (polymorphic across all types)
-            let handle = chatter_linux::services::conversation::ConversationHandle::new(
+            let handle = chatter_core::services::conversation::ConversationHandle::new(
                 conversation, ui_ctx.clone(),
             );
             let attachment_ids = match handle.get_message_attachment_ids(&target_sender_id, target_sent_timestamp) {
@@ -307,7 +307,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 let dest_path = download_dir.join(&filename);
 
                 // Check if attachment needs downloading first
-                let needs_download = attachment.content_location == chatter_linux::domain::attachment::ContentLocation::NotDownloaded
+                let needs_download = attachment.content_location == chatter_core::domain::attachment::ContentLocation::NotDownloaded
                     && attachment.remote_url.is_some()
                     && attachment.encryption_key.is_some();
 

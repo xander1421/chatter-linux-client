@@ -4,15 +4,15 @@ use std::sync::Arc;
 
 use slint::{Model, Weak};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::UserId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::UserId;
 use crate::MainWindow;
 
 /// Handle friend requests updated event.
 pub(super) fn handle_friend_requests_updated(
     window: &Weak<MainWindow>,
-    received: Vec<chatter_linux::inbox::events::FriendRequestInfo>,
-    sent: Vec<chatter_linux::inbox::events::FriendRequestInfo>,
+    received: Vec<chatter_core::inbox::events::FriendRequestInfo>,
+    sent: Vec<chatter_core::inbox::events::FriendRequestInfo>,
 ) {
     let weak = window.clone();
     let received_count = received.len();
@@ -64,7 +64,7 @@ pub(super) fn handle_friend_accepted(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<UIContext>,
     friend_id: UserId,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    channel_id: chatter_core::domain::ids::ChannelId,
 ) {
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
@@ -89,16 +89,16 @@ pub(super) fn handle_friend_accepted(
 pub(super) fn handle_presence_changed(
     window: &Weak<MainWindow>,
     user_id: UserId,
-    presence: chatter_linux::proto::UserPresence,
+    presence: chatter_core::proto::UserPresence,
     timestamp: u64,
 ) {
     let weak = window.clone();
     let user_id_str = user_id.to_string();
     let presence_str = match presence {
-        chatter_linux::proto::UserPresence::Online => "online",
-        chatter_linux::proto::UserPresence::Away => "away",
-        chatter_linux::proto::UserPresence::DoNotDisturb => "dnd",
-        chatter_linux::proto::UserPresence::Offline | _ => "offline",
+        chatter_core::proto::UserPresence::Online => "online",
+        chatter_core::proto::UserPresence::Away => "away",
+        chatter_core::proto::UserPresence::DoNotDisturb => "dnd",
+        chatter_core::proto::UserPresence::Offline | _ => "offline",
     };
 
     let _ = slint::invoke_from_event_loop(move || {
@@ -131,7 +131,7 @@ pub(super) fn handle_presence_changed(
 /// Handle anonymous DM profile updated event.
 pub(super) fn handle_anon_dm_profile_updated(
     window: &Weak<MainWindow>,
-    conversation_id: chatter_linux::domain::anon_dm::AnonDmId,
+    conversation_id: chatter_core::domain::anon_dm::AnonDmId,
     user_id: UserId,
     display_name: Option<String>,
     avatar_url: Option<String>,

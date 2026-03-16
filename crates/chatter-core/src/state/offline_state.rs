@@ -48,8 +48,8 @@ impl Default for OfflineStateData {
 /// # Example
 ///
 /// ```ignore
-/// use chatter_linux::state::OfflineState;
-/// use chatter_linux::network::connection::ConnectionState;
+/// use chatter_core::state::OfflineState;
+/// use chatter_core::network::connection::ConnectionState;
 ///
 /// let state = OfflineState::new();
 ///

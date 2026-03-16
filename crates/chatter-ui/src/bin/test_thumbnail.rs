@@ -29,7 +29,7 @@ fn main() {
 
     let start = Instant::now();
 
-    match chatter_linux::media::extract_video_thumbnail(video_path) {
+    match chatter_core::media::extract_video_thumbnail(video_path) {
         Ok((webp_data, width, height, duration_ms)) => {
             println!("\nSUCCESS in {:?}", start.elapsed());
             println!("  Thumbnail: {}x{}", width, height);

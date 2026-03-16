@@ -17,14 +17,14 @@ use std::time::Duration;
 
 use ed25519_dalek::Signer;
 
-use chatter_linux::domain::ids::ChannelId;
-use chatter_linux::mailbox::group::{GroupCoordinator, GroupMailboxManager, MemberMailbox};
-use chatter_linux::mailbox::TokenManager;
-use chatter_linux::network::grpc::{ChannelClient, GrpcClientPool, MailboxClient, MessageClient};
-use chatter_linux::proto::chat_v1::{
+use chatter_core::domain::ids::ChannelId;
+use chatter_core::mailbox::group::{GroupCoordinator, GroupMailboxManager, MemberMailbox};
+use chatter_core::mailbox::TokenManager;
+use chatter_core::network::grpc::{ChannelClient, GrpcClientPool, MailboxClient, MessageClient};
+use chatter_core::proto::chat_v1::{
     message::content::Type as ContentType, message::Content, ChannelType,
 };
-use chatter_linux::storage::Database;
+use chatter_core::storage::Database;
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 
@@ -91,7 +91,7 @@ async fn create_test_channel(client: &mut ChannelClient, name: &str) -> String {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(channel) => {
                     channel_id = channel.id;
@@ -327,9 +327,9 @@ async fn test_send_with_partial_member_list() {
     let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
 
     // Simulate having only ONE member's mailbox (User A)
-    let user_a: chatter_linux::domain::UserId =
+    let user_a: chatter_core::domain::UserId =
         uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
-    let user_b: chatter_linux::domain::UserId =
+    let user_b: chatter_core::domain::UserId =
         uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
 
     let mut key_a = [0u8; 32];
@@ -417,7 +417,7 @@ async fn test_member_mailbox_key_update() {
     let ctx = assert_ok(MailboxTestContext::new().await);
 
     let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
-    let member_id: chatter_linux::domain::UserId =
+    let member_id: chatter_core::domain::UserId =
         uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
 
     // Step 1: Store first mailbox key for member
@@ -822,7 +822,7 @@ async fn test_e2e_message_with_mailbox_exchange() {
     sleep(Duration::from_millis(200)).await;
 
     // Both users should be able to retrieve messages
-    use chatter_linux::proto::chat_v1::MessageSortDirection;
+    use chatter_core::proto::chat_v1::MessageSortDirection;
 
     let messages1 = assert_ok(
         msg_client1

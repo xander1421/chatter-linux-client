@@ -1,7 +1,7 @@
 use std::sync::Arc;
-use chatter_linux::app::UIContext;
-use chatter_linux::network::grpc::GifClient;
-use chatter_linux::mailbox::blind_signature::UnblindedToken;
+use chatter_core::app::UIContext;
+use chatter_core::network::grpc::GifClient;
+use chatter_core::mailbox::blind_signature::UnblindedToken;
 
 #[tokio::test]
 async fn test_gif_client_anonymous_search() {
@@ -18,7 +18,7 @@ async fn test_gif_client_anonymous_search() {
             }
         };
 
-    let interceptor = chatter_linux::network::grpc::interceptors::AuthInterceptor::new();
+    let interceptor = chatter_core::network::grpc::interceptors::AuthInterceptor::new();
     
     // Create a fake token to test spending logic
     let token = UnblindedToken {

@@ -19,7 +19,7 @@ use crate::error::SystemError;
 /// # Example
 ///
 /// ```no_run
-/// use chatter_linux::system::ExternalOpener;
+/// use chatter_core::system::ExternalOpener;
 /// use std::path::Path;
 ///
 /// let opener = ExternalOpener;
@@ -32,7 +32,7 @@ use crate::error::SystemError;
 ///
 /// // Open a folder in the file manager
 /// opener.open_folder(Path::new("/home/user/Documents"))?;
-/// # Ok::<(), chatter_linux::error::SystemError>(())
+/// # Ok::<(), chatter_core::error::SystemError>(())
 /// ```
 pub struct ExternalOpener;
 
@@ -51,12 +51,12 @@ impl ExternalOpener {
     /// # Example
     ///
     /// ```no_run
-    /// use chatter_linux::system::ExternalOpener;
+    /// use chatter_core::system::ExternalOpener;
     ///
     /// let opener = ExternalOpener;
     /// opener.open_url("https://example.com")?;
     /// opener.open_url("mailto:user@example.com")?;
-    /// # Ok::<(), chatter_linux::error::SystemError>(())
+    /// # Ok::<(), chatter_core::error::SystemError>(())
     /// ```
     pub fn open_url(&self, url: &str) -> Result<(), SystemError> {
         // Validate URL scheme
@@ -86,12 +86,12 @@ impl ExternalOpener {
     /// # Example
     ///
     /// ```no_run
-    /// use chatter_linux::system::ExternalOpener;
+    /// use chatter_core::system::ExternalOpener;
     /// use std::path::Path;
     ///
     /// let opener = ExternalOpener;
     /// opener.open_file(Path::new("/home/user/image.png"))?;
-    /// # Ok::<(), chatter_linux::error::SystemError>(())
+    /// # Ok::<(), chatter_core::error::SystemError>(())
     /// ```
     pub fn open_file(&self, path: &Path) -> Result<(), SystemError> {
         // Validate path exists
@@ -118,12 +118,12 @@ impl ExternalOpener {
     /// # Example
     ///
     /// ```no_run
-    /// use chatter_linux::system::ExternalOpener;
+    /// use chatter_core::system::ExternalOpener;
     /// use std::path::Path;
     ///
     /// let opener = ExternalOpener;
     /// opener.open_folder(Path::new("/home/user/Documents"))?;
-    /// # Ok::<(), chatter_linux::error::SystemError>(())
+    /// # Ok::<(), chatter_core::error::SystemError>(())
     /// ```
     pub fn open_folder(&self, path: &Path) -> Result<(), SystemError> {
         // Validate path exists and is a directory
@@ -161,13 +161,13 @@ impl ExternalOpener {
     /// # Example
     ///
     /// ```no_run
-    /// use chatter_linux::system::ExternalOpener;
+    /// use chatter_core::system::ExternalOpener;
     /// use std::path::Path;
     ///
     /// let opener = ExternalOpener;
     /// // Opens /home/user/Documents and may select document.pdf
     /// opener.reveal_in_folder(Path::new("/home/user/Documents/document.pdf"))?;
-    /// # Ok::<(), chatter_linux::error::SystemError>(())
+    /// # Ok::<(), chatter_core::error::SystemError>(())
     /// ```
     pub fn reveal_in_folder(&self, path: &Path) -> Result<(), SystemError> {
         // Validate path exists

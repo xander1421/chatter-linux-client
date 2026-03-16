@@ -5,8 +5,8 @@
 mod common;
 
 use std::time::Duration;
-use chatter_linux::network::grpc::{ChannelClient, MessageClient, UserClient};
-use chatter_linux::proto::chat_v1::{
+use chatter_core::network::grpc::{ChannelClient, MessageClient, UserClient};
+use chatter_core::proto::chat_v1::{
     message::content::Type as ContentType, message::Content, ChannelType, UserPresence,
 };
 use tokio_stream::StreamExt;
@@ -47,7 +47,7 @@ async fn test_message_stream_establishment() {
     while let Some(result) = create_stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(ch) = payload {
                 channel_id = ch.id;
             }
@@ -97,7 +97,7 @@ async fn test_message_stream_receives_new_messages() {
     while let Some(result) = create_stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(ch) = payload {
                 channel_id = ch.id;
             }
@@ -228,7 +228,7 @@ async fn test_channel_event_stream_specific_channel() {
         while let Some(result) = create_stream.next().await {
             let event = result.expect("Stream error");
             if let Some(payload) = event.event {
-                use chatter_linux::proto::chat_v1::channel_event::Event;
+                use chatter_core::proto::chat_v1::channel_event::Event;
                 if let Event::ChannelCreated(ch) = payload {
                     channel_id = ch.id;
                 }
@@ -368,7 +368,7 @@ async fn test_stream_reconnection() {
     while let Some(result) = create_stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(ch) = payload {
                 channel_id = ch.id;
             }
@@ -428,7 +428,7 @@ async fn test_multiple_channel_streams() {
             while let Some(result) = create_stream.next().await {
                 let event = result.expect("Stream error");
                 if let Some(payload) = event.event {
-                    use chatter_linux::proto::chat_v1::channel_event::Event;
+                    use chatter_core::proto::chat_v1::channel_event::Event;
                     if let Event::ChannelCreated(ch) = payload {
                         ids.push(ch.id);
                     }
@@ -485,7 +485,7 @@ async fn test_message_stream_with_cursor() {
     while let Some(result) = create_stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(ch) = payload {
                 channel_id = ch.id;
             }

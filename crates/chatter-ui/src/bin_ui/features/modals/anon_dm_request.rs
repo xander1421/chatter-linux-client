@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::anon_dm::AnonDm;
-use chatter_linux::inbox::DomainEvent;
+use chatter_core::app::UIContext;
+use chatter_core::domain::anon_dm::AnonDm;
+use chatter_core::inbox::DomainEvent;
 use crate::{DMListItemData, FriendRequestData, MainWindow, MessageItemData};
 use crate::bin_ui::converters::get_initials;
 use crate::bin_ui::features::auth::inbox::unified_actions::{self, EventSource};
@@ -275,11 +275,11 @@ pub fn spawn_anon_dm_request_handler(
                     };
 
                     // Extract text, attachments, and quote for display
-                    let (text, attachment_pointers, has_quote, quote_author, quote_preview) = if let Some(chatter_linux::proto::content_v1::content::Content::DataMessage(data_msg)) = &inner_content.content {
+                    let (text, attachment_pointers, has_quote, quote_author, quote_preview) = if let Some(chatter_core::proto::content_v1::content::Content::DataMessage(data_msg)) = &inner_content.content {
                         let q_has = data_msg.quote.is_some();
                         let q_author = data_msg.quote.as_ref().map(|q| {
                             // Resolve author UUID to display name
-                            if let Ok(uid) = q.author_aci.parse::<chatter_linux::domain::UserId>() {
+                            if let Ok(uid) = q.author_aci.parse::<chatter_core::domain::UserId>() {
                                 anon_dm_service.get_conversation(&conversation_id)
                                     .ok()
                                     .flatten()
@@ -650,7 +650,7 @@ pub fn spawn_anon_dm_request_handler(
                         if let Some(w) = weak.upgrade() {
                             let selected_dm = w.get_selected_dm_id().to_string();
                             if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
-                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_linux::domain::ChannelId>() {
+                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_core::domain::ChannelId>() {
                                     unified_actions::handle_reaction(
                                         &weak, &cs, EventSource::Channel(channel_id),
                                         emoji.clone(), false, timestamp,
@@ -671,7 +671,7 @@ pub fn spawn_anon_dm_request_handler(
                         if let Some(w) = weak.upgrade() {
                             let selected_dm = w.get_selected_dm_id().to_string();
                             if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
-                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_linux::domain::ChannelId>() {
+                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_core::domain::ChannelId>() {
                                     unified_actions::handle_reaction(
                                         &weak, &cs, EventSource::Channel(channel_id),
                                         emoji.clone(), true, timestamp,
@@ -768,7 +768,7 @@ pub fn spawn_anon_dm_request_handler(
                                 // Fallback: try to determine from selected DM
                                 let selected_dm = w.get_selected_dm_id().to_string();
                                 if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
-                                    anon_dm_id_str.parse::<chatter_linux::domain::ChannelId>().ok()
+                                    anon_dm_id_str.parse::<chatter_core::domain::ChannelId>().ok()
                                 } else {
                                     None
                                 }
@@ -796,7 +796,7 @@ pub fn spawn_anon_dm_request_handler(
                         if let Some(w) = weak.upgrade() {
                             let selected_dm = w.get_selected_dm_id().to_string();
                             if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
-                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_linux::domain::ChannelId>() {
+                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_core::domain::ChannelId>() {
                                     unified_actions::handle_receipt(
                                         &weak, &cs,
                                         EventSource::Channel(channel_id),
@@ -820,7 +820,7 @@ pub fn spawn_anon_dm_request_handler(
                         .map(u64::from_be_bytes)
                         .unwrap_or(0);
                     let new_body = match new_content {
-                        chatter_linux::domain::message::MessageContent::Text(text) => text,
+                        chatter_core::domain::message::MessageContent::Text(text) => text,
                         _ => "[Unsupported content]".to_string(),
                     };
                     unified_actions::handle_edit(

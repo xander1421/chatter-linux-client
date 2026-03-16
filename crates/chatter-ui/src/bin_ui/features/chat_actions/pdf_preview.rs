@@ -3,9 +3,9 @@
 //! Handles PDF file viewing and export.
 
 #[cfg(not(target_os = "android"))]
-use chatter_linux::media::{FilePicker, FilePickerConfig};
+use chatter_core::media::{FilePicker, FilePickerConfig};
 #[cfg(not(target_os = "android"))]
-use chatter_linux::system::ExternalOpener;
+use chatter_core::system::ExternalOpener;
 
 use crate::bin_ui::preview_state;
 use crate::MainWindow;

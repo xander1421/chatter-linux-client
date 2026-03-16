@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::calls::AudioCapture;
+use chatter_core::app::UIContext;
+use chatter_core::calls::AudioCapture;
 #[cfg(not(target_os = "android"))]
-use chatter_linux::calls::{ScreenCapture, ScreenSourceType};
+use chatter_core::calls::{ScreenCapture, ScreenSourceType};
 use crate::AudioDeviceData;
 #[cfg(not(target_os = "android"))]
 use crate::ScreenSourceData;

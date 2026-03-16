@@ -35,10 +35,10 @@ pub use crate::framework::fixtures::{
 };
 
 // Re-export profile crypto utilities for tests
-pub use chatter_linux::crypto::profile_crypto::{
+pub use chatter_core::crypto::profile_crypto::{
     encrypt_display_name, decrypt_display_name,
 };
-pub use chatter_linux::crypto::derive_uak;
+pub use chatter_core::crypto::derive_uak;
 
 // Re-export traits
 pub use crate::framework::traits::{TestContext, Resettable, AsyncTestExt};
@@ -63,11 +63,11 @@ pub use std::sync::Arc;
 pub use std::time::Duration;
 
 // Re-export chatter types commonly used in tests
-pub use chatter_linux::error::NetworkError;
-pub use chatter_linux::network::grpc::{
+pub use chatter_core::error::NetworkError;
+pub use chatter_core::network::grpc::{
     AuthClient, ChannelClient, MessageClient, UserClient, GrpcClientPool,
 };
-pub use chatter_linux::proto::chat_v1::{
+pub use chatter_core::proto::chat_v1::{
     ChannelType, FriendStatus, MessageSortDirection,
     channel_event, user_event, message,
 };

@@ -7,9 +7,9 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
-use chatter_linux::events::EventBus;
-use chatter_linux::inbox::handlers::DomainEvent;
-use chatter_linux::services::message::MessageService;
+use chatter_core::events::EventBus;
+use chatter_core::inbox::handlers::DomainEvent;
+use chatter_core::services::message::MessageService;
 
 /// Spawn a task that listens for pin events and persists them to the database.
 ///

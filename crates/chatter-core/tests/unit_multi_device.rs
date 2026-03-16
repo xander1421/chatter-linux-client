@@ -8,7 +8,7 @@ mod framework;
 
 use std::collections::{HashMap, HashSet};
 
-use chatter_linux::proto::chat_v1::{
+use chatter_core::proto::chat_v1::{
     get_pre_key_bundle_response, GetPreKeyBundleResponse, PreKeyBundleDeviceList,
     SignalPreKeyBundle,
 };
@@ -276,7 +276,7 @@ async fn test_valid_device_list_succeeds() {
 
 /// Create a test SignalPreKeyBundle for a device.
 fn create_test_bundle(device_id: u32) -> SignalPreKeyBundle {
-    use chatter_linux::proto::chat_v1::signal_pre_key_bundle::{
+    use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
         KyberPreKeyRecord, PreKeyRecord, SignedPreKeyRecord,
     };
 

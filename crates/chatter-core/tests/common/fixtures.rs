@@ -10,12 +10,12 @@ use base64::Engine;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
-use chatter_linux::error::NetworkError;
-use chatter_linux::network::grpc::{AuthClient, GrpcClientPool};
-use chatter_linux::proto::chat_v1::signal_pre_key_bundle::{
+use chatter_core::error::NetworkError;
+use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
+use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
     KyberPreKeyRecord as ProtoKyberPreKey, PreKeyRecord, SignedPreKeyRecord,
 };
-use chatter_linux::proto::chat_v1::SignalPreKeyBundle;
+use chatter_core::proto::chat_v1::SignalPreKeyBundle;
 use libsignal_protocol::{kem, IdentityKeyPair, KeyPair, KyberPreKeyId, KyberPreKeyRecord, GenericSignedPreKey};
 
 /// Test user data returned after registration.
@@ -48,7 +48,7 @@ impl TestUser {
     ///
     /// Returns raw encrypted bytes (nonce || ciphertext || auth_tag).
     pub fn encrypt_display_name(&self) -> Vec<u8> {
-        chatter_linux::crypto::profile_crypto::encrypt_display_name(
+        chatter_core::crypto::profile_crypto::encrypt_display_name(
             &self.profile_key,
             &self.display_name,
         )
@@ -62,7 +62,7 @@ impl TestUser {
 
     /// Decrypt an encrypted display name with the user's profile key.
     pub fn decrypt_display_name(&self, encrypted: &[u8]) -> Option<String> {
-        chatter_linux::crypto::profile_crypto::decrypt_display_name(
+        chatter_core::crypto::profile_crypto::decrypt_display_name(
             &self.profile_key,
             encrypted,
         )
@@ -77,7 +77,7 @@ impl TestUser {
 
     /// Derive Unidentified Access Key from profile key.
     pub fn derive_uak(&self) -> [u8; 16] {
-        chatter_linux::crypto::derive_uak(&self.profile_key)
+        chatter_core::crypto::derive_uak(&self.profile_key)
     }
 }
 
@@ -229,7 +229,7 @@ pub async fn register_test_user(pool: &GrpcClientPool) -> Result<TestUser, Netwo
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
     // Encrypt display name with profile key (required for Phase 79 privacy)
-    let encrypted_display_name = chatter_linux::crypto::profile_crypto::encrypt_display_name(
+    let encrypted_display_name = chatter_core::crypto::profile_crypto::encrypt_display_name(
         &profile_key,
         &display_name,
     )
@@ -293,7 +293,7 @@ pub fn mock_test_user() -> TestUser {
     let display_name = format!("Mock User {}", &username[10..18.min(username.len())]);
 
     // Encrypt the display name with the profile key
-    let encrypted_display_name = chatter_linux::crypto::profile_crypto::encrypt_display_name(
+    let encrypted_display_name = chatter_core::crypto::profile_crypto::encrypt_display_name(
         &profile_key,
         &display_name,
     )
@@ -318,7 +318,7 @@ pub fn mock_test_user() -> TestUser {
 /// Uses the provided profile key to encrypt the display name.
 /// Returns raw encrypted bytes (nonce || ciphertext || auth_tag).
 pub fn encrypt_test_display_name(profile_key: &[u8; 32], display_name: &str) -> Vec<u8> {
-    chatter_linux::crypto::profile_crypto::encrypt_display_name(profile_key, display_name)
+    chatter_core::crypto::profile_crypto::encrypt_display_name(profile_key, display_name)
         .expect("Display name encryption should succeed")
 }
 

@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel, Weak, Model};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::channel::ChannelType;
-use chatter_linux::domain::ids::ChannelId;
-use chatter_linux::services::user::FriendRequestFilter;
+use chatter_core::app::UIContext;
+use chatter_core::domain::channel::ChannelType;
+use chatter_core::domain::ids::ChannelId;
+use chatter_core::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{
     channel_to_slint, dm_to_send_data, get_initials, message_to_display_data,
@@ -310,7 +310,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<UICon
                     avatar_bytes: dm.peer_avatar.clone(),
                     avatar_decoded: None,
                     initials: get_initials(&peer_name),
-                    presence_status: if dm.status == chatter_linux::domain::anon_dm::AnonDmStatus::Active {
+                    presence_status: if dm.status == chatter_core::domain::anon_dm::AnonDmStatus::Active {
                         "online".to_string()
                     } else {
                         "offline".to_string()
@@ -868,7 +868,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         match ui_ctx.anon_dm_service.list_conversations() {
             Ok(dms) => {
                 for dm in dms {
-                    if dm.status != chatter_linux::domain::anon_dm::AnonDmStatus::Pending {
+                    if dm.status != chatter_core::domain::anon_dm::AnonDmStatus::Pending {
                         let peer_name = dm.peer_display_name.clone()
                             .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
                         let peer_id_str = dm.peer_id.to_string();
@@ -905,7 +905,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             avatar_bytes: dm.peer_avatar.clone(),
                             avatar_decoded: None,
                             initials: get_initials(&peer_name),
-                            presence_status: if dm.status == chatter_linux::domain::anon_dm::AnonDmStatus::Active {
+                            presence_status: if dm.status == chatter_core::domain::anon_dm::AnonDmStatus::Active {
                                 "online".to_string()
                             } else {
                                 "offline".to_string()

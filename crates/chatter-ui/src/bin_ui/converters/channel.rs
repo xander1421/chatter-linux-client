@@ -2,7 +2,7 @@
 
 use slint::SharedString;
 
-use chatter_linux::domain::channel::Channel;
+use chatter_core::domain::channel::Channel;
 
 use super::utils::{avatar_bytes_to_image, channel_type_to_string, get_initials};
 use crate::{ChannelListItemData, DMListItemData};

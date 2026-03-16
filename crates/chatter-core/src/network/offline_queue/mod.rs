@@ -27,7 +27,7 @@ use uuid::Uuid;
 /// # Example
 ///
 /// ```
-/// use chatter_linux::network::offline_queue::{OfflineQueue, OperationType};
+/// use chatter_core::network::offline_queue::{OfflineQueue, OperationType};
 ///
 /// let queue = OfflineQueue::new(100);
 ///

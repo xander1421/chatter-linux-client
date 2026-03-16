@@ -100,7 +100,7 @@ pub struct ReplayResult {
 /// # Example
 ///
 /// ```ignore
-/// use chatter_linux::network::connection_manager::{ConnectionManager, ConnectionConfig};
+/// use chatter_core::network::connection_manager::{ConnectionManager, ConnectionConfig};
 ///
 /// let config = ConnectionConfig::new("http://localhost:50051");
 /// let manager = ConnectionManager::new(config)?;

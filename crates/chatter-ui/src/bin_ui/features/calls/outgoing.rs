@@ -6,12 +6,12 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::crypto::EphemeralCallKey;
-use chatter_linux::domain::call::CallType;
-use chatter_linux::domain::ids::ChannelId;
-use chatter_linux::services::CallWorkerHandle;
-use chatter_linux::state::ActiveConversation;
+use chatter_core::app::UIContext;
+use chatter_core::crypto::EphemeralCallKey;
+use chatter_core::domain::call::CallType;
+use chatter_core::domain::ids::ChannelId;
+use chatter_core::services::CallWorkerHandle;
+use chatter_core::state::ActiveConversation;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 use super::key_exchange::{set_pending_call, PendingOutgoingCall};
@@ -146,13 +146,13 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 async fn start_call_impl(
     weak: slint::Weak<MainWindow>,
     call_service: CallWorkerHandle,
-    session_service: Arc<chatter_linux::services::session_service::SessionService>,
+    session_service: Arc<chatter_core::services::session_service::SessionService>,
     call_type: CallType,
-    message_service: Arc<chatter_linux::services::message::MessageService>,
-    mailbox_manager: Arc<chatter_linux::services::mailbox_manager::MailboxManager>,
-    channel_service: Arc<chatter_linux::services::channel::ChannelService>,
-    anon_dm_service: Arc<chatter_linux::services::anon_dm::AnonDmService>,
-    anon_group_service: Arc<chatter_linux::services::anon_group::AnonGroupService>,
+    message_service: Arc<chatter_core::services::message::MessageService>,
+    mailbox_manager: Arc<chatter_core::services::mailbox_manager::MailboxManager>,
+    channel_service: Arc<chatter_core::services::channel::ChannelService>,
+    anon_dm_service: Arc<chatter_core::services::anon_dm::AnonDmService>,
+    anon_group_service: Arc<chatter_core::services::anon_group::AnonGroupService>,
     conversation: ActiveConversation,
 ) {
     // Get current user ID and display name
@@ -275,7 +275,7 @@ async fn start_call_impl(
                                     let channel_id_str = format!("anon-dm-{}", anon_dm_id);
                                     if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
                                         use crate::bin_ui::features::calls::call_history::create_call_history_message;
-                                        let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                                        let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                                         create_call_history_message(
                                             message_service.clone(),
                                             &channel_id,
@@ -298,7 +298,7 @@ async fn start_call_impl(
                             let channel_id_str = format!("anon-dm-{}", anon_dm_id);
                             if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
                                 use crate::bin_ui::features::calls::call_history::create_call_history_message;
-                                let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                                 create_call_history_message(
                                     message_service.clone(),
                                     &channel_id,
@@ -321,7 +321,7 @@ async fn start_call_impl(
                     let channel_id_str = format!("anon-dm-{}", anon_dm_id);
                     if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
                         use crate::bin_ui::features::calls::call_history::create_call_history_message;
-                        let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                        let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                         create_call_history_message(
                             message_service.clone(),
                             &channel_id,
@@ -356,7 +356,7 @@ async fn start_call_impl(
                     // Store pending anonymous call state in the service
                     anon_dm_service.store_pending_anon_call(
                         offer_result.room_name.clone(),
-                        chatter_linux::services::anon_dm::PendingAnonCall {
+                        chatter_core::services::anon_dm::PendingAnonCall {
                             call_room_id: offer_result.call_room_id,
                             room_name: offer_result.room_name.clone(),
                             conversation_id: anon_dm_id,
@@ -414,7 +414,7 @@ async fn start_call_impl(
                     let channel_id_str = format!("anon-dm-{}", anon_dm_id);
                     if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
                         use crate::bin_ui::features::calls::call_history::create_call_history_message;
-                        let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                        let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                         create_call_history_message(
                             message_service.clone(),
                             &channel_id,
@@ -457,7 +457,7 @@ async fn start_call_impl(
                     tracing::info!("Created call on server: {:?}, waiting for peer's ephemeral key", call.id);
 
                     // Build and send offer with our ephemeral public key
-                    let content = chatter_linux::services::build_call_key_offer(
+                    let content = chatter_core::services::build_call_key_offer(
                         &call.id.to_string(),
                         ephemeral_public,
                         call_type_str,
@@ -545,7 +545,7 @@ async fn start_call_impl(
         // Generate random key and distribute via pairwise sealed sender
         // =================================================================
 
-        let group_key = chatter_linux::crypto::generate_group_call_key();
+        let group_key = chatter_core::crypto::generate_group_call_key();
 
         match call_service.initiate_call(
             channel_id,
@@ -594,7 +594,7 @@ async fn start_call_impl(
                                 }
 
                                 // Build GroupCallKey content
-                                let content = chatter_linux::services::build_group_call_key_content(
+                                let content = chatter_core::services::build_group_call_key_content(
                                     &call_id_str,
                                     group_key_arr,
                                     0, // Initial epoch
@@ -638,11 +638,11 @@ async fn start_call_impl(
                         is_speaking: false,
                     };
 
-                    let verification = chatter_linux::services::CallVerification::derive_verification_emojis(
+                    let verification = chatter_core::services::CallVerification::derive_verification_emojis(
                         &group_key,
                         &call.id.to_string(),
                     );
-                    let (e1, e2, e3, e4) = chatter_linux::services::CallVerification::to_slint_tuple(&verification);
+                    let (e1, e2, e3, e4) = chatter_core::services::CallVerification::to_slint_tuple(&verification);
 
                     let call_data = ActiveCallData {
                         call_id: call.id.to_string().into(),
@@ -688,13 +688,13 @@ async fn start_private_group_call(
     weak: slint::Weak<MainWindow>,
     group_id_str: &str,
     display_name: &str,
-    user_id: chatter_linux::domain::ids::UserId,
+    user_id: chatter_core::domain::ids::UserId,
     is_video_call: bool,
     call_type_str: &str,
-    anon_dm_service: Arc<chatter_linux::services::anon_dm::AnonDmService>,
-    anon_group_service: Arc<chatter_linux::services::anon_group::AnonGroupService>,
+    anon_dm_service: Arc<chatter_core::services::anon_dm::AnonDmService>,
+    anon_group_service: Arc<chatter_core::services::anon_group::AnonGroupService>,
 ) {
-    use chatter_linux::domain::anon_group::AnonGroupId;
+    use chatter_core::domain::anon_group::AnonGroupId;
 
     let anon_group_id: AnonGroupId = match group_id_str.parse() {
         Ok(id) => id,
@@ -753,11 +753,11 @@ async fn start_private_group_call(
             // Store pending call state (reuse anon DM pending call storage)
             anon_dm_service.store_pending_anon_call(
                 offer_result.room_name.clone(),
-                chatter_linux::services::anon_dm::PendingAnonCall {
+                chatter_core::services::anon_dm::PendingAnonCall {
                     call_room_id: offer_result.call_room_id,
                     room_name: offer_result.room_name.clone(),
                     // Use a synthetic AnonDmId from the group ID bytes for storage
-                    conversation_id: chatter_linux::domain::anon_dm::AnonDmId::try_from_slice(
+                    conversation_id: chatter_core::domain::anon_dm::AnonDmId::try_from_slice(
                         anon_group_id.as_bytes()
                     ).expect("AnonGroupId is 16 bytes like AnonDmId"),
                     token,

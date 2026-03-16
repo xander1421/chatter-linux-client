@@ -6,17 +6,17 @@ use std::sync::Arc;
 
 use slint::Model;
 
-use chatter_linux::domain::attachment::Attachment;
-use chatter_linux::domain::ids::ChannelId;
-use chatter_linux::domain::UserId;
-use chatter_linux::proto::content_v1::{AttachmentPointer, Content};
-use chatter_linux::services::attachment::AttachmentService;
-use chatter_linux::services::{
+use chatter_core::domain::attachment::Attachment;
+use chatter_core::domain::ids::ChannelId;
+use chatter_core::domain::UserId;
+use chatter_core::proto::content_v1::{AttachmentPointer, Content};
+use chatter_core::services::attachment::AttachmentService;
+use chatter_core::services::{
     build_delivery_receipt_content, build_delivery_receipt_content_with_channel,
     build_read_receipt_content, build_read_receipt_content_with_channel,
     MailboxManager, MessageService,
 };
-use chatter_linux::state::chat_state::PendingAttachment;
+use chatter_core::state::chat_state::PendingAttachment;
 
 use crate::MainWindow;
 

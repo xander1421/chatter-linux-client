@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::anon_dm::AnonDmId;
-use chatter_linux::domain::ids::UserId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::anon_dm::AnonDmId;
+use chatter_core::domain::ids::UserId;
 use crate::MainWindow;
 
 /// Handle anonymous DM request received.

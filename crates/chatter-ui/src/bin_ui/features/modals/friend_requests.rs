@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::UserId;
-use chatter_linux::services::channel::ChannelService;
-use chatter_linux::services::user::UserService;
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::UserId;
+use chatter_core::services::channel::ChannelService;
+use chatter_core::services::user::UserService;
 
 use crate::bin_ui::converters::get_initials;
 use crate::{DMListItemData, MainWindow};
@@ -228,7 +228,7 @@ async fn add_dm_to_sidebar_on_accept(
     other_user_id: &str,
 ) {
     // Parse channel ID
-    let channel_id_parsed: chatter_linux::domain::ids::ChannelId = match channel_id.parse() {
+    let channel_id_parsed: chatter_core::domain::ids::ChannelId = match channel_id.parse() {
         Ok(id) => id,
         Err(e) => {
             tracing::error!("Invalid channel ID {}: {}", channel_id, e);
@@ -237,7 +237,7 @@ async fn add_dm_to_sidebar_on_accept(
     };
 
     // Parse other user ID
-    let other_user_id_parsed: chatter_linux::domain::UserId = match other_user_id.parse() {
+    let other_user_id_parsed: chatter_core::domain::UserId = match other_user_id.parse() {
         Ok(id) => id,
         Err(e) => {
             tracing::error!("Invalid user ID {}: {}", other_user_id, e);

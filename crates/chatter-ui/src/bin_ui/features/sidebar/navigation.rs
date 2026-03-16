@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::ChannelId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::ChannelId;
 
 use crate::MainWindow;
 

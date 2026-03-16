@@ -2,10 +2,10 @@
 
 use slint::{Image, ModelRc, VecModel};
 
-use chatter_linux::domain::attachment::{Attachment, AttachmentStatus};
-use chatter_linux::domain::ids::AttachmentId;
-use chatter_linux::proto::content_v1::AttachmentPointer;
-use chatter_linux::state::PendingAttachment;
+use chatter_core::domain::attachment::{Attachment, AttachmentStatus};
+use chatter_core::domain::ids::AttachmentId;
+use chatter_core::proto::content_v1::AttachmentPointer;
+use chatter_core::state::PendingAttachment;
 
 use crate::bin_ui::audio_state;
 use crate::{MessageAttachmentData, PendingAttachmentData};

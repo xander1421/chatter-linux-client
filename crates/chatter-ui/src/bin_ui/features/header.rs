@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::state::ActiveConversation;
+use chatter_core::app::UIContext;
+use chatter_core::state::ActiveConversation;
 
 use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
 use crate::MainWindow;
@@ -129,7 +129,7 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 // Get content preview
                 let content_preview = msg
                     .as_text()
-                    .map(|t| chatter_linux::services::gateway::shared::truncate_preview(&t))
+                    .map(|t| chatter_core::services::gateway::shared::truncate_preview(&t))
                     .unwrap_or_else(|| "[Attachment]".to_string());
 
                 display_results.push(crate::SearchResult {
@@ -300,9 +300,9 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 /// falling back to PinService (regular channels) or AnonGroupService (private groups).
 fn update_pinned_ui_from_loaded_messages(
     weak_window: slint::Weak<MainWindow>,
-    pinned_state: chatter_linux::state::PinnedState,
-    pin_service: Arc<chatter_linux::services::pin_service::PinService>,
-    anon_group_service: Arc<chatter_linux::services::anon_group::AnonGroupService>,
+    pinned_state: chatter_core::state::PinnedState,
+    pin_service: Arc<chatter_core::services::pin_service::PinService>,
+    anon_group_service: Arc<chatter_core::services::anon_group::AnonGroupService>,
     conversation: ActiveConversation,
 ) {
     let state = pinned_state.get();
@@ -343,7 +343,7 @@ fn update_pinned_ui_from_loaded_messages(
         let preview = if let Some(msg_id) = current_msg_id {
             if let ActiveConversation::AnonGroup(group_id) = conversation {
                 // Private group: look up from anon_group_messages
-                if let Ok(Some(msg)) = anon_group_service.get_message(&chatter_linux::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string())) {
+                if let Ok(Some(msg)) = anon_group_service.get_message(&chatter_core::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string())) {
                     msg.as_text()
                         .filter(|t| !t.is_empty())
                         .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t })
@@ -415,8 +415,8 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     Ok(id) => id,
                     _ => return,
                 };
-                let is_owner = group.owner_id == current_user_id || group.my_role == chatter_linux::domain::anon_group::AnonGroupRole::Owner;
-                let is_admin = group.my_role == chatter_linux::domain::anon_group::AnonGroupRole::Admin;
+                let is_owner = group.owner_id == current_user_id || group.my_role == chatter_core::domain::anon_group::AnonGroupRole::Owner;
+                let is_admin = group.my_role == chatter_core::domain::anon_group::AnonGroupRole::Admin;
 
                 // Convert members to Slint data
                 let mut slint_members = Vec::with_capacity(members.len());
@@ -428,9 +428,9 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     };
 
                     let role = match member.role {
-                        chatter_linux::domain::anon_group::AnonGroupRole::Owner => "owner",
-                        chatter_linux::domain::anon_group::AnonGroupRole::Admin => "admin",
-                        chatter_linux::domain::anon_group::AnonGroupRole::Member => "member",
+                        chatter_core::domain::anon_group::AnonGroupRole::Owner => "owner",
+                        chatter_core::domain::anon_group::AnonGroupRole::Admin => "admin",
+                        chatter_core::domain::anon_group::AnonGroupRole::Member => "member",
                     };
 
                     slint_members.push(crate::ChannelMemberData {
@@ -536,13 +536,13 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
             let has_more = older_messages.len() >= 50;
             let new_cursor = if !older_messages.is_empty() {
-                chatter_linux::state::PaginationCursor::new(
+                chatter_core::state::PaginationCursor::new(
                     has_more,
                     older_messages.first().map(|m| m.id),
                     older_messages.first().map(|m| m.created_at),
                 )
             } else {
-                chatter_linux::state::PaginationCursor::exhausted()
+                chatter_core::state::PaginationCursor::exhausted()
             };
             message_state.set_cursor(channel_id, new_cursor);
 

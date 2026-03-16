@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use chatter_linux::media::InAppVideoPlayer as VideoPlayer;
+use chatter_core::media::InAppVideoPlayer as VideoPlayer;
 
 use super::video as hw_video;
 
@@ -130,7 +130,7 @@ pub fn start_video_from_memory_async<F>(
                         video_state.volume = 1.0;
                     }
 
-                    let duration_str = chatter_linux::media::format_duration(duration);
+                    let duration_str = chatter_core::media::format_duration(duration);
                     tracing::info!("HW video started: {}s ({})", duration, duration_str);
                     on_ready(Ok((duration, duration_str)));
                 }
@@ -222,7 +222,7 @@ fn start_video_software<F>(
             // Get final state
             let state = player_state.get_state();
             let duration = state.duration;
-            let duration_str = chatter_linux::media::format_duration(duration);
+            let duration_str = chatter_core::media::format_duration(duration);
             tracing::info!("Video loaded (software): {}s ({})", duration, duration_str);
 
             // Update global state

@@ -4,13 +4,13 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::{ChannelId, MessageId};
-use chatter_linux::services::attachment::AttachmentService;
-use chatter_linux::services::channel::ChannelService;
-use chatter_linux::services::message::MessageService;
-use chatter_linux::services::user::UserService;
-use chatter_linux::state::ChatState;
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::{ChannelId, MessageId};
+use chatter_core::services::attachment::AttachmentService;
+use chatter_core::services::channel::ChannelService;
+use chatter_core::services::message::MessageService;
+use chatter_core::services::user::UserService;
+use chatter_core::state::ChatState;
 
 use crate::bin_ui::converters::message_to_display_data;
 use crate::MainWindow;

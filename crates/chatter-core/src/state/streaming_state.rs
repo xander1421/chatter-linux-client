@@ -41,8 +41,8 @@ pub struct StreamingStateData {
 /// # Example
 ///
 /// ```ignore
-/// use chatter_linux::state::StreamingState;
-/// use chatter_linux::domain::ids::{ChannelId, UserId};
+/// use chatter_core::state::StreamingState;
+/// use chatter_core::domain::ids::{ChannelId, UserId};
 ///
 /// let state = StreamingState::new();
 ///

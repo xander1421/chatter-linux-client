@@ -2,7 +2,7 @@
 //!
 //! Provides assertion helpers for common error checking patterns.
 
-use chatter_linux::error::NetworkError;
+use chatter_core::error::NetworkError;
 
 /// Assert that an error indicates a resource was not found.
 ///

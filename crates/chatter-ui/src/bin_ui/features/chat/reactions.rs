@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::services::conversation::ConversationHandle;
-use chatter_linux::state::ActiveConversation;
+use chatter_core::app::UIContext;
+use chatter_core::services::conversation::ConversationHandle;
+use chatter_core::state::ActiveConversation;
 
 use crate::MainWindow;
 

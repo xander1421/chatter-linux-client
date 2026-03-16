@@ -7,8 +7,8 @@ mod common;
 
 use std::time::Duration;
 
-use chatter_linux::network::grpc::UserClient;
-use chatter_linux::proto::chat_v1::{user_event::Event, FriendStatus};
+use chatter_core::network::grpc::UserClient;
+use chatter_core::proto::chat_v1::{user_event::Event, FriendStatus};
 use tokio_stream::StreamExt;
 
 use common::*;

@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::{Attachment, FileCategory, Message};
-use chatter_linux::services::attachment::AttachmentService;
-use chatter_linux::services::conversation::ConversationHandle;
-use chatter_linux::state::ActiveConversation;
+use chatter_core::app::UIContext;
+use chatter_core::domain::{Attachment, FileCategory, Message};
+use chatter_core::services::attachment::AttachmentService;
+use chatter_core::services::conversation::ConversationHandle;
+use chatter_core::state::ActiveConversation;
 
 use crate::{MainWindow, MessageItemData};
 
@@ -108,7 +108,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
                 ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
                     // For DM/Channel, look up the message and update is_pinned
-                    if let Ok(sender_id) = sender_id_str.parse::<chatter_linux::domain::UserId>() {
+                    if let Ok(sender_id) = sender_id_str.parse::<chatter_core::domain::UserId>() {
                         if let Ok(Some(message)) = ui_ctx.message_service.get_by_sender_timestamp(&sender_id, target_sent_timestamp) {
                             let mut updated = message.clone();
                             updated.is_pinned = new_pinned_state;
@@ -120,7 +120,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             }
 
             // Update pinned_state
-            if let Ok(msg_id) = msg_id_str.parse::<chatter_linux::domain::ids::MessageId>() {
+            if let Ok(msg_id) = msg_id_str.parse::<chatter_core::domain::ids::MessageId>() {
                 if new_pinned_state {
                     ui_ctx.pinned_state.add_pinned_message(msg_id);
                 } else {
@@ -132,7 +132,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             // For DM/Channel, generate preview from stored message + attachments
             let preview_text = match handle.conversation() {
                 ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
-                    if let Ok(sender_id) = sender_id_str.parse::<chatter_linux::domain::UserId>() {
+                    if let Ok(sender_id) = sender_id_str.parse::<chatter_core::domain::UserId>() {
                         if let Ok(Some(message)) = ui_ctx.message_service.get_by_sender_timestamp(&sender_id, target_sent_timestamp) {
                             let attachments = resolve_attachments(&message, &ui_ctx.attachment_service);
                             generate_pinned_preview(&message, &attachments)

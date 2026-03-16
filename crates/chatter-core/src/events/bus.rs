@@ -51,7 +51,7 @@ const UI_CHANNEL_CAPACITY: usize = 32;
 /// # Example
 ///
 /// ```ignore
-/// use chatter_linux::events::{EventBus, DomainEvent, UiEvent};
+/// use chatter_core::events::{EventBus, DomainEvent, UiEvent};
 ///
 /// let bus = EventBus::new();
 ///

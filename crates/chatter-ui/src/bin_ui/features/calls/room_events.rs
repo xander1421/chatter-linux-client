@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::calls::LiveKitRoomEvent;
+use chatter_core::app::UIContext;
+use chatter_core::calls::LiveKitRoomEvent;
 use crate::{CallParticipantData, MainWindow};
 
 /// Wire room events to update UI (participant count, etc.).
@@ -39,7 +39,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
             match event {
                 LiveKitRoomEvent::StateChanged(state) => {
-                    if let chatter_linux::calls::RoomState::Connected { participant_count, .. } = state {
+                    if let chatter_core::calls::RoomState::Connected { participant_count, .. } = state {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 let mut data = w.get_active_call_data();

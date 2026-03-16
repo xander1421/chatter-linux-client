@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::anon_dm::AnonDmId;
-use chatter_linux::domain::anon_group::AnonGroupId;
-use chatter_linux::domain::ids::UserId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::anon_dm::AnonDmId;
+use chatter_core::domain::anon_group::AnonGroupId;
+use chatter_core::domain::ids::UserId;
 use crate::MainWindow;
 
 /// Handle anonymous call offer received.
@@ -24,7 +24,7 @@ pub(super) fn handle_anon_call_offer(
 ) {
     // Store pending call state for later use when accepting/declining
     // We'll get a real token when accepting
-    let dummy_token = chatter_linux::mailbox::CallRoomToken {
+    let dummy_token = chatter_core::mailbox::CallRoomToken {
         id: String::new(),
         public_key: vec![],
         private_key: vec![],
@@ -40,7 +40,7 @@ pub(super) fn handle_anon_call_offer(
         call_room_id_array[..call_room_id.len()].copy_from_slice(&call_room_id);
     }
 
-    let pending = chatter_linux::services::anon_dm::PendingAnonCall {
+    let pending = chatter_core::services::anon_dm::PendingAnonCall {
         call_room_id: call_room_id_array,
         room_name: room_name.clone(),
         conversation_id,
@@ -184,8 +184,8 @@ pub(super) fn handle_anon_call_answer(
                                 };
 
                                 // Create dummy IDs for anonymous calls
-                                let call_id = chatter_linux::domain::ids::CallId::new();
-                                let channel_id = chatter_linux::domain::ids::ChannelId::new();
+                                let call_id = chatter_core::domain::ids::CallId::new();
+                                let channel_id = chatter_core::domain::ids::ChannelId::new();
 
                                 // Connect to LiveKit with the access token and E2EE key
                                 match service.connect_with_token(
@@ -234,11 +234,11 @@ pub(super) fn handle_anon_call_answer(
                                             // Derive verification emojis from shared E2EE key + room name
                                             let mut e2ee_key = [0u8; 32];
                                             if pending.encryption_key.len() >= 32 { e2ee_key.copy_from_slice(&pending.encryption_key[..32]); }
-                                            let verification = chatter_linux::services::CallVerification::derive_verification_emojis(
+                                            let verification = chatter_core::services::CallVerification::derive_verification_emojis(
                                                 &e2ee_key,
                                                 &pending.room_name,
                                             );
-                                            let (e1, e2, e3, e4) = chatter_linux::services::CallVerification::to_slint_tuple(&verification);
+                                            let (e1, e2, e3, e4) = chatter_core::services::CallVerification::to_slint_tuple(&verification);
 
                                             // Create call data for UI (use room_name as call_id so "anon-" prefix is preserved for cleanup)
                                             let call_data = crate::ActiveCallData {
@@ -290,8 +290,8 @@ pub(super) fn handle_anon_call_answer(
 
                                         // Create failed call history entry
                                         let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
-                                        if let Ok(channel_id) = channel_id_str.parse::<chatter_linux::domain::ids::ChannelId>() {
-                                            let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                                        if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
+                                            let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                                             crate::bin_ui::features::calls::call_history::create_call_history_message(
                                                 ui_ctx.message_service.clone(),
                                                 &channel_id,
@@ -320,8 +320,8 @@ pub(super) fn handle_anon_call_answer(
 
                                 // Create failed call history entry
                                 let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
-                                if let Ok(channel_id) = channel_id_str.parse::<chatter_linux::domain::ids::ChannelId>() {
-                                    let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                                if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
+                                    let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                                     crate::bin_ui::features::calls::call_history::create_call_history_message(
                                         ui_ctx.message_service.clone(),
                                         &channel_id,
@@ -356,8 +356,8 @@ pub(super) fn handle_anon_call_answer(
                 let room_name = format!("anon-{}", uuid::Uuid::from_bytes(call_room_id.as_slice().try_into().unwrap_or_default()));
                 if let Some(pending) = ui_ctx.anon_dm_service.take_pending_anon_call(&room_name) {
                     let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
-                    if let Ok(channel_id) = channel_id_str.parse::<chatter_linux::domain::ids::ChannelId>() {
-                        let anonymous_user_id = chatter_linux::domain::ids::UserId::new();
+                    if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
+                        let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                         crate::bin_ui::features::calls::call_history::create_call_history_message(
                             ui_ctx.message_service.clone(),
                             &channel_id,
@@ -407,7 +407,7 @@ pub(super) fn handle_anon_group_call_offer(
     call_encryption_key: Vec<u8>,
 ) {
     // Store pending call state
-    let dummy_token = chatter_linux::mailbox::CallRoomToken {
+    let dummy_token = chatter_core::mailbox::CallRoomToken {
         id: String::new(),
         public_key: vec![],
         private_key: vec![],
@@ -423,11 +423,11 @@ pub(super) fn handle_anon_group_call_offer(
     }
 
     // Store as pending anon call (reuse the DM pending call infrastructure)
-    let conversation_id = chatter_linux::domain::anon_dm::AnonDmId::try_from_slice(
+    let conversation_id = chatter_core::domain::anon_dm::AnonDmId::try_from_slice(
         group_id.as_bytes()
     ).expect("AnonGroupId is 16 bytes");
 
-    let pending = chatter_linux::services::anon_dm::PendingAnonCall {
+    let pending = chatter_core::services::anon_dm::PendingAnonCall {
         call_room_id: call_room_id_array,
         room_name: room_name.clone(),
         conversation_id,
@@ -546,8 +546,8 @@ pub(super) fn handle_anon_group_call_answer(
                                     }
                                 };
 
-                                let call_id = chatter_linux::domain::ids::CallId::new();
-                                let channel_id = chatter_linux::domain::ids::ChannelId::new();
+                                let call_id = chatter_core::domain::ids::CallId::new();
+                                let channel_id = chatter_core::domain::ids::ChannelId::new();
 
                                 match service.connect_with_token(
                                     &room_info.livekit_token,

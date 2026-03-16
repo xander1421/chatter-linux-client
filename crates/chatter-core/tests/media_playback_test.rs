@@ -24,7 +24,7 @@ fn test_video_from_memory_mp4() {
     println!("Loaded {} bytes of video data", video_data.len());
 
     // Use the public API to get video info
-    use chatter_linux::media::decoder::create_decoder;
+    use chatter_core::media::decoder::create_decoder;
 
     let mut decoder = create_decoder().expect("Failed to create decoder");
 

@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use slint::{Model, Weak};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::UserId;
-use chatter_linux::domain::anon_group::AnonGroupId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::UserId;
+use chatter_core::domain::anon_group::AnonGroupId;
 use crate::MainWindow;
 
 /// Handle anonymous group invite received.
@@ -80,7 +80,7 @@ pub(super) fn handle_message_received(
     ui_ctx: &Arc<UIContext>,
     group_id: AnonGroupId,
     sender_id: UserId,
-    message_id: chatter_linux::domain::anon_group::AnonGroupMessageId,
+    message_id: chatter_core::domain::anon_group::AnonGroupMessageId,
 ) {
     // Resolve sender display name from group member list
     let sender_name = super::super::anon_group_handlers::get_anon_member_name(ui_ctx, &group_id, &sender_id);
@@ -106,7 +106,7 @@ pub(super) fn handle_message_received(
 
     // Resolve attachments
     let attachment_ids = msg.attachment_ids();
-    let resolved_attachments: Vec<chatter_linux::domain::Attachment> = attachment_ids
+    let resolved_attachments: Vec<chatter_core::domain::Attachment> = attachment_ids
         .iter()
         .filter_map(|att_id| ui_ctx.attachment_service.get(att_id).ok().flatten())
         .collect();
@@ -148,7 +148,7 @@ pub(super) fn handle_member_list_received(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<UIContext>,
     group_id: AnonGroupId,
-    members: Vec<chatter_linux::proto::content_v1::AnonGroupMemberInfo>,
+    members: Vec<chatter_core::proto::content_v1::AnonGroupMemberInfo>,
 ) {
     tracing::debug!(
         group_id = %group_id,

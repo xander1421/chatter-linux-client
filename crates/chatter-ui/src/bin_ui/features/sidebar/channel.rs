@@ -4,13 +4,13 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::channel::ChannelType;
-use chatter_linux::domain::ids::ChannelId;
-use chatter_linux::services::attachment::AttachmentService;
-use chatter_linux::services::channel::ChannelService;
-use chatter_linux::services::message::MessageService;
-use chatter_linux::services::user::UserService;
+use chatter_core::app::UIContext;
+use chatter_core::domain::channel::ChannelType;
+use chatter_core::domain::ids::ChannelId;
+use chatter_core::services::attachment::AttachmentService;
+use chatter_core::services::channel::ChannelService;
+use chatter_core::services::message::MessageService;
+use chatter_core::services::user::UserService;
 
 use crate::bin_ui::converters::{channel_type_to_string, message_to_display_data, MessageDisplayData};
 use crate::bin_ui::features::chat::send_channel_read_receipts;
@@ -76,7 +76,7 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>
 
             // Update chat state
             chat_state.set_active_channel(channel_id);
-            chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::Channel(channel_id));
+            chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
 
             // Get current user ID from user service
             let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string());

@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
-use chatter_linux::domain::ids::AttachmentId;
-use chatter_linux::state::chat_state::PendingAttachment;
-use chatter_linux::state::{ActiveConversation, ChatState};
+use chatter_core::domain::ids::AttachmentId;
+use chatter_core::state::chat_state::PendingAttachment;
+use chatter_core::state::{ActiveConversation, ChatState};
 
 use crate::bin_ui::converters::pending_attachment_to_slint;
 use crate::{MainWindow, PendingAttachmentData};
@@ -114,7 +114,7 @@ pub(crate) fn wire_attachment_clicked(window: &MainWindow, chat_state: ChatState
         {
             // Use tokio::spawn for the file picker (async operation)
             tokio::spawn(async move {
-                use chatter_linux::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
+                use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
 
                 let config = FilePickerConfig::new()
                     .with_title("Select Attachment")

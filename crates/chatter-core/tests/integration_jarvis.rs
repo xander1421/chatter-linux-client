@@ -5,13 +5,13 @@
 use std::sync::Arc;
 use tempfile::TempDir;
 
-use chatter_linux::domain::jarvis::{
+use chatter_core::domain::jarvis::{
     ContextType, EntityType, JarvisContext, JarvisConversation, JarvisEntity,
     JarvisFact, JarvisRelationship, Role, SubjectType,
 };
-use chatter_linux::domain::{ChannelId, UserId};
-use chatter_linux::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
-use chatter_linux::storage::Database;
+use chatter_core::domain::{ChannelId, UserId};
+use chatter_core::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
+use chatter_core::storage::Database;
 
 // ============================================================================
 // Test Helpers

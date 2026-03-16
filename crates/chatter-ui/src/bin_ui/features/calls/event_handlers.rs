@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::inbox::DomainEvent;
+use chatter_core::app::UIContext;
+use chatter_core::inbox::DomainEvent;
 use crate::MainWindow;
 
 use super::key_exchange::handle_call_key_answer;

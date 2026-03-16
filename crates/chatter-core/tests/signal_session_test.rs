@@ -8,8 +8,8 @@
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
-use chatter_linux::storage::{Database, KeyStore, SettingsRepository, settings_keys};
-use chatter_linux::services::SignalService;
+use chatter_core::storage::{Database, KeyStore, SettingsRepository, settings_keys};
+use chatter_core::services::SignalService;
 
 /// Helper to set up a test database and SignalService.
 async fn setup_test_service() -> (SignalService, Arc<KeyStore>, Arc<SettingsRepository>, NamedTempFile) {
@@ -129,7 +129,7 @@ async fn test_actor_runs_on_dedicated_thread() {
 async fn test_sender_key_operations_use_actor() {
     let (service, _key_store, _settings, _db_file) = setup_test_service().await;
 
-    let channel_id = chatter_linux::domain::ids::ChannelId::new();
+    let channel_id = chatter_core::domain::ids::ChannelId::new();
     let our_address = libsignal_protocol::ProtocolAddress::new(
         "our-uuid".to_string(),
         libsignal_protocol::DeviceId::try_from(1u32).unwrap(),

@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use slint::{ComponentHandle, ModelRc, Timer, TimerMode, VecModel};
 
-use chatter_linux::services::CallWorkerHandle;
+use chatter_core::services::CallWorkerHandle;
 use crate::MainWindow;
 
 thread_local! {

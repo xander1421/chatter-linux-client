@@ -5,8 +5,8 @@
 
 mod common;
 
-use chatter_linux::network::grpc::{ChannelClient, FileClient};
-use chatter_linux::proto::chat_v1::ChannelType;
+use chatter_core::network::grpc::{ChannelClient, FileClient};
+use chatter_core::proto::chat_v1::ChannelType;
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -86,7 +86,7 @@ async fn test_list_channel_files_empty() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(channel) = payload {
                 // ChannelCreated directly contains the Channel proto
                 channel_id = channel.id;
@@ -176,7 +176,7 @@ async fn test_initiate_upload() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(channel) = payload {
                 // ChannelCreated directly contains the Channel proto
                 channel_id = channel.id;

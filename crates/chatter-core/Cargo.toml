@@ -9,7 +9,7 @@ repository = "https://github.com/xander1421/chatter"
 rust-version = "1.85"
 
 [lib]
-name = "chatter_linux"
+name = "chatter_core"
 path = "src/lib.rs"
 
 [dependencies]

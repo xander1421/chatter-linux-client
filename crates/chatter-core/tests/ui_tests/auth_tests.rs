@@ -165,7 +165,7 @@ async fn test_login_callback_flow() {
     let mut current_view = "login";
 
     // Simulate callback: on_login(username, password)
-    use chatter_linux::network::grpc::AuthClient;
+    use chatter_core::network::grpc::AuthClient;
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
@@ -217,7 +217,7 @@ async fn test_login_wrong_password_flow() {
     let mut current_view = "login";
 
     // Simulate callback with wrong password
-    use chatter_linux::network::grpc::AuthClient;
+    use chatter_core::network::grpc::AuthClient;
     use sha2::{Digest, Sha256};
 
     let wrong_password_hash = Sha256::digest(b"wrong_password").to_vec();
@@ -266,7 +266,7 @@ async fn test_register_callback_flow() {
     let mut current_view = "register";
 
     // Simulate callback: on_register(username, password, display_name)
-    use chatter_linux::network::grpc::AuthClient;
+    use chatter_core::network::grpc::AuthClient;
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
@@ -322,7 +322,7 @@ async fn test_logout_callback_flow() {
     let mut current_view = "main";
 
     // Simulate callback: on_settings_logout()
-    use chatter_linux::network::grpc::AuthClient;
+    use chatter_core::network::grpc::AuthClient;
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 

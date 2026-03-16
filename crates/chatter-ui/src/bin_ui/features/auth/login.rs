@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 
 use super::initial_data::load_initial_data;
 use crate::MainWindow;
@@ -115,7 +115,7 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     tracing::debug!("Anon DM request handler spawned");
 
                     // Spawn Jarvis background observer and maintenance
-                    let _jarvis_handles = chatter_linux::services::JarvisBackgroundBuilder::new(
+                    let _jarvis_handles = chatter_core::services::JarvisBackgroundBuilder::new(
                         ui_ctx.jarvis_service.clone(),
                     )
                     .with_event_bus(ui_ctx.event_bus.clone())

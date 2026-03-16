@@ -107,7 +107,7 @@ pub fn start_video_progress_timer(window: &MainWindow) {
                         // Clamp position to duration (some videos report timestamps beyond duration)
                         let clamped_position = position.min(duration);
                         let progress = if duration > 0.0 { (clamped_position / duration).clamp(0.0, 1.0) } else { 0.0 };
-                        let elapsed = chatter_linux::media::format_duration(clamped_position);
+                        let elapsed = chatter_core::media::format_duration(clamped_position);
 
                         w.set_video_player_progress(progress as f32);
                         w.set_video_player_elapsed(elapsed.into());

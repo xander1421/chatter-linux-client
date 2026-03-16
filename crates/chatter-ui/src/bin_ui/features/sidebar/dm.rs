@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::anon_dm::AnonDmId;
-use chatter_linux::domain::channel::ChannelType;
-use chatter_linux::domain::ids::ChannelId;
-use chatter_linux::services::user::UserService;
+use chatter_core::app::UIContext;
+use chatter_core::domain::anon_dm::AnonDmId;
+use chatter_core::domain::channel::ChannelType;
+use chatter_core::domain::ids::ChannelId;
+use chatter_core::services::user::UserService;
 
 use crate::bin_ui::features::chat::send_dm_read_receipts;
 use crate::MainWindow;
@@ -61,7 +61,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 for i in 0..conversations.row_count() {
                     if let Some(item) = conversations.row_data(i) {
                         if item.channel_id.as_str() == dm_id_str {
-                            return item.user_id.to_string().parse::<chatter_linux::domain::UserId>().ok();
+                            return item.user_id.to_string().parse::<chatter_core::domain::UserId>().ok();
                         }
                     }
                 }
@@ -106,7 +106,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 };
 
                 // Set typed active conversation
-                chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::AnonDm(anon_dm_id));
+                chat_state.set_active_conversation(chatter_core::state::ActiveConversation::AnonDm(anon_dm_id));
 
                 // Load pinned messages for this anon DM
                 let (msg_ids, preview) = match anon_dm_service.list_pinned(&anon_dm_id) {
@@ -121,7 +121,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     _ => (vec![], String::new()),
                 };
                 let channel_id = anon_dm_id.to_string().parse()
-                    .unwrap_or_else(|_| chatter_linux::domain::ids::ChannelId::new());
+                    .unwrap_or_else(|_| chatter_core::domain::ids::ChannelId::new());
                 super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
 
                 // Send presence update and track activity when opening anon DM
@@ -154,10 +154,10 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             // Update chat state
             chat_state.set_active_channel(channel_id);
             if let Some(peer_id) = peer_id_for_dm {
-                chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::Dm { channel_id, peer_id });
+                chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Dm { channel_id, peer_id });
             } else {
                 // Fallback if peer lookup fails (shouldn't happen for real DMs)
-                chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::Channel(channel_id));
+                chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
                 tracing::warn!(channel_id = %channel_id, "Could not resolve peer_id for DM — falling back to Channel");
             }
 
@@ -257,10 +257,10 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 async fn load_anon_dm_into_ui(
     window_weak: slint::Weak<MainWindow>,
     dm_id: AnonDmId,
-    anon_dm_service: Arc<chatter_linux::services::anon_dm::AnonDmService>,
+    anon_dm_service: Arc<chatter_core::services::anon_dm::AnonDmService>,
     user_service: Arc<UserService>,
-    attachment_service: Arc<chatter_linux::services::attachment::AttachmentService>,
-    auth_state: chatter_linux::state::AuthState,
+    attachment_service: Arc<chatter_core::services::attachment::AttachmentService>,
+    auth_state: chatter_core::state::AuthState,
 ) {
     // Get conversation info
     let dm = match anon_dm_service.get_conversation(&dm_id) {
@@ -321,7 +321,7 @@ async fn load_anon_dm_into_ui(
 
         // Resolve attachments from stored IDs
         let attachment_ids = msg.attachment_ids();
-        let resolved_attachments: Vec<chatter_linux::domain::Attachment> = attachment_ids
+        let resolved_attachments: Vec<chatter_core::domain::Attachment> = attachment_ids
             .iter()
             .filter_map(|att_id| {
                 match attachment_service.get(att_id) {

@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::anon_group::AnonGroupId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::anon_group::AnonGroupId;
 
 use crate::{MainWindow, PrivateGroupListItemData};
 
@@ -69,7 +69,7 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<UIContext>,
                 if let Some(counts) = reaction_map.get(&msg.sent_at) {
                     msg.reaction_counts = counts
                         .iter()
-                        .map(|(emoji, count): &(String, u32)| chatter_linux::domain::message::ReactionCount {
+                        .map(|(emoji, count): &(String, u32)| chatter_core::domain::message::ReactionCount {
                             emoji: emoji.clone(),
                             count: *count,
                         })
@@ -118,7 +118,7 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<UIContext>,
             
             // Resolve attachments from stored IDs
             let attachment_ids = msg.attachment_ids();
-            let resolved_attachments: Vec<chatter_linux::domain::Attachment> = attachment_ids
+            let resolved_attachments: Vec<chatter_core::domain::Attachment> = attachment_ids
                 .iter()
                 .filter_map(|att_id| {
                     match attachment_service.get(att_id) {
@@ -226,7 +226,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
             };
 
             // Set typed active conversation
-            chat_state.set_active_conversation(chatter_linux::state::ActiveConversation::AnonGroup(group_id));
+            chat_state.set_active_conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));
 
             // Load pinned messages for this group from DB
             let (msg_ids, preview) = match anon_group_service.list_pinned(&group_id) {
@@ -241,7 +241,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
                 _ => (vec![], String::new()),
             };
             let channel_id = group_id.to_string().parse()
-                .unwrap_or_else(|_| chatter_linux::domain::ids::ChannelId::new());
+                .unwrap_or_else(|_| chatter_core::domain::ids::ChannelId::new());
             super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
 
             // Mark messages as read when opening the group
@@ -287,7 +287,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
                     if let Some(counts) = reaction_map.get(&msg.sent_at) {
                         msg.reaction_counts = counts
                             .iter()
-                            .map(|(emoji, count): &(String, u32)| chatter_linux::domain::message::ReactionCount {
+                            .map(|(emoji, count): &(String, u32)| chatter_core::domain::message::ReactionCount {
                                 emoji: emoji.clone(),
                                 count: *count,
                             })
@@ -336,7 +336,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
 
                 // Resolve attachments from stored IDs
                 let attachment_ids = msg.attachment_ids();
-                let resolved_attachments: Vec<chatter_linux::domain::Attachment> = attachment_ids
+                let resolved_attachments: Vec<chatter_core::domain::Attachment> = attachment_ids
                     .iter()
                     .filter_map(|att_id| {
                         match attachment_service.get(att_id) {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 
 use crate::bin_ui::converters::get_initials;
 use crate::{DMListItemData, MainWindow};
@@ -23,7 +23,7 @@ pub async fn handle_friend_accepted(
     channel_id: String,
 ) {
     // Parse the channel ID
-    let channel_uuid = match channel_id.parse::<chatter_linux::domain::ids::ChannelId>() {
+    let channel_uuid = match channel_id.parse::<chatter_core::domain::ids::ChannelId>() {
         Ok(id) => id,
         Err(e) => {
             tracing::error!(error = %e, channel_id = %channel_id, "Invalid channel_id in FriendAccepted event");
@@ -32,7 +32,7 @@ pub async fn handle_friend_accepted(
     };
 
     // Parse the friend user ID
-    let friend_uuid = match friend_user_id.parse::<chatter_linux::domain::UserId>() {
+    let friend_uuid = match friend_user_id.parse::<chatter_core::domain::UserId>() {
         Ok(id) => id,
         Err(e) => {
             tracing::error!(error = %e, friend_user_id = %friend_user_id, "Invalid friend_user_id in FriendAccepted event");

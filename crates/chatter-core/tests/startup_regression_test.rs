@@ -40,7 +40,7 @@ unsafe fn remove_env(key: &str) {
 
 #[test]
 fn test_01_antidebug_init() {
-    use chatter_linux::system::{init_antidebug, check_debugger};
+    use chatter_core::system::{init_antidebug, check_debugger};
 
     println!("\n=== Testing antidebug initialization ===");
 
@@ -80,7 +80,7 @@ fn test_02_gstreamer_init() {
 
 #[test]
 fn test_03_directories_init() {
-    use chatter_linux::system::Directories;
+    use chatter_core::system::Directories;
 
     println!("\n=== Testing directories initialization ===");
 
@@ -99,7 +99,7 @@ fn test_03_directories_init() {
 
 #[test]
 fn test_04_keyring_access() {
-    use chatter_linux::system::Keyring;
+    use chatter_core::system::Keyring;
     use std::path::PathBuf;
 
     println!("\n=== Testing keyring access ===");
@@ -136,7 +136,7 @@ fn test_04_keyring_access() {
 
 #[test]
 fn test_05_keyring_with_env_bypass() {
-    use chatter_linux::system::Keyring;
+    use chatter_core::system::Keyring;
     use std::path::PathBuf;
 
     println!("\n=== Testing keyring with CHATTER_DB_PASSPHRASE bypass ===");
@@ -165,7 +165,7 @@ fn test_05_keyring_with_env_bypass() {
 
 #[test]
 fn test_06_database_open() {
-    use chatter_linux::storage::Database;
+    use chatter_core::storage::Database;
 
     println!("\n=== Testing database open ===");
 
@@ -202,7 +202,7 @@ fn test_06_database_open() {
 
 #[test]
 fn test_07_grpc_pool_creation() {
-    use chatter_linux::network::grpc::GrpcClientPool;
+    use chatter_core::network::grpc::GrpcClientPool;
 
     println!("\n=== Testing gRPC pool creation ===");
 
@@ -230,7 +230,7 @@ fn test_08_infrastructure_container() {
         set_env("XDG_DATA_HOME", "/tmp/chatter-startup-test-infra");
     }
 
-    use chatter_linux::app::InfrastructureContainer;
+    use chatter_core::app::InfrastructureContainer;
 
     let (result, duration) = with_timeout("InfrastructureContainer::new", || {
         InfrastructureContainer::new()
@@ -263,7 +263,7 @@ fn test_09_app_context() {
         set_env("XDG_DATA_HOME", "/tmp/chatter-startup-test-ctx");
     }
 
-    use chatter_linux::app::AppContext;
+    use chatter_core::app::AppContext;
 
     let (result, duration) = with_timeout("AppContext::new", || {
         AppContext::new()
@@ -288,7 +288,7 @@ fn test_09_app_context() {
 /// Test that specifically checks for the keyring retry blocking issue.
 #[test]
 fn test_10_keyring_no_retry_block() {
-    use chatter_linux::system::Keyring;
+    use chatter_core::system::Keyring;
     use std::path::PathBuf;
     use std::sync::mpsc;
     use std::thread;
@@ -324,7 +324,7 @@ fn test_10_keyring_no_retry_block() {
 #[test]
 #[ignore = "Takes 30+ seconds - run manually to verify hang behavior"]
 fn test_10b_keyring_real_retry_params() {
-    use chatter_linux::system::Keyring;
+    use chatter_core::system::Keyring;
     use std::path::PathBuf;
 
     println!("\n=== Testing keyring with REAL retry params (6, 5) ===");
@@ -358,7 +358,7 @@ fn test_10b_keyring_real_retry_params() {
 /// Tests the NEW smart retry logic that fails fast on NoEntry errors.
 #[test]
 fn test_11_keyring_real_path() {
-    use chatter_linux::system::{Directories, Keyring};
+    use chatter_core::system::{Directories, Keyring};
     use std::sync::mpsc;
     use std::thread;
 
@@ -413,7 +413,7 @@ fn test_11_keyring_real_path() {
 /// Test set_passphrase - this is likely where the hang is
 #[test]
 fn test_12_keyring_set_passphrase() {
-    use chatter_linux::system::Keyring;
+    use chatter_core::system::Keyring;
     use std::path::PathBuf;
     use std::sync::mpsc;
     use std::thread;
@@ -474,7 +474,7 @@ fn test_13_infrastructure_real_path() {
     let (tx, rx) = mpsc::channel();
 
     let handle = thread::spawn(move || {
-        use chatter_linux::app::InfrastructureContainer;
+        use chatter_core::app::InfrastructureContainer;
 
         println!("  [thread] Creating InfrastructureContainer...");
         let start = std::time::Instant::now();

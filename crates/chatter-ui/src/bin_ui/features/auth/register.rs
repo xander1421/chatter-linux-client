@@ -6,9 +6,9 @@ use lazy_static::lazy_static;
 
 use slint::{ComponentHandle, Image};
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 #[cfg(not(target_os = "android"))]
-use chatter_linux::media::{FileFilter, FilePicker, FilePickerConfig};
+use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
 
 lazy_static! {
     static ref SELECTED_AVATAR: Mutex<Option<Vec<u8>>> = Mutex::new(None);

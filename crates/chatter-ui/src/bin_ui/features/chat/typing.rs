@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use slint::Timer;
 use slint::TimerMode;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::services::conversation::ConversationHandle;
-use chatter_linux::state::ActiveConversation;
+use chatter_core::app::UIContext;
+use chatter_core::services::conversation::ConversationHandle;
+use chatter_core::state::ActiveConversation;
 
 /// Typing refresh interval (Signal: 10 seconds)
 const TYPING_REFRESH_MS: u64 = 10_000;

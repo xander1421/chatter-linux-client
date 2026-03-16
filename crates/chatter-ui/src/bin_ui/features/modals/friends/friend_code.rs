@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 
 use super::requests::refresh_sent_requests;
 use crate::MainWindow;
@@ -264,9 +264,9 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<UIContext>)
             });
 
             // Check if this is an NDSS'21 compliant private code
-            if chatter_linux::domain::PrivateFriendCode::is_private_code(&code_str) {
+            if chatter_core::domain::PrivateFriendCode::is_private_code(&code_str) {
                 // Parse the private friend code (includes identity key + delivery token)
-                let friend_code = match chatter_linux::domain::PrivateFriendCode::parse(&code_str) {
+                let friend_code = match chatter_core::domain::PrivateFriendCode::parse(&code_str) {
                     Ok(fc) => fc,
                     Err(e) => {
                         let error_msg = format!("Invalid private code: {}", e);

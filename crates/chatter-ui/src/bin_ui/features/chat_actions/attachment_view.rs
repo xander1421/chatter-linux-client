@@ -7,15 +7,15 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
-use chatter_linux::domain::ids::AttachmentId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
+use chatter_core::domain::ids::AttachmentId;
 use slint_code_view::CodeViewState;
 #[cfg(not(target_os = "android"))]
-use chatter_linux::media::{FilePicker, FilePickerConfig};
-use chatter_linux::media::ImageProcessor;
+use chatter_core::media::{FilePicker, FilePickerConfig};
+use chatter_core::media::ImageProcessor;
 #[cfg(not(target_os = "android"))]
-use chatter_linux::system::ExternalOpener;
+use chatter_core::system::ExternalOpener;
 
 use crate::bin_ui::audio_state;
 use crate::bin_ui::converters::format_file_size;
@@ -157,7 +157,7 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 /// so we can do synchronous decryption here without blocking the UI.
 fn handle_local_attachment(
     weak: slint::Weak<MainWindow>,
-    attachment_service: Arc<chatter_linux::services::attachment::AttachmentService>,
+    attachment_service: Arc<chatter_core::services::attachment::AttachmentService>,
     att_id: AttachmentId,
     attachment_id: SharedString,
     filename: &str,
@@ -310,7 +310,7 @@ fn toggle_audio_playback(weak: &slint::Weak<MainWindow>) {
 /// Show image preview (thumbnail) while loading full image.
 fn show_image_preview(
     weak: &slint::Weak<MainWindow>,
-    attachment_service: &Arc<chatter_linux::services::attachment::AttachmentService>,
+    attachment_service: &Arc<chatter_core::services::attachment::AttachmentService>,
     att_id: &AttachmentId,
     filename: &str,
     file_size: u64,
@@ -345,7 +345,7 @@ fn show_image_preview(
 /// Display decrypted content based on file type.
 fn display_decrypted_content(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_linux::crypto::SecureBuffer,
+    secure_buffer: chatter_core::crypto::SecureBuffer,
     attachment_id: &str,
     filename: &str,
     file_size: u64,
@@ -376,7 +376,7 @@ fn display_decrypted_content(
 /// Play audio from decrypted buffer.
 fn play_audio_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_linux::crypto::SecureBuffer,
+    secure_buffer: chatter_core::crypto::SecureBuffer,
     attachment_id: &str,
 ) {
     let player_arc = audio_state::get_audio_player();
@@ -419,7 +419,7 @@ fn play_audio_from_buffer(
 /// Display image from decrypted buffer.
 fn display_image_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_linux::crypto::SecureBuffer,
+    secure_buffer: chatter_core::crypto::SecureBuffer,
     attachment_id: &str,
     filename: &str,
     file_size: u64,
@@ -507,7 +507,7 @@ fn display_image_from_buffer(
 /// Play video from decrypted buffer.
 fn play_video_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_linux::crypto::SecureBuffer,
+    secure_buffer: chatter_core::crypto::SecureBuffer,
     filename: &str,
 ) {
     let data = secure_buffer.as_slice().to_vec();
@@ -551,7 +551,7 @@ fn play_video_from_buffer(
 /// that can be converted to slint::Image on the UI thread.
 fn display_code_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_linux::crypto::SecureBuffer,
+    secure_buffer: chatter_core::crypto::SecureBuffer,
     filename: &str,
 ) {
     let data = secure_buffer.as_slice().to_vec();
@@ -591,7 +591,7 @@ fn display_code_from_buffer(
 /// Display PDF from decrypted buffer.
 fn display_pdf_from_buffer(
     weak: slint::Weak<MainWindow>,
-    secure_buffer: chatter_linux::crypto::SecureBuffer,
+    secure_buffer: chatter_core::crypto::SecureBuffer,
     filename: &str,
 ) {
     let data = secure_buffer.as_slice().to_vec();
@@ -618,7 +618,7 @@ fn display_pdf_from_buffer(
 /// for the async file picker.
 #[cfg(not(target_os = "android"))]
 fn save_file_from_buffer(
-    secure_buffer: chatter_linux::crypto::SecureBuffer,
+    secure_buffer: chatter_core::crypto::SecureBuffer,
     filename: &str,
 ) {
     let data = secure_buffer.as_slice().to_vec();
@@ -665,7 +665,7 @@ fn save_file_from_buffer(
 
 #[cfg(target_os = "android")]
 fn save_file_from_buffer(
-    _secure_buffer: chatter_linux::crypto::SecureBuffer,
+    _secure_buffer: chatter_core::crypto::SecureBuffer,
     _filename: &str,
 ) {
     tracing::warn!("Save file not supported on Android");
@@ -675,8 +675,8 @@ fn save_file_from_buffer(
 fn handle_download_attachment(
     handle: tokio::runtime::Handle,
     weak: slint::Weak<MainWindow>,
-    attachment_service: Arc<chatter_linux::services::attachment::AttachmentService>,
-    attachment: chatter_linux::domain::attachment::Attachment,
+    attachment_service: Arc<chatter_core::services::attachment::AttachmentService>,
+    attachment: chatter_core::domain::attachment::Attachment,
     att_id: AttachmentId,
 ) {
     // Mark as downloading immediately to prevent duplicate downloads

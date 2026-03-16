@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::services::anon_dm::AnonDmService;
+use chatter_core::app::UIContext;
+use chatter_core::services::anon_dm::AnonDmService;
 
 use crate::bin_ui::converters::{get_initials, DMListItemSendData, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
@@ -35,7 +35,7 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<UICo
             });
 
             // Parse conversation ID
-            let conv_id: chatter_linux::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
+            let conv_id: chatter_core::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
                 Ok(id) => id,
                 Err(_) => {
                     tracing::error!("Invalid conversation ID: {}", conv_id_str);
@@ -108,7 +108,7 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<UIC
             });
 
             // Parse conversation ID
-            let conv_id: chatter_linux::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
+            let conv_id: chatter_core::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
                 Ok(id) => id,
                 Err(_) => {
                     tracing::error!("Invalid conversation ID: {}", conv_id_str);
@@ -173,7 +173,7 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<UICon
             });
 
             // Parse conversation ID
-            let conv_id: chatter_linux::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
+            let conv_id: chatter_core::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
                 Ok(id) => id,
                 Err(_) => {
                     tracing::error!("Invalid conversation ID: {}", conv_id_str);
@@ -289,7 +289,7 @@ async fn refresh_private_requests(
 /// Add an accepted anonymous DM to the sidebar.
 fn add_anon_dm_to_sidebar(
     weak_window: slint::Weak<MainWindow>,
-    dm: &chatter_linux::domain::anon_dm::AnonDm,
+    dm: &chatter_core::domain::anon_dm::AnonDm,
     peer_name: &str,
 ) {
     // Use Send-safe type to pass across thread boundary

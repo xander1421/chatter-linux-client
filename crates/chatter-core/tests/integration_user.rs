@@ -5,8 +5,8 @@
 
 mod common;
 
-use chatter_linux::network::grpc::{ChannelClient, UserClient};
-use chatter_linux::proto::chat_v1::{friend_requests_filter, ChannelType, UserPresence};
+use chatter_core::network::grpc::{ChannelClient, UserClient};
+use chatter_core::proto::chat_v1::{friend_requests_filter, ChannelType, UserPresence};
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -193,7 +193,7 @@ async fn test_send_friend_request() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::user_event::Event;
+            use chatter_core::proto::chat_v1::user_event::Event;
             if let Event::FriendStatusChanged(_) = payload {
                 status_changed = true;
             }
@@ -311,7 +311,7 @@ async fn test_track_channel_visit() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(channel) = payload {
                 // ChannelCreated directly contains the Channel proto
                 channel_id = channel.id;
@@ -381,7 +381,7 @@ async fn test_pin_unpin_channel() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(channel) = payload {
                 // ChannelCreated directly contains the Channel proto
                 channel_id = channel.id;

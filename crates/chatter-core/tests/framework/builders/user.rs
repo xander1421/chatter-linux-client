@@ -88,7 +88,7 @@ impl UserBuilder {
         let profile_key = self.profile_key.unwrap_or_else(random_profile_key);
 
         // Encrypt the display name with the profile key (returns Vec<u8>)
-        let encrypted_display_name = chatter_linux::crypto::profile_crypto::encrypt_display_name(
+        let encrypted_display_name = chatter_core::crypto::profile_crypto::encrypt_display_name(
             &profile_key,
             &display_name,
         )

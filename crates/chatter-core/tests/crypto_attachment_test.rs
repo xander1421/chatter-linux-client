@@ -7,12 +7,12 @@
 //! - Edge cases: empty data, large files, boundary conditions
 //! - Cross-platform: deterministic test vectors
 
-use chatter_linux::crypto::attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
-use chatter_linux::crypto::attachment_crypto_fast::{
+use chatter_core::crypto::attachment_crypto::{AttachmentCrypto, KEY_SET_LENGTH};
+use chatter_core::crypto::attachment_crypto_fast::{
     decrypt_single_pass, decrypt_single_pass_into, decrypt_single_pass_secure,
     decrypt_zero_copy, decrypt_zero_copy_secure,
 };
-use chatter_linux::error::CryptoError;
+use chatter_core::error::CryptoError;
 
 // =============================================================================
 // CORRECTNESS TESTS

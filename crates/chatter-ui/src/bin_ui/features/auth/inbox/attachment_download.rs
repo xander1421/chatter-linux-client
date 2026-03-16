@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use slint::{Model, VecModel};
 
-use chatter_linux::domain::ids::AttachmentId;
-use chatter_linux::proto::content_v1::AttachmentPointer;
-use chatter_linux::services::attachment::AttachmentService;
+use chatter_core::domain::ids::AttachmentId;
+use chatter_core::proto::content_v1::AttachmentPointer;
+use chatter_core::services::attachment::AttachmentService;
 
 use crate::MainWindow;
 
@@ -151,7 +151,7 @@ fn handle_gif(
     // Background: decode remaining frames (REUSES ALREADY DECRYPTED BYTES)
     let gif_bytes = decode_result.gif_bytes;
     tokio::task::spawn_blocking(move || {
-        use chatter_linux::services::attachment::AttachmentService;
+        use chatter_core::services::attachment::AttachmentService;
 
         let start = std::time::Instant::now();
 

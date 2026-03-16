@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use chatter_linux::media::AudioPlayer;
+use chatter_core::media::AudioPlayer;
 
 /// Global audio player instance.
 static AUDIO_PLAYER: OnceLock<Arc<Mutex<Option<AudioPlayer>>>> = OnceLock::new();

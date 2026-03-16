@@ -11,12 +11,12 @@ mod common;
 use std::sync::Arc;
 use chrono::{Duration, Utc};
 
-use chatter_linux::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
-use chatter_linux::domain::anon_group::{AnonGroup, AnonGroupId, AnonGroupStatus};
-use chatter_linux::domain::UserId;
-use chatter_linux::storage::migrations::default_migrations;
-use chatter_linux::storage::repositories::{AnonDmRepository, AnonGroupRepository};
-use chatter_linux::storage::Database;
+use chatter_core::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
+use chatter_core::domain::anon_group::{AnonGroup, AnonGroupId, AnonGroupStatus};
+use chatter_core::domain::UserId;
+use chatter_core::storage::migrations::default_migrations;
+use chatter_core::storage::repositories::{AnonDmRepository, AnonGroupRepository};
+use chatter_core::storage::Database;
 
 // ============================================================================
 // Test Helpers
@@ -81,7 +81,7 @@ fn create_test_anon_dm(peer_id: UserId) -> AnonDm {
 
 /// Create a test AnonGroup using the constructor.
 fn create_test_anon_group(name: &str) -> AnonGroup {
-    AnonGroup::new_as_owner(name.to_string(), chatter_linux::domain::UserId::new())
+    AnonGroup::new_as_owner(name.to_string(), chatter_core::domain::UserId::new())
 }
 
 // ============================================================================

@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::attachment::Attachment;
-use chatter_linux::proto::content_v1::AttachmentPointer;
+use chatter_core::app::UIContext;
+use chatter_core::domain::attachment::Attachment;
+use chatter_core::proto::content_v1::AttachmentPointer;
 
 use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
 use crate::{ChannelListItemData, MainWindow, MessageItemData};
@@ -23,7 +23,7 @@ use super::utils::update_reaction_summary;
 pub(crate) fn handle_channel_message_received(
     weak_window: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<UIContext>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    channel_id: chatter_core::domain::ids::ChannelId,
     text: String,
 ) {
     tracing::info!(
@@ -125,8 +125,8 @@ pub(crate) fn handle_channel_message_received(
 pub(crate) fn handle_channel_typing(
     weak_window: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<UIContext>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
-    sender_id: chatter_linux::domain::UserId,
+    channel_id: chatter_core::domain::ids::ChannelId,
+    sender_id: chatter_core::domain::UserId,
     action: i32,
 ) {
     tracing::debug!(
@@ -166,7 +166,7 @@ pub(crate) fn handle_channel_typing(
 
 pub(crate) fn handle_channel_reaction(
     weak_window: &slint::Weak<MainWindow>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    channel_id: chatter_core::domain::ids::ChannelId,
     emoji: String,
     remove: bool,
     target_sent_timestamp: u64,
@@ -220,8 +220,8 @@ pub(crate) fn handle_channel_reaction(
 
 pub(crate) fn handle_channel_pin(
     weak_window: &slint::Weak<MainWindow>,
-    pinned_state: chatter_linux::state::PinnedState,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    pinned_state: chatter_core::state::PinnedState,
+    channel_id: chatter_core::domain::ids::ChannelId,
     target_sent_timestamp: u64,
     unpin: bool,
 ) {
@@ -264,7 +264,7 @@ pub(crate) fn handle_channel_pin(
                     }
 
                     // Update pinned_state with message ID
-                    if let Ok(msg_id) = msg.message_id.to_string().parse::<chatter_linux::domain::ids::MessageId>() {
+                    if let Ok(msg_id) = msg.message_id.to_string().parse::<chatter_core::domain::ids::MessageId>() {
                         if new_pinned {
                             pinned_state.add_pinned_message(msg_id);
                         } else {
@@ -294,7 +294,7 @@ pub(crate) fn handle_channel_pin(
 
 pub(crate) fn handle_channel_edit(
     weak_window: &slint::Weak<MainWindow>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    channel_id: chatter_core::domain::ids::ChannelId,
     target_sent_timestamp: u64,
     new_body: String,
 ) {
@@ -341,7 +341,7 @@ pub(crate) fn handle_channel_edit(
 
 pub(crate) fn handle_channel_delete_for_everyone(
     weak_window: &slint::Weak<MainWindow>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    channel_id: chatter_core::domain::ids::ChannelId,
     target_sent_timestamp: u64,
 ) {
     tracing::debug!(
@@ -434,8 +434,8 @@ pub(crate) fn handle_channel_delete_for_me(
 
 pub(crate) fn handle_channel_receipt(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &std::sync::Arc<chatter_linux::app::UIContext>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    ui_ctx: &std::sync::Arc<chatter_core::app::UIContext>,
+    channel_id: chatter_core::domain::ids::ChannelId,
     receipt_type: i32,
     timestamps: Vec<u64>,
 ) {
@@ -534,7 +534,7 @@ pub(crate) fn handle_channel_receipt(
 
 pub(crate) fn handle_channel_unread_count(
     weak_window: &slint::Weak<MainWindow>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    channel_id: chatter_core::domain::ids::ChannelId,
     unread_count: u32,
 ) {
     tracing::debug!(
@@ -579,7 +579,7 @@ pub(crate) fn handle_channel_unread_count(
 pub(crate) fn trigger_channel_attachment_download(
     weak_window: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<UIContext>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    channel_id: chatter_core::domain::ids::ChannelId,
     attachments: Vec<AttachmentPointer>,
 ) {
     if attachments.is_empty() {

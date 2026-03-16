@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
-use chatter_linux::app::UIContext;
-use chatter_linux::proto::UserPresence;
+use chatter_core::app::UIContext;
+use chatter_core::proto::UserPresence;
 
 /// Current presence state for this session
 static CURRENT_PRESENCE: once_cell::sync::Lazy<RwLock<UserPresence>> = 
@@ -54,7 +54,7 @@ pub async fn track_activity(ui_ctx: &Arc<UIContext>) {
 /// Notify when opening an anon DM chat.
 pub async fn notify_chat_opened(
     ui_ctx: &Arc<UIContext>,
-    conversation_id: &chatter_linux::domain::anon_dm::AnonDmId,
+    conversation_id: &chatter_core::domain::anon_dm::AnonDmId,
 ) {
     let current = *CURRENT_PRESENCE.read().await;
     if current == UserPresence::Offline {

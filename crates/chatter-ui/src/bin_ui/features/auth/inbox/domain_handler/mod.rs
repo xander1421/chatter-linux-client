@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_linux::inbox::handlers::DomainEvent;
-use chatter_linux::app::UIContext;
+use chatter_core::inbox::handlers::DomainEvent;
+use chatter_core::app::UIContext;
 use crate::MainWindow;
 
 /// Handle a domain event for UI updates only.

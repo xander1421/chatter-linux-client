@@ -407,7 +407,7 @@ pub fn clear_inline_gifs() {
 /// Must be called from the UI thread (inside invoke_from_event_loop).
 pub fn auto_register_gifs_from_messages(
     window_weak: Weak<MainWindow>,
-    attachment_service: std::sync::Arc<chatter_linux::services::AttachmentService>,
+    attachment_service: std::sync::Arc<chatter_core::services::AttachmentService>,
 ) {
     let Some(w) = window_weak.upgrade() else {
         return;
@@ -460,7 +460,7 @@ pub fn auto_register_gifs_from_messages(
 /// Safe to call from any context (including nested runtimes).
 pub fn register_gif_attachment(
     attachment_id: String,
-    attachment_service: std::sync::Arc<chatter_linux::services::AttachmentService>,
+    attachment_service: std::sync::Arc<chatter_core::services::AttachmentService>,
     window_weak: slint::Weak<crate::MainWindow>,
 ) {
     // Optimization: Check if already registered (O(1) in UI thread)
@@ -471,10 +471,10 @@ pub fn register_gif_attachment(
 
     // Spawn independent thread to avoid runtime context issues
     std::thread::spawn(move || {
-        use chatter_linux::domain::attachment::ContentLocation;
+        use chatter_core::domain::attachment::ContentLocation;
 
         // Parse attachment ID
-        let att_id: chatter_linux::domain::ids::AttachmentId = match attachment_id.parse() {
+        let att_id: chatter_core::domain::ids::AttachmentId = match attachment_id.parse() {
             Ok(id) => id,
             Err(_) => {
                 tracing::debug!("Invalid attachment ID for GIF registration: {}", attachment_id);
@@ -510,7 +510,7 @@ pub fn register_gif_attachment(
         };
 
         // Decode first frame immediately for instant display
-        use chatter_linux::media::gif::decode_first_frame_only;
+        use chatter_core::media::gif::decode_first_frame_only;
 
         let first_frame = match decode_first_frame_only(&data) {
             Ok(Some(f)) => f,
@@ -655,9 +655,9 @@ mod tests {
         // Create a mock attachment repo that will fail lookup (attachment doesn't exist)
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
-        let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
-        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new_local(attachment_repo));
+        let db = Arc::new(chatter_core::storage::Database::open(&db_path, "test_passphrase").unwrap());
+        let attachment_repo = Arc::new(chatter_core::storage::AttachmentRepository::new(db));
+        let attachment_service = Arc::new(chatter_core::services::AttachmentService::new_local(attachment_repo));
 
         // Create a dummy window weak reference (will be None when upgraded)
         // We can't create a real MainWindow in tests, but the function handles None gracefully
@@ -689,9 +689,9 @@ mod tests {
         // We'll verify the thread runs by checking that the repo is accessed
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
-        let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
-        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new_local(attachment_repo));
+        let db = Arc::new(chatter_core::storage::Database::open(&db_path, "test_passphrase").unwrap());
+        let attachment_repo = Arc::new(chatter_core::storage::AttachmentRepository::new(db));
+        let attachment_service = Arc::new(chatter_core::services::AttachmentService::new_local(attachment_repo));
 
         let window_weak: slint::Weak<crate::MainWindow> = slint::Weak::default();
 
@@ -715,9 +715,9 @@ mod tests {
     fn test_concurrent_gif_registrations_non_blocking() {
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = Arc::new(chatter_linux::storage::Database::open(&db_path, "test_passphrase").unwrap());
-        let attachment_repo = Arc::new(chatter_linux::storage::AttachmentRepository::new(db));
-        let attachment_service = Arc::new(chatter_linux::services::AttachmentService::new_local(attachment_repo));
+        let db = Arc::new(chatter_core::storage::Database::open(&db_path, "test_passphrase").unwrap());
+        let attachment_repo = Arc::new(chatter_core::storage::AttachmentRepository::new(db));
+        let attachment_service = Arc::new(chatter_core::services::AttachmentService::new_local(attachment_repo));
 
         let window_weak: slint::Weak<crate::MainWindow> = slint::Weak::default();
 

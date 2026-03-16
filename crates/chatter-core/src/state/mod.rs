@@ -13,7 +13,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use chatter_linux::state::{AuthState, UIState, ModalType};
+//! use chatter_core::state::{AuthState, UIState, ModalType};
 //!
 //! // Create state managers
 //! let auth_state = AuthState::new();

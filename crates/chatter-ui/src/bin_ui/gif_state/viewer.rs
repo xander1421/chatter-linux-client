@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use slint::{Image, Timer, TimerMode, Weak};
 
-use chatter_linux::media::gif::{
+use chatter_core::media::gif::{
     decode_first_frame_only,
     decode_gif_auto, is_gpu_acceleration_available,
 };

@@ -7,9 +7,9 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use uuid::Uuid;
 
-use chatter_linux::domain::ids::{ChannelId, MessageId, UserId};
-use chatter_linux::domain::message::{CallMessage, CallMessageType, Message, MessageContent};
-use chatter_linux::services::message::MessageService;
+use chatter_core::domain::ids::{ChannelId, MessageId, UserId};
+use chatter_core::domain::message::{CallMessage, CallMessageType, Message, MessageContent};
+use chatter_core::services::message::MessageService;
 
 use super::timers::current_time_ns;
 

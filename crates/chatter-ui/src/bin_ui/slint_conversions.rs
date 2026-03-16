@@ -3,10 +3,10 @@
 //! Converts raw pixel data from core types into Slint Image for UI display.
 //! These functions were extracted from core to keep it Slint-free.
 
-use chatter_linux::calls::shared_frames::VideoFrameData;
-use chatter_linux::error::MediaError;
-use chatter_linux::media::gif::GifFrame;
-use chatter_linux::media::ImageProcessor;
+use chatter_core::calls::shared_frames::VideoFrameData;
+use chatter_core::error::MediaError;
+use chatter_core::media::gif::GifFrame;
+use chatter_core::media::ImageProcessor;
 
 /// Convert RGBA8 pixel data to a Slint Image.
 pub fn rgba_to_slint_image(data: &[u8], width: u32, height: u32) -> slint::Image {

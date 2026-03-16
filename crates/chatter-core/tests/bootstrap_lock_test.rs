@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chatter_linux::domain::UserId;
-use chatter_linux::mailbox::dm::{release_bootstrap_lock, try_acquire_bootstrap_lock};
+use chatter_core::domain::UserId;
+use chatter_core::mailbox::dm::{release_bootstrap_lock, try_acquire_bootstrap_lock};
 
 /// Test that the bootstrap lock prevents concurrent acquisitions for the same peer.
 #[test]

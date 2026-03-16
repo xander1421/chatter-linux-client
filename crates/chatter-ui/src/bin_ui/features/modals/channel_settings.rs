@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::anon_group::AnonGroupId;
-use chatter_linux::domain::ids::{ChannelId, UserId};
-use chatter_linux::domain::ChannelType;
-use chatter_linux::services::channel::ChannelService;
-use chatter_linux::services::user::UserService;
+use chatter_core::app::UIContext;
+use chatter_core::domain::anon_group::AnonGroupId;
+use chatter_core::domain::ids::{ChannelId, UserId};
+use chatter_core::domain::ChannelType;
+use chatter_core::services::channel::ChannelService;
+use chatter_core::services::user::UserService;
 
 use crate::{ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
 
@@ -78,10 +78,10 @@ pub fn open_channel_settings(
                         let display = user_service.get_profile_local(&m.user_id).ok().flatten().map(|p| p.display_name).unwrap_or_else(|| "Unknown".to_string());
                         let uname = user_service.get_user_local(&m.user_id).ok().flatten().map(|u| u.username).unwrap_or_else(|| "unknown".to_string());
                         let role = match m.role {
-                            chatter_linux::domain::channel::MemberRole::Member => "member",
-                            chatter_linux::domain::channel::MemberRole::Moderator => "moderator",
-                            chatter_linux::domain::channel::MemberRole::Admin => "admin",
-                            chatter_linux::domain::channel::MemberRole::Owner => "owner",
+                            chatter_core::domain::channel::MemberRole::Member => "member",
+                            chatter_core::domain::channel::MemberRole::Moderator => "moderator",
+                            chatter_core::domain::channel::MemberRole::Admin => "admin",
+                            chatter_core::domain::channel::MemberRole::Owner => "owner",
                         };
                         data.push(ChannelMemberData {
                             user_id: m.user_id.to_string().into(),
@@ -225,14 +225,14 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 Err(_) => return,
             };
             let user_uuid = match user_id_str.parse::<uuid::Uuid>() {
-                Ok(id) => chatter_linux::domain::ids::UserId::from(id),
+                Ok(id) => chatter_core::domain::ids::UserId::from(id),
                 Err(_) => return,
             };
             let new_role = match role_str.as_str() {
-                "member" => chatter_linux::domain::channel::MemberRole::Member,
-                "moderator" => chatter_linux::domain::channel::MemberRole::Moderator,
-                "admin" => chatter_linux::domain::channel::MemberRole::Admin,
-                "owner" => chatter_linux::domain::channel::MemberRole::Owner,
+                "member" => chatter_core::domain::channel::MemberRole::Member,
+                "moderator" => chatter_core::domain::channel::MemberRole::Moderator,
+                "admin" => chatter_core::domain::channel::MemberRole::Admin,
+                "owner" => chatter_core::domain::channel::MemberRole::Owner,
                 _ => return,
             };
             let _ = channel_service.update_member_role(&channel_uuid, &user_uuid, new_role).await;
@@ -257,7 +257,7 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 Err(_) => return,
             };
             let user_uuid = match user_id_str.parse::<uuid::Uuid>() {
-                Ok(id) => chatter_linux::domain::ids::UserId::from(id),
+                Ok(id) => chatter_core::domain::ids::UserId::from(id),
                 Err(_) => return,
             };
 

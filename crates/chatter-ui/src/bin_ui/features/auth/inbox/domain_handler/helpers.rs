@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{Model, Weak};
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 use crate::MainWindow;
 
 /// Update unread count badge in sidebar.
@@ -22,7 +22,7 @@ pub(super) fn update_unread_count(window: &MainWindow, channel_id: &str, count: 
 pub(super) fn handle_pin_ui_update(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<UIContext>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
+    channel_id: chatter_core::domain::ids::ChannelId,
     target_sent_timestamp: u64,
     unpin: bool,
 ) {
@@ -63,7 +63,7 @@ pub(super) fn handle_pin_ui_update(
                     }
 
                     // Update pinned_state with the real message_id from the UI model
-                    if let Ok(msg_id) = msg.message_id.to_string().parse::<chatter_linux::domain::ids::MessageId>() {
+                    if let Ok(msg_id) = msg.message_id.to_string().parse::<chatter_core::domain::ids::MessageId>() {
                         if new_pinned {
                             pinned_state.add_pinned_message(msg_id);
                         } else {

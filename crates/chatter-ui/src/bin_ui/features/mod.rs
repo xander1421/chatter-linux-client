@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 use crate::MainWindow;
 
 /// Wire all UI callbacks to their handlers.

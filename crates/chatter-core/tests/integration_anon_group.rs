@@ -13,8 +13,8 @@
 mod common;
 
 use base64::Engine;
-use chatter_linux::network::grpc::MailboxClient;
-use chatter_linux::proto::mailbox_v1::EnvelopeType;
+use chatter_core::network::grpc::MailboxClient;
+use chatter_core::proto::mailbox_v1::EnvelopeType;
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
 
@@ -220,8 +220,8 @@ async fn test_anon_group_invite_via_dm() {
     //
     // For now, verify the prerequisite DM setup works
 
-    use chatter_linux::network::grpc::{ChannelClient, UserClient};
-    use chatter_linux::proto::chat_v1::{ChannelType, FriendStatus};
+    use chatter_core::network::grpc::{ChannelClient, UserClient};
+    use chatter_core::proto::chat_v1::{ChannelType, FriendStatus};
     use tokio_stream::StreamExt;
 
     // Make them friends first (required for DM)
@@ -278,7 +278,7 @@ async fn test_anon_group_invite_via_dm() {
             while let Some(result) = stream.next().await {
                 let event = result.expect("Stream error");
                 if let Some(payload) = event.event {
-                    use chatter_linux::proto::chat_v1::channel_event::Event;
+                    use chatter_core::proto::chat_v1::channel_event::Event;
                     if let Event::ChannelCreated(ch) = payload {
                         channel_id = ch.id;
                     }
@@ -352,7 +352,7 @@ async fn test_anon_group_content_serialization() {
 
     // Test the content proto serialization for anonymous group messages
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonGroupInvite, AnonGroupMessage, Content, DataMessage};
+    use chatter_core::proto::content_v1::{self, AnonGroupInvite, AnonGroupMessage, Content, DataMessage};
 
     // Create a test group invite
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -432,7 +432,7 @@ async fn test_anon_group_join_ack_content() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonGroupJoinAck, Content};
+    use chatter_core::proto::content_v1::{self, AnonGroupJoinAck, Content};
 
     // Create join ack (sent when accepting an invite)
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -486,7 +486,7 @@ async fn test_anon_group_kick_content() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonGroupKick, Content};
+    use chatter_core::proto::content_v1::{self, AnonGroupKick, Content};
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
     let kicked_user_id = uuid::Uuid::new_v4().as_bytes().to_vec();
@@ -530,7 +530,7 @@ async fn test_anon_group_leave_content() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonGroupLeave, Content};
+    use chatter_core::proto::content_v1::{self, AnonGroupLeave, Content};
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -571,7 +571,7 @@ async fn test_anon_group_member_list_content() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonGroupMemberInfo, AnonGroupMemberList, Content};
+    use chatter_core::proto::content_v1::{self, AnonGroupMemberInfo, AnonGroupMemberList, Content};
 
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 

@@ -50,12 +50,12 @@ impl ImageData {
 /// # Example
 ///
 /// ```no_run
-/// use chatter_linux::system::Clipboard;
+/// use chatter_core::system::Clipboard;
 ///
 /// let mut clipboard = Clipboard::new()?;
 /// clipboard.set_text("Hello, world!")?;
 /// let text = clipboard.get_text()?;
-/// # Ok::<(), chatter_linux::error::SystemError>(())
+/// # Ok::<(), chatter_core::error::SystemError>(())
 /// ```
 pub struct Clipboard {
     inner: arboard::Clipboard,

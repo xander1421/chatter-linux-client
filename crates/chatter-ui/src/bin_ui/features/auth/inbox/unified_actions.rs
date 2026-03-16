@@ -7,8 +7,8 @@
 
 use slint::{Model, VecModel};
 
-use chatter_linux::domain::ids::{ChannelId, UserId};
-use chatter_linux::state::{ActiveConversation, ChatState};
+use chatter_core::domain::ids::{ChannelId, UserId};
+use chatter_core::state::{ActiveConversation, ChatState};
 
 use crate::bin_ui::features::auth::inbox::typing::{clear_typing_for_peer, set_typing_with_timer};
 use crate::bin_ui::features::auth::inbox::utils::update_reaction_summary;
@@ -279,7 +279,7 @@ pub fn handle_delete(
 pub fn handle_pin(
     weak_window: &slint::Weak<MainWindow>,
     chat_state: &ChatState,
-    pinned_state: &chatter_linux::state::PinnedState,
+    pinned_state: &chatter_core::state::PinnedState,
     source: EventSource,
     target_sent_timestamp: u64,
     is_pinned: bool,
@@ -323,7 +323,7 @@ pub fn handle_pin(
 
                     // Update pinned_state
                     if let Ok(msg_id) =
-                        msg.message_id.to_string().parse::<chatter_linux::domain::ids::MessageId>()
+                        msg.message_id.to_string().parse::<chatter_core::domain::ids::MessageId>()
                     {
                         if is_pinned {
                             pinned_state.add_pinned_message(msg_id);

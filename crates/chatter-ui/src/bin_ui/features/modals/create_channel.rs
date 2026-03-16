@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::channel::{ChannelConfig, ChannelType, MessagePersistence};
-use chatter_linux::domain::ids::UserId;
-use chatter_linux::proto::chat_v1::IntegrationType;
+use chatter_core::app::UIContext;
+use chatter_core::domain::channel::{ChannelConfig, ChannelType, MessagePersistence};
+use chatter_core::domain::ids::UserId;
+use chatter_core::proto::chat_v1::IntegrationType;
 
 use crate::bin_ui::converters::channel_to_slint;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
@@ -91,7 +91,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 "openai" => IntegrationType::Openai,
                                 _ => IntegrationType::Custom,
                             };
-                            if let Ok(integration) = ai_service.create(&format!("{} Assistant", name), provider_type, Some(chatter_linux::proto::chat_v1::IntegrationConfig { model: ai_model.clone(), ..Default::default() })).await {
+                            if let Ok(integration) = ai_service.create(&format!("{} Assistant", name), provider_type, Some(chatter_core::proto::chat_v1::IntegrationConfig { model: ai_model.clone(), ..Default::default() })).await {
                                 let _ = ai_service.attach_to_channel(&integration.id, &channel_id.to_string()).await;
                             }
                         }
@@ -203,15 +203,15 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let name = name.to_string();
 
         // Extract selected friends with their roles
-        let selected_friends: Vec<(UserId, chatter_linux::domain::anon_group::AnonGroupRole)> = (0..friends.row_count())
+        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> = (0..friends.row_count())
             .filter_map(|i| friends.row_data(i))
             .filter(|f| f.selected)
             .filter_map(|f| {
                 let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
                 let role = if f.role == "admin" {
-                    chatter_linux::domain::anon_group::AnonGroupRole::Admin
+                    chatter_core::domain::anon_group::AnonGroupRole::Admin
                 } else {
-                    chatter_linux::domain::anon_group::AnonGroupRole::Member
+                    chatter_core::domain::anon_group::AnonGroupRole::Member
                 };
                 Some((user_id, role))
             })
@@ -378,15 +378,15 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<UIContext>
             .unwrap_or_default();
 
         // Extract selected friends with their roles
-        let selected_friends: Vec<(UserId, chatter_linux::domain::anon_group::AnonGroupRole)> = (0..friends.row_count())
+        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> = (0..friends.row_count())
             .filter_map(|i| friends.row_data(i))
             .filter(|f| f.selected)
             .filter_map(|f| {
                 let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
                 let role = if f.role == "admin" {
-                    chatter_linux::domain::anon_group::AnonGroupRole::Admin
+                    chatter_core::domain::anon_group::AnonGroupRole::Admin
                 } else {
-                    chatter_linux::domain::anon_group::AnonGroupRole::Member
+                    chatter_core::domain::anon_group::AnonGroupRole::Member
                 };
                 Some((user_id, role))
             })
@@ -405,7 +405,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<UIContext>
         });
 
         tokio::spawn(async move {
-            let group_id: chatter_linux::domain::anon_group::AnonGroupId = match group_id_str.parse() {
+            let group_id: chatter_core::domain::anon_group::AnonGroupId = match group_id_str.parse() {
                 Ok(id) => id,
                 Err(e) => {
                     tracing::error!("Invalid group ID for invite: {}", e);

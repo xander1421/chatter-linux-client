@@ -124,7 +124,7 @@ fn test_sha256_hardware_acceleration() {
 /// Test full attachment encryption/decryption pipeline.
 #[test]
 fn test_attachment_crypto_performance() {
-    use chatter_linux::crypto::attachment_crypto::AttachmentCrypto;
+    use chatter_core::crypto::attachment_crypto::AttachmentCrypto;
 
     // 50 MB test (smaller to keep test fast)
     let size = 50 * 1024 * 1024;
@@ -175,8 +175,8 @@ fn test_attachment_crypto_performance() {
 /// Test parallel decryption with rayon (decrypt_zero_copy).
 #[test]
 fn test_parallel_decryption_with_rayon() {
-    use chatter_linux::crypto::attachment_crypto::AttachmentCrypto;
-    use chatter_linux::crypto::attachment_crypto_fast::decrypt_zero_copy;
+    use chatter_core::crypto::attachment_crypto::AttachmentCrypto;
+    use chatter_core::crypto::attachment_crypto_fast::decrypt_zero_copy;
 
     // 100 MB test - large enough to benefit from parallelization
     let size = 100 * 1024 * 1024;

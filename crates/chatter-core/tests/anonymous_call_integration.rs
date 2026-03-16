@@ -3,9 +3,9 @@
 //! Tests the basic flow of anonymous call creation, acceptance, and cleanup
 //! without requiring actual network connections.
 
-use chatter_linux::mailbox::CallRoomToken;
-use chatter_linux::domain::anon_dm::AnonDmId;
-use chatter_linux::services::anon_dm::{AnonCallRoomCredentials, PendingAnonCall};
+use chatter_core::mailbox::CallRoomToken;
+use chatter_core::domain::anon_dm::AnonDmId;
+use chatter_core::services::anon_dm::{AnonCallRoomCredentials, PendingAnonCall};
 
 /// Test that we can create call room tokens and store pending call state.
 #[tokio::test]

@@ -9,8 +9,8 @@
 
 mod common;
 
-use chatter_linux::network::grpc::{ChannelClient, MessageClient};
-use chatter_linux::proto::chat_v1::{
+use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::proto::chat_v1::{
     message::content::Type as ContentType, message::Content, ChannelType, MessageSortDirection,
 };
 use tokio_stream::StreamExt;
@@ -23,7 +23,7 @@ const NUM_USERS: usize = 5;
 /// Helper struct to hold user pool and clients.
 struct TestUserContext {
     user: TestUser,
-    pool: std::sync::Arc<chatter_linux::network::grpc::GrpcClientPool>,
+    pool: std::sync::Arc<chatter_core::network::grpc::GrpcClientPool>,
 }
 
 impl TestUserContext {
@@ -72,7 +72,7 @@ async fn create_channel_and_wait(
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(channel) => {
                     channel_id = channel.id;
@@ -104,7 +104,7 @@ async fn join_channel_and_wait(channel_client: &mut ChannelClient, channel_id: &
     while let Some(result) = join_stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
                 Event::MemberAdded(member) => {
                     tracing::info!(
@@ -442,7 +442,7 @@ async fn test_e2e_user_leaves_channel() {
     while let Some(result) = leave_stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
                 Event::MemberRemovedId(removed_user_id) => {
                     tracing::info!(

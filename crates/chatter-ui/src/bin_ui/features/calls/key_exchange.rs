@@ -7,10 +7,10 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use chatter_linux::crypto::EphemeralCallKey;
-use chatter_linux::domain::ids::{CallId, ChannelId, UserId};
-use chatter_linux::services::CallWorkerHandle;
-use chatter_linux::services::signal::SignalService;
+use chatter_core::crypto::EphemeralCallKey;
+use chatter_core::domain::ids::{CallId, ChannelId, UserId};
+use chatter_core::services::CallWorkerHandle;
+use chatter_core::services::signal::SignalService;
 use crate::MainWindow;
 
 use super::timers::{start_call_timer, start_video_frame_timer};
@@ -150,11 +150,11 @@ pub async fn handle_call_key_answer(
 
     // Update UI with verification emojis
     if let Some(w) = weak_window.upgrade() {
-        let verification = chatter_linux::services::CallVerification::derive_verification_emojis(
+        let verification = chatter_core::services::CallVerification::derive_verification_emojis(
             &call_key,
             &call_id,
         );
-        let (e1, e2, e3, e4) = chatter_linux::services::CallVerification::to_slint_tuple(&verification);
+        let (e1, e2, e3, e4) = chatter_core::services::CallVerification::to_slint_tuple(&verification);
 
         // Update verification emojis in active call data
         let mut call_data = w.get_active_call_data();

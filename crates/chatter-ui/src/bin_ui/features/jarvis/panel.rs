@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::jarvis::JarvisContext;
-use chatter_linux::state::JarvisRole;
+use chatter_core::app::UIContext;
+use chatter_core::domain::jarvis::JarvisContext;
+use chatter_core::state::JarvisRole;
 
 use crate::{JarvisMessageData, MainWindow};
 

@@ -4,7 +4,7 @@
 
 mod common;
 
-use chatter_linux::network::grpc::MailboxClient;
+use chatter_core::network::grpc::MailboxClient;
 use common::*;
 
 // ============================================================================

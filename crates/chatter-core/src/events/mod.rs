@@ -25,8 +25,8 @@
 //! # Example
 //!
 //! ```ignore
-//! use chatter_linux::events::{EventBus, DomainEvent, UiEvent, EventHandlers};
-//! use chatter_linux::state::*;
+//! use chatter_core::events::{EventBus, DomainEvent, UiEvent, EventHandlers};
+//! use chatter_core::state::*;
 //!
 //! // Create event bus
 //! let event_bus = EventBus::new();

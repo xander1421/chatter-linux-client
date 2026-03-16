@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::UserId;
-use chatter_linux::services::conversation::ConversationHandle;
-use chatter_linux::state::ActiveConversation;
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::UserId;
+use chatter_core::services::conversation::ConversationHandle;
+use chatter_core::state::ActiveConversation;
 use crate::MainWindow;
 
 /// Wire edit-message callback - enters edit mode by populating composer.
@@ -39,7 +39,7 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             };
 
             // Get message text via ConversationHandle (polymorphic across all types)
-            let handle = chatter_linux::services::conversation::ConversationHandle::new(
+            let handle = chatter_core::services::conversation::ConversationHandle::new(
                 conversation, ui_ctx.clone(),
             );
             let text = match handle.get_message_text(&target_sender_id, target_sent_timestamp) {
@@ -118,7 +118,7 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 };
 
                 if let Ok(Some(message)) = message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                    use chatter_linux::domain::message::MessageContent;
+                    use chatter_core::domain::message::MessageContent;
                     let mut updated = message.clone();
                     updated.content = MessageContent::Text(new_text_str.clone());
                     updated.is_edited = true;

@@ -5,9 +5,9 @@
 
 mod common;
 
-use chatter_linux::error::NetworkError;
-use chatter_linux::network::grpc::{ChannelClient, MessageClient};
-use chatter_linux::proto::chat_v1::{
+use chatter_core::error::NetworkError;
+use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::proto::chat_v1::{
     message::content::Type as ContentType, message::Content, ChannelType, MessageSortDirection,
 };
 use tokio_stream::StreamExt;
@@ -15,7 +15,7 @@ use tokio_stream::StreamExt;
 use common::*;
 
 /// Helper to create a test channel and return its ID.
-async fn create_test_channel(pool: &chatter_linux::network::grpc::GrpcClientPool) -> String {
+async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("test_channel_{}", unique_username());
 
@@ -38,7 +38,7 @@ async fn create_test_channel(pool: &chatter_linux::network::grpc::GrpcClientPool
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(channel) => {
                     // ChannelCreated directly contains the Channel proto

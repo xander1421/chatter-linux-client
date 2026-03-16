@@ -1,6 +1,6 @@
 //! Utility functions for domain-to-Slint conversions.
 
-use chatter_linux::domain::channel::ChannelType;
+use chatter_core::domain::channel::ChannelType;
 
 use crate::ReactionEntry;
 

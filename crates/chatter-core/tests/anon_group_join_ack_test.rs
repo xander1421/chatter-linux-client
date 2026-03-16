@@ -49,8 +49,8 @@
 //! by the group polling handler to emit `InboxEvent::AnonGroupJoinAck`,
 //! which calls `anon_group_service.handle_join_ack()`.
 
-use chatter_linux::proto::content_v1::{self, AnonGroupJoinAck, Content};
-use chatter_linux::services::gateway::SealedSenderResult;
+use chatter_core::proto::content_v1::{self, AnonGroupJoinAck, Content};
+use chatter_core::services::gateway::SealedSenderResult;
 use prost::Message;
 
 /// Test that AnonGroupJoinAck content is correctly identified.
@@ -93,7 +93,7 @@ fn test_anon_group_join_ack_content_serialization() {
 /// Test that the SealedSenderResult enum has the AnonGroupJoinAckReceived variant.
 #[test]
 fn test_sealed_sender_result_has_join_ack_variant() {
-    let sender_id = chatter_linux::domain::UserId::new();
+    let sender_id = chatter_core::domain::UserId::new();
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
     let joiner_mailbox_pk = [0x42u8; 32].to_vec();
     let timestamp = 1234567890u64;
@@ -166,9 +166,9 @@ fn test_all_content_types_listed() {
 /// Test that InboxEvent has the AnonGroupJoinAck variant.
 #[test]
 fn test_inbox_event_has_join_ack_variant() {
-    use chatter_linux::inbox::events::InboxEvent;
+    use chatter_core::inbox::events::InboxEvent;
 
-    let peer_id = chatter_linux::domain::UserId::new();
+    let peer_id = chatter_core::domain::UserId::new();
     let group_id = uuid::Uuid::new_v4().as_bytes().to_vec();
     let joiner_mailbox_pk = [0x42u8; 32].to_vec();
     let timestamp = 1234567890u64;

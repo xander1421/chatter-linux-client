@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::{ChannelId, UserId};
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::{ChannelId, UserId};
 use crate::MainWindow;
 
 /// Handle incoming call key offer.
@@ -65,7 +65,7 @@ pub(super) fn handle_call_key_answer(
     if let Some(_our_eph_sk) = ui_ctx.chat_state.take_outgoing_call_ephemeral_sk() {
         // Derive call key from ECDH
         // TODO: Implement x25519_ecdh or use call_key_provider
-        // let shared = chatter_linux::crypto::x25519_ecdh(&our_eph_sk, &ephemeral_public_key);
+        // let shared = chatter_core::crypto::x25519_ecdh(&our_eph_sk, &ephemeral_public_key);
         let shared = [0u8; 32]; // Placeholder
         ui_ctx.chat_state.set_current_call_key(Some(shared.to_vec()));
 

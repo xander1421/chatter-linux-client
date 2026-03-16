@@ -8,12 +8,12 @@
 
 mod common;
 
-use chatter_linux::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
-use chatter_linux::network::grpc::{AuthClient, MailboxClient, MessageClient};
-use chatter_linux::proto::{
+use chatter_core::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
+use chatter_core::network::grpc::{AuthClient, MailboxClient, MessageClient};
+use chatter_core::proto::{
     signal_pre_key_bundle::PreKeyRecord, GetPreKeyBundleResponse, SealedSenderMessage,
 };
-use chatter_linux::proto::mailbox_v1::EnvelopeType;
+use chatter_core::proto::mailbox_v1::EnvelopeType;
 use common::*;
 use ed25519_dalek::{Signer, SigningKey};
 use rand::RngCore;
@@ -44,7 +44,7 @@ async fn test_send_sealed_message_to_user() {
 
     // Extract UAK from bundle
     let uak = match bundle_response.result {
-        Some(chatter_linux::proto::get_pre_key_bundle_response::Result::Bundle(bundle)) => {
+        Some(chatter_core::proto::get_pre_key_bundle_response::Result::Bundle(bundle)) => {
             bundle.unidentified_access_key.unwrap_or_default()
         }
         _ => panic!("Expected single bundle result"),

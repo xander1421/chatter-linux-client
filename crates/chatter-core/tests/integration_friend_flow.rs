@@ -5,8 +5,8 @@
 mod common;
 
 use base64::Engine;
-use chatter_linux::network::grpc::{ChannelClient, UserClient};
-use chatter_linux::proto::chat_v1::{friend_requests_filter, ChannelType, FriendStatus};
+use chatter_core::network::grpc::{ChannelClient, UserClient};
+use chatter_core::proto::chat_v1::{friend_requests_filter, ChannelType, FriendStatus};
 use tokio_stream::StreamExt;
 
 use common::*;
@@ -238,7 +238,7 @@ async fn test_friends_can_create_dm_channel() {
             while let Some(result) = stream.next().await {
                 let event = result.expect("Stream error");
                 if let Some(payload) = event.event {
-                    use chatter_linux::proto::chat_v1::channel_event::Event;
+                    use chatter_core::proto::chat_v1::channel_event::Event;
                     if let Event::ChannelCreated(ch) = payload {
                         channel_id = ch.id;
                     }

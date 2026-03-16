@@ -2,10 +2,10 @@
 
 use slint::{ModelRc, SharedString, VecModel};
 
-use chatter_linux::domain::anon_dm::AnonDmMessage;
-use chatter_linux::domain::anon_group::AnonGroupMessage;
-use chatter_linux::domain::attachment::Attachment;
-use chatter_linux::domain::message::{Message, MessageContent};
+use chatter_core::domain::anon_dm::AnonDmMessage;
+use chatter_core::domain::anon_group::AnonGroupMessage;
+use chatter_core::domain::attachment::Attachment;
+use chatter_core::domain::message::{Message, MessageContent};
 
 use crate::MessageItemData;
 
@@ -204,7 +204,7 @@ pub fn message_to_display_data_with_replies(
     // Extract call information if this is a call message
     let (is_call, call_message_type, call_initiator_id, call_duration) =
         if let MessageContent::Call(call_msg) = &msg.content {
-            use chatter_linux::domain::message::CallMessageType;
+            use chatter_core::domain::message::CallMessageType;
             let msg_type = match call_msg.call_type {
                 CallMessageType::Started => "started",
                 CallMessageType::Ended => "ended",
@@ -276,7 +276,7 @@ pub fn message_to_display_data_with_attachments(
     // Extract call information if this is a call message
     let (is_call, call_message_type, call_initiator_id, call_duration) =
         if let MessageContent::Call(call_msg) = &msg.content {
-            use chatter_linux::domain::message::CallMessageType;
+            use chatter_core::domain::message::CallMessageType;
             let msg_type = match call_msg.call_type {
                 CallMessageType::Started => "started",
                 CallMessageType::Ended => "ended",
@@ -339,7 +339,7 @@ pub fn message_to_display_data_with_attachments(
 // Shared trait for anonymous message conversion
 // ============================================================================
 
-use chatter_linux::domain::message::ReactionCount;
+use chatter_core::domain::message::ReactionCount;
 
 /// Trait for anonymous message types that can be converted to display data.
 ///
@@ -347,7 +347,7 @@ use chatter_linux::domain::message::ReactionCount;
 /// the duplicated converter functions.
 pub trait AnonMessageFields {
     fn message_id_str(&self) -> &str;
-    fn sender_id(&self) -> &chatter_linux::domain::UserId;
+    fn sender_id(&self) -> &chatter_core::domain::UserId;
     fn content_json(&self) -> &str;
     fn is_deleted(&self) -> bool;
     fn is_pinned(&self) -> bool;
@@ -360,7 +360,7 @@ pub trait AnonMessageFields {
 
 impl AnonMessageFields for AnonGroupMessage {
     fn message_id_str(&self) -> &str { self.id.as_str() }
-    fn sender_id(&self) -> &chatter_linux::domain::UserId { &self.sender_id }
+    fn sender_id(&self) -> &chatter_core::domain::UserId { &self.sender_id }
     fn content_json(&self) -> &str { &self.content_json }
     fn is_deleted(&self) -> bool { self.is_deleted }
     fn is_pinned(&self) -> bool { self.is_pinned }
@@ -373,7 +373,7 @@ impl AnonMessageFields for AnonGroupMessage {
 
 impl AnonMessageFields for AnonDmMessage {
     fn message_id_str(&self) -> &str { self.id.as_str() }
-    fn sender_id(&self) -> &chatter_linux::domain::UserId { &self.sender_id }
+    fn sender_id(&self) -> &chatter_core::domain::UserId { &self.sender_id }
     fn content_json(&self) -> &str { &self.content_json }
     fn is_deleted(&self) -> bool { self.is_deleted }
     fn is_pinned(&self) -> bool { self.is_pinned }

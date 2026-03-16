@@ -14,9 +14,9 @@ async fn test_send_message_callback_flow() {
     let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create a channel
-    use chatter_linux::network::grpc::ChannelClient;
-    use chatter_linux::network::grpc::MessageClient;
-    use chatter_linux::proto::chat_v1::{ChannelType, message::{self, content}};
+    use chatter_core::network::grpc::ChannelClient;
+    use chatter_core::network::grpc::MessageClient;
+    use chatter_core::proto::chat_v1::{ChannelType, message::{self, content}};
     use tokio_stream::StreamExt;
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -34,7 +34,7 @@ async fn test_send_message_callback_flow() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(channel) = payload {
                 channel_id = channel.id;
             }
@@ -152,9 +152,9 @@ async fn test_load_more_callback_flow() {
     let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     // Create channel
-    use chatter_linux::network::grpc::ChannelClient;
-    use chatter_linux::network::grpc::MessageClient;
-    use chatter_linux::proto::chat_v1::{ChannelType, MessageSortDirection, message::{self, content}};
+    use chatter_core::network::grpc::ChannelClient;
+    use chatter_core::network::grpc::MessageClient;
+    use chatter_core::proto::chat_v1::{ChannelType, MessageSortDirection, message::{self, content}};
     use tokio_stream::StreamExt;
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
@@ -173,7 +173,7 @@ async fn test_load_more_callback_flow() {
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             if let Event::ChannelCreated(channel) = payload {
                 channel_id = channel.id;
             }

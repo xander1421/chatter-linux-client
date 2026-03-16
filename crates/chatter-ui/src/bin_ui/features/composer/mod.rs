@@ -12,7 +12,7 @@ mod text;
 
 use std::sync::Arc;
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 
 use crate::MainWindow;
 

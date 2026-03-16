@@ -30,7 +30,7 @@ async fn test_settings_change_password_callback_flow() {
     // Simulate: on_settings_change_password callback
     settings_password_changing = true;
 
-    use chatter_linux::network::grpc::AuthClient;
+    use chatter_core::network::grpc::AuthClient;
     use sha2::{Digest, Sha256};
 
     let current_hash = Sha256::digest(settings_current_password.as_bytes()).to_vec();
@@ -75,7 +75,7 @@ async fn test_settings_view_sessions_callback_flow() {
     sessions_loading = true;
     active_modal = "sessions".to_string();
 
-    use chatter_linux::network::grpc::AuthClient;
+    use chatter_core::network::grpc::AuthClient;
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 
@@ -112,7 +112,7 @@ async fn test_settings_revoke_session_callback_flow() {
     let mut sessions_revoking = false;
 
     // Get sessions first
-    use chatter_linux::network::grpc::AuthClient;
+    use chatter_core::network::grpc::AuthClient;
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
     let _devices = assert_ok(auth_client.list_sessions().await);
@@ -141,7 +141,7 @@ async fn test_settings_logout_callback_flow() {
     let mut current_view = "main";
 
     // Simulate: on_settings_logout callback
-    use chatter_linux::network::grpc::AuthClient;
+    use chatter_core::network::grpc::AuthClient;
 
     let mut auth_client = AuthClient::new(pool.channel(), pool.auth_clone());
 

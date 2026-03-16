@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::MessageId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::MessageId;
 use crate::bin_ui::features::chat::emoji_loader;
 use crate::MainWindow;
 

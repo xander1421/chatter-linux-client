@@ -108,7 +108,7 @@ mod stub_tests {
 
 /// Test the LocalAIActorHandle API (works with or without local-ai feature).
 mod actor_tests {
-    use chatter_linux::services::ai::{LocalAIActorHandle, SampleParams};
+    use chatter_core::services::ai::{LocalAIActorHandle, SampleParams};
 
     #[tokio::test]
     async fn test_actor_handle_load_and_complete() {
@@ -183,7 +183,7 @@ mod actor_tests {
         let result = handle.complete("Hello".to_string(), SampleParams::default()).await;
 
         match result {
-            Err(chatter_linux::services::ai::LocalAIError::NoModel) => {
+            Err(chatter_core::services::ai::LocalAIError::NoModel) => {
                 println!("✅ Correctly returned NoModel error");
             }
             Err(e) => {

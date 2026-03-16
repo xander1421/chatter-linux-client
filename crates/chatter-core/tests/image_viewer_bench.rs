@@ -80,7 +80,7 @@ fn bench_image_decode_pipeline() {
 /// Benchmark decryption performance for large files.
 #[test]
 fn bench_decryption_pipeline() {
-    use chatter_linux::crypto::attachment_crypto::AttachmentCrypto;
+    use chatter_core::crypto::attachment_crypto::AttachmentCrypto;
 
     // Create a 21MB test buffer (simulating the PNG file)
     let plaintext_size = 21 * 1024 * 1024; // 21 MB
@@ -99,7 +99,7 @@ fn bench_decryption_pipeline() {
 
     // Decrypt with zero-copy (parallel)
     let start = Instant::now();
-    let decrypted = chatter_linux::crypto::attachment_crypto_fast::decrypt_zero_copy(
+    let decrypted = chatter_core::crypto::attachment_crypto_fast::decrypt_zero_copy(
         encrypted.ciphertext.clone(),
         &encrypted.key,
         &encrypted.digest,
@@ -120,7 +120,7 @@ fn bench_decryption_pipeline() {
 /// Full pipeline benchmark: decrypt + decode + display.
 #[test]
 fn bench_full_pipeline() {
-    use chatter_linux::crypto::attachment_crypto::AttachmentCrypto;
+    use chatter_core::crypto::attachment_crypto::AttachmentCrypto;
 
     let benchmark_file = std::path::Path::new("/home/alex/Downloads/space-galaxy");
 
@@ -142,7 +142,7 @@ fn bench_full_pipeline() {
 
     // Step 2: Decrypt (what viewing does)
     let start = Instant::now();
-    let decrypted = chatter_linux::crypto::attachment_crypto_fast::decrypt_zero_copy(
+    let decrypted = chatter_core::crypto::attachment_crypto_fast::decrypt_zero_copy(
         encrypted.ciphertext.clone(),
         &encrypted.key,
         &encrypted.digest,

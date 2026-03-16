@@ -17,10 +17,10 @@
 
 mod common;
 
-use chatter_linux::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmMessage, AnonDmStatus};
-use chatter_linux::domain::UserId;
-use chatter_linux::network::grpc::MailboxClient;
-use chatter_linux::proto::mailbox_v1::EnvelopeType;
+use chatter_core::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmMessage, AnonDmStatus};
+use chatter_core::domain::UserId;
+use chatter_core::network::grpc::MailboxClient;
+use chatter_core::proto::mailbox_v1::EnvelopeType;
 use chrono::Utc;
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use rand::RngCore;
@@ -217,7 +217,7 @@ async fn test_anon_dm_request_serialization() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonDmRequest, Content};
+    use chatter_core::proto::content_v1::{self, AnonDmRequest, Content};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -272,7 +272,7 @@ async fn test_anon_dm_accept_serialization() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonDmAccept, Content};
+    use chatter_core::proto::content_v1::{self, AnonDmAccept, Content};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -326,7 +326,7 @@ async fn test_anon_dm_message_serialization() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, DataMessage};
+    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, DataMessage};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -609,7 +609,7 @@ async fn test_anon_dm_message_with_attachment() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, AttachmentMessage, Content};
+    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, AttachmentMessage, Content};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -665,7 +665,7 @@ async fn test_anon_dm_message_with_reaction() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, Reaction};
+    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, Reaction};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -830,7 +830,7 @@ async fn test_anon_dm_message_with_typing() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, TypingMessage, typing_message};
+    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, TypingMessage, typing_message};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -891,7 +891,7 @@ async fn test_anon_dm_message_with_read_receipt() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, ReceiptMessage, receipt_message};
+    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, ReceiptMessage, receipt_message};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 
@@ -954,7 +954,7 @@ async fn test_anon_dm_message_with_delete() {
     skip_if_no_server!();
 
     use prost::Message;
-    use chatter_linux::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, DataMessage, Delete};
+    use chatter_core::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, Content, DataMessage, Delete};
 
     let conversation_id = uuid::Uuid::new_v4().as_bytes().to_vec();
 

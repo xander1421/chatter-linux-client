@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::anon_group::AnonGroupId;
-use chatter_linux::domain::UserId;
+use chatter_core::app::UIContext;
+use chatter_core::domain::anon_group::AnonGroupId;
+use chatter_core::domain::UserId;
 
 use crate::MainWindow;
 use crate::MessageItemData;

@@ -5,8 +5,8 @@
 mod common;
 
 use base64::Engine;
-use chatter_linux::network::grpc::{ChannelClient, MessageClient};
-use chatter_linux::proto::chat_v1::{
+use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::proto::chat_v1::{
     message::content::Type as ContentType, message::Content, ChannelType, MessageSortDirection,
 };
 use tokio_stream::StreamExt;
@@ -47,7 +47,7 @@ async fn test_create_saved_messages_channel() {
             while let Some(result) = stream.next().await {
                 let event = result.expect("Stream error");
                 if let Some(payload) = event.event {
-                    use chatter_linux::proto::chat_v1::channel_event::Event;
+                    use chatter_core::proto::chat_v1::channel_event::Event;
                     if let Event::ChannelCreated(ch) = payload {
                         channel_id = ch.id;
                         // Verify channel type is SavedMessages
@@ -166,7 +166,7 @@ async fn test_send_message_to_saved_messages() {
             while let Some(result) = stream.next().await {
                 let event = result.expect("Stream error");
                 if let Some(payload) = event.event {
-                    use chatter_linux::proto::chat_v1::channel_event::Event;
+                    use chatter_core::proto::chat_v1::channel_event::Event;
                     if let Event::ChannelCreated(ch) = payload {
                         id = ch.id;
                     }
@@ -241,7 +241,7 @@ async fn test_retrieve_saved_messages() {
             while let Some(result) = stream.next().await {
                 let event = result.expect("Stream error");
                 if let Some(payload) = event.event {
-                    use chatter_linux::proto::chat_v1::channel_event::Event;
+                    use chatter_core::proto::chat_v1::channel_event::Event;
                     if let Event::ChannelCreated(ch) = payload {
                         id = ch.id;
                     }

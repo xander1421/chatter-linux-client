@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 
 use crate::{GifData, MainWindow};
 
@@ -106,7 +106,7 @@ async fn download_and_send_gif(
     );
 
     // Create pending attachment with pre-uploaded pointer
-    let pending = chatter_linux::state::PendingAttachment::with_pointer(
+    let pending = chatter_core::state::PendingAttachment::with_pointer(
         upload_result.attachment_id,
         std::path::PathBuf::new(), // No temp file - already uploaded
         filename,

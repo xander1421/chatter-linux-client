@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 
 use crate::MainWindow;
 
@@ -62,7 +62,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let session_service_read = session_service.clone();
     window.on_settings_read_receipts_changed(move |enabled: bool| {
         if let Err(e) = session_service_read.set_bool_setting(
-            chatter_linux::storage::settings_keys::SEND_READ_RECEIPTS,
+            chatter_core::storage::settings_keys::SEND_READ_RECEIPTS,
             enabled,
         ) {
             tracing::error!("Failed to save read receipts setting: {}", e);
@@ -75,7 +75,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     let session_service_typing = session_service.clone();
     window.on_settings_typing_indicators_changed(move |enabled: bool| {
         if let Err(e) = session_service_typing.set_bool_setting(
-            chatter_linux::storage::settings_keys::SHOW_TYPING_INDICATORS,
+            chatter_core::storage::settings_keys::SHOW_TYPING_INDICATORS,
             enabled,
         ) {
             tracing::error!("Failed to save typing indicators setting: {}", e);
@@ -99,7 +99,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
             #[cfg(not(target_os = "android"))]
             {
-                use chatter_linux::system::Clipboard;
+                use chatter_core::system::Clipboard;
                 match Clipboard::new() {
                     Ok(mut clipboard) => {
                         if let Err(e) = clipboard.set_text(&fingerprint) {

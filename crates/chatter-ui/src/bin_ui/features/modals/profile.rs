@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::ids::UserId;
-use chatter_linux::services::user::FriendRequestFilter;
+use chatter_core::app::UIContext;
+use chatter_core::domain::ids::UserId;
+use chatter_core::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{get_initials, DMListItemSendData, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
@@ -583,7 +583,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
             // 2. Map bio to status message
             let status_msg = if !bio.is_empty() {
-                Some(chatter_linux::domain::user::StatusMessage::new(bio))
+                Some(chatter_core::domain::user::StatusMessage::new(bio))
             } else {
                 None
             };
@@ -648,11 +648,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let weak = weak_window.clone();
 
             tokio::spawn(async move {
-                let config = chatter_linux::media::FilePickerConfig::new()
+                let config = chatter_core::media::FilePickerConfig::new()
                     .with_title("Select Profile Picture")
-                    .with_filter(chatter_linux::media::FileFilter::images());
+                    .with_filter(chatter_core::media::FileFilter::images());
 
-                if let Some(path) = chatter_linux::media::FilePicker::pick_file(config).await {
+                if let Some(path) = chatter_core::media::FilePicker::pick_file(config).await {
                     match std::fs::read(&path) {
                         Ok(data) => {
                             // Store the path for later use
@@ -682,7 +682,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 }
 
 /// Broadcast profile update to all anon DM conversations and anon groups
-async fn broadcast_profile_update(ui_ctx: &Arc<UIContext>, profile: &chatter_linux::domain::user::Profile) {
+async fn broadcast_profile_update(ui_ctx: &Arc<UIContext>, profile: &chatter_core::domain::user::Profile) {
     let display_name = Some(profile.display_name.clone());
     let avatar_url = profile.avatar_url.clone();
     let bio = profile.status_message.as_ref().map(|m| m.text.clone());

@@ -13,10 +13,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
 
-use chatter_linux::domain::channel::{Channel, ChannelType};
-use chatter_linux::domain::ids::{ChannelId, MessageId, UserId};
-use chatter_linux::domain::message::{Message, MessageContent};
-use chatter_linux::storage::{ChannelRepository, Database, MessageRepository};
+use chatter_core::domain::channel::{Channel, ChannelType};
+use chatter_core::domain::ids::{ChannelId, MessageId, UserId};
+use chatter_core::domain::message::{Message, MessageContent};
+use chatter_core::storage::{ChannelRepository, Database, MessageRepository};
 
 // ============================================================================
 // Test Setup Helpers
@@ -281,7 +281,7 @@ fn test_saved_messages_storage() {
 
 #[test]
 fn test_system_message_user_joined() {
-    use chatter_linux::domain::message::SystemMessage;
+    use chatter_core::domain::message::SystemMessage;
 
     let (_temp_dir, db) = setup_test_db();
     let message_repo = MessageRepository::new(db.clone());
@@ -328,7 +328,7 @@ fn test_system_message_user_joined() {
 
 #[test]
 fn test_system_message_user_left() {
-    use chatter_linux::domain::message::SystemMessage;
+    use chatter_core::domain::message::SystemMessage;
 
     let (_temp_dir, db) = setup_test_db();
     let message_repo = MessageRepository::new(db.clone());
@@ -875,7 +875,7 @@ fn test_reaction_via_signal_style_lookup() {
 
     // Simulate reaction: lookup by (sender_id, sent_at) and add reaction
     let mut found = message_repo.get_by_sender_timestamp(&sender, sent_at).unwrap().unwrap();
-    use chatter_linux::domain::message::ReactionCount;
+    use chatter_core::domain::message::ReactionCount;
     found.reaction_counts.push(ReactionCount {
         emoji: "👍".to_string(),
         count: 1,

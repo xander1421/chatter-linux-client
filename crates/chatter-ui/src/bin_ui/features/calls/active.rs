@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc};
 
-use chatter_linux::app::UIContext;
+use chatter_core::app::UIContext;
 #[cfg(not(target_os = "android"))]
-use chatter_linux::calls::ScreenCapture;
-use chatter_linux::inbox::handlers::DomainEvent;
-use chatter_linux::state::ActiveConversation;
+use chatter_core::calls::ScreenCapture;
+use chatter_core::inbox::handlers::DomainEvent;
+use chatter_core::state::ActiveConversation;
 use crate::MainWindow;
 
 use super::call_history::create_call_history_message;
@@ -173,7 +173,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     if let Err(e) = anon_dm_service_clone.send_call_hangup(
                         &pending_anon.conversation_id,
                         &pending_anon.call_room_id,
-                        chatter_linux::proto::content_v1::anon_call_hangup::Reason::Normal,
+                        chatter_core::proto::content_v1::anon_call_hangup::Reason::Normal,
                     ).await {
                         tracing::error!(
                             "Failed to send anonymous call hangup: {}", e
@@ -196,7 +196,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                     // Store in anon DM message store
                     let sent_at = super::timers::current_time_ns();
-                    let our_user_id = session_service.current_user_id().unwrap_or_else(chatter_linux::domain::ids::UserId::new);
+                    let our_user_id = session_service.current_user_id().unwrap_or_else(chatter_core::domain::ids::UserId::new);
                     if let Err(e) = anon_dm_service_clone.store_message(
                         &pending_anon.conversation_id,
                         &our_user_id,
@@ -277,9 +277,9 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                 );
 
                                 // Build hangup content
-                                let content = chatter_linux::services::build_call_hangup_content(
+                                let content = chatter_core::services::build_call_hangup_content(
                                     &call.id.to_string(),
-                                    chatter_linux::services::CallHangupReason::Normal,
+                                    chatter_core::services::CallHangupReason::Normal,
                                 );
 
                                 // Send via sealed sender

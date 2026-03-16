@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::crypto::EphemeralCallKey;
-use chatter_linux::domain::ids::{CallId, UserId};
+use chatter_core::app::UIContext;
+use chatter_core::crypto::EphemeralCallKey;
+use chatter_core::domain::ids::{CallId, UserId};
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 use super::timers::{start_call_timer, start_video_frame_timer};
@@ -126,7 +126,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                     if is_group_call {
                         // Route through anon group service
-                        let group_id = match chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(
+                        let group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(
                             pending.conversation_id.as_bytes()
                         ) {
                             Some(id) => id,
@@ -199,8 +199,8 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             };
                             
                             // Create a dummy call ID and channel ID for anonymous calls
-                            let call_id = chatter_linux::domain::ids::CallId::new();
-                            let channel_id = chatter_linux::domain::ids::ChannelId::new();
+                            let call_id = chatter_core::domain::ids::CallId::new();
+                            let channel_id = chatter_core::domain::ids::ChannelId::new();
                             
                             // Connect to LiveKit with the access token and E2EE key
                             match service.connect_with_token(
@@ -249,11 +249,11 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                         // Derive verification emojis from shared E2EE key + room name
                                         let mut e2ee_key = [0u8; 32];
                                         if pending.encryption_key.len() >= 32 { e2ee_key.copy_from_slice(&pending.encryption_key[..32]); }
-                                        let verification = chatter_linux::services::CallVerification::derive_verification_emojis(
+                                        let verification = chatter_core::services::CallVerification::derive_verification_emojis(
                                             &e2ee_key,
                                             &pending.room_name,
                                         );
-                                        let (e1, e2, e3, e4) = chatter_linux::services::CallVerification::to_slint_tuple(&verification);
+                                        let (e1, e2, e3, e4) = chatter_core::services::CallVerification::to_slint_tuple(&verification);
 
                                         // Create call data for UI (use room_name as call_id so "anon-" prefix is preserved for cleanup)
                                         let call_data = ActiveCallData {
@@ -419,7 +419,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 );
 
                 // Send answer with our ephemeral public key
-                let answer_content = chatter_linux::services::build_call_key_answer(
+                let answer_content = chatter_core::services::build_call_key_answer(
                     &call_id_str,
                     our_ephemeral_pk,
                 );
@@ -508,11 +508,11 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             };
 
                             // Derive verification emojis for secure call verification
-                            let verification = chatter_linux::services::CallVerification::derive_verification_emojis(
+                            let verification = chatter_core::services::CallVerification::derive_verification_emojis(
                                 &encryption_key,
                                 &call.id.to_string(),
                             );
-                            let (e1, e2, e3, e4) = chatter_linux::services::CallVerification::to_slint_tuple(&verification);
+                            let (e1, e2, e3, e4) = chatter_core::services::CallVerification::to_slint_tuple(&verification);
 
                             // Create call data for UI
                             let call_data = ActiveCallData {
@@ -598,7 +598,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         .ok().flatten().is_none();
 
                     if is_group_call {
-                        let group_id = chatter_linux::domain::anon_group::AnonGroupId::try_from_slice(
+                        let group_id = chatter_core::domain::anon_group::AnonGroupId::try_from_slice(
                             pending.conversation_id.as_bytes()
                         ).expect("conversation_id bytes are valid");
                         if let Err(e) = ui_ctx.anon_group_service.send_call_answer(

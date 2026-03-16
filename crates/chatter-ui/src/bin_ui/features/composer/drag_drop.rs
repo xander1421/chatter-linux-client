@@ -9,7 +9,7 @@ use i_slint_backend_winit::{EventResult, WinitWindowAccessor};
 use slint::ComponentHandle;
 use winit::event::WindowEvent;
 
-use chatter_linux::state::{ActiveConversation, ChatState};
+use chatter_core::state::{ActiveConversation, ChatState};
 
 use super::attachments::process_and_add_file;
 use crate::MainWindow;

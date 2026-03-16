@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_linux::app::UIContext;
-use chatter_linux::inbox::DomainEvent;
+use chatter_core::app::UIContext;
+use chatter_core::inbox::DomainEvent;
 use crate::MainWindow;
 
 /// Spawn anon group invite handler to process incoming invite events.

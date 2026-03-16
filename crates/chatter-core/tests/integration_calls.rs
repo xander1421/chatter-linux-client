@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use chatter_linux::calls::{
+use chatter_core::calls::{
     AudioCapture, AudioDevice, AudioOutputDevice,
     ScreenCapture, ScreenCaptureConfig, ScreenSource, ScreenSourceType,
 };

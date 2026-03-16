@@ -5,8 +5,8 @@
 mod common;
 
 use base64::Engine;
-use chatter_linux::network::grpc::{ChannelClient, MessageClient};
-use chatter_linux::proto::chat_v1::{
+use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::proto::chat_v1::{
     message::content::Type as ContentType, message::Content, Channel as ChannelProto, ChannelType,
     MessageSortDirection,
 };
@@ -16,14 +16,14 @@ use common::*;
 
 // Helper to consume a channel creation stream and get the channel ID
 async fn consume_create_stream_get_id(
-    stream: impl futures::Stream<Item = Result<chatter_linux::proto::chat_v1::ChannelEvent, chatter_linux::error::NetworkError>>,
+    stream: impl futures::Stream<Item = Result<chatter_core::proto::chat_v1::ChannelEvent, chatter_core::error::NetworkError>>,
 ) -> String {
     tokio::pin!(stream);
     let mut channel_id = String::new();
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(ch) => {
                     channel_id = ch.id;
@@ -407,7 +407,7 @@ async fn test_update_group_settings() {
             while let Some(result) = stream.next().await {
                 let event = result.expect("Stream error");
                 if let Some(payload) = event.event {
-                    use chatter_linux::proto::chat_v1::channel_event::Event;
+                    use chatter_core::proto::chat_v1::channel_event::Event;
                     if let Event::ChannelUpdated(ch) = payload {
                         assert_eq!(ch.name, new_name);
                     }

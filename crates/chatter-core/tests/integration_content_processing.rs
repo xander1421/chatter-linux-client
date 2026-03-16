@@ -8,8 +8,8 @@
 
 mod common;
 
-use chatter_linux::network::grpc::{ChannelClient, MessageClient};
-use chatter_linux::proto::chat_v1::{
+use chatter_core::network::grpc::{ChannelClient, MessageClient};
+use chatter_core::proto::chat_v1::{
     self, message::content::Type as ContentType, message::Content, ChannelType, EncryptedData,
 };
 use tokio_stream::StreamExt;
@@ -296,7 +296,7 @@ fn test_prekey_requires_sender_context() {
 // ============================================================================
 
 /// Helper to create a test channel and return its ID.
-async fn create_test_channel(pool: &chatter_linux::network::grpc::GrpcClientPool) -> String {
+async fn create_test_channel(pool: &chatter_core::network::grpc::GrpcClientPool) -> String {
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
     let channel_name = format!("content_test_{}", unique_username());
 
@@ -319,7 +319,7 @@ async fn create_test_channel(pool: &chatter_linux::network::grpc::GrpcClientPool
     while let Some(result) = stream.next().await {
         let event = result.expect("Stream error");
         if let Some(payload) = event.event {
-            use chatter_linux::proto::chat_v1::channel_event::Event;
+            use chatter_core::proto::chat_v1::channel_event::Event;
             match payload {
                 Event::ChannelCreated(channel) => {
                     channel_id = channel.id;
@@ -369,7 +369,7 @@ async fn test_server_text_message_roundtrip() {
                 10,
                 None,
                 None,
-                chatter_linux::proto::chat_v1::MessageSortDirection::SortNewestFirst,
+                chatter_core::proto::chat_v1::MessageSortDirection::SortNewestFirst,
                 None,
                 None,
             )
@@ -404,7 +404,7 @@ async fn test_server_device_list_includes_current() {
     let _user = assert_ok(setup_authenticated_test(&pool).await);
 
     let mut auth_client =
-        chatter_linux::network::grpc::AuthClient::new(pool.channel(), pool.auth_clone());
+        chatter_core::network::grpc::AuthClient::new(pool.channel(), pool.auth_clone());
 
     // Get device list
     let devices = assert_ok(auth_client.list_devices().await);
@@ -430,7 +430,7 @@ async fn test_server_saved_messages_single_device() {
 
     // Get device count
     let mut auth_client =
-        chatter_linux::network::grpc::AuthClient::new(pool.channel(), pool.auth_clone());
+        chatter_core::network::grpc::AuthClient::new(pool.channel(), pool.auth_clone());
     let devices = assert_ok(auth_client.list_devices().await);
 
     // For single device, saved messages are local-only

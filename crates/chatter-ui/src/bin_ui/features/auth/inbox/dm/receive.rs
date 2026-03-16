@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::message::Message;
-use chatter_linux::proto::content_v1::AttachmentPointer;
+use chatter_core::app::UIContext;
+use chatter_core::domain::message::Message;
+use chatter_core::proto::content_v1::AttachmentPointer;
 
 use crate::bin_ui::converters::{
     attachment_pointer_to_display_data, message_to_display_data_with_attachments,
@@ -23,8 +23,8 @@ use super::download::auto_download_attachments;
 pub fn handle_dm_received(
     weak_window: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<UIContext>,
-    peer_id: chatter_linux::domain::UserId,
-    dm_channel_id: chatter_linux::domain::ids::ChannelId,
+    peer_id: chatter_core::domain::UserId,
+    dm_channel_id: chatter_core::domain::ids::ChannelId,
     text: String,
     timestamp: u64,
     message_id: String,
@@ -160,7 +160,7 @@ pub fn handle_dm_received(
                 // Use shared converter to create MessageItemData
                 // Create a temporary domain Message object for conversion
                 let mut domain_msg = Message::new_text(
-                    chatter_linux::domain::ids::ChannelId::new(), // DMs use empty/virtual channel ID
+                    chatter_core::domain::ids::ChannelId::new(), // DMs use empty/virtual channel ID
                     Some(peer_id_cloned),
                     text_for_ui,
                     timestamp,
@@ -226,7 +226,7 @@ pub fn handle_dm_received(
             // Send read receipt for this message since conversation is active
             let channel_id_str = dm_channel_id.to_string();
             if let Some(anon_dm_id_str) = channel_id_str.strip_prefix("anon_dm:") {
-                if let Ok(dm_id) = anon_dm_id_str.parse::<chatter_linux::domain::anon_dm::AnonDmId>() {
+                if let Ok(dm_id) = anon_dm_id_str.parse::<chatter_core::domain::anon_dm::AnonDmId>() {
                     let service = ui_ctx_cloned.anon_dm_service.clone();
                     tokio::spawn(async move {
                         let _ = service.send_read_receipt(&dm_id, vec![timestamp]).await;
@@ -236,7 +236,7 @@ pub fn handle_dm_received(
         }
 
         // Always update sidebar (with unread increment for received messages)
-        let conv = chatter_linux::state::ActiveConversation::Dm {
+        let conv = chatter_core::state::ActiveConversation::Dm {
             channel_id: dm_channel_id,
             peer_id: peer_id_cloned,
         };
@@ -256,8 +256,8 @@ pub fn handle_dm_received(
 /// Handle DM unread count update.
 pub fn handle_dm_unread_count(
     weak_window: &slint::Weak<MainWindow>,
-    channel_id: chatter_linux::domain::ids::ChannelId,
-    peer_id: chatter_linux::domain::UserId,
+    channel_id: chatter_core::domain::ids::ChannelId,
+    peer_id: chatter_core::domain::UserId,
     unread_count: u32,
 ) {
     tracing::debug!(

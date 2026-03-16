@@ -10,13 +10,13 @@ mod common;
 use std::sync::Arc;
 use tempfile::TempDir;
 
-use chatter_linux::crypto::dm_crypto::{decrypt_dm_message, encrypt_dm_message};
-use chatter_linux::domain::UserId;
-use chatter_linux::inbox::{InboxConfig, InboxEvent};
-use chatter_linux::mailbox::dm::{
+use chatter_core::crypto::dm_crypto::{decrypt_dm_message, encrypt_dm_message};
+use chatter_core::domain::UserId;
+use chatter_core::inbox::{InboxConfig, InboxEvent};
+use chatter_core::mailbox::dm::{
     ConversationKey, DmConversation, DmConversationManager, DmMailbox, PeerMailbox, TwoWayAnonymity,
 };
-use chatter_linux::storage::Database;
+use chatter_core::storage::Database;
 use chrono::{Duration, Utc};
 use rusqlite;
 
@@ -360,7 +360,7 @@ fn test_inbox_event_dm_received_format() {
     let peer_id = UserId::new();
     let event = InboxEvent::DmReceived {
         peer_id,
-        channel_id: chatter_linux::domain::ids::ChannelId::new(),
+        channel_id: chatter_core::domain::ids::ChannelId::new(),
         text: "Hello!".to_string(),
         timestamp: 1234567890,
         message_id: "msg-123".to_string(),

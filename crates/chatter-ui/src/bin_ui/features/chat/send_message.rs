@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_linux::app::UIContext;
-use chatter_linux::domain::channel::ChannelType;
-use chatter_linux::services::gateway;
-use chatter_linux::state::ActiveConversation;
+use chatter_core::app::UIContext;
+use chatter_core::domain::channel::ChannelType;
+use chatter_core::services::gateway;
+use chatter_core::state::ActiveConversation;
 
 use crate::bin_ui::converters::attachment_to_display_data;
 use super::typing::clear_outgoing_typing;
@@ -221,7 +221,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                     if is_saved {
                         let att_ids = uploaded.pointers.iter()
-                            .map(|p| chatter_linux::domain::AttachmentId::from_cdn_key(&p.cdn_key))
+                            .map(|p| chatter_core::domain::AttachmentId::from_cdn_key(&p.cdn_key))
                             .collect();
                         gateway::OutgoingIntent::SavedMessages {
                             text: text.clone(),
@@ -328,17 +328,17 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 async fn handle_jarvis_slash_command(
     ui_ctx: &Arc<UIContext>,
     cmd: crate::bin_ui::features::jarvis::JarvisCommand,
-    channel_id: Option<&chatter_linux::domain::ids::ChannelId>,
+    channel_id: Option<&chatter_core::domain::ids::ChannelId>,
     weak_window: slint::Weak<MainWindow>,
 ) {
     use crate::bin_ui::features::jarvis::JarvisCommand;
-    use chatter_linux::domain::jarvis::JarvisContext;
+    use chatter_core::domain::jarvis::JarvisContext;
 
     // Build context
     let context = match channel_id {
         Some(id) => JarvisContext::channel(id.clone()),
         None => {
-            let placeholder_id: chatter_linux::domain::ids::ChannelId = uuid::Uuid::nil().into();
+            let placeholder_id: chatter_core::domain::ids::ChannelId = uuid::Uuid::nil().into();
             JarvisContext::dm(placeholder_id)
         }
     };

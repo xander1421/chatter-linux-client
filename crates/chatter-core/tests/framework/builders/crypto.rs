@@ -85,7 +85,7 @@ impl CryptoBuilder {
     ///
     /// Returns encrypted bytes (nonce || ciphertext || auth_tag).
     pub fn encrypt_display_name(profile_key: &[u8; 32], display_name: &str) -> Vec<u8> {
-        chatter_linux::crypto::profile_crypto::encrypt_display_name(profile_key, display_name)
+        chatter_core::crypto::profile_crypto::encrypt_display_name(profile_key, display_name)
             .expect("Display name encryption should succeed")
     }
 
@@ -99,7 +99,7 @@ impl CryptoBuilder {
     ///
     /// Returns the plaintext display name.
     pub fn decrypt_display_name(profile_key: &[u8; 32], encrypted: &[u8]) -> Option<String> {
-        chatter_linux::crypto::profile_crypto::decrypt_display_name(profile_key, encrypted).ok()
+        chatter_core::crypto::profile_crypto::decrypt_display_name(profile_key, encrypted).ok()
     }
 
     /// Decrypt a base64-encoded display name.
@@ -123,7 +123,7 @@ impl CryptoBuilder {
 
     /// Derive Unidentified Access Key from profile key.
     pub fn derive_uak(profile_key: &[u8; 32]) -> [u8; 16] {
-        chatter_linux::crypto::derive_uak(profile_key)
+        chatter_core::crypto::derive_uak(profile_key)
     }
 }
 

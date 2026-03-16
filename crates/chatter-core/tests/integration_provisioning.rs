@@ -8,12 +8,12 @@ mod common;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 
-use chatter_linux::network::grpc::{ProvisioningClient, ProvisioningPollResult};
-use chatter_linux::proto::chat_v1::signal_pre_key_bundle::{
+use chatter_core::network::grpc::{ProvisioningClient, ProvisioningPollResult};
+use chatter_core::proto::chat_v1::signal_pre_key_bundle::{
     PreKeyRecord, SignedPreKeyRecord,
 };
-use chatter_linux::proto::chat_v1::SignalPreKeyBundle;
-use chatter_linux::proto::provisioning_v1::ProvisionEnvelope;
+use chatter_core::proto::chat_v1::SignalPreKeyBundle;
+use chatter_core::proto::provisioning_v1::ProvisionEnvelope;
 use libsignal_protocol::{IdentityKeyPair, KeyPair};
 
 use common::*;
@@ -456,7 +456,7 @@ async fn test_cannot_reprovision_already_provisioned_session() {
 /// In a real implementation, this would be decrypted from the envelope.
 /// For testing, we query the server directly.
 async fn get_provisioning_code_for_test(
-    pool: &std::sync::Arc<chatter_linux::network::grpc::GrpcClientPool>,
+    pool: &std::sync::Arc<chatter_core::network::grpc::GrpcClientPool>,
     _provisioning_uuid: &str,
 ) -> String {
     // In a real test against a real server, we'd need to:

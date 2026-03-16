@@ -11,11 +11,11 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use tempfile::tempdir;
 
-use chatter_linux::crypto::{SavedMessageCrypto, SavedMessageSource};
-use chatter_linux::network::grpc::MessageClient;
-use chatter_linux::proto::chat_v1::CryptoVersion;
-use chatter_linux::services::SavedMessageService;
-use chatter_linux::storage::{repositories::settings_repo::keys, Database, SettingsRepository};
+use chatter_core::crypto::{SavedMessageCrypto, SavedMessageSource};
+use chatter_core::network::grpc::MessageClient;
+use chatter_core::proto::chat_v1::CryptoVersion;
+use chatter_core::services::SavedMessageService;
+use chatter_core::storage::{repositories::settings_repo::keys, Database, SettingsRepository};
 
 use common::*;
 
@@ -41,7 +41,7 @@ fn test_encrypt_text_produces_valid_data() {
 
     // Verify content structure
     match content.r#type {
-        Some(chatter_linux::proto::chat_v1::message::content::Type::Encrypted(ref encrypted)) => {
+        Some(chatter_core::proto::chat_v1::message::content::Type::Encrypted(ref encrypted)) => {
             assert_eq!(encrypted.version, CryptoVersion::SimpleE2e as i32);
             assert_eq!(encrypted.nonce.len(), 24); // XChaCha20 nonce
             assert!(!encrypted.ciphertext.is_empty());
@@ -67,7 +67,7 @@ fn test_encrypt_with_source_metadata() {
 
     // Verify associated_data contains source
     match content.r#type {
-        Some(chatter_linux::proto::chat_v1::message::content::Type::Encrypted(ref encrypted)) => {
+        Some(chatter_core::proto::chat_v1::message::content::Type::Encrypted(ref encrypted)) => {
             assert!(!encrypted.associated_data.is_empty());
             // Verify it's valid JSON
             let parsed: SavedMessageSource =
@@ -140,12 +140,12 @@ fn test_tampered_ciphertext_fails() {
 
     // Tamper with ciphertext
     let tampered = match content.r#type {
-        Some(chatter_linux::proto::chat_v1::message::content::Type::Encrypted(mut encrypted)) => {
+        Some(chatter_core::proto::chat_v1::message::content::Type::Encrypted(mut encrypted)) => {
             if !encrypted.ciphertext.is_empty() {
                 encrypted.ciphertext[0] ^= 0xFF;
             }
-            chatter_linux::proto::chat_v1::message::Content {
-                r#type: Some(chatter_linux::proto::chat_v1::message::content::Type::Encrypted(
+            chatter_core::proto::chat_v1::message::Content {
+                r#type: Some(chatter_core::proto::chat_v1::message::content::Type::Encrypted(
                     encrypted,
                 )),
             }
@@ -169,12 +169,12 @@ fn test_tampered_auth_tag_fails() {
 
     // Tamper with auth tag
     let tampered = match content.r#type {
-        Some(chatter_linux::proto::chat_v1::message::content::Type::Encrypted(mut encrypted)) => {
+        Some(chatter_core::proto::chat_v1::message::content::Type::Encrypted(mut encrypted)) => {
             if !encrypted.auth_tag.is_empty() {
                 encrypted.auth_tag[0] ^= 0xFF;
             }
-            chatter_linux::proto::chat_v1::message::Content {
-                r#type: Some(chatter_linux::proto::chat_v1::message::content::Type::Encrypted(
+            chatter_core::proto::chat_v1::message::Content {
+                r#type: Some(chatter_core::proto::chat_v1::message::content::Type::Encrypted(
                     encrypted,
                 )),
             }

@@ -27,7 +27,7 @@ const SERVICE: &str = APP_ID;
 /// # Example
 ///
 /// ```ignore
-/// use chatter_linux::system::Keyring;
+/// use chatter_core::system::Keyring;
 /// use std::path::PathBuf;
 ///
 /// let keyring = Keyring::new(PathBuf::from("/path/to/chatter.db"));

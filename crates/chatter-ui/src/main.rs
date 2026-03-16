@@ -3,8 +3,8 @@
 //! Cross-platform client for Chatter secure messaging.
 //! Supports Linux, Windows, macOS, and Android.
 
-use chatter_linux::app::AppContext;
-use chatter_linux::system::{init_antidebug, antidebug_check};
+use chatter_core::app::AppContext;
+use chatter_core::system::{init_antidebug, antidebug_check};
 use tokio_util::sync::CancellationToken;
 
 // Include Slint-generated code in the binary
