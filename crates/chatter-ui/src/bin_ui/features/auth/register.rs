@@ -15,9 +15,9 @@ lazy_static! {
 }
 
 const DEFAULT_AVATARS: &[&[u8]] = &[
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/avatars/pepe.jpg")),
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/avatars/doge.jpg")),
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/avatars/wojak.jpg")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/avatars/pepe.jpg")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/avatars/doge.jpg")),
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/avatars/wojak.jpg")),
 ];
 
 use super::initial_data::load_initial_data;
