@@ -6,7 +6,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use parking_lot::RwLock;
-use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 
 /// Raw video frame data (Send + Sync safe).
 #[derive(Clone)]
@@ -21,20 +20,6 @@ pub struct VideoFrameData {
     pub is_screen_share: bool,
     /// Frame timestamp (monotonic counter for change detection).
     pub frame_id: u64,
-}
-
-impl VideoFrameData {
-    /// Convert to a Slint Image for UI display.
-    ///
-    /// This should be called on the UI thread.
-    pub fn to_slint_image(&self) -> Image {
-        let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-            &self.rgba_data,
-            self.width,
-            self.height,
-        );
-        Image::from_rgba8(buffer)
-    }
 }
 
 /// Shared storage for video frames from remote participants.
@@ -142,42 +127,6 @@ impl SharedVideoFrames {
             .collect()
     }
 
-    /// Get a frame as a Slint Image (for UI display).
-    pub fn get_slint_image(&self, participant_id: &str) -> Option<Image> {
-        self.frames
-            .read()
-            .get(participant_id)
-            .map(|frame| frame.to_slint_image())
-    }
-
-    /// Get all frames as Slint Images.
-    pub fn get_all_slint_images(&self) -> Vec<(String, Image)> {
-        self.frames
-            .read()
-            .iter()
-            .map(|(id, frame)| (id.clone(), frame.to_slint_image()))
-            .collect()
-    }
-
-    /// Get camera frames as Slint Images (excludes screen shares).
-    pub fn get_camera_slint_images(&self) -> Vec<(String, Image)> {
-        self.frames
-            .read()
-            .iter()
-            .filter(|(_, frame)| !frame.is_screen_share)
-            .map(|(id, frame)| (id.clone(), frame.to_slint_image()))
-            .collect()
-    }
-
-    /// Get screen share frames as Slint Images.
-    pub fn get_screen_share_slint_images(&self) -> Vec<(String, Image)> {
-        self.frames
-            .read()
-            .iter()
-            .filter(|(_, frame)| frame.is_screen_share)
-            .map(|(id, frame)| (id.clone(), frame.to_slint_image()))
-            .collect()
-    }
 }
 
 #[cfg(test)]

@@ -487,17 +487,6 @@ where
     Ok(())
 }
 
-/// Convert RGB data to Slint SharedPixelBuffer.
-///
-/// This is a helper for the UI layer to convert the raw RGB bytes
-/// from the frame callback into a Slint Image.
-pub fn rgb_to_slint_image(width: u32, height: u32, rgb_data: &[u8]) -> slint::Image {
-    let mut pixel_buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(width, height);
-    let bytes = pixel_buffer.make_mut_bytes();
-    bytes.copy_from_slice(rgb_data);
-    slint::Image::from_rgb8(pixel_buffer)
-}
-
 /// Format duration as MM:SS string.
 pub fn format_duration(seconds: f64) -> String {
     let total_secs = seconds as u64;

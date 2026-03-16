@@ -133,8 +133,8 @@ pub fn start_video_frame_timer(window: &MainWindow, call_service: &CallWorkerHan
             std::time::Duration::from_millis(33),
             move || {
                 if let Some(w) = weak.upgrade() {
-                    // Get all frames (camera + screen share) as Slint images
-                    let all_frames = shared_frames.get_all_slint_images();
+                    // Get all frames (camera + screen share) as raw data
+                    let all_frames = shared_frames.get_all_frames();
 
                     if !all_frames.is_empty() {
                         // Log first frame received
@@ -146,10 +146,10 @@ pub fn start_video_frame_timer(window: &MainWindow, call_service: &CallWorkerHan
                             );
                         }
 
-                        // Convert to Slint array
+                        // Convert to Slint images
                         let remote_images: Vec<slint::Image> = all_frames
                             .into_iter()
-                            .map(|(_, image)| image)
+                            .map(|(_, frame)| crate::bin_ui::slint_conversions::video_frame_to_slint_image(&frame))
                             .collect();
 
                         // Update remote video frames

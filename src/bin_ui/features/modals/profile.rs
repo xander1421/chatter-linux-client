@@ -661,7 +661,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             // Create the image on the UI thread
                             let _ = slint::invoke_from_event_loop(move || {
                                 // Process image on UI thread where it's safe
-                                match chatter_linux::media::ImageProcessor::memory_to_slint_image(&data) {
+                                match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
                                     Ok(slint_img) => {
                                         if let Some(w) = weak.upgrade() {
                                             w.set_edit_profile_avatar(slint_img);

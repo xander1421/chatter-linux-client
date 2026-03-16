@@ -9,7 +9,7 @@ mod video_capture;
 mod video_playback;
 #[cfg(not(target_os = "android"))]
 mod screen_capture;
-mod shared_frames;
+pub mod shared_frames;
 
 pub use room_manager::{RoomManager, RoomState, RoomEvent as LiveKitRoomEvent};
 pub use audio_capture::{AudioCapture, AudioDevice, AudioOutputDevice as AudioInputDevice};

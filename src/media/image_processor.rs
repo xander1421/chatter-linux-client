@@ -198,31 +198,6 @@ impl ImageProcessor {
             .map_err(|e| MediaError::InvalidFormat(format!("cannot read dimensions: {}", e)))
     }
 
-    /// Convert a DynamicImage to Slint Image for display.
-    ///
-    /// Converts the image to RGBA8 format compatible with Slint.
-    #[must_use]
-    pub fn to_slint_image(image: &DynamicImage) -> slint::Image {
-        let rgba = image.to_rgba8();
-        let width = rgba.width();
-        let height = rgba.height();
-        let data = rgba.into_raw();
-
-        slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
-            &data,
-            width,
-            height,
-        ))
-    }
-
-    /// Load an image from memory and convert directly to Slint Image.
-    ///
-    /// Convenience method combining load_from_memory and to_slint_image.
-    pub fn memory_to_slint_image(data: &[u8]) -> Result<slint::Image, MediaError> {
-        let image = Self::load_from_memory(data)?;
-        Ok(Self::to_slint_image(&image))
-    }
-
     /// Generate thumbnail bytes from in-memory image data.
     ///
     /// Returns WebP-encoded thumbnail bytes with dimensions.

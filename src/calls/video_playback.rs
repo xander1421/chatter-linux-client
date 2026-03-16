@@ -11,9 +11,8 @@ use futures::StreamExt;
 use livekit::track::RemoteVideoTrack;
 use livekit::webrtc::video_stream::native::NativeVideoStream;
 use parking_lot::RwLock;
-use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 
-use super::shared_frames::SharedVideoFrames;
+use super::shared_frames::{SharedVideoFrames, VideoFrameData};
 
 /// Information about a video stream.
 #[derive(Debug, Clone)]
@@ -181,69 +180,67 @@ impl VideoPlayback {
         }
     }
 
-    /// Get the latest frame for a participant as a Slint Image.
+    /// Get the latest frame for a participant as raw video data.
     ///
     /// Returns None if no frame is available for the participant.
-    pub fn get_frame(&self, participant_id: &str) -> Option<Image> {
+    pub fn get_frame(&self, participant_id: &str) -> Option<VideoFrameData> {
         let frames = self.frames.read();
-        frames.get(participant_id).map(|frame| {
-            let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                &frame.rgba_data,
-                frame.width,
-                frame.height,
-            );
-            Image::from_rgba8(buffer)
+        frames.get(participant_id).map(|frame| VideoFrameData {
+            rgba_data: frame.rgba_data.clone(),
+            width: frame.width,
+            height: frame.height,
+            is_screen_share: frame.is_screen_share,
+            frame_id: 0,
         })
     }
 
-    /// Get all remote video frames as a Vec of Slint Images.
-    ///
-    /// Returns frames in the order participants were added.
-    pub fn get_all_frames(&self) -> Vec<Image> {
+    /// Get all remote video frames as raw data.
+    pub fn get_all_frames(&self) -> Vec<VideoFrameData> {
         let frames = self.frames.read();
         frames
             .values()
-            .map(|frame| {
-                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                    &frame.rgba_data,
-                    frame.width,
-                    frame.height,
-                );
-                Image::from_rgba8(buffer)
+            .map(|frame| VideoFrameData {
+                rgba_data: frame.rgba_data.clone(),
+                width: frame.width,
+                height: frame.height,
+                is_screen_share: frame.is_screen_share,
+                frame_id: 0,
             })
             .collect()
     }
 
     /// Get only camera video frames (excludes screen shares).
-    pub fn get_camera_frames(&self) -> Vec<(String, Image)> {
+    pub fn get_camera_frames(&self) -> Vec<(String, VideoFrameData)> {
         let frames = self.frames.read();
         frames
             .iter()
             .filter(|(_, frame)| !frame.is_screen_share)
             .map(|(participant_id, frame)| {
-                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                    &frame.rgba_data,
-                    frame.width,
-                    frame.height,
-                );
-                (participant_id.clone(), Image::from_rgba8(buffer))
+                (participant_id.clone(), VideoFrameData {
+                    rgba_data: frame.rgba_data.clone(),
+                    width: frame.width,
+                    height: frame.height,
+                    is_screen_share: frame.is_screen_share,
+                    frame_id: 0,
+                })
             })
             .collect()
     }
 
     /// Get only screen share frames.
-    pub fn get_screen_share_frames(&self) -> Vec<(String, Image)> {
+    pub fn get_screen_share_frames(&self) -> Vec<(String, VideoFrameData)> {
         let frames = self.frames.read();
         frames
             .iter()
             .filter(|(_, frame)| frame.is_screen_share)
             .map(|(participant_id, frame)| {
-                let buffer = SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
-                    &frame.rgba_data,
-                    frame.width,
-                    frame.height,
-                );
-                (participant_id.clone(), Image::from_rgba8(buffer))
+                (participant_id.clone(), VideoFrameData {
+                    rgba_data: frame.rgba_data.clone(),
+                    width: frame.width,
+                    height: frame.height,
+                    is_screen_share: frame.is_screen_share,
+                    frame_id: 0,
+                })
             })
             .collect()
     }

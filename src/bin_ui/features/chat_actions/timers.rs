@@ -94,7 +94,7 @@ pub fn start_video_progress_timer(window: &MainWindow) {
                 if let Some(w) = weak_window.upgrade() {
                     // Take latest frame from buffer and render it
                     if let Some(frame) = video_state::take_frame() {
-                        let image = chatter_linux::media::rgb_to_slint_image(
+                        let image = crate::bin_ui::slint_conversions::rgb_to_slint_image(
                             frame.width,
                             frame.height,
                             &frame.rgb_data,

@@ -6,7 +6,7 @@ use std::cell::RefCell;
 
 use slint::ComponentHandle;
 
-use chatter_linux::media::code_preview::CodeViewState;
+use slint_code_view::CodeViewState;
 #[cfg(not(target_os = "android"))]
 use chatter_linux::media::{FilePicker, FilePickerConfig};
 #[cfg(not(target_os = "android"))]

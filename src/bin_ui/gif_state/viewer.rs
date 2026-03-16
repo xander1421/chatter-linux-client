@@ -8,9 +8,10 @@ use std::time::Duration;
 use slint::{Image, Timer, TimerMode, Weak};
 
 use chatter_linux::media::gif::{
-    frame_to_slint_image, decode_first_frame_only,
+    decode_first_frame_only,
     decode_gif_auto, is_gpu_acceleration_available,
 };
+use crate::bin_ui::slint_conversions::gif_frame_to_slint_image;
 use tokio::sync::mpsc;
 
 use crate::MainWindow;
@@ -97,7 +98,7 @@ pub fn start_gif_animation_and_inline(
         }
     };
 
-    let first_frame_image = frame_to_slint_image(&first_frame);
+    let first_frame_image = gif_frame_to_slint_image(&first_frame);
     let first_delay = first_frame.delay.as_millis() as u64;
 
     tracing::info!(

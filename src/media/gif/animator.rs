@@ -111,16 +111,6 @@ fn frame_delay(frame: &Frame) -> Duration {
     }
 }
 
-/// Convert a GIF frame to a Slint Image.
-pub fn frame_to_slint_image(frame: &GifFrame) -> slint::Image {
-    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-        &frame.data,
-        frame.width,
-        frame.height,
-    );
-    slint::Image::from_rgba8(buffer)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

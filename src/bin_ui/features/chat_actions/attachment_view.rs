@@ -10,7 +10,7 @@ use slint::{ComponentHandle, SharedString};
 use chatter_linux::app::UIContext;
 use chatter_linux::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
 use chatter_linux::domain::ids::AttachmentId;
-use chatter_linux::media::code_preview::CodeViewState;
+use slint_code_view::CodeViewState;
 #[cfg(not(target_os = "android"))]
 use chatter_linux::media::{FilePicker, FilePickerConfig};
 use chatter_linux::media::ImageProcessor;
@@ -460,7 +460,7 @@ fn display_image_from_buffer(
                 } else {
                     tracing::warn!("CLICK: start_gif_animation_and_inline returned None, trying static");
                     // Not animated, decode as static image
-                    match ImageProcessor::memory_to_slint_image(&data) {
+                    match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
                         Ok(img) => {
                             w.set_image_viewer_source(img);
                             w.set_image_viewer_filename(filename_for_ui.into());

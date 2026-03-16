@@ -27,7 +27,7 @@ pub mod waveform;
 // Re-exports for convenient access
 pub use audio_player::{AudioPlayer, PlaybackState};
 pub use audio_recorder::{AudioRecorder, RecordingState};
-pub use code_preview::{CodePreview, HighlightedLine, HighlightedSpan, CodeViewState};
+pub use code_preview::{HighlightedLine, HighlightedSpan};
 #[cfg(not(target_os = "android"))]
 pub use file_picker::{FileFilter, FilePicker, FilePickerConfig};
 pub use gif::{GifCache, GifClient, GifPicker, GifResult};
@@ -36,7 +36,7 @@ pub use mime_detector::MimeDetector;
 pub use pdf_viewer::PdfViewer;
 pub use thumbnail_cache::ThumbnailCache;
 pub use video_playback::{
-    format_duration, rgb_to_slint_image, PlayerState, SharedPlayerState,
+    format_duration, PlayerState, SharedPlayerState,
     VideoPlayer as InAppVideoPlayer,
 };
 pub use video_player::VideoPlayer;

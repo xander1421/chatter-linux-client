@@ -340,15 +340,15 @@ impl RoomManager {
             .unwrap_or(1.0)
     }
 
-    /// Get the latest video frame for a participant as a Slint Image.
+    /// Get the latest video frame for a participant as raw data.
     ///
     /// Returns None if no frame is available for the participant.
-    pub fn get_video_frame(&self, participant_id: &str) -> Option<slint::Image> {
+    pub fn get_video_frame(&self, participant_id: &str) -> Option<super::shared_frames::VideoFrameData> {
         self.video_playback.read().get_frame(participant_id)
     }
 
-    /// Get all remote video frames as a Vec of Slint Images.
-    pub fn get_all_video_frames(&self) -> Vec<slint::Image> {
+    /// Get all remote video frames as raw data.
+    pub fn get_all_video_frames(&self) -> Vec<super::shared_frames::VideoFrameData> {
         self.video_playback.read().get_all_frames()
     }
 

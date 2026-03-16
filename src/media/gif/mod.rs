@@ -27,7 +27,7 @@ pub mod picker;
 pub mod progressive;
 
 // Re-exports for convenient access
-pub use animator::{AnimatedGif, GifFrame, frame_to_slint_image};
+pub use animator::{AnimatedGif, GifFrame};
 pub use cache::GifCache;
 pub use client::{GifClient, GifResult};
 pub use picker::GifPicker;

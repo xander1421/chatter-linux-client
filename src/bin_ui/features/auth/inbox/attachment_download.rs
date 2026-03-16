@@ -8,7 +8,6 @@ use std::sync::Arc;
 use slint::{Model, VecModel};
 
 use chatter_linux::domain::ids::AttachmentId;
-use chatter_linux::media::ImageProcessor;
 use chatter_linux::proto::content_v1::AttachmentPointer;
 use chatter_linux::services::attachment::AttachmentService;
 
@@ -226,7 +225,7 @@ fn handle_image(
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(window) = weak.upgrade() {
-            match ImageProcessor::memory_to_slint_image(&image_bytes) {
+            match crate::bin_ui::slint_conversions::memory_to_slint_image(&image_bytes) {
                 Ok(image) => {
                     update_attachment_thumbnail_with_dims(
                         &window,
