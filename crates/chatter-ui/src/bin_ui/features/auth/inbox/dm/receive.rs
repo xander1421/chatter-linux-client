@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::message::Message;
 use chatter_core::proto::content_v1::AttachmentPointer;
 
@@ -22,7 +22,7 @@ use super::download::auto_download_attachments;
 /// Handle received DM message.
 pub fn handle_dm_received(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     peer_id: chatter_core::domain::UserId,
     dm_channel_id: chatter_core::domain::ids::ChannelId,
     text: String,
@@ -56,14 +56,14 @@ pub fn handle_dm_received(
     }
 
     // Try to get display name from profile, fall back to user
-    let sender_name_from_repo = ui_ctx.user_service
+    let sender_name_from_repo = ui_ctx.users()
         .get_profile_local(&peer_id)
         .ok()
         .flatten()
         .map(|p| p.display_name.clone())
         .filter(|name| !name.is_empty())
         .or_else(|| {
-        ui_ctx.user_service
+        ui_ctx.users()
         .get_user_local(&peer_id)
         .ok()
         .flatten()
@@ -97,7 +97,7 @@ pub fn handle_dm_received(
     // Determine is_active from ChatState (source of truth), not the Slint sidebar model.
     // ChatState.active_channel_id is set in dm.rs:106 when user navigates to a DM.
     let is_active = ui_ctx
-        .chat_state
+        .chat_state()
         .get()
         .active_channel_id
         .map(|id| id == dm_channel_id)
@@ -172,7 +172,7 @@ pub fn handle_dm_received(
                 }
 
                 let current_user_id = ui_ctx_cloned
-                    .auth_state
+                    .auth_state()
                     .get()
                     .current_user_id
                     .map(|id| id.to_string())
@@ -213,7 +213,7 @@ pub fn handle_dm_received(
                 // Auto-register GIFs for animation
                 crate::bin_ui::gif_state::auto_register_gifs_from_messages(
                     weak.clone(),
-                    ui_ctx_cloned.attachment_service.clone(),
+                    ui_ctx_cloned.attachments().clone(),
                 );
             }
 
@@ -227,7 +227,7 @@ pub fn handle_dm_received(
             let channel_id_str = dm_channel_id.to_string();
             if let Some(anon_dm_id_str) = channel_id_str.strip_prefix("anon_dm:") {
                 if let Ok(dm_id) = anon_dm_id_str.parse::<chatter_core::domain::anon_dm::AnonDmId>() {
-                    let service = ui_ctx_cloned.anon_dm_service.clone();
+                    let service = ui_ctx_cloned.anon_dms().clone();
                     tokio::spawn(async move {
                         let _ = service.send_read_receipt(&dm_id, vec![timestamp]).await;
                     });

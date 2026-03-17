@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
 
 use crate::MainWindow;
 
 /// Wire reaction selected callback for DM and channel conversations.
-pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
@@ -42,17 +42,13 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             Err(_) => return,
         };
 
-        let conversation = ui_ctx.chat_state.active_conversation();
+        let conversation = ui_ctx.chat_state().active_conversation();
         if matches!(conversation, ActiveConversation::None) {
             return;
         }
 
         let handle = ConversationHandle::current(&ui_ctx);
-        let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
-
-        // For anon groups, persist own reaction to DB after sending
-        let is_anon_group = matches!(conversation, ActiveConversation::AnonGroup(_));
 
         tokio::spawn(async move {
             if let Err(e) = handle.send_reaction(
@@ -62,21 +58,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 return;
             }
 
-            // Anon group: persist own reaction to DB
-            if is_anon_group {
-                if let ActiveConversation::AnonGroup(group_id) = handle.conversation() {
-                    if let Some(user_id) = ui_ctx.auth_state.get().current_user_id {
-                        let service = ui_ctx.anon_group_service.clone();
-                        let emoji_db = emoji_str.clone();
-                        let group_id = *group_id;
-                        let _ = tokio::task::spawn_blocking(move || {
-                            if let Err(e) = service.add_reaction(&group_id, target_sent_timestamp, &user_id, &emoji_db) {
-                                tracing::warn!(error = %e, "Failed to persist own reaction to DB");
-                            }
-                        });
-                    }
-                }
-            }
+            // Persistence is handled by ConversationHandle::send_reaction()
 
             // Update UI
             let _ = slint::invoke_from_event_loop(move || {

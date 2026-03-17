@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 use crate::bin_ui::features::chat::emoji_loader;
 use crate::MainWindow;
@@ -32,7 +32,7 @@ pub fn wire_message_clicked(window: &MainWindow) {
 ///
 /// Gets sender name and preview text directly from the UI message model,
 /// which works for all message types (channels, DMs, anon DMs, anon groups).
-pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
+pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     window.on_reply_clicked(move |sender_id: SharedString, timestamp_ns: SharedString| {
@@ -165,13 +165,13 @@ pub fn wire_cancel_reply(window: &MainWindow) {
 }
 
 /// Wire thread click callback.
-pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state.clone();
-    let message_service = ui_ctx.message_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
-    let channel_service = ui_ctx.channel_service.clone();
+    let chat_state = ui_ctx.chat_state().clone();
+    let message_service = ui_ctx.messages().clone();
+    let user_service = ui_ctx.users().clone();
+    let attachment_service = ui_ctx.attachments().clone();
+    let channel_service = ui_ctx.channels().clone();
 
     window.on_thread_clicked(move |message_id: SharedString| {
         let message_id_str = message_id.to_string();

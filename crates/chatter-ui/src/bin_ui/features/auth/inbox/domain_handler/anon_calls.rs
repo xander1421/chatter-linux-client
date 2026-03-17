@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::UserId;
@@ -13,7 +13,7 @@ use crate::MainWindow;
 /// Handle anonymous call offer received.
 pub(super) fn handle_anon_call_offer(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     conversation_id: AnonDmId,
     sender_id: UserId,
     call_room_id: Vec<u8>,
@@ -52,7 +52,7 @@ pub(super) fn handle_anon_call_offer(
         sender_id: Some(sender_id),
         started_at: None, // Will be set when call is accepted
     };
-    ui_ctx.anon_dm_service.store_pending_anon_call(room_name.clone(), pending);
+    ui_ctx.anon_dms().store_pending_anon_call(room_name.clone(), pending);
 
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -93,7 +93,7 @@ pub(super) fn handle_anon_call_offer(
 /// Handle anonymous call answer received.
 pub(super) fn handle_anon_call_answer(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     conversation_id: AnonDmId,
     accepted: bool,
     call_room_id: Vec<u8>,
@@ -112,7 +112,7 @@ pub(super) fn handle_anon_call_answer(
 
                 // Get the pending call info from the service
                 let room_name = format!("anon-{}", uuid::Uuid::from_bytes(call_room_id.as_slice().try_into().unwrap_or_default()));
-                if let Some(pending) = ui_ctx.anon_dm_service.take_pending_anon_call(&room_name) {
+                if let Some(pending) = ui_ctx.anon_dms().take_pending_anon_call(&room_name) {
                     // Validate that this matches our pending call
                     if call_room_id.as_slice() != pending.call_room_id.as_slice() {
                         tracing::warn!(
@@ -124,13 +124,13 @@ pub(super) fn handle_anon_call_answer(
                     }
 
                     // Mark call as started for duration tracking
-                    ui_ctx.anon_dm_service.mark_anon_call_started(&pending.room_name);
+                    ui_ctx.anon_dms().mark_anon_call_started(&pending.room_name);
 
                     // Join the call room using our token
-                    let anon_dm_service = ui_ctx.anon_dm_service.clone();
+                    let anon_dm_service = ui_ctx.anon_dms().clone();
                     let weak = weak.clone();
 
-                    let call_service = ui_ctx.call_service.clone();
+                    let call_service = ui_ctx.call_service().clone();
                     slint::spawn_local(async move {
                         // Get a fresh token for joining (the stored one may have been used for signaling)
                         let join_token = match anon_dm_service.get_available_call_room_token() {
@@ -178,7 +178,7 @@ pub(super) fn handle_anon_call_answer(
                                         if let Some(w) = weak.upgrade() {
                                             super::super::super::initial_data::hide_incoming_call(&w);
                                         }
-                                        ui_ctx.anon_dm_service.clear_pending_anon_call(&pending.room_name);
+                                        ui_ctx.anon_dms().clear_pending_anon_call(&pending.room_name);
                                         return;
                                     }
                                 };
@@ -293,7 +293,7 @@ pub(super) fn handle_anon_call_answer(
                                         if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
                                             let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                                             crate::bin_ui::features::calls::call_history::create_call_history_message(
-                                                ui_ctx.message_service.clone(),
+                                                ui_ctx.messages().clone(),
                                                 &channel_id,
                                                 &pending.room_name,
                                                 &anonymous_user_id,
@@ -309,7 +309,7 @@ pub(super) fn handle_anon_call_answer(
                                             super::super::super::initial_data::hide_incoming_call(&w);
                                             // TODO: Show toast notification about call failure
                                         }
-                                        ui_ctx.anon_dm_service.clear_pending_anon_call(&pending.room_name);
+                                        ui_ctx.anon_dms().clear_pending_anon_call(&pending.room_name);
                                     }
                                 }
                             }
@@ -323,7 +323,7 @@ pub(super) fn handle_anon_call_answer(
                                 if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
                                     let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                                     crate::bin_ui::features::calls::call_history::create_call_history_message(
-                                        ui_ctx.message_service.clone(),
+                                        ui_ctx.messages().clone(),
                                         &channel_id,
                                         &pending.room_name,
                                         &anonymous_user_id,
@@ -339,7 +339,7 @@ pub(super) fn handle_anon_call_answer(
                                     super::super::super::initial_data::hide_incoming_call(&w);
                                     // TODO: Show toast notification about room join failure
                                 }
-                                ui_ctx.anon_dm_service.clear_pending_anon_call(&pending.room_name);
+                                ui_ctx.anon_dms().clear_pending_anon_call(&pending.room_name);
                             }
                         }
                     }).unwrap();
@@ -354,12 +354,12 @@ pub(super) fn handle_anon_call_answer(
                 // Create declined call history entry
                 // Construct room name from call_room_id
                 let room_name = format!("anon-{}", uuid::Uuid::from_bytes(call_room_id.as_slice().try_into().unwrap_or_default()));
-                if let Some(pending) = ui_ctx.anon_dm_service.take_pending_anon_call(&room_name) {
+                if let Some(pending) = ui_ctx.anon_dms().take_pending_anon_call(&room_name) {
                     let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
                     if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
                         let anonymous_user_id = chatter_core::domain::ids::UserId::new();
                         crate::bin_ui::features::calls::call_history::create_call_history_message(
-                            ui_ctx.message_service.clone(),
+                            ui_ctx.messages().clone(),
                             &channel_id,
                             &pending.room_name,
                             &anonymous_user_id,
@@ -397,7 +397,7 @@ pub(super) fn handle_anon_call_hangup(
 /// Handle anonymous group call offer received.
 pub(super) fn handle_anon_group_call_offer(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
     sender_id: UserId,
     call_room_id: Vec<u8>,
@@ -439,7 +439,7 @@ pub(super) fn handle_anon_group_call_offer(
         sender_id: Some(sender_id),
         started_at: None,
     };
-    ui_ctx.anon_dm_service.store_pending_anon_call(room_name.clone(), pending);
+    ui_ctx.anon_dms().store_pending_anon_call(room_name.clone(), pending);
 
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -476,7 +476,7 @@ pub(super) fn handle_anon_group_call_offer(
 /// Handle anonymous group call answer received.
 pub(super) fn handle_anon_group_call_answer(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
     accepted: bool,
     call_room_id: Vec<u8>,
@@ -496,11 +496,11 @@ pub(super) fn handle_anon_group_call_answer(
                 let room_name = format!("anon-{}", uuid::Uuid::from_bytes(
                     call_room_id.as_slice().try_into().unwrap_or_default()
                 ));
-                if let Some(pending) = ui_ctx.anon_dm_service.take_pending_anon_call(&room_name) {
-                    ui_ctx.anon_dm_service.mark_anon_call_started(&pending.room_name);
+                if let Some(pending) = ui_ctx.anon_dms().take_pending_anon_call(&room_name) {
+                    ui_ctx.anon_dms().mark_anon_call_started(&pending.room_name);
 
-                    let anon_dm_service = ui_ctx.anon_dm_service.clone();
-                    let call_service = ui_ctx.call_service.clone();
+                    let anon_dm_service = ui_ctx.anon_dms().clone();
+                    let call_service = ui_ctx.call_service().clone();
                     let weak = weak.clone();
 
                     slint::spawn_local(async move {

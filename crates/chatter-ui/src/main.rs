@@ -3,7 +3,6 @@
 //! Cross-platform client for Chatter secure messaging.
 //! Supports Linux, Windows, macOS, and Android.
 
-use chatter_core::app::AppContext;
 use chatter_core::system::{init_antidebug, antidebug_check};
 use tokio_util::sync::CancellationToken;
 
@@ -81,35 +80,27 @@ async fn app_main() {
     }
 
     // Initialize application context (all subsystems)
-    let ctx = match AppContext::new() {
-        Ok(ctx) => ctx,
+    let client = match chatter_core::client::ChatterClient::builder().build() {
+        Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to initialize application: {}", e);
             eprintln!("Failed to initialize: {}", e);
             std::process::exit(1);
         }
     };
-
-    // Get UIContext for all UI operations
-    let ui_ctx = ctx.ui_context();
+    let ui_ctx = client.clone();
 
     // Restore authentication session from saved credentials
     // This populates the gRPC auth interceptor before we connect
-    ui_ctx.auth_service.restore_session();
+    ui_ctx.auth().restore_session();
 
     // Start background typing indicator cleanup task
-    let _typing_cleanup = ui_ctx.typing_service.start_cleanup_task();
+    let _typing_cleanup = ui_ctx.typing().start_cleanup_task();
     tracing::info!("Typing indicator cleanup task started");
 
     // Connect to server (continue in offline mode if fails)
-    let _connected = match ui_ctx.auth_service.connect().await {
-        Ok(()) => {
-            // Initialize components that require connection
-            ctx.init_device_inbox_provider();
-            ctx.init_group_fanout();
-            ctx.init_call_service();
-            true
-        }
+    let _connected = match client.connect().await {
+        Ok(()) => true,
         Err(e) => {
             tracing::warn!("Could not connect to server: {} (offline mode)", e);
             false
@@ -127,27 +118,20 @@ async fn app_main() {
     }
 
     // Set initial view based on login state
-    if ui_ctx.auth_service.is_logged_in() {
+    if ui_ctx.auth().is_logged_in() {
         // Restore auth_state from stored session (critical for is_own detection in messages)
-        if let Some((user_id, device_id)) = ui_ctx.auth_service.current_user() {
-            let display_name = ui_ctx.user_service.get_display_name(&user_id);
-            ui_ctx.auth_state.set_logged_in(user_id, device_id, display_name);
+        if let Some((user_id, device_id)) = ui_ctx.auth().current_user() {
+            let display_name = ui_ctx.users().get_display_name(&user_id);
+            ui_ctx.auth_state().set_logged_in(user_id, device_id, display_name);
             tracing::info!("Restored auth state for user {}", user_id);
         }
 
         window.set_current_view("main".into());
 
-        // Spawn event handlers for DomainEvent processing (NDSS '21 mailboxes, etc.)
-        let _event_handlers = ctx.spawn_event_handlers();
-        
-        // Start channel event stream service (owns gRPC stream, handles reconnection)
-        let _channel_events = ctx.start_channel_event_stream();
-        
-        // Start channel bootstrap service (flushes pending messages to new members)
-        let _channel_bootstrap = ctx.start_channel_bootstrap_service();
-
-        // Spawn DM bootstrap handler for processing incoming key exchanges
-        let _bootstrap_handle = ctx.spawn_dm_bootstrap_handler();
+        // Start all background services
+        if let Err(e) = client.start().await {
+            tracing::warn!("Could not start services: {} (some features may not work)", e);
+        }
 
         // Spawn UI-level domain event handlers (anon DM messages, requests, group events, etc.)
         let weak_window = window.as_weak();
@@ -163,11 +147,11 @@ async fn app_main() {
             weak_window.clone(),
             &ui_ctx,
         );
-        // Pin persistence is now spawned by start_inbox()
+        // Pin persistence is handled by EventHandlers
 
         // Subscribe to DomainEvent for UI updates (sidebar, message list, etc.)
         {
-            let mut domain_rx = ui_ctx.event_bus.subscribe_domain();
+            let mut domain_rx = ui_ctx.event_bus().subscribe_domain();
             let weak_for_domain = weak_window.clone();
             let ui_ctx_for_domain = ui_ctx.clone();
             tokio::spawn(async move {
@@ -196,70 +180,43 @@ async fn app_main() {
             });
         }
 
-        // Start inbox provider and load initial data (only if connected)
-        let inbox_provider = ctx.get_device_inbox_provider();
-        let ui_ctx_for_events = ui_ctx.clone();
-        let weak_for_events = weak_window.clone();
-        let shutdown_for_inbox = shutdown_token.clone();
-
-        tokio::spawn(async move {
-            // Start inbox provider if available
-            if let Some(provider) = inbox_provider {
-                if let Err(e) = provider.start().await {
-                    tracing::error!("Failed to start inbox provider on startup: {}", e);
-                } else {
-                    // Subscribe to inbox events for real-time updates (DMs, friend requests, etc.)
-                    let mut event_rx = provider.subscribe();
+        // Subscribe to raw InboxEvent for UI-level handlers not yet migrated to DomainEvent
+        {
+            let ui_ctx_for_events = ui_ctx.clone();
+            let weak_for_events = weak_window.clone();
+            let shutdown_for_inbox = shutdown_token.clone();
+            tokio::spawn(async move {
+                if let Some(mut event_rx) = ui_ctx_for_events.start_inbox_provider().await {
                     let weak_events = weak_for_events.clone();
                     let ui_ctx_events = ui_ctx_for_events.clone();
-                    let shutdown_for_events = shutdown_for_inbox.clone();
-
                     tokio::spawn(async move {
                         loop {
                             tokio::select! {
-                                _ = shutdown_for_events.cancelled() => {
-                                    tracing::debug!("Inbox event handler shutting down");
-                                    break;
-                                }
+                                _ = shutdown_for_inbox.cancelled() => break,
                                 result = event_rx.recv() => {
                                     match result {
                                         Ok(event) => {
-                                            bin_ui::features::auth::handle_inbox_event(
-                                                event,
-                                                &weak_events,
-                                                &ui_ctx_events,
-                                            )
-                                            .await;
+                                            bin_ui::features::auth::handle_inbox_event(event, &weak_events, &ui_ctx_events).await;
                                         }
                                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                            tracing::warn!(
-                                                dropped_count = n,
-                                                "Inbox event receiver lagged - {} events dropped",
-                                                n
-                                            );
-                                            // Continue receiving new events
+                                            tracing::warn!("Inbox event receiver lagged - {} events dropped", n);
                                         }
-                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                            tracing::info!("Inbox event channel closed");
-                                            break;
-                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                                     }
                                 }
                             }
                         }
                     });
                 }
-            } else {
-                tracing::warn!("Inbox provider not available (offline mode)");
-            }
 
-            // Load initial data (channels, DMs, messages)
-            bin_ui::features::auth::load_initial_data(weak_window, &ui_ctx_for_events).await;
-        });
+                // Load initial data (channels, DMs, messages)
+                bin_ui::features::auth::load_initial_data(weak_window, &ui_ctx_for_events).await;
+            });
+        }
     } else {
         // Check if user has registered before on this device
         // If not, show register page first; otherwise show login
-        let has_registered_before = ui_ctx.auth_service.has_registered_before();
+        let has_registered_before = ui_ctx.auth().has_registered_before();
         if has_registered_before {
             window.set_current_view("login".into());
         } else {
@@ -272,7 +229,7 @@ async fn app_main() {
     bin_ui::features::wire_all(&window, &ui_ctx);
 
     // Dev mode: auto-fill and auto-submit registration for fast testing
-    if std::env::var("CHATTER_DEV").is_ok() && !ui_ctx.auth_service.is_logged_in() && !ui_ctx.auth_service.has_registered_before() {
+    if std::env::var("CHATTER_DEV").is_ok() && !ui_ctx.auth().is_logged_in() && !ui_ctx.auth().has_registered_before() {
         let suffix: u16 = rand::random();
         let username = format!("dev{}", suffix);
         let display_name = format!("Dev User {}", suffix);
@@ -339,22 +296,15 @@ async fn app_main() {
     tracing::info!("Shutting down services...");
 
     // Send offline presence before shutting down
-    if ui_ctx.auth_state.is_logged_in() {
+    if ui_ctx.auth_state().is_logged_in() {
         tracing::info!("Sending offline presence before shutdown...");
         bin_ui::features::auth::presence_integration::shutdown_presence(&ui_ctx).await;
         // Give a moment for presence updates to be sent
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
-    // Stop inbox provider (has its own shutdown logic)
-    if let Some(provider) = ctx.get_device_inbox_provider() {
-        if let Err(e) = provider.stop().await {
-            tracing::warn!("Failed to stop inbox provider: {}", e);
-        }
-    }
-
-    // Disconnect from server
-    ui_ctx.auth_service.disconnect();
+    // Graceful shutdown (stops inbox, aborts tasks, disconnects)
+    client.shutdown().await;
     tracing::debug!("Disconnected from server");
 
     tracing::info!("Shutdown complete, exiting...");

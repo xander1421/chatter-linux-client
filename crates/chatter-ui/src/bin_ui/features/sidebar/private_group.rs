@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_group::AnonGroupId;
 
 use crate::{MainWindow, PrivateGroupListItemData};
@@ -14,7 +14,7 @@ use std::str::FromStr;
 
 /// Load and display messages for a private group.
 /// This can be called both when a group is selected and when member profiles are updated.
-pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<UIContext>, group_id_str: &str) {
+pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, group_id_str: &str) {
     let group_id = match AnonGroupId::from_str(group_id_str) {
         Ok(id) => id,
         Err(e) => {
@@ -23,10 +23,10 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<UIContext>,
         }
     };
     
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
-    let auth_state = ui_ctx.auth_state.clone();
+    let anon_group_service = ui_ctx.anon_groups().clone();
+    let user_service = ui_ctx.users().clone();
+    let attachment_service = ui_ctx.attachments().clone();
+    let auth_state = ui_ctx.auth_state().clone();
     let weak_window = window.as_weak();
     let group_id_str = group_id_str.to_string();
     
@@ -192,13 +192,13 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<UIContext>,
     });
 }
 
-pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
-    let auth_state = ui_ctx.auth_state.clone();
-    let pinned_state = ui_ctx.pinned_state.clone();
-    let chat_state = ui_ctx.chat_state.clone();
+pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let anon_group_service = ui_ctx.anon_groups().clone();
+    let user_service = ui_ctx.users().clone();
+    let attachment_service = ui_ctx.attachments().clone();
+    let auth_state = ui_ctx.auth_state().clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
+    let chat_state = ui_ctx.chat_state().clone();
     let weak_window = window.as_weak();
 
     window.on_private_group_selected(move |group_id: SharedString| {
@@ -417,8 +417,8 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<UICo
 /// Note: `initial_data.rs` already loads private groups with last message preview.
 /// This function is kept for potential refresh use cases.
 #[allow(dead_code)]
-pub fn load_private_groups(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let anon_group_service = ui_ctx.anon_group_service.clone();
+pub fn load_private_groups(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let anon_group_service = ui_ctx.anon_groups().clone();
     let weak_window = window.as_weak();
 
     tokio::spawn(async move {

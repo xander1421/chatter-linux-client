@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
 use chatter_core::domain::ids::AttachmentId;
 use slint_code_view::CodeViewState;
@@ -28,9 +28,9 @@ use super::timers::{start_audio_progress_timer, start_video_progress_timer};
 use super::transfer_status::update_attachment_transfer_status;
 
 /// Wire the view attachment callback.
-pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let attachment_service = ui_ctx.attachment_service.clone();
-    let tokio_handle = ui_ctx.runtime_handle.clone();
+pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let attachment_service = ui_ctx.attachments().clone();
+    let tokio_handle = ui_ctx.runtime_handle().clone();
     let weak_window = window.as_weak();
 
     window.on_view_attachment(move |attachment_id: SharedString| {

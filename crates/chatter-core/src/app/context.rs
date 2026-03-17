@@ -182,7 +182,8 @@ impl AppContext {
             self.ui_context.streaming_state.clone(),
             self.ui_context.offline_state.clone(),
         )
-        .with_group_coordinator(self.infrastructure.group_coordinator.clone());
+        .with_group_coordinator(self.infrastructure.group_coordinator.clone())
+        .with_message_service(self.ui_context.message_service.clone());
 
         handlers.spawn(self.ui_context.event_bus.clone())
     }

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use slint::Timer;
 use slint::TimerMode;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
 
@@ -59,7 +59,7 @@ pub fn clear_outgoing_typing() {
 }
 
 /// Wire typing indicator callback for DM and channel conversations.
-pub fn wire_typing_changed(window: &crate::MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_typing_changed(window: &crate::MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
 
     window.on_typing_changed(move |is_typing: bool| {
@@ -71,14 +71,14 @@ pub fn wire_typing_changed(window: &crate::MainWindow, ui_ctx: &Arc<UIContext>) 
             });
         }
 
-        let conversation = ui_ctx.chat_state.active_conversation();
+        let conversation = ui_ctx.chat_state().active_conversation();
         if matches!(conversation, ActiveConversation::None) {
             return;
         }
 
         // Skip if typing to self (DM only)
         if let ActiveConversation::Dm { peer_id, .. } = &conversation {
-            if let Some(user_id) = ui_ctx.auth_state.get().current_user_id {
+            if let Some(user_id) = ui_ctx.auth_state().get().current_user_id {
                 if peer_id == &user_id {
                     return;
                 }

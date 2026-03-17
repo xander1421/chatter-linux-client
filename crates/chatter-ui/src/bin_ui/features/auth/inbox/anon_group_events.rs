@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::inbox::DomainEvent;
 use crate::MainWindow;
 
@@ -27,10 +27,10 @@ use super::anon_group_handlers::{
 /// Returns a handle to the spawned task.
 pub fn spawn_anon_group_event_handler(
     weak_window: Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
     let ui_ctx = ui_ctx.clone();
-    let mut event_rx = ui_ctx.event_bus.subscribe_domain();
+    let mut event_rx = ui_ctx.event_bus().subscribe_domain();
 
     tokio::spawn(async move {
         while let Ok(event) = event_rx.recv().await {
@@ -64,7 +64,7 @@ pub fn spawn_anon_group_event_handler(
                     // Share our profile with group members we just learned about.
                     // This ensures all members learn our display name directly rather
                     // than relying on the group owner to relay it.
-                    let anon_group_service = ui_ctx.anon_group_service.clone();
+                    let anon_group_service = ui_ctx.anon_groups().clone();
                     tokio::spawn(async move {
                         if let Err(e) = anon_group_service.share_profile_with_group(&group_id).await {
                             tracing::warn!(

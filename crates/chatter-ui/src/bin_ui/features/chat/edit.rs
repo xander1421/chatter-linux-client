@@ -7,14 +7,14 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
 use crate::MainWindow;
 
 /// Wire edit-message callback - enters edit mode by populating composer.
-pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
@@ -24,7 +24,7 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
-        let conversation = ui_ctx.chat_state.active_conversation();
+        let conversation = ui_ctx.chat_state().active_conversation();
 
         // Move service lookups to background task
         tokio::spawn(async move {
@@ -70,7 +70,7 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 /// Wire send-edit callback - sends the edited message content.
 ///
 /// Uses Signal-style (sender_id, timestamp_ns) stored in composer_edit_message_id as "sender_id:timestamp_ns".
-pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
@@ -96,7 +96,7 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             handle.conversation(),
             ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_)
         );
-        let message_service = ui_ctx.message_service.clone();
+        let message_service = ui_ctx.messages().clone();
         let weak = weak_window.clone();
 
         let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
@@ -110,21 +110,7 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 return;
             }
 
-            // For DM/Channel, persist the edit locally (anon services handle this internally)
-            if !is_anon {
-                let target_sender_id: UserId = match sender_id_str.parse() {
-                    Ok(id) => id,
-                    Err(_) => return,
-                };
-
-                if let Ok(Some(message)) = message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                    use chatter_core::domain::message::MessageContent;
-                    let mut updated = message.clone();
-                    updated.content = MessageContent::Text(new_text_str.clone());
-                    updated.is_edited = true;
-                    let _ = message_service.update_message(&updated);
-                }
-            }
+            // Persistence is handled by ConversationHandle::send_edit()
 
             // Update UI
             let _ = slint::invoke_from_event_loop(move || {

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::ChannelType;
@@ -15,7 +15,7 @@ use chatter_core::services::user::UserService;
 use crate::{ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
 
 /// Wire channel settings modal callbacks.
-pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_save_settings(window, ui_ctx);
     wire_toggle_setting(window, ui_ctx);
     wire_notification_settings(window, ui_ctx);
@@ -134,9 +134,9 @@ pub fn open_channel_settings(
     });
 }
 
-fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
+    let channel_service = ui_ctx.channels().clone();
 
     window.on_channel_settings_save(move |name, description| {
         let weak = weak_window.clone();
@@ -170,7 +170,7 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-fn wire_toggle_setting(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
+fn wire_toggle_setting(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     window.on_channel_settings_toggle_setting(move |setting, value| {
         let weak = weak_window.clone();
@@ -188,7 +188,7 @@ fn wire_toggle_setting(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
     });
 }
 
-fn wire_notification_settings(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
+fn wire_notification_settings(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     window.on_channel_settings_change_notification(move |preference| {
         let weak = weak_window.clone();
@@ -207,9 +207,10 @@ fn wire_notification_settings(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
     });
 }
 
-fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
+    let ui_ctx = ui_ctx.clone();
+    let channel_service = ui_ctx.channels().clone();
 
     window.on_channel_settings_change_member_role(move |user_id, role| {
         let weak = weak_window.clone();
@@ -240,15 +241,11 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
-    let message_service = ui_ctx.message_service.clone();
-
     window.on_channel_settings_remove_member(move |user_id| {
         let weak = weak_window.clone();
-        let channel_service = channel_service.clone();
-        let message_service = message_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let user_id_str = user_id.to_string();
-        
+
         tokio::spawn(async move {
             let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
@@ -261,18 +258,16 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 Err(_) => return,
             };
 
-            if let Ok(skdm_opt) = channel_service.kick_user(&channel_uuid, &user_uuid, None).await {
-                if let Some(skdm) = skdm_opt {
-                    let _ = message_service.distribute_skdm(&channel_uuid, &skdm).await;
-                }
+            if let Err(e) = ui_ctx.kick_user(&channel_uuid, &user_uuid, None).await {
+                tracing::error!(error = %e, "Failed to kick user");
             }
         });
     });
 }
 
-fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
+    let channel_service = ui_ctx.channels().clone();
 
     window.on_channel_settings_archive(move || {
         let weak = weak_window.clone();
@@ -295,7 +290,7 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
+    let channel_service = ui_ctx.channels().clone();
     window.on_channel_settings_leave(move || {
         let weak = weak_window.clone();
         let channel_service = channel_service.clone();
@@ -318,7 +313,7 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
+    let channel_service = ui_ctx.channels().clone();
     window.on_channel_settings_delete(move || {
         let weak = weak_window.clone();
         let channel_service = channel_service.clone();
@@ -341,11 +336,11 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let anon_group_service = ui_ctx.anon_groups().clone();
+    let user_service = ui_ctx.users().clone();
+    let anon_dm_service = ui_ctx.anon_dms().clone();
 
     window.on_channel_settings_invite_members(move || {
         let weak = weak_window.clone();
@@ -458,11 +453,11 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Open invite modal for regular channels
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
-    let user_service = ui_ctx.user_service.clone();
+    let channel_service = ui_ctx.channels().clone();
+    let user_service = ui_ctx.users().clone();
 
     window.on_channel_settings_invite_channel_members(move || {
         let weak = weak_window.clone();
@@ -580,7 +575,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     // Confirm invite
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
+    let channel_service = ui_ctx.channels().clone();
 
     window.on_invite_member_confirm(move || {
         let weak = weak_window.clone();

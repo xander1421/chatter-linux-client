@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
 
-pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
@@ -18,13 +18,13 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
         tokio::spawn(async move {
             // Use pre-built auth service from UIContext
-            let auth_service = &ui_ctx.auth_service;
+            let auth_service = &ui_ctx.auth();
 
             // Attempt logout (ignore errors - we logout locally regardless)
             let _ = auth_service.do_logout().await;
 
             // Update auth state
-            ui_ctx.auth_state.set_logged_out();
+            ui_ctx.auth_state().set_logged_out();
 
             // Switch to login view
             let _ = slint::invoke_from_event_loop(move || {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use super::requests::refresh_sent_requests;
 use crate::MainWindow;
@@ -15,9 +15,9 @@ use crate::MainWindow;
 ///
 /// When private_mode is false: generates `chatter://connect/{user_id}` format.
 /// When private_mode is true: generates `chatter://private/{base32}` with embedded keys.
-pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.user_service.clone();
+    let user_service = ui_ctx.users().clone();
 
     window.on_friends_generate_code(move |private_mode: bool| {
         let weak = weak_window.clone();
@@ -60,9 +60,9 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<UICont
 }
 
 /// Wire callback to generate QR code image for the friend code.
-fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.user_service.clone();
+    let user_service = ui_ctx.users().clone();
 
     window.on_friends_generate_qr(move |private_mode: bool| {
         let weak = weak_window.clone();
@@ -113,7 +113,7 @@ fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 }
 
 /// Wire callback to copy friend code to clipboard.
-fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
+fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     window.on_friends_copy_code(move || {
@@ -167,9 +167,9 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
 /// Accepts friend codes in formats:
 /// - `chatter://connect/{user_id}` (URL format)
 /// - `{user_id}` (plain UUID)
-pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.user_service.clone();
+    let user_service = ui_ctx.users().clone();
 
     window.on_friends_connect_via_code(move |code: SharedString| {
         let weak = weak_window.clone();
@@ -239,10 +239,10 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<UIC
 /// The `chatter://private/` format embeds all key material needed for initial
 /// contact. NO prekey fetch is required, so the server learns NOTHING about
 /// who is contacting whom.
-pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let auth_state = ui_ctx.auth_state.clone();
+    let anon_dm_service = ui_ctx.anon_dms().clone();
+    let auth_state = ui_ctx.auth_state().clone();
 
     window.on_friends_connect_private(move |code: SharedString| {
         let weak = weak_window.clone();

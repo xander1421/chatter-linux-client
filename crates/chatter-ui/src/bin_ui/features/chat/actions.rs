@@ -5,14 +5,14 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::UserId;
 
 use crate::{ForwardTarget, MainWindow};
 
 /// Wire reply-message callback from context menu.
 /// Gets sender name and preview from the UI message model directly.
-pub fn wire_reply_message(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
+pub fn wire_reply_message(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     window.on_reply_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
@@ -65,7 +65,7 @@ pub fn wire_reply_message(window: &MainWindow, _ui_ctx: &Arc<UIContext>) {
 
 /// Wire forward-message-action callback from context menu.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
-pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
@@ -76,7 +76,7 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<UIContext>)
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
-        let conversation = ui_ctx.chat_state.active_conversation();
+        let conversation = ui_ctx.chat_state().active_conversation();
 
         // Move service lookups to background task
         tokio::spawn(async move {
@@ -172,7 +172,7 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<UIContext>)
 
 /// Wire copy-message callback to copy message text to clipboard.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
-pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
 
     // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
@@ -181,7 +181,7 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = ui_ctx.clone();
 
-        let conversation = ui_ctx.chat_state.active_conversation();
+        let conversation = ui_ctx.chat_state().active_conversation();
 
         // Move service lookups and clipboard to background thread
         std::thread::spawn(move || {
@@ -242,7 +242,7 @@ pub fn wire_copy_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
 /// Wire download-message callback from context menu.
 /// Downloads all attachments from a message to the user's Downloads folder.
-pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
 
     window.on_download_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
@@ -250,7 +250,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let timestamp_ns_str = timestamp_ns.to_string();
         let ui_ctx = ui_ctx.clone();
 
-        let conversation = ui_ctx.chat_state.active_conversation();
+        let conversation = ui_ctx.chat_state().active_conversation();
 
         std::thread::spawn(move || {
             // Parse sender_id for Signal-style lookup
@@ -291,7 +291,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let download_dir = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
 
             for att_id in attachment_ids {
-                let attachment = match ui_ctx.attachment_service.get(&att_id) {
+                let attachment = match ui_ctx.attachments().get(&att_id) {
                     Ok(Some(att)) => att,
                     Ok(None) => {
                         tracing::warn!("Attachment {} not found", att_id);
@@ -313,8 +313,8 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                 if needs_download {
                     // Download first, then save
-                    let attachment_service = ui_ctx.attachment_service.clone();
-                    ui_ctx.runtime_handle.spawn(async move {
+                    let attachment_service = ui_ctx.attachments().clone();
+                    ui_ctx.runtime_handle().spawn(async move {
                         match attachment_service.download_to_filesystem(&att_id).await {
                             Ok(()) => {
                                 // Now decrypt and save
@@ -338,7 +338,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     });
                 } else {
                     // Already downloaded, just decrypt and save
-                    match ui_ctx.attachment_service.decrypt_auto(&att_id) {
+                    match ui_ctx.attachments().decrypt_auto(&att_id) {
                         Ok(buffer) => {
                             if let Err(e) = std::fs::write(&dest_path, buffer.as_slice()) {
                                 tracing::error!(error = %e, "Failed to save attachment");

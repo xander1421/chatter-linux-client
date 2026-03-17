@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::{Attachment, FileCategory, Message};
 use chatter_core::services::attachment::AttachmentService;
 use chatter_core::services::conversation::ConversationHandle;
@@ -44,7 +44,7 @@ fn generate_pinned_preview_from_ui(msg: &MessageItemData) -> String {
     crate::bin_ui::features::auth::inbox::utils::generate_preview_from_ui_message(msg)
 }
 
-pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
@@ -57,7 +57,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             Err(_) => return,
         };
 
-        let conversation = ui_ctx.chat_state.active_conversation();
+        let conversation = ui_ctx.chat_state().active_conversation();
         if matches!(conversation, ActiveConversation::None) {
             return;
         }
@@ -92,49 +92,26 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 return;
             }
 
-            let new_pinned_state = !unpin;
+            // Persistence is handled by ConversationHandle::send_pin()
 
-            // Persist pin state based on conversation type
-            match handle.conversation() {
-                ActiveConversation::AnonDm(id) => {
-                    if let Err(e) = ui_ctx.anon_dm_service.set_message_pinned(id, target_sent_timestamp, new_pinned_state) {
-                        tracing::error!(error = %e, "Failed to persist anon DM pin state");
-                    }
-                }
-                ActiveConversation::AnonGroup(id) => {
-                    if let Err(e) = ui_ctx.anon_group_service.set_message_pinned(id, target_sent_timestamp, new_pinned_state) {
-                        tracing::error!(error = %e, "Failed to persist anon group pin state");
-                    }
-                }
-                ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
-                    // For DM/Channel, look up the message and update is_pinned
-                    if let Ok(sender_id) = sender_id_str.parse::<chatter_core::domain::UserId>() {
-                        if let Ok(Some(message)) = ui_ctx.message_service.get_by_sender_timestamp(&sender_id, target_sent_timestamp) {
-                            let mut updated = message.clone();
-                            updated.is_pinned = new_pinned_state;
-                            let _ = ui_ctx.message_service.update_message(&updated);
-                        }
-                    }
-                }
-                ActiveConversation::None => {}
-            }
+            let new_pinned_state = !unpin;
 
             // Update pinned_state
             if let Ok(msg_id) = msg_id_str.parse::<chatter_core::domain::ids::MessageId>() {
                 if new_pinned_state {
-                    ui_ctx.pinned_state.add_pinned_message(msg_id);
+                    ui_ctx.pinned_state().add_pinned_message(msg_id);
                 } else {
-                    ui_ctx.pinned_state.remove_pinned_message(&msg_id);
+                    ui_ctx.pinned_state().remove_pinned_message(&msg_id);
                 }
             }
-            let pinned_count = ui_ctx.pinned_state.get().pinned_message_ids.len();
+            let pinned_count = ui_ctx.pinned_state().get().pinned_message_ids.len();
 
             // For DM/Channel, generate preview from stored message + attachments
             let preview_text = match handle.conversation() {
                 ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
                     if let Ok(sender_id) = sender_id_str.parse::<chatter_core::domain::UserId>() {
-                        if let Ok(Some(message)) = ui_ctx.message_service.get_by_sender_timestamp(&sender_id, target_sent_timestamp) {
-                            let attachments = resolve_attachments(&message, &ui_ctx.attachment_service);
+                        if let Ok(Some(message)) = ui_ctx.messages().get_by_sender_timestamp(&sender_id, target_sent_timestamp) {
+                            let attachments = resolve_attachments(&message, &ui_ctx.attachments());
                             generate_pinned_preview(&message, &attachments)
                         } else {
                             preview_text

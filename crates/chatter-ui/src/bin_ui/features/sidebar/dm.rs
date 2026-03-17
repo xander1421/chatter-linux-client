@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
@@ -16,17 +16,17 @@ use crate::MainWindow;
 use super::channel::load_channel_into_ui;
 use super::stop_audio_playback;
 
-pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_clone = ui_ctx.clone();
-    let chat_state = ui_ctx.chat_state.clone();
-    let channel_service = ui_ctx.channel_service.clone();
-    let message_service = ui_ctx.message_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
-    let auth_state = ui_ctx.auth_state.clone();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let pin_service = ui_ctx.pin_service.clone();
-    let pinned_state = ui_ctx.pinned_state.clone();
+    let chat_state = ui_ctx.chat_state().clone();
+    let channel_service = ui_ctx.channels().clone();
+    let message_service = ui_ctx.messages().clone();
+    let user_service = ui_ctx.users().clone();
+    let attachment_service = ui_ctx.attachments().clone();
+    let auth_state = ui_ctx.auth_state().clone();
+    let anon_dm_service = ui_ctx.anon_dms().clone();
+    let pin_service = ui_ctx.pins().clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
 
     let weak_window = window.as_weak();
 
@@ -435,6 +435,7 @@ async fn load_anon_dm_into_ui(
 }
 
 /// Add an anonymous DM to the sidebar dynamically.
+#[allow(dead_code)]
 pub fn add_anon_dm_to_sidebar(
     window: &MainWindow,
     dm_id: &str,

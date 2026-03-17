@@ -128,13 +128,21 @@ impl AnonDmPoller {
 
         let has_more = poll_response.has_more;
 
-        tracing::info!(
-            conversation_id = %conversation_id,
-            message_count = messages.len(),
-            has_more = has_more,
-            mailbox_pk = hex::encode(&mailbox.public_key[..8]),
-            "Polled anonymous DM mailbox"
-        );
+        if messages.is_empty() {
+            tracing::trace!(
+                conversation_id = %conversation_id,
+                mailbox_pk = hex::encode(&mailbox.public_key[..8]),
+                "Polled anonymous DM mailbox (empty)"
+            );
+        } else {
+            tracing::info!(
+                conversation_id = %conversation_id,
+                message_count = messages.len(),
+                has_more = has_more,
+                mailbox_pk = hex::encode(&mailbox.public_key[..8]),
+                "Polled anonymous DM mailbox"
+            );
+        }
 
         Ok(AnonDmPollResult {
             conversation_id: *conversation_id,
@@ -151,7 +159,7 @@ impl AnonDmPoller {
     ) -> Result<Vec<AnonDmPollResult>, MailboxError> {
         let mailbox_keys = self.get_active_mailbox_keys()?;
 
-        tracing::info!(
+        tracing::trace!(
             mailbox_count = mailbox_keys.len(),
             "[ANON_DM_POLLER] Polling all anonymous DM mailboxes"
         );

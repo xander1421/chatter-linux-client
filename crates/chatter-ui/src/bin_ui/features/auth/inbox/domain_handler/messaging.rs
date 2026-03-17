@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use crate::MainWindow;
 
@@ -34,40 +34,18 @@ pub(super) fn handle_unread_count_updated(
 /// Handle DM bootstrap completed event.
 pub(super) fn handle_dm_bootstrap_completed(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     peer_id: UserId,
 ) {
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
     let peer_id_str = peer_id.to_string();
 
-    // Flush any pending messages for this peer
-    let dm_bootstrap = ui_ctx.dm_bootstrap_service.clone();
-    let pending = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            dm_bootstrap.take_pending_messages(&peer_id).await
-        })
+    // Flush any pending messages for this peer (now handled in core)
+    let dm_bootstrap = ui_ctx.dm_bootstrap().clone();
+    tokio::spawn(async move {
+        dm_bootstrap.flush_pending_ui_messages(&peer_id).await;
     });
-
-    if !pending.is_empty() {
-        tracing::info!(
-            peer_id = %peer_id,
-            pending_count = pending.len(),
-            "Flushing pending messages after bootstrap"
-        );
-
-        let mailbox = ui_ctx.mailbox_manager.clone();
-        let msg_svc = ui_ctx.message_service.clone();
-        tokio::spawn(async move {
-            for text in pending {
-                let now = chrono::Utc::now().timestamp_millis() as u64;
-                let content = chatter_core::services::build_text_content(&text, now);
-                if let Err(e) = msg_svc.send_dm(&peer_id, content, &*mailbox).await {
-                    tracing::warn!(error = %e, "Failed to send pending message");
-                }
-            }
-        });
-    }
 
     // Update UI to enable composer
     let _ = slint::invoke_from_event_loop(move || {

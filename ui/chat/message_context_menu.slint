@@ -56,7 +56,8 @@ export component MessageContextMenu inherits Rectangle {
     // Message context (Signal-style identification: sender_id + timestamp_ns)
     in property <string> sender-id: "";
     in property <string> timestamp-ns: "";
-    in property <bool> is-own-message: false;  // Can edit/delete own messages
+    in property <bool> is-own-message: false;  // Can edit own messages
+    in property <bool> can-delete-for-everyone: false;  // Derived from permissions
     in property <bool> is-pinned: false;
     in property <bool> has-attachments: false;  // Show download option when true
 
@@ -169,7 +170,7 @@ export component MessageContextMenu inherits Rectangle {
                 background: Colors.surface-hover;
             }
 
-            if root.is-own-message: MenuItem {
+            if root.can-delete-for-everyone: MenuItem {
                 icon: Icons.trash;
                 label: "Delete for Everyone";
                 destructive: true;

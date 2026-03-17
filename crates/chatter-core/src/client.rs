@@ -4,7 +4,7 @@
 //! It wraps the internal [`AppContext`] and [`UIContext`] with a clean,
 //! discoverable API.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -77,15 +77,16 @@ impl ClientBuilder {
     ///
     /// Must be called within a tokio runtime (e.g. inside `#[tokio::main]`
     /// or after `Runtime::new()`).
-    pub fn build(self) -> Result<ChatterClient, ClientError> {
+    pub fn build(self) -> Result<Arc<ChatterClient>, ClientError> {
         let ctx = AppContext::with_config(self.server_url)?;
         let ui = ctx.ui_context();
-        Ok(ChatterClient {
+        Ok(Arc::new(ChatterClient {
             ctx,
             ui,
             tasks: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
-        })
+            last_activity_ms: AtomicU64::new(0),
+        }))
     }
 }
 
@@ -123,7 +124,7 @@ pub enum ClientError {
 ///
 ///     client.connect().await?;
 ///     // client.auth().login(...).await?;
-///     client.start_inbox().await?;
+///     client.start().await?;
 ///     Ok(())
 /// }
 /// ```
@@ -134,9 +135,11 @@ pub enum ClientError {
 /// The `Drop` impl aborts background tasks but cannot await async cleanup.
 pub struct ChatterClient {
     ctx: AppContext,
-    pub(crate) ui: Arc<UIContext>,
+    ui: Arc<UIContext>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     started: AtomicBool,
+    /// Epoch millis of last user activity (for idle detection).
+    last_activity_ms: AtomicU64,
 }
 
 impl ChatterClient {
@@ -230,12 +233,6 @@ impl ChatterClient {
         self.ui.is_connected()
     }
 
-    /// Start the inbox provider with InboxEventProcessor.
-    /// Returns true if started, false if already running or failed.
-    pub async fn start_inbox_with_processor(&self) -> bool {
-        self.ui.start_inbox_with_processor().await
-    }
-
     /// Start the inbox provider and return a receiver for raw inbox events.
     pub async fn start_inbox_provider(
         &self,
@@ -287,77 +284,90 @@ impl ChatterClient {
         Ok(())
     }
 
-    /// Start receiving messages and events.
+    /// Start all background services after authentication.
     ///
-    /// Call AFTER login/register (needs auth credentials).
-    /// Call `subscribe_events()` BEFORE this to avoid missing events.
+    /// Call AFTER login/register. Call `subscribe_events()` BEFORE this
+    /// to avoid missing events.
     ///
-    /// Spawns background tasks for: event handling, inbox polling,
-    /// channel event stream, DM bootstrap, channel bootstrap.
-    pub async fn start_inbox(&self) -> Result<(), ClientError> {
+    /// This initializes:
+    /// - Post-login infrastructure (device inbox, group fanout, call service)
+    /// - Event handlers (DomainEvent → state store + DB persistence)
+    /// - Inbox polling + protocol processor
+    /// - Channel event stream, bootstrap, DM bootstrap
+    /// - AI services (Jarvis, local AI)
+    /// - Presence (broadcasts online status)
+    pub async fn start(self: &Arc<Self>) -> Result<(), ClientError> {
         if self.started.swap(true, Ordering::SeqCst) {
             return Err(ClientError::AlreadyStarted);
         }
 
-        // Post-login init
+        // ── Infrastructure init ─────────────────────────────────────
         self.ctx.init_device_inbox_provider();
         self.ctx.init_group_fanout();
         self.ctx.init_call_service();
 
-        // Spawn event handlers (DomainEvent -> state store updates)
-        let h1 = self.ctx.spawn_event_handlers();
+        // ── Event handling ──────────────────────────────────────────
+        let h_events = self.ctx.spawn_event_handlers();
 
-        // Start inbox polling + DomainEvent emission
-        if !self.ui.start_inbox_with_processor().await {
-            self.started.store(false, Ordering::SeqCst);
-            return Err(ClientError::Inbox("failed to start inbox".into()));
-        }
+        // ── Inbox polling + protocol processor ──────────────────────
+        let inbox_rx = match self.ui.start_inbox_provider().await {
+            Some(rx) => rx,
+            None => {
+                self.started.store(false, Ordering::SeqCst);
+                return Err(ClientError::Inbox("failed to start inbox".into()));
+            }
+        };
+        let processor = crate::services::InboxEventProcessor::from_client(self);
+        let mut inbox_rx = inbox_rx;
+        let h_inbox = tokio::spawn(async move {
+            loop {
+                match inbox_rx.recv().await {
+                    Ok(event) => { processor.process(&event).await; }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "InboxEventProcessor lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
 
-        // Start auxiliary background services
-        let h2 = self.ctx.start_channel_event_stream();
-        let h3 = self.ctx.start_channel_bootstrap_service();
-        let h4 = self.ctx.spawn_dm_bootstrap_handler();
+        // ── Channel + DM services ───────────────────────────────────
+        let h_channel_stream = self.ctx.start_channel_event_stream();
+        let h_channel_bootstrap = self.ctx.start_channel_bootstrap_service();
+        let h_dm_bootstrap = self.ctx.spawn_dm_bootstrap_handler();
 
-        // Pin persistence (subscribes to pin events → persists to DB)
-        let h5 = crate::events::pin_persistence::spawn(
-            self.event_bus().clone(),
-            self.messages().clone(),
-        );
-
-        // Jarvis background maintenance + observer
-        let jarvis_handles = crate::services::jarvis::JarvisBackgroundBuilder::new(
+        // ── AI services ─────────────────────────────────────────────
+        let jarvis = crate::services::jarvis::JarvisBackgroundBuilder::new(
             self.jarvis().clone(),
         )
         .with_event_bus(self.event_bus().clone())
         .spawn();
 
-        // Auto-load preferred local AI model
-        let h6 = tokio::spawn({
+        let h_ai = tokio::spawn({
             let local_ai = self.local_ai().clone();
             async move {
                 match local_ai.load_preferred_model().await {
-                    Ok(Some(info)) => {
-                        tracing::info!("Auto-loaded local AI model: {}", info.model_id);
-                    }
-                    Ok(None) => {
-                        tracing::debug!("No local AI model configured for auto-load");
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to auto-load local AI model: {}", e);
-                    }
+                    Ok(Some(info)) => tracing::info!("Auto-loaded local AI model: {}", info.model_id),
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!("Failed to auto-load local AI model: {}", e),
                 }
             }
         });
 
-        // Store handles for shutdown
+        // ── Presence ────────────────────────────────────────────────
+        self.set_presence(crate::proto::UserPresence::Online).await;
+        self.touch_activity();
+
+        // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
-        tasks.extend([h1, h2, h3, h4, h5, jarvis_handles.maintenance, h6]);
-        if let Some(observer) = jarvis_handles.observer {
+        tasks.extend([h_events, h_inbox, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, jarvis.maintenance, h_ai]);
+        if let Some(observer) = jarvis.observer {
             tasks.push(observer);
         }
 
         Ok(())
     }
+
 
     // ── High-level messaging ─────────────────────────────────────────
 
@@ -396,11 +406,8 @@ impl ChatterClient {
     }
 
     /// Get a [`ConversationHandle`] for per-conversation operations.
-    ///
-    /// Requires an `Arc<ChatterClient>` because the handle stores it for async ops.
-    /// Callers typically already hold one: `let handle = client.conversation(client.clone(), conv);`
     pub fn conversation(self: &Arc<Self>, conv: ActiveConversation) -> ConversationHandle {
-        ConversationHandle::from_client(conv, self)
+        ConversationHandle::new(conv, self.clone())
     }
 
     // ── Auth (high-level) ───────────────────────────────────────────
@@ -410,7 +417,7 @@ impl ChatterClient {
     /// This is the one-call entry point: authenticates, sets auth state,
     /// and starts inbox polling + event handlers.
     pub async fn login(
-        &self,
+        self: &Arc<Self>,
         username: &str,
         password: &str,
         device_name: &str,
@@ -421,13 +428,13 @@ impl ChatterClient {
             result.device_id,
             result.display_name.clone(),
         );
-        self.start_inbox().await?;
+        self.start().await?;
         Ok(result)
     }
 
     /// Register a new account and start all background services.
     pub async fn register(
-        &self,
+        self: &Arc<Self>,
         username: &str,
         password: &str,
         display_name: &str,
@@ -443,7 +450,7 @@ impl ChatterClient {
             result.device_id,
             result.display_name.clone(),
         );
-        self.start_inbox().await?;
+        self.start().await?;
         Ok(result)
     }
 
@@ -582,6 +589,18 @@ impl ChatterClient {
         }
     }
 
+    /// Record user activity (resets idle timer).
+    ///
+    /// Call this on any user interaction (message send, typing, etc.)
+    /// to prevent automatic away status.
+    pub fn touch_activity(&self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.last_activity_ms.store(now, Ordering::Relaxed);
+    }
+
     // ── Private channel helpers ────────────────────────────────────
 
     /// Announce mailbox and distribute SKDM after channel create/join.
@@ -605,7 +624,7 @@ impl ChatterClient {
 
     /// Sync channels from server and prefetch tokens.
     ///
-    /// Call after `start_inbox()` / `login()` to ensure local data is fresh.
+    /// Call after `start()` / `login()` to ensure local data is fresh.
     /// The UI's `load_initial_data` calls this internally — SDK consumers
     /// should call it if they need server-fresh data.
     pub async fn sync(&self) {
@@ -671,13 +690,6 @@ impl ChatterClient {
 
     // ── Escape hatches ──────────────────────────────────────────────────
 
-    /// Access the `UIContext` for backward-compatible feature wiring.
-    ///
-    /// Prefer the typed accessors (`auth()`, `messages()`, etc.) for new code.
-    pub fn ui_context(&self) -> &Arc<UIContext> { &self.ui }
-
-    /// Access the raw `AppContext`. Not part of the stable SDK API.
-    pub fn inner(&self) -> &AppContext { &self.ctx }
 }
 
 impl Drop for ChatterClient {

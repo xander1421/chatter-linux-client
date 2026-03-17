@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::crypto::EphemeralCallKey;
 use chatter_core::domain::ids::{CallId, UserId};
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
@@ -15,23 +15,21 @@ use crate::{ActiveCallData, CallParticipantData, MainWindow};
 use super::timers::{start_call_timer, start_video_frame_timer};
 
 /// Wire incoming call accept/decline callbacks.
-pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let ctx_call_service = ui_ctx.call_service.clone();
-    let ctx_session_service = ui_ctx.session_service.clone();
-    let ctx_message_service = ui_ctx.message_service.clone();
-    let ctx_mailbox_manager = ui_ctx.mailbox_manager.clone();
-    let ctx_signal_service = ui_ctx.signal_service.clone();
-    let ctx_anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let ctx_anon_group_service = ui_ctx.anon_group_service.clone();
+    let ui_ctx = ui_ctx.clone();
+    let ctx_call_service = ui_ctx.call_service().clone();
+    let ctx_session_service = ui_ctx.sessions().clone();
+    let ctx_signal_service = ui_ctx.signal().clone();
+    let ctx_anon_dm_service = ui_ctx.anon_dms().clone();
+    let ctx_anon_group_service = ui_ctx.anon_groups().clone();
 
     // Accept call callback
     window.on_accept_incoming_call({
         let weak = weak.clone();
+        let ui_ctx = ui_ctx.clone();
         let call_service = ctx_call_service.clone();
         let session_service = ctx_session_service.clone();
-        let message_service = ctx_message_service.clone();
-        let mailbox_manager = ctx_mailbox_manager.clone();
         let signal_service = ctx_signal_service.clone();
         let anon_dm_service = ctx_anon_dm_service.clone();
         let anon_group_service = ctx_anon_group_service.clone();
@@ -331,9 +329,8 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let weak = weak.clone();
             let call_service = call_service.clone();
             let session_service = session_service.clone();
-            let message_service = message_service.clone();
-            let mailbox_manager = mailbox_manager.clone();
             let signal_service = signal_service.clone();
+            let ui_ctx = ui_ctx.clone();
 
             slint::spawn_local(async move {
                 // Get incoming call data to extract caller's ephemeral key and caller ID
@@ -418,21 +415,10 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     "Derived call key, sending answer"
                 );
 
-                // Send answer with our ephemeral public key
-                let answer_content = chatter_core::services::build_call_key_answer(
-                    &call_id_str,
-                    our_ephemeral_pk,
-                );
-
-                if let Err(e) = message_service
-                    .send_dm(&caller_id, answer_content, &mailbox_manager)
-                    .await
-                {
-                    tracing::error!(
-                        caller_id = %caller_id,
-                        error = %e,
-                        "Failed to send call key answer"
-                    );
+                // Send answer with our ephemeral public key via CallSignalingService
+                let signaling = ui_ctx.call_signaling();
+                if let Err(e) = signaling.send_call_answer(&caller_id, &call_id_str, our_ephemeral_pk).await {
+                    tracing::error!(caller_id = %caller_id, error = %e, "Failed to send call key answer");
                     // Continue anyway - caller might timeout, but we can still try to connect
                 }
 
@@ -592,16 +578,16 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             
             slint::spawn_local(async move {
                 // Get stored offer details from pending state (consume it since we're declining)
-                if let Some(pending) = ui_ctx.anon_dm_service.take_pending_anon_call(&call_id_str) {
+                if let Some(pending) = ui_ctx.anon_dms().take_pending_anon_call(&call_id_str) {
                     // Route decline through DM or group service
-                    let is_group_call = ui_ctx.anon_dm_service.get_conversation(&pending.conversation_id)
+                    let is_group_call = ui_ctx.anon_dms().get_conversation(&pending.conversation_id)
                         .ok().flatten().is_none();
 
                     if is_group_call {
                         let group_id = chatter_core::domain::anon_group::AnonGroupId::try_from_slice(
                             pending.conversation_id.as_bytes()
                         ).expect("conversation_id bytes are valid");
-                        if let Err(e) = ui_ctx.anon_group_service.send_call_answer(
+                        if let Err(e) = ui_ctx.anon_groups().send_call_answer(
                             &group_id,
                             &pending.call_room_id,
                             false,
@@ -613,7 +599,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             tracing::info!("Group call decline sent for {}", call_id_str);
                         }
                     } else {
-                        if let Err(e) = ui_ctx.anon_dm_service.send_call_answer(
+                        if let Err(e) = ui_ctx.anon_dms().send_call_answer(
                             &pending.conversation_id,
                             &pending.call_room_id,
                             false,

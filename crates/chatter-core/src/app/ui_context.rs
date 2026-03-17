@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use crate::inbox::DeviceInboxProvider;
 use crate::services::CallWorkerHandle;
-use crate::storage::KeyStore;
 use crate::events::EventBus;
 use crate::mailbox::group::GroupFanout;
 use crate::mailbox::TokenManager;
@@ -98,8 +97,7 @@ pub struct UIContext {
     pub directories: Directories,
     pub(crate) token_manager: Arc<TokenManager>,
 
-    // Crypto (internal — accessed via SignalService)
-    pub(crate) key_store: Arc<KeyStore>,
+    // Note: key_store is accessed via SignalService — not stored here.
 
     // Post-boot services (initialized via AppContext after grpc connect)
     pub group_fanout: Arc<std::sync::OnceLock<Arc<GroupFanout>>>,
@@ -163,7 +161,7 @@ impl UIContext {
             token_manager: infra.token_manager.clone(),
 
             // Crypto
-            key_store: infra.key_store.clone(),
+            // key_store accessed via SignalService
 
             // Post-boot services (shared OnceLock with AppContext)
             group_fanout,
@@ -404,124 +402,4 @@ impl UIContext {
         }
     }
 
-    /// Start the inbox provider with the InboxEventProcessor.
-    ///
-    /// This is the recommended way to handle inbox events. It:
-    /// 1. Starts the inbox provider
-    /// 2. Creates an InboxEventProcessor that converts InboxEvent → DomainEvent
-    /// 3. Spawns a background task to process events
-    ///
-    /// UI code should subscribe to DomainEvent via `event_bus.subscribe_domain()`.
-    ///
-    /// Returns true if started successfully, false if already running or failed.
-    pub async fn start_inbox_with_processor(&self) -> bool {
-        use crate::services::InboxEventProcessor;
-
-        let inbox_rx = match self.start_inbox_provider().await {
-            Some(rx) => rx,
-            None => return false,
-        };
-
-        // Create the processor
-        let processor = InboxEventProcessor::new(
-            self.event_bus.domain_sender(),
-            self.message_service.clone(),
-            self.dm_bootstrap_service.clone(),
-            self.mailbox_manager.clone(),
-            self.key_store.clone(),
-        );
-
-        // Spawn the processing task
-        let mut inbox_rx = inbox_rx;
-        tokio::spawn(async move {
-            tracing::info!("InboxEventProcessor started");
-            loop {
-                match inbox_rx.recv().await {
-                    Ok(event) => {
-                        processor.process(event).await;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "InboxEventProcessor lagged, events skipped");
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        tracing::info!("InboxEventProcessor stopped (channel closed)");
-                        break;
-                    }
-                }
-            }
-        });
-
-        tracing::info!("Inbox provider started with InboxEventProcessor");
-        true
-    }
-
-    /// Send a message with optional attachments, quote, and options.
-    ///
-    /// Delegates to the gateway layer. Handles upload, quote preview, intent
-    /// building, and routing for all conversation types.
-    pub async fn send_message(
-        &self,
-        conversation: crate::state::ActiveConversation,
-        text: &str,
-        pending_attachments: &[crate::state::chat_state::PendingAttachment],
-        quote: Option<crate::services::gateway::outgoing::QuoteIntent>,
-        options: Option<crate::services::gateway::outgoing::SendOptions>,
-    ) -> Result<crate::services::gateway::outgoing::SendResult, crate::services::gateway::outgoing::SendError> {
-        use crate::services::gateway::outgoing::{
-            OwnedOutgoingServices, route_outgoing_owned, upload_attachments, build_intent,
-        };
-        use crate::services::gateway::shared::truncate_preview;
-
-        // 1. Upload attachments
-        let uploaded = upload_attachments(pending_attachments, &self.attachment_service).await;
-
-        // 2. Fill in quote preview if missing (for non-anon paths)
-        let quote = if let Some(mut q) = quote {
-            if q.preview_text.is_none() && !conversation.is_anon() {
-                q.preview_text = self.message_service
-                    .get_by_sender_timestamp(&q.author_id, q.timestamp)
-                    .ok()
-                    .flatten()
-                    .and_then(|m| m.as_text().map(|t| t.to_string()))
-                    .map(|t| truncate_preview(&t));
-            }
-            Some(q)
-        } else { None };
-
-        // 3. Build intent
-        let intent = build_intent(
-            conversation,
-            text,
-            uploaded.pointers,
-            quote,
-            &options.unwrap_or_default(),
-            &self.channel_service,
-        )?;
-
-        // 4. Route
-        let services = OwnedOutgoingServices::from_ui_ctx(self);
-        route_outgoing_owned(intent, &services).await
-    }
-
-    /// Enable or disable sending read receipts.
-    pub fn set_read_receipts_enabled(&self, enabled: bool) {
-        if let Err(e) = self.session_service.set_bool_setting(
-            crate::storage::settings_keys::SEND_READ_RECEIPTS, enabled,
-        ) {
-            tracing::error!("Failed to save read receipts setting: {}", e);
-        } else {
-            tracing::debug!("Read receipts setting changed to: {}", enabled);
-        }
-    }
-
-    /// Enable or disable typing indicators.
-    pub fn set_typing_indicators_enabled(&self, enabled: bool) {
-        if let Err(e) = self.session_service.set_bool_setting(
-            crate::storage::settings_keys::SHOW_TYPING_INDICATORS, enabled,
-        ) {
-            tracing::error!("Failed to save typing indicators setting: {}", e);
-        } else {
-            tracing::debug!("Typing indicators setting changed to: {}", enabled);
-        }
-    }
 }

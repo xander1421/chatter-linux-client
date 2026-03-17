@@ -703,11 +703,17 @@ impl GroupMailboxManager {
             results.push((group_id, public_key_arr, private_key_arr, mailbox_id));
         }
 
-        tracing::info!(
-            count = results.len(),
-            "[GROUP_MAILBOX] Returning {} active group mailboxes for polling",
-            results.len()
-        );
+        if results.is_empty() {
+            tracing::trace!(
+                "[GROUP_MAILBOX] No active group mailboxes for polling"
+            );
+        } else {
+            tracing::info!(
+                count = results.len(),
+                "[GROUP_MAILBOX] Returning {} active group mailboxes for polling",
+                results.len()
+            );
+        }
 
         Ok(results)
     }

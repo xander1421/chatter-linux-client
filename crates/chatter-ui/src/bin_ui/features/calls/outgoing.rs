@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::crypto::EphemeralCallKey;
 use chatter_core::domain::call::CallType;
 use chatter_core::domain::ids::ChannelId;
@@ -18,16 +18,17 @@ use super::key_exchange::{set_pending_call, PendingOutgoingCall};
 use super::timers::{start_call_timer, start_video_frame_timer};
 
 /// Wire start call callbacks.
-pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let ctx_call_service = ui_ctx.call_service.clone();
-    let ctx_session_service = ui_ctx.session_service.clone();
-    let ctx_message_service = ui_ctx.message_service.clone();
-    let ctx_mailbox_manager = ui_ctx.mailbox_manager.clone();
-    let ctx_channel_service = ui_ctx.channel_service.clone();
-    let ctx_anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let ctx_anon_group_service = ui_ctx.anon_group_service.clone();
-    let ctx_chat_state = ui_ctx.chat_state.clone();
+    let ctx_call_service = ui_ctx.call_service().clone();
+    let ctx_session_service = ui_ctx.sessions().clone();
+    let ctx_message_service = ui_ctx.messages().clone();
+    let ctx_mailbox_manager = ui_ctx.mailbox_manager().clone();
+    let ctx_channel_service = ui_ctx.channels().clone();
+    let ctx_anon_dm_service = ui_ctx.anon_dms().clone();
+    let ctx_anon_group_service = ui_ctx.anon_groups().clone();
+    let ctx_chat_state = ui_ctx.chat_state().clone();
+    let ctx_ui = ui_ctx.clone();
 
     // Start voice call
     window.on_start_voice_call({
@@ -40,6 +41,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let anon_dm_service = ctx_anon_dm_service.clone();
         let anon_group_service = ctx_anon_group_service.clone();
         let chat_state = ctx_chat_state.clone();
+        let ui_ctx = ctx_ui.clone();
 
         move || {
             let weak = weak.clone();
@@ -50,6 +52,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let anon_dm_service = anon_dm_service.clone();
             let anon_group_service = anon_group_service.clone();
             let conversation = chat_state.active_conversation();
+            let ui_ctx = ui_ctx.clone();
 
             // Get the call service from OnceLock
             let call_service = match call_service.get() {
@@ -74,6 +77,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         anon_dm_service,
                         anon_group_service,
                         conversation,
+                        ui_ctx,
                     ),
                 ).await.is_err() {
                     tracing::error!("Call setup timed out");
@@ -96,6 +100,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let anon_dm_service = ctx_anon_dm_service.clone();
         let anon_group_service = ctx_anon_group_service.clone();
         let chat_state = ctx_chat_state.clone();
+        let ui_ctx = ctx_ui.clone();
 
         move || {
             let weak = weak.clone();
@@ -106,6 +111,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
             let anon_dm_service = anon_dm_service.clone();
             let anon_group_service = anon_group_service.clone();
             let conversation = chat_state.active_conversation();
+            let ui_ctx = ui_ctx.clone();
 
             // Get the call service from OnceLock
             let call_service = match call_service.get() {
@@ -130,6 +136,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         anon_dm_service,
                         anon_group_service,
                         conversation,
+                        ui_ctx,
                     ),
                 ).await.is_err() {
                     tracing::error!("Call setup timed out");
@@ -149,11 +156,12 @@ async fn start_call_impl(
     session_service: Arc<chatter_core::services::session_service::SessionService>,
     call_type: CallType,
     message_service: Arc<chatter_core::services::message::MessageService>,
-    mailbox_manager: Arc<chatter_core::services::mailbox_manager::MailboxManager>,
+    _mailbox_manager: Arc<chatter_core::services::mailbox_manager::MailboxManager>,
     channel_service: Arc<chatter_core::services::channel::ChannelService>,
     anon_dm_service: Arc<chatter_core::services::anon_dm::AnonDmService>,
     anon_group_service: Arc<chatter_core::services::anon_group::AnonGroupService>,
     conversation: ActiveConversation,
+    ui_ctx: Arc<ChatterClient>,
 ) {
     // Get current user ID and display name
     let user_id = match session_service.current_user_id() {
@@ -456,17 +464,12 @@ async fn start_call_impl(
                 Ok(call) => {
                     tracing::info!("Created call on server: {:?}, waiting for peer's ephemeral key", call.id);
 
-                    // Build and send offer with our ephemeral public key
-                    let content = chatter_core::services::build_call_key_offer(
-                        &call.id.to_string(),
-                        ephemeral_public,
-                        call_type_str,
-                        &channel_id.to_string(),
-                    );
-
-                    // Send via regular DM
-                    let send_result = message_service.send_dm(&peer_id, content, &mailbox_manager).await
-                        .map_err(|e| format!("{}", e));
+                    // Send offer via CallSignalingService
+                    let signaling = ui_ctx.call_signaling();
+                    let send_result = signaling.send_call_offer(
+                        &peer_id, &call.id.to_string(), ephemeral_public,
+                        call_type_str, &channel_id.to_string(),
+                    ).await;
 
                     if let Err(e) = send_result {
                         tracing::error!(
@@ -569,61 +572,15 @@ async fn start_call_impl(
                 // This ensures all members have the same AES-256 key for E2EE media.
                 // =============================================================
                 let channel_id_clone = channel_id;
-                let message_service_clone = message_service.clone();
-                let channel_service_clone = channel_service.clone();
-                let mailbox_manager_clone = mailbox_manager.clone();
                 let call_id_str = call.id.to_string();
-                let channel_id_str = channel_id_clone.to_string();
-                let group_key_arr = group_key;
+                let signaling = ui_ctx.call_signaling();
 
-                let channel_id_str_for_spawn = channel_id_str.clone();
                 let _ = slint::spawn_local(async move {
-                    match channel_service_clone.get_channel_members(&channel_id_clone, 100, 0).await {
-                        Ok(members) => {
-                            tracing::info!(
-                                call_id = %call_id_str,
-                                member_count = %members.len(),
-                                "Distributing group call key to members"
-                            );
-
-                            let channel_id_str_inner = channel_id_str_for_spawn.clone();
-                            for member in members {
-                                // Don't send the key to ourselves
-                                if member.user_id == user_id {
-                                    continue;
-                                }
-
-                                // Build GroupCallKey content
-                                let content = chatter_core::services::build_group_call_key_content(
-                                    &call_id_str,
-                                    group_key_arr,
-                                    0, // Initial epoch
-                                    &channel_id_str_inner,
-                                );
-
-
-                                // Send via pairwise DM (uses sealed sender)
-                                if let Err(e) = message_service_clone
-                                    .send_dm(&member.user_id, content, &mailbox_manager_clone)
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        call_id = %call_id_str,
-                                        peer_id = %member.user_id,
-                                        error = %e,
-                                        "Failed to distribute group call key to member"
-                                    );
-                                }
-                            }
-                            tracing::info!(call_id = %call_id_str, "Completed group call key distribution");
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                call_id = %call_id_str,
-                                error = %e,
-                                "Failed to fetch channel members for key distribution"
-                            );
-                        }
+                    match signaling.distribute_group_call_key(
+                        &channel_id_clone, &call_id_str, group_key, 0,
+                    ).await {
+                        Ok(count) => tracing::info!(call_id = %call_id_str, sent = count, "Group call key distributed"),
+                        Err(e) => tracing::error!(call_id = %call_id_str, error = %e, "Failed to distribute group call key"),
                     }
                 });
 
@@ -646,7 +603,7 @@ async fn start_call_impl(
 
                     let call_data = ActiveCallData {
                         call_id: call.id.to_string().into(),
-                        channel_id: channel_id_str.into(),
+                        channel_id: channel_id.to_string().into(),
                         title: if channel_name.is_empty() { call_type_str.into() } else { channel_name.into() },
                         is_video_call,
                         is_anonymous_call: false,

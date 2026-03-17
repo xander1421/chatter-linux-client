@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::attachment::Attachment;
 use chatter_core::proto::content_v1::AttachmentPointer;
 
@@ -22,7 +22,7 @@ use super::utils::update_reaction_summary;
 
 pub(crate) fn handle_channel_message_received(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     channel_id: chatter_core::domain::ids::ChannelId,
     text: String,
 ) {
@@ -33,7 +33,7 @@ pub(crate) fn handle_channel_message_received(
     );
 
     // Fetch messages from DB (already sorted by sent_at DESC)
-    let display_messages: Option<Vec<MessageDisplayData>> = ui_ctx.message_service
+    let display_messages: Option<Vec<MessageDisplayData>> = ui_ctx.messages()
         .get_messages_local(&channel_id, None, 100)
         .ok()
         .map(|messages| {
@@ -42,7 +42,7 @@ pub(crate) fn handle_channel_message_received(
                 .map(|msg| {
                     let sender_name = if let Some(sender_id) = &msg.sender_id {
                         // Use profile's display_name, fall back to UUID
-                        ui_ctx.user_service
+                        ui_ctx.users()
                             .get_profile_local(sender_id)
                             .ok()
                             .flatten()
@@ -56,7 +56,7 @@ pub(crate) fn handle_channel_message_received(
                     let resolved_attachments: Vec<Attachment> = msg
                         .attachments
                         .iter()
-                        .filter_map(|att_id| ui_ctx.attachment_service.get_metadata(att_id).ok().flatten())
+                        .filter_map(|att_id| ui_ctx.attachments().get_metadata(att_id).ok().flatten())
                         .collect();
 
                     if !msg.attachments.is_empty() {
@@ -84,7 +84,7 @@ pub(crate) fn handle_channel_message_received(
     let ui_ctx_cloned = ui_ctx.clone();
     let channel_id_str = channel_id.to_string();
     // Get current user ID for is_own calculation
-    let current_user_id = ui_ctx.user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
+    let current_user_id = ui_ctx.users().current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(window) = weak.upgrade() else {
@@ -109,7 +109,7 @@ pub(crate) fn handle_channel_message_received(
                 // Auto-register GIFs for animation
                 crate::bin_ui::gif_state::auto_register_gifs_from_messages(
                     weak.clone(),
-                    ui_ctx_cloned.attachment_service.clone(),
+                    ui_ctx_cloned.attachments().clone(),
                 );
 
                 // Auto-scroll to bottom if user was at bottom before new message
@@ -124,7 +124,7 @@ pub(crate) fn handle_channel_message_received(
 
 pub(crate) fn handle_channel_typing(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     channel_id: chatter_core::domain::ids::ChannelId,
     sender_id: chatter_core::domain::UserId,
     action: i32,
@@ -136,7 +136,7 @@ pub(crate) fn handle_channel_typing(
         "Received channel typing indicator"
     );
 
-    let sender_name = ui_ctx.user_service
+    let sender_name = ui_ctx.users()
         .get_user_local(&sender_id)
         .ok()
         .flatten()
@@ -434,7 +434,7 @@ pub(crate) fn handle_channel_delete_for_me(
 
 pub(crate) fn handle_channel_receipt(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &std::sync::Arc<chatter_core::app::UIContext>,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
     channel_id: chatter_core::domain::ids::ChannelId,
     receipt_type: i32,
     timestamps: Vec<u64>,
@@ -454,7 +454,7 @@ pub(crate) fn handle_channel_receipt(
     };
 
     // Persist delivery status to database for each timestamp
-    let message_service = ui_ctx.message_service.clone();
+    let message_service = ui_ctx.messages().clone();
     for &ts in &timestamps {
         match message_service.update_delivery_status(&channel_id, ts, status) {
             Ok(true) => {
@@ -578,7 +578,7 @@ pub(crate) fn handle_channel_unread_count(
 /// Trigger auto-download for channel attachments (spawns background task).
 pub(crate) fn trigger_channel_attachment_download(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     channel_id: chatter_core::domain::ids::ChannelId,
     attachments: Vec<AttachmentPointer>,
 ) {
@@ -587,7 +587,7 @@ pub(crate) fn trigger_channel_attachment_download(
     }
 
     let weak = weak_window.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
+    let attachment_service = ui_ctx.attachments().clone();
     let channel_str = channel_id.to_string();
 
     tokio::spawn(async move {

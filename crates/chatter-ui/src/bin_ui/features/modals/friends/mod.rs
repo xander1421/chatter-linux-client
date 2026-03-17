@@ -15,12 +15,12 @@ mod requests;
 
 use std::sync::Arc;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
 
 /// Wire friends modal callbacks.
-pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // NOTE: wire_search_users removed - username search disabled for privacy
     // Users must use friend codes for discovery
 

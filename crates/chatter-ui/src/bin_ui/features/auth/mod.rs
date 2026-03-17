@@ -15,12 +15,12 @@ pub use initial_data::load_initial_data;
 
 use std::sync::Arc;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
 
 /// Wire authentication callbacks (login, register, logout).
-pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     login::wire_login(window, ui_ctx);
     register::wire_register(window, ui_ctx);
     logout::wire_logout(window, ui_ctx);

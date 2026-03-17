@@ -414,17 +414,13 @@ pub struct OwnedOutgoingServices {
 
 impl OwnedOutgoingServices {
     pub fn from_client(client: &crate::client::ChatterClient) -> Self {
-        Self::from_ui_ctx(&client.ui)
-    }
-
-    pub fn from_ui_ctx(ui_ctx: &crate::app::UIContext) -> Self {
         Self {
-            message_service: ui_ctx.message_service.clone(),
-            mailbox_manager: ui_ctx.mailbox_manager.clone(),
-            user_service: Some(ui_ctx.user_service.clone()),
-            group_fanout: ui_ctx.group_fanout.get().cloned(),
-            anon_dm_service: Some(ui_ctx.anon_dm_service.clone()),
-            anon_group_service: Some(ui_ctx.anon_group_service.clone()),
+            message_service: client.messages().clone(),
+            mailbox_manager: client.mailbox_manager().clone(),
+            user_service: Some(client.users().clone()),
+            group_fanout: client.group_fanout().get().cloned(),
+            anon_dm_service: Some(client.anon_dms().clone()),
+            anon_group_service: Some(client.anon_groups().clone()),
         }
     }
 

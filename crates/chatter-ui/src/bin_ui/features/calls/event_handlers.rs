@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::inbox::DomainEvent;
 use crate::MainWindow;
 
@@ -16,10 +16,10 @@ use super::key_exchange::handle_call_key_answer;
 ///
 /// Subscribes to `DomainEvent::CallKeyAnswerReceived` from the event bus
 /// and completes the ephemeral key exchange for the caller.
-pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let call_service = ui_ctx.call_service.clone();
-    let signal_service = ui_ctx.signal_service.clone();
-    let mut event_rx = ui_ctx.event_bus.subscribe_domain();
+pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let call_service = ui_ctx.call_service().clone();
+    let signal_service = ui_ctx.signal().clone();
+    let mut event_rx = ui_ctx.event_bus().subscribe_domain();
     let weak = window.as_weak();
 
     slint::spawn_local(async move {

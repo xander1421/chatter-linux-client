@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::bin_ui::converters::get_initials;
 use crate::{DMListItemData, MainWindow};
@@ -18,7 +18,7 @@ use crate::{DMListItemData, MainWindow};
 /// avoiding race conditions where both sides try to initiate simultaneously.
 pub async fn handle_friend_accepted(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     friend_user_id: String,
     channel_id: String,
 ) {
@@ -41,7 +41,7 @@ pub async fn handle_friend_accepted(
     };
 
     // Fetch channel from server via ChannelService (handles storage + memberships)
-    let channel = match ui_ctx.channel_service.get_channel_with_memberships(&channel_uuid).await {
+    let channel = match ui_ctx.channels().get_channel_with_memberships(&channel_uuid).await {
         Ok(ch) => ch,
         Err(e) => {
             tracing::error!(error = %e, channel_id = %channel_id, "Failed to fetch channel via service");
@@ -50,13 +50,13 @@ pub async fn handle_friend_accepted(
     };
 
     // Also save via DmBootstrapService for DM-specific handling
-    if let Err(e) = ui_ctx.dm_bootstrap_service.save_dm_channel(&channel) {
+    if let Err(e) = ui_ctx.dm_bootstrap().save_dm_channel(&channel) {
         tracing::error!(error = %e, "Failed to save DM channel via bootstrap service");
         // Continue anyway to update UI
     }
 
     // Get friend's display name via UserService (handles fetch + storage)
-    let friend_name = match ui_ctx.user_service.get_user_profile(&friend_uuid).await {
+    let friend_name = match ui_ctx.users().get_user_profile(&friend_uuid).await {
         Ok(profile) => {
             if profile.display_name.is_empty() {
                 friend_user_id.clone()

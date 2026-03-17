@@ -6,17 +6,17 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::jarvis::JarvisContext;
 use chatter_core::state::JarvisRole;
 
 use crate::{JarvisMessageData, MainWindow};
 
 /// Wire Jarvis panel callbacks to the main window.
-pub fn wire_jarvis_panel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_jarvis_panel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Close panel
     {
-        let jarvis_state = ui_ctx.jarvis_state.clone();
+        let jarvis_state = ui_ctx.jarvis_state().clone();
         let weak = window.as_weak();
         window.on_jarvis_panel_close(move || {
             jarvis_state.hide_panel();
@@ -28,7 +28,7 @@ pub fn wire_jarvis_panel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     // Toggle panel
     {
-        let jarvis_state = ui_ctx.jarvis_state.clone();
+        let jarvis_state = ui_ctx.jarvis_state().clone();
         let weak = window.as_weak();
         window.on_toggle_jarvis_panel(move || {
             let was_visible = jarvis_state.is_panel_visible();
@@ -46,7 +46,7 @@ pub fn wire_jarvis_panel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     // Clear messages
     {
-        let jarvis_state = ui_ctx.jarvis_state.clone();
+        let jarvis_state = ui_ctx.jarvis_state().clone();
         let weak = window.as_weak();
         window.on_jarvis_clear(move || {
             jarvis_state.clear_messages();
@@ -86,19 +86,19 @@ pub fn wire_jarvis_panel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
 /// Handle a regular Jarvis question.
 async fn handle_jarvis_question(
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     query: &str,
     weak: slint::Weak<MainWindow>,
 ) {
     // Set thinking state
-    ui_ctx.jarvis_state.set_thinking(true);
+    ui_ctx.jarvis_state().set_thinking(true);
     update_thinking_ui(&weak, true);
 
     // Add user message
-    let channel_id = ui_ctx.chat_state.get().active_channel_id;
+    let channel_id = ui_ctx.chat_state().get().active_channel_id;
     let channel_id_str = channel_id.as_ref().map(|id| id.to_string());
     ui_ctx
-        .jarvis_state
+        .jarvis_state()
         .add_user_message(query, channel_id_str.as_deref());
     update_messages_ui(ui_ctx, &weak);
 
@@ -108,24 +108,24 @@ async fn handle_jarvis_question(
         None => JarvisContext::general(),
     };
 
-    let author_id = ui_ctx.auth_state.get().current_user_id;
+    let author_id = ui_ctx.auth_state().get().current_user_id;
 
     // Call Jarvis
     match ui_ctx
-        .jarvis_service
+        .jarvis()
         .ask(&context, query, author_id.as_ref())
         .await
     {
         Ok(response) => {
-            ui_ctx.jarvis_state.add_assistant_message(&response);
-            ui_ctx.jarvis_state.set_thinking(false);
+            ui_ctx.jarvis_state().add_assistant_message(&response);
+            ui_ctx.jarvis_state().set_thinking(false);
             update_thinking_ui(&weak, false);
             update_messages_ui(ui_ctx, &weak);
         }
         Err(e) => {
             let error_msg = format!("Error: {}", e);
-            ui_ctx.jarvis_state.add_assistant_message(&error_msg);
-            ui_ctx.jarvis_state.set_thinking(false);
+            ui_ctx.jarvis_state().add_assistant_message(&error_msg);
+            ui_ctx.jarvis_state().set_thinking(false);
             update_thinking_ui(&weak, false);
             update_messages_ui(ui_ctx, &weak);
         }
@@ -134,16 +134,16 @@ async fn handle_jarvis_question(
 
 /// Handle a Jarvis slash command.
 async fn handle_jarvis_command(
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     cmd: super::slash_commands::JarvisCommand,
     weak: slint::Weak<MainWindow>,
 ) {
     use super::slash_commands::JarvisCommand;
 
-    ui_ctx.jarvis_state.set_thinking(true);
+    ui_ctx.jarvis_state().set_thinking(true);
     update_thinking_ui(&weak, true);
 
-    let channel_id = ui_ctx.chat_state.get().active_channel_id;
+    let channel_id = ui_ctx.chat_state().get().active_channel_id;
     let context = match &channel_id {
         Some(id) => JarvisContext::channel(id.clone()),
         None => JarvisContext::general(),
@@ -152,43 +152,43 @@ async fn handle_jarvis_command(
     let result = match cmd {
         JarvisCommand::Ask(query) => {
             ui_ctx
-                .jarvis_state
+                .jarvis_state()
                 .add_user_message(&format!("/ask {}", query), None);
             update_messages_ui(ui_ctx, &weak);
 
-            let author_id = ui_ctx.auth_state.get().current_user_id;
+            let author_id = ui_ctx.auth_state().get().current_user_id;
             ui_ctx
-                .jarvis_service
+                .jarvis()
                 .ask(&context, &query, author_id.as_ref())
                 .await
         }
         JarvisCommand::Summarize => {
-            ui_ctx.jarvis_state.add_user_message("/summarize", None);
+            ui_ctx.jarvis_state().add_user_message("/summarize", None);
             update_messages_ui(ui_ctx, &weak);
 
-            ui_ctx.jarvis_service.summarize_conversation(&context).await
+            ui_ctx.jarvis().summarize_conversation(&context).await
         }
         JarvisCommand::Knowledge(entity) => {
             ui_ctx
-                .jarvis_state
+                .jarvis_state()
                 .add_user_message(&format!("/knowledge {}", entity), None);
             update_messages_ui(ui_ctx, &weak);
 
-            match ui_ctx.jarvis_service.get_entity_knowledge(&entity) {
+            match ui_ctx.jarvis().get_entity_knowledge(&entity) {
                 Ok(knowledge) => Ok(knowledge.to_summary()),
                 Err(e) => Err(e),
             }
         }
         JarvisCommand::Remember(fact) => {
             ui_ctx
-                .jarvis_state
+                .jarvis_state()
                 .add_user_message(&format!("/remember {}", fact), None);
             update_messages_ui(ui_ctx, &weak);
 
             // For /remember, we use observe_message to store the fact
-            let author_id = ui_ctx.auth_state.get().current_user_id;
+            let author_id = ui_ctx.auth_state().get().current_user_id;
             match ui_ctx
-                .jarvis_service
+                .jarvis()
                 .observe_message(&context, &fact, author_id.as_ref(), None)
                 .await
             {
@@ -200,16 +200,16 @@ async fn handle_jarvis_command(
 
     match result {
         Ok(response) => {
-            ui_ctx.jarvis_state.add_assistant_message(&response);
+            ui_ctx.jarvis_state().add_assistant_message(&response);
         }
         Err(e) => {
             ui_ctx
-                .jarvis_state
+                .jarvis_state()
                 .add_assistant_message(&format!("Error: {}", e));
         }
     }
 
-    ui_ctx.jarvis_state.set_thinking(false);
+    ui_ctx.jarvis_state().set_thinking(false);
     update_thinking_ui(&weak, false);
     update_messages_ui(ui_ctx, &weak);
 }
@@ -225,8 +225,8 @@ fn update_thinking_ui(weak: &slint::Weak<MainWindow>, thinking: bool) {
 }
 
 /// Update the messages list in the UI.
-fn update_messages_ui(ui_ctx: &Arc<UIContext>, weak: &slint::Weak<MainWindow>) {
-    let messages = ui_ctx.jarvis_state.get_messages();
+fn update_messages_ui(ui_ctx: &Arc<ChatterClient>, weak: &slint::Weak<MainWindow>) {
+    let messages = ui_ctx.jarvis_state().get_messages();
     let slint_messages: Vec<JarvisMessageData> = messages
         .into_iter()
         .map(|m| JarvisMessageData {

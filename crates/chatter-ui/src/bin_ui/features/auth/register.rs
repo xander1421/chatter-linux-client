@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 
 use slint::{ComponentHandle, Image};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 #[cfg(not(target_os = "android"))]
 use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
 
@@ -23,7 +23,7 @@ const DEFAULT_AVATARS: &[&[u8]] = &[
 use super::initial_data::load_initial_data;
 use crate::MainWindow;
 
-pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
@@ -164,8 +164,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 });
 
                 // Update server URL and connect if different from current
-                if ui_ctx.auth_service.endpoint() != server_url {
-                    if let Err(e) = ui_ctx.auth_service.set_server_url(&server_url) {
+                if ui_ctx.auth().endpoint() != server_url {
+                    if let Err(e) = ui_ctx.auth().set_server_url(&server_url) {
                         let error_msg = format!("Invalid Server URL: {}", e);
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
@@ -178,8 +178,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
 
                 // Ensure we are connected to the selected server
-                if !ui_ctx.auth_service.is_connected() {
-                    if let Err(e) = ui_ctx.auth_service.connect().await {
+                if !ui_ctx.auth().is_connected() {
+                    if let Err(e) = ui_ctx.auth().connect().await {
                         let error_msg = format!("Failed to connect to server: {}", e);
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
@@ -192,7 +192,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
 
                 // Use pre-built auth service from UIContext
-                let auth_service = &ui_ctx.auth_service;
+                let auth_service = &ui_ctx.auth();
                 // Get selected avatar or use random default
                 let user_avatar = SELECTED_AVATAR.lock().ok().and_then(|g| g.clone());
 
@@ -208,124 +208,54 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 };
 
 
-                // Attempt registration using simplified method
-                match auth_service
-                    .do_register(&username, &password, &display_name, "linux-client", Some(avatar_bytes), Some(&pin))
-                    .await
-                {
-                    Ok(result) => {
-                        // Clear selected avatar on success
+                // Register via SDK (handles auth + state + inbox + presence)
+                match ui_ctx.register(&username, &password, &display_name, "linux-client", Some(avatar_bytes), Some(&pin)).await {
+                    Ok(_result) => {
                         if let Ok(mut guard) = SELECTED_AVATAR.lock() {
                             *guard = None;
                         }
 
-                        // Update auth state
-                        ui_ctx.auth_state.set_logged_in(
-                            result.user_id,
-                            result.device_id,
-                            result.display_name.clone(),
-                        );
+                        // Spawn UI-only event handlers
+                        crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);
+                        crate::bin_ui::features::auth::inbox::spawn_anon_group_event_handler(weak.clone(), &ui_ctx);
+                        crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak.clone(), &ui_ctx);
 
-                        // IMPORTANT: Spawn domain event handlers BEFORE starting inbox provider
-                        // to avoid race condition where inbox emits events before handlers subscribe.
-
-                        // Spawn DM bootstrap handler for processing incoming key exchanges
-                        let _bootstrap_handle = ui_ctx.dm_bootstrap_service.spawn_handler(&ui_ctx.event_bus);
-                        tracing::debug!("DM bootstrap handler spawned");
-
-                        // Channel event stream is now started centrally in main.rs via AppContext
-                        // It owns the gRPC stream and handles reconnection automatically
-                        tracing::debug!("Channel events handled by service layer");
-
-                        // Spawn anon group invite handler for processing incoming invites
-                        let _anon_invite_handle = crate::bin_ui::features::modals::spawn_anon_group_invite_handler(
-                            weak.clone(),
-                            &ui_ctx,
-                        );
-                        tracing::debug!("Anon group invite handler spawned");
-
-                        // Spawn anon group event handler for member joined/left/kicked events
-                        let _anon_group_events_handle = crate::bin_ui::features::auth::inbox::spawn_anon_group_event_handler(
-                            weak.clone(),
-                            &ui_ctx,
-                        );
-                        tracing::debug!("Anon group event handler spawned");
-                        
-                        // Spawn anon DM request handler for processing incoming message requests
-                        let _anon_dm_handle = crate::bin_ui::features::modals::spawn_anon_dm_request_handler(
-                            weak.clone(),
-                            &ui_ctx,
-                        );
-                        tracing::debug!("Anon DM request handler spawned");
-
-                        // Ensure post-boot services are initialized (may have been
-                        // skipped if initial server connection failed on startup)
-                        ui_ctx.ensure_call_service();
-
-                        // Start inbox provider with InboxEventProcessor
-                        // The processor handles protocol concerns and emits DomainEvent
+                        // Subscribe to DomainEvent for UI updates
                         {
-                            let weak_for_inbox = weak.clone();
-                            let ui_ctx_for_inbox = ui_ctx.clone();
+                            let mut domain_rx = ui_ctx.event_bus().subscribe_domain();
+                            let weak_for_domain = weak.clone();
+                            let ui_ctx_for_domain = ui_ctx.clone();
                             tokio::spawn(async move {
-                                // Start the inbox provider with the processor
-                                if !ui_ctx_for_inbox.start_inbox_with_processor().await {
-                                    tracing::warn!("Failed to start inbox with processor");
-                                }
-
-                                // Subscribe to DomainEvent for UI updates
-                                let mut domain_rx = ui_ctx_for_inbox.event_bus.subscribe_domain();
-                                let weak_for_domain = weak_for_inbox.clone();
-                                let ui_ctx_for_domain = ui_ctx_for_inbox.clone();
-                                tokio::spawn(async move {
-                                    loop {
-                                        match domain_rx.recv().await {
-                                            Ok(event) => {
-                                                super::inbox::domain_handler::handle_domain_event(event, &weak_for_domain, &ui_ctx_for_domain).await;
-                                            }
-                                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                                tracing::warn!(
-                                                    dropped_count = n,
-                                                    "Domain event receiver lagged - {} events dropped",
-                                                    n
-                                                );
-                                            }
-                                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                                tracing::info!("Domain event channel closed");
-                                                break;
-                                            }
+                                loop {
+                                    match domain_rx.recv().await {
+                                        Ok(event) => {
+                                            super::inbox::domain_handler::handle_domain_event(event, &weak_for_domain, &ui_ctx_for_domain).await;
                                         }
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                                     }
-                                });
-
-                                // Also subscribe to raw InboxEvent for events not yet migrated
-                                // TODO: Remove this once all events are handled via DomainEvent
-                                if let Some(mut event_rx) = ui_ctx_for_inbox.start_inbox_provider().await {
-                                    tokio::spawn(async move {
-                                        loop {
-                                            match event_rx.recv().await {
-                                                Ok(event) => {
-                                                    super::handle_inbox_event(event, &weak_for_inbox, &ui_ctx_for_inbox).await;
-                                                }
-                                                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                                                    tracing::warn!(
-                                                        dropped_count = n,
-                                                        "Inbox event receiver lagged - {} events dropped",
-                                                        n
-                                                    );
-                                                }
-                                                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                                                    tracing::info!("Inbox event channel closed");
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    });
                                 }
                             });
                         }
 
-                        // Switch to main view and stop animation
+                        // Subscribe to raw InboxEvent for UI-level handlers
+                        if let Some(mut event_rx) = ui_ctx.start_inbox_provider().await {
+                            let weak_for_inbox = weak.clone();
+                            let ui_ctx_for_inbox = ui_ctx.clone();
+                            tokio::spawn(async move {
+                                loop {
+                                    match event_rx.recv().await {
+                                        Ok(event) => {
+                                            super::handle_inbox_event(event, &weak_for_inbox, &ui_ctx_for_inbox).await;
+                                        }
+                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                                    }
+                                }
+                            });
+                        }
+
+                        // Switch to main view
                         let weak_for_view = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_for_view.upgrade() {
@@ -334,7 +264,6 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                             }
                         });
 
-                        // Load initial data
                         load_initial_data(weak, &ui_ctx).await;
                     }
                     Err(e) => {

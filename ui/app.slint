@@ -223,6 +223,7 @@ export component App inherits Rectangle {
     in-out property <length> context-menu-x: 0px;
     in-out property <length> context-menu-y: 0px;
     in property <bool> context-menu-is-own-message: false;
+    in property <bool> context-menu-can-delete-for-everyone: false;
     in property <bool> context-menu-is-pinned: false;
     in property <bool> context-menu-has-attachments: false;
     // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
@@ -305,7 +306,8 @@ export component App inherits Rectangle {
     in property <string> profile-user-id: "";
     in property <string> profile-display-name: "";
     in property <string> profile-username: "";
-    in property <string> profile-avatar-url: "";
+    in property <image> profile-avatar-source;
+    in property <string> profile-initials: "";
     in property <string> profile-status-text: "";
     in property <string> profile-presence: "offline";
     in property <string> profile-bio: "";
@@ -1118,7 +1120,8 @@ export component App inherits Rectangle {
         user-id: root.profile-user-id;
         display-name: root.profile-display-name;
         username: root.profile-username;
-        avatar-url: root.profile-avatar-url;
+        avatar-source: root.profile-avatar-source;
+        initials: root.profile-initials;
         status-text: root.profile-status-text;
         presence: root.profile-presence;
         bio: root.profile-bio;
@@ -1756,6 +1759,7 @@ export component App inherits Rectangle {
         position-x: root.context-menu-x;
         position-y: root.context-menu-y;
         is-own-message: root.context-menu-is-own-message;
+        can-delete-for-everyone: root.context-menu-can-delete-for-everyone;
         is-pinned: root.context-menu-is-pinned;
         has-attachments: root.context-menu-has-attachments;
 

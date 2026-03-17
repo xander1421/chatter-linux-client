@@ -16,16 +16,17 @@ mod settings;
 
 use std::sync::Arc;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
 
 pub use anon_dm_request::spawn_anon_dm_request_handler;
 pub use anon_group_invite::spawn_anon_group_invite_handler;
 pub use channel_settings::open_channel_settings;
+pub use profile::open_user_profile;
 
 /// Wire modal callbacks.
-pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     create_channel::wire_create_channel(window, ui_ctx);
     create_channel::wire_invite_to_private_group(window, ui_ctx);
     join_channel::wire_join_channel(window, ui_ctx);

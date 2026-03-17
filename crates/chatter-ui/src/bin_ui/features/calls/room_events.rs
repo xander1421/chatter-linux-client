@@ -6,14 +6,14 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::calls::LiveKitRoomEvent;
 use crate::{CallParticipantData, MainWindow};
 
 /// Wire room events to update UI (participant count, etc.).
-pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let call_service = ui_ctx.call_service.clone();
+    let call_service = ui_ctx.call_service().clone();
 
     // Spawn a tokio task to consume room events (tokio runtime needed for channels and sleep)
     tokio::spawn(async move {

@@ -9,7 +9,7 @@ pub mod private_group;
 
 use std::sync::Arc;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::bin_ui::audio_state;
 use crate::MainWindow;
@@ -19,7 +19,7 @@ pub use channel::load_channel_into_ui;
 pub use private_group::add_private_group_to_sidebar;
 
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
-pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     channel::wire_channel_selected(window, ui_ctx);
     dm::wire_dm_selected(window, ui_ctx);
     private_group::wire_private_group_selected(window, ui_ctx);
@@ -204,7 +204,7 @@ pub(crate) fn sidebar_has_dm(window: &MainWindow, peer_id: &chatter_core::domain
 /// inserted at position 0 (MRU) with unread_count = 1.
 pub(crate) fn create_dm_sidebar_entry(
     window: &MainWindow,
-    ui_ctx: &std::sync::Arc<chatter_core::app::UIContext>,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
     peer_id: &chatter_core::domain::UserId,
     sender_name: &str,
     preview: &str,
@@ -213,7 +213,7 @@ pub(crate) fn create_dm_sidebar_entry(
     use slint::Model;
     let peer_id_str = peer_id.to_string();
 
-    match ui_ctx.channel_service.get_dm_channel_for_peer(peer_id) {
+    match ui_ctx.channels().get_dm_channel_for_peer(peer_id) {
         Ok(Some(channel)) => {
             let mut new_dm = crate::bin_ui::converters::dm_to_slint(&channel, sender_name, &peer_id_str);
             new_dm.last_message = preview.into();

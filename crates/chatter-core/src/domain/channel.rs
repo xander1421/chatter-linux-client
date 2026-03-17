@@ -203,6 +203,22 @@ impl Permissions {
         }
     }
 
+    /// Permissions for DM participants — both users can delete any message.
+    #[must_use]
+    pub fn dm() -> Self {
+        Self {
+            can_send_messages: true,
+            can_edit_own_messages: true,
+            can_delete_own_messages: true,
+            can_delete_any_message: true,
+            can_pin_messages: true,
+            can_manage_members: false,
+            can_manage_roles: false,
+            can_edit_channel: false,
+            can_delete_channel: false,
+        }
+    }
+
     /// Get permissions for a given role.
     #[must_use]
     pub fn for_role(role: MemberRole) -> Self {

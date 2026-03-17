@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{Model, Weak};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use crate::MainWindow;
 
@@ -62,7 +62,7 @@ pub(super) fn handle_friend_requests_updated(
 /// Handle friend accepted event.
 pub(super) fn handle_friend_accepted(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     friend_id: UserId,
     channel_id: chatter_core::domain::ids::ChannelId,
 ) {
@@ -131,7 +131,7 @@ pub(super) fn handle_presence_changed(
 /// Handle anonymous DM profile updated event.
 pub(super) fn handle_anon_dm_profile_updated(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<chatter_core::app::UIContext>,
+    ui_ctx: &Arc<chatter_core::client::ChatterClient>,
     conversation_id: chatter_core::domain::anon_dm::AnonDmId,
     user_id: UserId,
     display_name: Option<String>,
@@ -166,7 +166,7 @@ pub(super) fn handle_anon_dm_profile_updated(
 
     // Download avatar from URL asynchronously and update repo + UI
     if let Some(url) = avatar_url.clone() {
-        let anon_dm_service = ui_ctx.anon_dm_service.clone();
+        let anon_dm_service = ui_ctx.anon_dms().clone();
         let weak_for_avatar = weak.clone();
         let conv_id_for_avatar = conversation_id_str.clone();
 

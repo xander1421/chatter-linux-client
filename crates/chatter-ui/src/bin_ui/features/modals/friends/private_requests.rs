@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::services::anon_dm::AnonDmService;
 
 use crate::bin_ui::converters::{get_initials, DMListItemSendData, FriendRequestSendData};
@@ -16,9 +16,9 @@ use crate::{DMListItemData, FriendRequestData, MainWindow};
 ///
 /// This uses the anonymous DM service which has NO server involvement.
 /// The conversation_id is passed as user-id field in the FriendRequestData struct.
-pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let anon_dm_service = ui_ctx.anon_dms().clone();
 
     window.on_friends_accept_private_request(move |conversation_id: SharedString| {
         let weak = weak_window.clone();
@@ -89,9 +89,9 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<UICo
 }
 
 /// Wire callback to decline an anonymous DM request.
-pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let anon_dm_service = ui_ctx.anon_dms().clone();
 
     window.on_friends_decline_private_request(move |conversation_id: SharedString| {
         let weak = weak_window.clone();
@@ -154,9 +154,9 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<UIC
 /// Wire callback to block an anonymous DM request.
 ///
 /// This blocks the conversation AND the user globally.
-pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let anon_dm_service = ui_ctx.anon_dms().clone();
 
     window.on_friends_block_private_request(move |conversation_id: SharedString| {
         let weak = weak_window.clone();

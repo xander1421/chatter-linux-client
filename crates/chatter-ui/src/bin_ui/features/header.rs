@@ -6,14 +6,14 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::state::ActiveConversation;
 
 use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
 use crate::MainWindow;
 
 /// Wire header callbacks.
-pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_search_clicked(window);
     wire_search_callbacks(window, ui_ctx);
     wire_pinned_navigation(window, ui_ctx);
@@ -41,13 +41,13 @@ fn wire_search_clicked(window: &MainWindow) {
     });
 }
 
-fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Search messages
     let weak_window = window.as_weak();
-    let message_service = ui_ctx.message_service.clone();
-    let channel_service = ui_ctx.channel_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let chat_state = ui_ctx.chat_state.clone();
+    let message_service = ui_ctx.messages().clone();
+    let channel_service = ui_ctx.channels().clone();
+    let user_service = ui_ctx.users().clone();
+    let chat_state = ui_ctx.chat_state().clone();
 
     window.on_search_messages(move |query: slint::SharedString| {
         let query_str = query.to_string();
@@ -187,13 +187,13 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Previous pinned message
-    let pinned_state = ui_ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
     let weak_window = window.as_weak();
-    let pin_service = ui_ctx.pin_service.clone();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let chat_state = ui_ctx.chat_state.clone();
+    let pin_service = ui_ctx.pins().clone();
+    let anon_group_service = ui_ctx.anon_groups().clone();
+    let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_prev_clicked(move || {
         pinned_state.navigate_prev();
@@ -201,11 +201,11 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     // Next pinned message
-    let pinned_state = ui_ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
     let weak_window = window.as_weak();
-    let pin_service = ui_ctx.pin_service.clone();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let chat_state = ui_ctx.chat_state.clone();
+    let pin_service = ui_ctx.pins().clone();
+    let anon_group_service = ui_ctx.anon_groups().clone();
+    let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_next_clicked(move || {
         pinned_state.navigate_next();
@@ -213,7 +213,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     // Dismiss pinned bar
-    let pinned_state = ui_ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
     let weak_window = window.as_weak();
 
     window.on_pinned_dismiss_clicked(move || {
@@ -225,11 +225,11 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     // Re-show dismissed pinned bar (pin button in header)
-    let pinned_state = ui_ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
     let weak_window = window.as_weak();
-    let pin_service = ui_ctx.pin_service.clone();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let chat_state = ui_ctx.chat_state.clone();
+    let pin_service = ui_ctx.pins().clone();
+    let anon_group_service = ui_ctx.anon_groups().clone();
+    let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_show_clicked(move || {
         let state = pinned_state.get();
@@ -249,7 +249,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     // Go to pinned message (scroll to it in chat)
-    let pinned_state = ui_ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
     let weak_window = window.as_weak();
 
     window.on_pinned_go_to_message(move || {
@@ -375,12 +375,12 @@ fn update_pinned_ui_from_loaded_messages(
     });
 }
 
-fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state.clone();
-    let channel_service = ui_ctx.channel_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
+    let chat_state = ui_ctx.chat_state().clone();
+    let channel_service = ui_ctx.channels().clone();
+    let user_service = ui_ctx.users().clone();
+    let anon_group_service = ui_ctx.anon_groups().clone();
 
     window.on_chat_settings_clicked(move || {
         let conversation = chat_state.active_conversation();
@@ -482,13 +482,13 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state.clone();
-    let message_service = ui_ctx.message_service.clone();
-    let message_state = ui_ctx.message_state.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
+    let chat_state = ui_ctx.chat_state().clone();
+    let message_service = ui_ctx.messages().clone();
+    let message_state = ui_ctx.message_state().clone();
+    let user_service = ui_ctx.users().clone();
+    let attachment_service = ui_ctx.attachments().clone();
 
     window.on_load_more(move || {
         let weak = weak_window.clone();

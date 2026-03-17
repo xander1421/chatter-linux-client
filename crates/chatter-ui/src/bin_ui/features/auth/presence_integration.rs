@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::proto::UserPresence;
 
 /// Current presence state for this session
@@ -18,7 +18,7 @@ static LAST_ACTIVITY: once_cell::sync::Lazy<RwLock<Instant>> =
     once_cell::sync::Lazy::new(|| RwLock::new(Instant::now()));
 
 /// Initialize presence on login.
-pub async fn initialize_presence(ui_ctx: &Arc<UIContext>) {
+pub async fn initialize_presence(ui_ctx: &Arc<ChatterClient>) {
     // Set online and broadcast to all anon DMs
     set_presence(ui_ctx, UserPresence::Online).await;
     
@@ -29,7 +29,7 @@ pub async fn initialize_presence(ui_ctx: &Arc<UIContext>) {
 }
 
 /// Shutdown presence on logout or app exit.
-pub async fn shutdown_presence(ui_ctx: &Arc<UIContext>) {
+pub async fn shutdown_presence(ui_ctx: &Arc<ChatterClient>) {
     // Send offline status
     set_presence(ui_ctx, UserPresence::Offline).await;
     
@@ -37,7 +37,7 @@ pub async fn shutdown_presence(ui_ctx: &Arc<UIContext>) {
 }
 
 /// Track user activity (call on any user interaction).
-pub async fn track_activity(ui_ctx: &Arc<UIContext>) {
+pub async fn track_activity(ui_ctx: &Arc<ChatterClient>) {
     // Update last activity
     {
         let mut last = LAST_ACTIVITY.write().await;
@@ -53,7 +53,7 @@ pub async fn track_activity(ui_ctx: &Arc<UIContext>) {
 
 /// Notify when opening an anon DM chat.
 pub async fn notify_chat_opened(
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     conversation_id: &chatter_core::domain::anon_dm::AnonDmId,
 ) {
     let current = *CURRENT_PRESENCE.read().await;
@@ -62,14 +62,14 @@ pub async fn notify_chat_opened(
     }
     
     // Send current presence to this specific conversation
-    if let Err(e) = ui_ctx.anon_dm_service.send_presence_update(conversation_id, current).await {
+    if let Err(e) = ui_ctx.anon_dms().send_presence_update(conversation_id, current).await {
         tracing::debug!("Failed to send presence on chat open: {}", e);
     }
 }
 
-/// Set presence and broadcast to all anon DM conversations
-async fn set_presence(ui_ctx: &Arc<UIContext>, presence: UserPresence) {
-    // Update local state
+/// Set presence and broadcast to all anon DM conversations.
+/// Delegates to `ChatterClient::set_presence()` for the broadcast.
+async fn set_presence(ui_ctx: &Arc<ChatterClient>, presence: UserPresence) {
     {
         let mut current = CURRENT_PRESENCE.write().await;
         if *current == presence {
@@ -77,36 +77,12 @@ async fn set_presence(ui_ctx: &Arc<UIContext>, presence: UserPresence) {
         }
         *current = presence;
     }
-    
     tracing::info!("Setting presence to {:?}", presence);
-    
-    // Broadcast to all anon DM conversations
-    let conversations = match ui_ctx.anon_dm_service.list_conversations() {
-        Ok(convs) => convs,
-        Err(e) => {
-            tracing::warn!("Failed to list anon DM conversations: {}", e);
-            return;
-        }
-    };
-    
-    for conv in &conversations {
-        if !conv.is_ready() {
-            continue;
-        }
-        
-        let conv_id = conv.id;
-        let service = ui_ctx.anon_dm_service.clone();
-        
-        tokio::spawn(async move {
-            if let Err(e) = service.send_presence_update(&conv_id, presence).await {
-                tracing::debug!("Failed to send presence update: {}", e);
-            }
-        });
-    }
+    ui_ctx.set_presence(presence).await;
 }
 
 /// Manually set user status from UI
-pub async fn set_user_status(ui_ctx: &Arc<UIContext>, status: &str) {
+pub async fn set_user_status(ui_ctx: &Arc<ChatterClient>, status: &str) {
     let presence = match status.to_lowercase().as_str() {
         "online" | "available" => UserPresence::Online,
         "away" | "idle" => UserPresence::Away,
@@ -132,7 +108,7 @@ pub async fn get_current_status() -> String {
 }
 
 /// Start idle detection background task
-fn start_idle_detection(ui_ctx: Arc<UIContext>) {
+fn start_idle_detection(ui_ctx: Arc<ChatterClient>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         

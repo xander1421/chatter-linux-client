@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::domain::jarvis::JarvisContext;
 use slint::Weak;
@@ -39,13 +39,13 @@ pub fn extract_jarvis_query(text: &str) -> Option<String> {
 /// Sets thinking state, adds thinking placeholder to chat, calls JarvisService,
 /// and replaces placeholder with actual response.
 pub async fn handle_jarvis_mention(
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     query: &str,
     channel_id: Option<&ChannelId>,
     weak_window: Weak<MainWindow>,
 ) {
     // Set thinking state
-    ui_ctx.jarvis_state.set_thinking(true);
+    ui_ctx.jarvis_state().set_thinking(true);
 
     // Add thinking placeholder to chat and update header indicator
     let thinking_id = {
@@ -74,29 +74,29 @@ pub async fn handle_jarvis_mention(
     };
 
     // Get current user ID
-    let author_id = ui_ctx.auth_state.get().current_user_id;
+    let author_id = ui_ctx.auth_state().get().current_user_id;
 
     // Add user message to Jarvis state
     let channel_id_str = channel_id.map(|id| id.to_string());
     ui_ctx
-        .jarvis_state
+        .jarvis_state()
         .add_user_message(query, channel_id_str.as_deref());
 
     // Call Jarvis
     match ui_ctx
-        .jarvis_service
+        .jarvis()
         .ask(&context, query, author_id.as_ref())
         .await
     {
         Ok(response) => {
             // Add assistant response to state
-            ui_ctx.jarvis_state.add_assistant_message(&response);
+            ui_ctx.jarvis_state().add_assistant_message(&response);
 
             // Update UI - replace thinking placeholder with actual response
             let response_clone = response.clone();
             let query_clone = query.to_string();
             let thinking_id_clone = thinking_id.clone();
-            let jarvis_state = ui_ctx.jarvis_state.clone();
+            let jarvis_state = ui_ctx.jarvis_state().clone();
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
                 if let Some(w) = weak_window.upgrade() {
@@ -116,11 +116,11 @@ pub async fn handle_jarvis_mention(
         Err(e) => {
             tracing::error!("Jarvis error: {}", e);
             let error_msg = format!("I encountered an error: {}", e);
-            ui_ctx.jarvis_state.add_assistant_message(&error_msg);
+            ui_ctx.jarvis_state().add_assistant_message(&error_msg);
 
             let query_clone = query.to_string();
             let thinking_id_clone = thinking_id.clone();
-            let jarvis_state = ui_ctx.jarvis_state.clone();
+            let jarvis_state = ui_ctx.jarvis_state().clone();
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
                 if let Some(w) = weak_window.upgrade() {

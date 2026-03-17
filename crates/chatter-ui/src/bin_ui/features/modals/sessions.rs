@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::services::session_service::Session;
 
 use crate::{MainWindow, SessionInfo};
@@ -38,8 +38,8 @@ fn update_sessions_ui(weak: slint::Weak<MainWindow>, sessions: Vec<Session>) {
     });
 }
 
-pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let session_service = ui_ctx.session_service.clone();
+pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let session_service = ui_ctx.sessions().clone();
 
     // View sessions
     let weak_window = window.as_weak();

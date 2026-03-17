@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::services::gateway;
 use chatter_core::state::ActiveConversation;
 
@@ -20,10 +20,10 @@ use crate::bin_ui::converters::attachment_to_display_data;
 use super::typing::clear_outgoing_typing;
 use crate::{MainWindow, PendingAttachmentData};
 
-pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let chat_state = ui_ctx.chat_state.clone();
-    let auth_state = ui_ctx.auth_state.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
+pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let chat_state = ui_ctx.chat_state().clone();
+    let auth_state = ui_ctx.auth_state().clone();
+    let attachment_service = ui_ctx.attachments().clone();
     let ui_ctx_jarvis = ui_ctx.clone();
 
     let weak_window = window.as_weak();
@@ -183,9 +183,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 message_id_str
             };
 
-            // Attachments: always use pre-uploaded data (available for all types)
-            let mut attachment_display: Vec<_> = pending_attachments.iter()
-                .filter_map(|pa| attachment_service.get(&pa.id).ok().flatten())
+            // Resolve attachments by the IDs returned from the gateway (post-upload)
+            let mut attachment_display: Vec<_> = result.attachment_ids.iter()
+                .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
                 .map(|a| attachment_to_display_data(&a))
                 .collect();
             // Bootstrap sends have no attachments yet (key exchange must complete first)
@@ -230,7 +230,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
 /// Handle Jarvis slash commands (/ask, /summarize, /knowledge, /remember).
 async fn handle_jarvis_slash_command(
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     cmd: crate::bin_ui::features::jarvis::JarvisCommand,
     channel_id: Option<&chatter_core::domain::ids::ChannelId>,
     weak_window: slint::Weak<MainWindow>,
@@ -247,10 +247,10 @@ async fn handle_jarvis_slash_command(
         }
     };
 
-    let author_id = ui_ctx.auth_state.get().current_user_id;
+    let author_id = ui_ctx.auth_state().get().current_user_id;
 
     // Set thinking state and add placeholder
-    ui_ctx.jarvis_state.set_thinking(true);
+    ui_ctx.jarvis_state().set_thinking(true);
     let thinking_id = {
         let weak = weak_window.clone();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -267,24 +267,24 @@ async fn handle_jarvis_slash_command(
     // Execute command
     let (query_display, result) = match cmd {
         JarvisCommand::Ask(query) => {
-            ui_ctx.jarvis_state.add_user_message(&query, channel_id.map(|id| id.to_string()).as_deref());
-            let r = ui_ctx.jarvis_service.ask(&context, &query, author_id.as_ref()).await;
+            ui_ctx.jarvis_state().add_user_message(&query, channel_id.map(|id| id.to_string()).as_deref());
+            let r = ui_ctx.jarvis().ask(&context, &query, author_id.as_ref()).await;
             (format!("/ask {}", query), r)
         }
         JarvisCommand::Summarize => {
-            ui_ctx.jarvis_state.add_user_message("/summarize", channel_id.map(|id| id.to_string()).as_deref());
-            let r = ui_ctx.jarvis_service.summarize_conversation(&context).await;
+            ui_ctx.jarvis_state().add_user_message("/summarize", channel_id.map(|id| id.to_string()).as_deref());
+            let r = ui_ctx.jarvis().summarize_conversation(&context).await;
             ("/summarize".to_string(), r)
         }
         JarvisCommand::Knowledge(entity) => {
-            ui_ctx.jarvis_state.add_user_message(&format!("/knowledge {}", entity), channel_id.map(|id| id.to_string()).as_deref());
+            ui_ctx.jarvis_state().add_user_message(&format!("/knowledge {}", entity), channel_id.map(|id| id.to_string()).as_deref());
             let query = format!("What do you know about {}?", entity);
-            let r = ui_ctx.jarvis_service.ask(&context, &query, author_id.as_ref()).await;
+            let r = ui_ctx.jarvis().ask(&context, &query, author_id.as_ref()).await;
             (format!("/knowledge {}", entity), r)
         }
         JarvisCommand::Remember(fact) => {
-            ui_ctx.jarvis_state.add_user_message(&format!("/remember {}", fact), channel_id.map(|id| id.to_string()).as_deref());
-            let r = ui_ctx.jarvis_service.ask(&context, &format!("Please remember this fact: {}", fact), author_id.as_ref()).await;
+            ui_ctx.jarvis_state().add_user_message(&format!("/remember {}", fact), channel_id.map(|id| id.to_string()).as_deref());
+            let r = ui_ctx.jarvis().ask(&context, &format!("Please remember this fact: {}", fact), author_id.as_ref()).await;
             (format!("/remember {}", fact), r)
         }
     };
@@ -292,11 +292,11 @@ async fn handle_jarvis_slash_command(
     // Handle result
     match result {
         Ok(response) => {
-            ui_ctx.jarvis_state.add_assistant_message(&response);
+            ui_ctx.jarvis_state().add_assistant_message(&response);
             let response_clone = response.clone();
             let query_clone = query_display.clone();
             let thinking_id_clone = thinking_id.clone();
-            let jarvis_state = ui_ctx.jarvis_state.clone();
+            let jarvis_state = ui_ctx.jarvis_state().clone();
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
                 if let Some(w) = weak_window.upgrade() {
@@ -311,10 +311,10 @@ async fn handle_jarvis_slash_command(
         }
         Err(e) => {
             let error_msg = format!("Error: {}", e);
-            ui_ctx.jarvis_state.add_assistant_message(&error_msg);
+            ui_ctx.jarvis_state().add_assistant_message(&error_msg);
             let query_clone = query_display.clone();
             let thinking_id_clone = thinking_id.clone();
-            let jarvis_state = ui_ctx.jarvis_state.clone();
+            let jarvis_state = ui_ctx.jarvis_state().clone();
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
                 if let Some(w) = weak_window.upgrade() {

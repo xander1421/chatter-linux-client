@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::calls::AudioCapture;
 #[cfg(not(target_os = "android"))]
 use chatter_core::calls::{ScreenCapture, ScreenSourceType};
@@ -16,9 +16,9 @@ use crate::ScreenSourceData;
 use crate::MainWindow;
 
 /// Wire device picker callbacks for audio device and screen source selection.
-pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_device_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    let call_service = ui_ctx.call_service.clone();
+    let call_service = ui_ctx.call_service().clone();
 
     // Show audio input device picker (microphones)
     window.on_show_audio_device_picker({

@@ -8,9 +8,6 @@
 /// Long enough for slow networks, short enough that users won't force-quit.
 pub const UI_SERVICE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Longer timeout for operations involving file uploads (60 seconds).
-pub const UI_UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-
 /// Run an async action with loading state management.
 ///
 /// Handles the common modal callback pattern:

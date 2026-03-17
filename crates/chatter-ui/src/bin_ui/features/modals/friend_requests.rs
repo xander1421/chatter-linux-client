@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::services::channel::ChannelService;
 use chatter_core::services::user::UserService;
@@ -14,9 +14,9 @@ use chatter_core::services::user::UserService;
 use crate::bin_ui::converters::get_initials;
 use crate::{DMListItemData, MainWindow};
 
-pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let user_service = ui_ctx.user_service.clone();
-    let channel_service = ui_ctx.channel_service.clone();
+pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let user_service = ui_ctx.users().clone();
+    let channel_service = ui_ctx.channels().clone();
 
     // Switch tab
     let weak_window = window.as_weak();

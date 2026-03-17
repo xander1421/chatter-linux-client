@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::services::user::FriendRequestFilter;
 
@@ -19,10 +19,105 @@ thread_local! {
     static PENDING_AVATAR_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
 }
 
-pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let user_service = ui_ctx.user_service.clone();
-    let channel_service = ui_ctx.channel_service.clone();
-    let mailbox_manager = ui_ctx.mailbox_manager.clone();
+/// Open the user profile modal with all properties populated correctly.
+///
+/// Handles both "self" (own profile) and "other user" paths, ensuring
+/// consistent data regardless of which entry point triggered the modal.
+pub fn open_user_profile(
+    w: &MainWindow,
+    user_id: &UserId,
+    auth_state: &chatter_core::state::AuthState,
+    user_state: &chatter_core::state::UserState,
+) {
+    let is_self = auth_state.get().current_user_id.as_ref() == Some(user_id);
+
+    w.set_profile_user_id(user_id.to_string().into());
+
+    if is_self {
+        let state = auth_state.get();
+        let display_name = state.display_name.clone().unwrap_or_default();
+        let username = user_state
+            .get_user(user_id)
+            .map(|u| u.username.clone())
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| user_id.to_string());
+        let initials = get_initials(&display_name);
+
+        w.set_profile_display_name(display_name.into());
+        w.set_profile_username(username.into());
+        w.set_profile_initials(initials.into());
+        w.set_profile_avatar_source(w.get_user_avatar_source());
+        w.set_profile_presence(w.get_user_presence_status());
+
+        if let Some(profile) = user_state.get_profile(user_id) {
+            if let Some(msg) = profile.status_message {
+                w.set_profile_bio(msg.text.into());
+            } else {
+                w.set_profile_bio("".into());
+            }
+        } else {
+            w.set_profile_bio("".into());
+        }
+
+        w.set_profile_is_self(true);
+        w.set_profile_is_friend(false);
+        w.set_profile_is_blocked(false);
+    } else {
+        // Other-user path
+        let profile = user_state.get_profile(user_id);
+        let user = user_state.get_user(user_id);
+
+        let display_name = profile
+            .as_ref()
+            .map(|p| &p.display_name)
+            .filter(|n| !n.is_empty())
+            .cloned()
+            .or_else(|| user.as_ref().map(|u| u.username.clone()).filter(|u| !u.is_empty()))
+            .unwrap_or_else(|| user_id.to_string()[..8.min(user_id.to_string().len())].to_string());
+
+        let username = user
+            .as_ref()
+            .map(|u| u.username.clone())
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| user_id.to_string());
+
+        let initials = get_initials(&display_name);
+
+        let presence = match profile.as_ref().map(|p| p.presence) {
+            Some(chatter_core::domain::user::PresenceStatus::Online) => "online",
+            Some(chatter_core::domain::user::PresenceStatus::Away) => "away",
+            Some(chatter_core::domain::user::PresenceStatus::DoNotDisturb) => "dnd",
+            _ => "offline",
+        };
+
+        let bio = profile
+            .as_ref()
+            .and_then(|p| p.status_message.as_ref())
+            .map(|m| m.text.clone())
+            .unwrap_or_default();
+
+        let user_data = user_state.get();
+        let is_friend = user_data.friends.contains(user_id);
+        let is_blocked = user_state.is_blocked(user_id);
+
+        w.set_profile_display_name(display_name.into());
+        w.set_profile_username(username.into());
+        w.set_profile_initials(initials.into());
+        w.set_profile_avatar_source(slint::Image::default());
+        w.set_profile_presence(presence.into());
+        w.set_profile_bio(bio.into());
+        w.set_profile_is_self(false);
+        w.set_profile_is_friend(is_friend);
+        w.set_profile_is_blocked(is_blocked);
+    }
+
+    w.set_active_modal("user-profile".into());
+}
+
+pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let user_service = ui_ctx.users().clone();
+    let channel_service = ui_ctx.channels().clone();
+    let mailbox_manager = ui_ctx.mailbox_manager().clone();
 
     // Add friend
     let weak_window = window.as_weak();
@@ -526,7 +621,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     let weak_window = window.as_weak();
     let user_service_save = user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
+    let attachment_service = ui_ctx.attachments().clone();
     let ui_ctx_save = ui_ctx.clone();
     window.on_edit_profile_save(move |display_name: slint::SharedString, bio: slint::SharedString| {
         let weak = weak_window.clone();
@@ -682,7 +777,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 }
 
 /// Broadcast profile update to all anon DM conversations and anon groups
-async fn broadcast_profile_update(ui_ctx: &Arc<UIContext>, profile: &chatter_core::domain::user::Profile) {
+async fn broadcast_profile_update(ui_ctx: &Arc<ChatterClient>, profile: &chatter_core::domain::user::Profile) {
     let display_name = Some(profile.display_name.clone());
     let avatar_url = profile.avatar_url.clone();
     let bio = profile.status_message.as_ref().map(|m| m.text.clone());
@@ -693,7 +788,7 @@ async fn broadcast_profile_update(ui_ctx: &Arc<UIContext>, profile: &chatter_cor
     );
     
     // Broadcast to all anon DM conversations
-    let conversations = match ui_ctx.anon_dm_service.list_conversations() {
+    let conversations = match ui_ctx.anon_dms().list_conversations() {
         Ok(convs) => convs,
         Err(e) => {
             tracing::warn!("Failed to list anon DM conversations for profile broadcast: {}", e);
@@ -707,7 +802,7 @@ async fn broadcast_profile_update(ui_ctx: &Arc<UIContext>, profile: &chatter_cor
         }
         
         let conv_id = conv.id;
-        let service = ui_ctx.anon_dm_service.clone();
+        let service = ui_ctx.anon_dms().clone();
         let display_name = display_name.clone();
         let avatar_url = avatar_url.clone();
         let bio = bio.clone();
@@ -720,7 +815,7 @@ async fn broadcast_profile_update(ui_ctx: &Arc<UIContext>, profile: &chatter_cor
     }
     
     // Broadcast to anon groups where user is owner
-    let anon_group_service = ui_ctx.anon_group_service.clone();
+    let anon_group_service = ui_ctx.anon_groups().clone();
     tokio::spawn(async move {
         if let Err(e) = anon_group_service.broadcast_profile_to_owned_groups().await {
             tracing::warn!("Failed to broadcast profile to owned groups: {}", e);

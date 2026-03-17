@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::proto::content_v1::AttachmentPointer;
 
 use crate::bin_ui::features::auth::inbox::attachment_download;
@@ -22,13 +22,13 @@ use crate::MainWindow;
 /// - Handles both GIFs and images consistently
 pub async fn auto_download_attachments(
     pointers: Vec<AttachmentPointer>,
-    ui_ctx: Arc<UIContext>,
+    ui_ctx: Arc<ChatterClient>,
     weak_window: slint::Weak<MainWindow>,
     peer_id: String,
 ) {
     attachment_download::download_attachments(
         pointers,
-        ui_ctx.attachment_service.clone(),
+        ui_ctx.attachments().clone(),
         weak_window,
         peer_id,
     ).await;

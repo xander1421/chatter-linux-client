@@ -16,14 +16,14 @@ mod typing;
 
 use std::sync::Arc;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
 
 pub use helpers::get_dm_channel_from_peer;
 
 /// Wire chat callbacks.
-pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     send_message::wire_send(window, ui_ctx);
     typing::wire_typing_changed(window, ui_ctx);
     reactions::wire_reaction_selected(window, ui_ctx);

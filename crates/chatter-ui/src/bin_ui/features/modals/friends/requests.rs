@@ -4,16 +4,16 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::services::channel::ChannelService;
 use chatter_core::services::user::{FriendRequestFilter, UserService};
 
 use crate::bin_ui::converters::{get_initials, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
 
-pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.user_service.clone();
+    let user_service = ui_ctx.users().clone();
 
     window.on_friends_send_request(move |user_id: SharedString| {
         let weak = weak_window.clone();
@@ -133,10 +133,10 @@ pub(crate) async fn refresh_sent_requests(
     }
 }
 
-pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.user_service.clone();
-    let channel_service = ui_ctx.channel_service.clone();
+    let user_service = ui_ctx.users().clone();
+    let channel_service = ui_ctx.channels().clone();
 
     window.on_friends_accept_request(move |user_id: SharedString| {
         let weak = weak_window.clone();
@@ -364,9 +364,9 @@ pub(crate) async fn refresh_received_requests(
     }
 }
 
-pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.user_service.clone();
+    let user_service = ui_ctx.users().clone();
 
     window.on_friends_decline_request(move |user_id: SharedString| {
         let weak = weak_window.clone();
@@ -421,9 +421,9 @@ pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<UIContext>)
     });
 }
 
-pub(crate) fn wire_cancel_request(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_cancel_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.user_service.clone();
+    let user_service = ui_ctx.users().clone();
 
     window.on_friends_cancel_request(move |user_id: SharedString| {
         let weak = weak_window.clone();

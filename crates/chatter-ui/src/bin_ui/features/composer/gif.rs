@@ -5,11 +5,11 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::{GifData, MainWindow};
 
-pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
@@ -38,7 +38,7 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
@@ -75,7 +75,7 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 async fn download_and_send_gif(
     url: &str,
     gif_id: &str,
-    ui_ctx: Arc<UIContext>,
+    ui_ctx: Arc<ChatterClient>,
     weak: slint::Weak<MainWindow>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Download GIF bytes from Klipy/Tenor CDN
@@ -91,7 +91,7 @@ async fn download_and_send_gif(
     let filename = format!("{}.gif", gif_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
 
     // Upload directly to our CDN (encrypts and stores encrypted on filesystem)
-    let upload_result = ui_ctx.attachment_service
+    let upload_result = ui_ctx.attachments()
         .upload_bytes_to_cdn_encrypted(
             &bytes,
             &filename,
@@ -116,7 +116,7 @@ async fn download_and_send_gif(
     );
 
     // Add to chat state and trigger send
-    ui_ctx.chat_state.add_pending_attachment(pending);
+    ui_ctx.chat_state().add_pending_attachment(pending);
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
@@ -129,7 +129,7 @@ async fn download_and_send_gif(
     Ok(())
 }
 
-pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
@@ -286,7 +286,7 @@ fn load_gif_previews(
     }
 }
 
-async fn fetch_trending_gifs_raw(ui_ctx: &UIContext) -> Vec<RawGifData> {
+async fn fetch_trending_gifs_raw(ui_ctx: &ChatterClient) -> Vec<RawGifData> {
     ui_ctx.trending_gifs(20).await
         .into_iter()
         .map(|r| {
@@ -297,7 +297,7 @@ async fn fetch_trending_gifs_raw(ui_ctx: &UIContext) -> Vec<RawGifData> {
         .collect()
 }
 
-async fn search_gifs_raw(query: &str, ui_ctx: &UIContext) -> Vec<RawGifData> {
+async fn search_gifs_raw(query: &str, ui_ctx: &ChatterClient) -> Vec<RawGifData> {
     ui_ctx.search_gifs(query, 20).await
         .into_iter()
         .map(|r| {

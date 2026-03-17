@@ -177,6 +177,7 @@ export component MainWindow inherits Window {
     in-out property <length> context-menu-x <=> app.context-menu-x;
     in-out property <length> context-menu-y <=> app.context-menu-y;
     in property <bool> context-menu-is-own-message <=> app.context-menu-is-own-message;
+    in property <bool> context-menu-can-delete-for-everyone <=> app.context-menu-can-delete-for-everyone;
     in property <bool> context-menu-is-pinned <=> app.context-menu-is-pinned;
     in property <bool> context-menu-has-attachments <=> app.context-menu-has-attachments;
     callback reply-message <=> app.reply-message;
@@ -257,7 +258,8 @@ export component MainWindow inherits Window {
     in property <string> profile-user-id <=> app.profile-user-id;
     in property <string> profile-display-name <=> app.profile-display-name;
     in property <string> profile-username <=> app.profile-username;
-    in property <string> profile-avatar-url <=> app.profile-avatar-url;
+    in property <image> profile-avatar-source <=> app.profile-avatar-source;
+    in property <string> profile-initials <=> app.profile-initials;
     in property <string> profile-status-text <=> app.profile-status-text;
     in property <string> profile-presence <=> app.profile-presence;
     in property <string> profile-bio <=> app.profile-bio;

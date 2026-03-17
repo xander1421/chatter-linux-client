@@ -4,14 +4,14 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
 
-pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let signal_service = ui_ctx.signal_service.clone();
-    let auth_service = ui_ctx.auth_service.clone();
-    let session_service = ui_ctx.session_service.clone();
+pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let signal_service = ui_ctx.signal().clone();
+    let auth_service = ui_ctx.auth().clone();
+    let session_service = ui_ctx.sessions().clone();
 
     // Change password
     let weak_window = window.as_weak();
@@ -61,13 +61,13 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     // Read receipts toggle
     let ui_ctx_read = ui_ctx.clone();
     window.on_settings_read_receipts_changed(move |enabled: bool| {
-        ui_ctx_read.set_read_receipts_enabled(enabled);
+        let _ = ui_ctx_read.set_read_receipts_enabled(enabled);
     });
 
     // Typing indicators toggle
     let ui_ctx_typing = ui_ctx.clone();
     window.on_settings_typing_indicators_changed(move |enabled: bool| {
-        ui_ctx_typing.set_typing_indicators_enabled(enabled);
+        let _ = ui_ctx_typing.set_typing_indicators_enabled(enabled);
     });
 
     // Copy fingerprint
@@ -144,8 +144,8 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     // Edit profile
     let weak_window = window.as_weak();
-    let auth_state_edit = ui_ctx.auth_state.clone();
-    let user_state_edit = ui_ctx.user_state.clone();
+    let auth_state_edit = ui_ctx.auth_state().clone();
+    let user_state_edit = ui_ctx.user_state().clone();
     window.on_settings_edit_profile(move || {
         let weak = weak_window.clone();
         let auth_state = auth_state_edit.clone();
@@ -153,28 +153,10 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                let state = auth_state.get();
-                if let Some(user_id) = state.current_user_id {
-                    w.set_profile_user_id(user_id.to_string().into());
-                    w.set_profile_display_name(state.display_name.clone().unwrap_or_default().into());
-                    w.set_profile_username(user_id.to_string().into());
-                    w.set_profile_is_self(true);
-                    w.set_profile_is_friend(false);
-                    w.set_profile_is_blocked(false);
-                    w.set_profile_presence("online".into());
-
-                    // Set bio from user state if available
-                    if let Some(profile) = user_state.get_profile(&user_id) {
-                        if let Some(msg) = profile.status_message {
-                            w.set_profile_bio(msg.text.into());
-                        } else {
-                            w.set_profile_bio("".into());
-                        }
-                    } else {
-                        w.set_profile_bio("".into());
-                    }
-
-                    w.set_active_modal("user-profile".into());
+                if let Some(user_id) = auth_state.get().current_user_id {
+                    crate::bin_ui::features::modals::open_user_profile(
+                        &w, &user_id, &auth_state, &user_state,
+                    );
                 }
             }
         });
@@ -194,7 +176,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     // Local AI enabled toggle
-    let local_ai_service = ui_ctx.local_ai_service.clone();
+    let local_ai_service = ui_ctx.local_ai().clone();
     window.on_settings_local_ai_enabled_changed(move |enabled: bool| {
         if let Err(e) = local_ai_service.set_enabled(enabled) {
             tracing::error!("Failed to save local AI enabled setting: {}", e);
@@ -205,7 +187,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     // Load AI model
     let weak_window = window.as_weak();
-    let local_ai_service = ui_ctx.local_ai_service.clone();
+    let local_ai_service = ui_ctx.local_ai().clone();
     window.on_settings_local_ai_load_model(move |model_id: SharedString| {
         let weak = weak_window.clone();
         let local_ai = local_ai_service.clone();
@@ -266,7 +248,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     // Unload AI model
     let weak_window = window.as_weak();
-    let local_ai_service = ui_ctx.local_ai_service.clone();
+    let local_ai_service = ui_ctx.local_ai().clone();
     window.on_settings_local_ai_unload_model(move || {
         let weak = weak_window.clone();
         let local_ai = local_ai_service.clone();

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::{ChannelConfig, ChannelType, MessagePersistence};
 use chatter_core::domain::ids::UserId;
 use chatter_core::proto::chat_v1::IntegrationType;
@@ -13,15 +13,16 @@ use crate::bin_ui::converters::channel_to_slint;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
 use crate::{AIModelOption, ChannelListItemData, CreateChannelConfig, MainWindow, PrivateGroupFriend};
 
-pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
-    let message_service = ui_ctx.message_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
-    let ai_service = ui_ctx.ai_service.clone();
-    let chat_state = ui_ctx.chat_state.clone();
-    let auth_state_global = ui_ctx.auth_state.clone();
+    let ctx = ui_ctx.clone();
+    let channel_service = ctx.channels().clone();
+    let message_service = ctx.messages().clone();
+    let user_service = ctx.users().clone();
+    let attachment_service = ctx.attachments().clone();
+    let ai_service = ctx.ai().clone();
+    let chat_state = ctx.chat_state().clone();
+    let auth_state_global = ctx.auth_state().clone();
 
     window.on_create_channel(
         move |name: SharedString,
@@ -31,6 +32,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
               ai_provider: SharedString,
               ai_model: SharedString| {
             let weak = weak_window.clone();
+            let ui_ctx = ctx.clone();
             let channel_service = channel_service.clone();
             let message_service = message_service.clone();
             let user_service = user_service.clone();
@@ -71,17 +73,10 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     ..Default::default()
                 };
 
-                match channel_service.create_channel(&name, channel_type, Some(domain_config), description_opt, None, password_opt, vec![], true).await {
-                    Ok((channel, mailbox_setup)) => {
+                match ui_ctx.create_channel(&name, channel_type, Some(domain_config), description_opt, password_opt, vec![]).await {
+                    Ok(channel) => {
                         let channel_id = channel.id;
                         let channel_id_str: SharedString = channel_id.to_string().into();
-
-                        if let Some(setup_result) = mailbox_setup {
-                            let _ = message_service.announce_group_mailbox(&channel_id, setup_result.announcement).await;
-                            if let Some(skdm) = setup_result.skdm {
-                                let _ = message_service.distribute_skdm(&channel_id, &skdm).await;
-                            }
-                        }
 
                         chat_state.set_active_channel(channel_id);
 
@@ -131,7 +126,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     );
 
     let weak_window = window.as_weak();
-    let ai_service = ui_ctx.ai_service.clone();
+    let ai_service = ui_ctx.ai().clone();
     window.on_create_channel_provider_selected(move |provider: SharedString| {
         let weak = weak_window.clone();
         let ai_service = ai_service.clone();
@@ -196,7 +191,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     let weak_window = window.as_weak();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
+    let anon_group_service = ui_ctx.anon_groups().clone();
     window.on_create_private_group(move |name: SharedString, friends: ModelRc<PrivateGroupFriend>| {
         let weak = weak_window.clone();
         let anon_group_service = anon_group_service.clone();
@@ -257,8 +252,8 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.user_service.clone();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
+    let user_service = ui_ctx.users().clone();
+    let anon_dm_service = ui_ctx.anon_dms().clone();
     window.on_create_channel_template_selected(move |template: SharedString| {
         if template.as_str() != "private-group" { return; }
         let weak = weak_window.clone();
@@ -316,7 +311,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 }
 
 /// Wire the invite to private group modal callbacks.
-pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Toggle selection for invite modal
     let weak_window = window.as_weak();
     window.on_toggle_invite_friend_selection(move |idx: i32| {
@@ -367,7 +362,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<UIContext>
 
     // Submit invite
     let weak_window = window.as_weak();
-    let anon_group_service = ui_ctx.anon_group_service.clone();
+    let anon_group_service = ui_ctx.anon_groups().clone();
     window.on_invite_to_private_group(move |friends: ModelRc<PrivateGroupFriend>| {
         let weak = weak_window.clone();
         let anon_group_service = anon_group_service.clone();

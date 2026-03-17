@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDm;
 use chatter_core::inbox::DomainEvent;
 use crate::{DMListItemData, FriendRequestData, MainWindow, MessageItemData};
@@ -24,13 +24,13 @@ use crate::bin_ui::features::auth::inbox::unified_actions::{self, EventSource};
 /// Returns a handle to the spawned task.
 pub fn spawn_anon_dm_request_handler(
     weak_window: Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
-    let chat_state = ui_ctx.chat_state.clone();
-    let pinned_state = ui_ctx.pinned_state.clone();
-    let mut event_rx = ui_ctx.event_bus.subscribe_domain();
+    let anon_dm_service = ui_ctx.anon_dms().clone();
+    let attachment_service = ui_ctx.attachments().clone();
+    let chat_state = ui_ctx.chat_state().clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
+    let mut event_rx = ui_ctx.event_bus().subscribe_domain();
 
     tokio::spawn(async move {
         tracing::info!("[ANON_DM_HANDLER] Started listening for domain events");

@@ -23,7 +23,7 @@ use std::sync::Arc;
 use slint::Weak;
 
 use chatter_core::inbox::handlers::DomainEvent;
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 /// Handle a domain event for UI updates only.
@@ -33,7 +33,7 @@ use crate::MainWindow;
 pub async fn handle_domain_event(
     event: DomainEvent,
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
 ) {
     match event {
         // =========================================================================

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::UserId;
 use chatter_core::services::conversation::ConversationHandle;
 
@@ -31,7 +31,7 @@ fn unregister_message_gifs(message: &MessageItemData) {
 /// Wire delete-message callback for DM and channel conversations.
 /// Delete-for-me: deletes locally and syncs to own devices, does not notify peer/channel.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
-pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
@@ -89,7 +89,7 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 /// Wire delete-everyone-message callback for DM and channel conversations.
 /// Sends delete notification to peer/channel so they remove the message too.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
-pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
@@ -120,6 +120,8 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<UIContext>
                 tracing::error!(error = %e, "Failed to send delete-for-everyone");
                 return;
             }
+
+            // Persistence is handled by ConversationHandle::send_delete()
 
             // Update UI — remove message from model
             let _ = slint::invoke_from_event_loop(move || {

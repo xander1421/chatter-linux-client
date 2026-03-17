@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
 
 use crate::MainWindow;
@@ -12,14 +12,14 @@ use crate::MainWindow;
 use super::channel::load_channel_into_ui;
 use super::stop_audio_playback;
 
-pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let auth_state = ui_ctx.auth_state.clone();
-    let chat_state = ui_ctx.chat_state.clone();
-    let channel_service = ui_ctx.channel_service.clone();
-    let message_service = ui_ctx.message_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
+    let auth_state = ui_ctx.auth_state().clone();
+    let chat_state = ui_ctx.chat_state().clone();
+    let channel_service = ui_ctx.channels().clone();
+    let message_service = ui_ctx.messages().clone();
+    let user_service = ui_ctx.users().clone();
+    let attachment_service = ui_ctx.attachments().clone();
 
     window.on_saved_messages_clicked(move || {
         let weak = weak_window.clone();
@@ -78,10 +78,10 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<UIContext>) 
     });
 }
 
-pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let auth_state = ui_ctx.auth_state.clone();
-    let privacy_state = ui_ctx.privacy_state.clone();
-    let signal_service = ui_ctx.signal_service.clone();
+pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let auth_state = ui_ctx.auth_state().clone();
+    let privacy_state = ui_ctx.privacy_state().clone();
+    let signal_service = ui_ctx.signal().clone();
 
     let weak_window = window.as_weak();
 
@@ -131,9 +131,9 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>
     });
 }
 
-pub(crate) fn wire_profile_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let auth_state = ui_ctx.auth_state.clone();
-    let user_state = ui_ctx.user_state.clone();
+pub(crate) fn wire_profile_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let auth_state = ui_ctx.auth_state().clone();
+    let user_state = ui_ctx.user_state().clone();
 
     let weak_window = window.as_weak();
 
@@ -144,28 +144,10 @@ pub(crate) fn wire_profile_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>)
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                let state = auth_state.get();
-                if let Some(user_id) = state.current_user_id {
-                    w.set_profile_user_id(user_id.to_string().into());
-                    w.set_profile_display_name(state.display_name.clone().unwrap_or_default().into());
-                    w.set_profile_username(user_id.to_string().into());
-                    w.set_profile_is_self(true);
-                    w.set_profile_is_friend(false);
-                    w.set_profile_is_blocked(false);
-                    w.set_profile_presence("online".into());
-
-                    // Set bio from user state if available
-                    if let Some(profile) = user_state.get_profile(&user_id) {
-                        if let Some(msg) = profile.status_message {
-                            w.set_profile_bio(msg.text.into());
-                        } else {
-                            w.set_profile_bio("".into());
-                        }
-                    } else {
-                        w.set_profile_bio("".into());
-                    }
-
-                    w.set_active_modal("user-profile".into());
+                if let Some(user_id) = auth_state.get().current_user_id {
+                    crate::bin_ui::features::modals::open_user_profile(
+                        &w, &user_id, &auth_state, &user_state,
+                    );
                 }
             }
         });
@@ -184,8 +166,8 @@ pub(crate) fn wire_create_join_channel(window: &MainWindow) {
     });
 }
 
-pub(crate) fn wire_toggle_sidebar(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let ui_state = ui_ctx.ui_state.clone();
+pub(crate) fn wire_toggle_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_state = ui_ctx.ui_state().clone();
     let weak_window = window.as_weak();
 
     window.on_toggle_sidebar(move || {
@@ -203,9 +185,9 @@ pub(crate) fn wire_toggle_sidebar(window: &MainWindow, ui_ctx: &Arc<UIContext>) 
     });
 }
 
-pub(crate) fn load_sidebar_collapsed_state(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub(crate) fn load_sidebar_collapsed_state(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Load saved collapsed state from UI state on startup
-    let collapsed = ui_ctx.ui_state.get().sidebar_collapsed;
+    let collapsed = ui_ctx.ui_state().get().sidebar_collapsed;
     window.set_sidebar_collapsed(collapsed);
 }
 
@@ -213,8 +195,8 @@ pub(crate) fn load_sidebar_collapsed_state(window: &MainWindow, ui_ctx: &Arc<UIC
 ///
 /// Opens the friends modal with the "requests" tab and "private" sub-tab selected.
 /// Refreshes both the badge count and the private requests list in the modal.
-pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
+pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let anon_dm_service = ui_ctx.anon_dms().clone();
     let weak_window = window.as_weak();
 
     window.on_message_requests_clicked(move || {
@@ -274,8 +256,8 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<UI
 }
 
 /// Load pending message requests count and list into the sidebar.
-pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    match ui_ctx.anon_dm_service.list_message_requests() {
+pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    match ui_ctx.anon_dms().list_message_requests() {
         Ok(requests) => {
             let count = requests.len() as i32;
 

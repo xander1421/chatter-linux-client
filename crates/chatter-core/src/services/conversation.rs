@@ -15,7 +15,6 @@
 
 use std::sync::Arc;
 
-use crate::app::UIContext;
 use crate::client::ChatterClient;
 use crate::domain::ids::{ChannelId, UserId};
 use crate::state::ActiveConversation;
@@ -39,39 +38,26 @@ pub enum ConversationError {
 
 /// Polymorphic conversation operations.
 ///
-/// Wraps `ActiveConversation` + `UIContext` to provide a single API
+/// Wraps `ActiveConversation` + `ChatterClient` to provide a single API
 /// for all conversation types. The correct service is dispatched
 /// internally based on the conversation variant.
 #[derive(Clone)]
 pub struct ConversationHandle {
     conversation: ActiveConversation,
-    ui_ctx: Arc<UIContext>,
+    client: Arc<ChatterClient>,
 }
 
 impl ConversationHandle {
     /// Create a handle for a specific conversation.
-    pub fn new(conversation: ActiveConversation, ui_ctx: Arc<UIContext>) -> Self {
-        Self { conversation, ui_ctx }
-    }
-
-    /// Create from a [`ChatterClient`] (SDK entry point).
-    pub fn from_client(conversation: ActiveConversation, client: &Arc<ChatterClient>) -> Self {
-        Self { conversation, ui_ctx: client.ui_context().clone() }
+    pub fn new(conversation: ActiveConversation, client: Arc<ChatterClient>) -> Self {
+        Self { conversation, client }
     }
 
     /// Create for the current active conversation.
-    pub fn current(ui_ctx: &Arc<UIContext>) -> Self {
-        Self {
-            conversation: ui_ctx.chat_state.active_conversation(),
-            ui_ctx: ui_ctx.clone(),
-        }
-    }
-
-    /// Create for the current active conversation from a [`ChatterClient`].
-    pub fn current_from_client(client: &Arc<ChatterClient>) -> Self {
+    pub fn current(client: &Arc<ChatterClient>) -> Self {
         Self {
             conversation: client.chat_state().active_conversation(),
-            ui_ctx: client.ui_context().clone(),
+            client: client.clone(),
         }
     }
 
@@ -94,15 +80,19 @@ impl ConversationHandle {
     ) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                self.ui_ctx.anon_dm_service
+                self.client.anon_dms()
                     .send_reaction(id, emoji, target_author, target_sent_timestamp, remove)
                     .await?;
                 Ok(())
             }
             ActiveConversation::AnonGroup(id) => {
-                self.ui_ctx.anon_group_service
+                self.client.anon_groups()
                     .send_reaction(id, emoji, target_author, target_sent_timestamp, remove)
                     .await?;
+                // Persist own reaction
+                if let Some(user_id) = self.client.auth_state().get().current_user_id {
+                    let _ = self.client.anon_groups().add_reaction(id, target_sent_timestamp, &user_id, emoji);
+                }
                 Ok(())
             }
             ActiveConversation::Dm { peer_id, .. } => {
@@ -111,7 +101,10 @@ impl ConversationHandle {
                 let content = crate::services::build_reaction_content(
                     emoji, remove, &author_aci, target_sent_timestamp,
                 );
-                self.send_dm_content(content, peer_id).await
+                self.send_dm_content(content, peer_id).await?;
+                // Persist own reaction to DB
+                let _ = self.client.messages().update_reaction(&msg.id, emoji, !remove);
+                Ok(())
             }
             ActiveConversation::Channel(channel_id) => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
@@ -120,7 +113,10 @@ impl ConversationHandle {
                     emoji, remove, &author_aci, target_sent_timestamp,
                     Some(&channel_id.to_string()),
                 );
-                self.send_channel_content(content, channel_id).await
+                self.send_channel_content(content, channel_id).await?;
+                // Persist own reaction to DB
+                let _ = self.client.messages().update_reaction(&msg.id, emoji, !remove);
+                Ok(())
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
@@ -130,11 +126,11 @@ impl ConversationHandle {
     pub async fn send_typing(&self, started: bool) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                self.ui_ctx.anon_dm_service.send_typing_indicator(id, started).await?;
+                self.client.anon_dms().send_typing_indicator(id, started).await?;
                 Ok(())
             }
             ActiveConversation::AnonGroup(id) => {
-                self.ui_ctx.anon_group_service.send_typing_indicator(id, started).await?;
+                self.client.anon_groups().send_typing_indicator(id, started).await?;
                 Ok(())
             }
             ActiveConversation::Dm { peer_id, .. } => {
@@ -151,24 +147,27 @@ impl ConversationHandle {
         }
     }
 
-    /// Send a pin/unpin.
+    /// Send a pin/unpin and persist locally.
     pub async fn send_pin(
         &self,
         target_author: &str,
         target_sent_timestamp: u64,
         unpin: bool,
     ) -> ConversationResult {
+        let new_pinned = !unpin;
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                self.ui_ctx.anon_dm_service
+                self.client.anon_dms()
                     .send_pin(id, target_author, target_sent_timestamp, unpin)
                     .await?;
+                let _ = self.client.anon_dms().set_message_pinned(id, target_sent_timestamp, new_pinned);
                 Ok(())
             }
             ActiveConversation::AnonGroup(id) => {
-                self.ui_ctx.anon_group_service
+                self.client.anon_groups()
                     .send_pin(id, target_author, target_sent_timestamp, unpin)
                     .await?;
+                let _ = self.client.anon_groups().set_message_pinned(id, target_sent_timestamp, new_pinned);
                 Ok(())
             }
             ActiveConversation::Dm { peer_id, .. } => {
@@ -177,7 +176,9 @@ impl ConversationHandle {
                 let content = crate::services::build_pin_content(
                     &author_aci, target_sent_timestamp, unpin,
                 );
-                self.send_dm_content(content, peer_id).await
+                self.send_dm_content(content, peer_id).await?;
+                let _ = self.client.messages().set_message_pinned(&msg.id, new_pinned);
+                Ok(())
             }
             ActiveConversation::Channel(channel_id) => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
@@ -186,13 +187,15 @@ impl ConversationHandle {
                     &author_aci, target_sent_timestamp, unpin,
                     Some(&channel_id.to_string()),
                 );
-                self.send_channel_content(content, channel_id).await
+                self.send_channel_content(content, channel_id).await?;
+                let _ = self.client.messages().set_message_pinned(&msg.id, new_pinned);
+                Ok(())
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }
 
-    /// Send an edit.
+    /// Send an edit and persist locally.
     pub async fn send_edit(
         &self,
         target_sent_timestamp: u64,
@@ -200,13 +203,15 @@ impl ConversationHandle {
     ) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                self.ui_ctx.anon_dm_service
+                // anon_dms().send_edit() persists internally
+                self.client.anon_dms()
                     .send_edit(id, target_sent_timestamp, new_text)
                     .await?;
                 Ok(())
             }
             ActiveConversation::AnonGroup(id) => {
-                self.ui_ctx.anon_group_service
+                // anon_groups().send_edit() persists internally
+                self.client.anon_groups()
                     .send_edit(id, target_sent_timestamp, new_text)
                     .await?;
                 Ok(())
@@ -215,44 +220,62 @@ impl ConversationHandle {
                 let content = crate::services::gateway::builders::build_edit_content(
                     target_sent_timestamp, new_text,
                 );
-                self.send_dm_content(content, peer_id).await
+                self.send_dm_content(content, peer_id).await?;
+                // Persist edit locally
+                self.persist_edit(target_sent_timestamp, new_text);
+                Ok(())
             }
             ActiveConversation::Channel(channel_id) => {
                 let content = crate::services::gateway::builders::build_edit_content_with_channel(
                     target_sent_timestamp, new_text, Some(&channel_id.to_string()),
                 );
-                self.send_channel_content(content, channel_id).await
+                self.send_channel_content(content, channel_id).await?;
+                self.persist_edit(target_sent_timestamp, new_text);
+                Ok(())
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }
 
-    /// Send a delete-for-everyone.
+    /// Send a delete-for-everyone and persist locally.
     pub async fn send_delete(&self, target_sent_timestamp: u64) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                self.ui_ctx.anon_dm_service
+                self.client.anon_dms()
                     .send_delete_for_everyone(id, target_sent_timestamp)
                     .await?;
+                // Persist locally
+                if let Some(user_id) = self.client.auth_state().get().current_user_id {
+                    let _ = self.client.anon_dms().delete_message_by_timestamp(id, &user_id, target_sent_timestamp);
+                }
                 Ok(())
             }
             ActiveConversation::AnonGroup(id) => {
-                self.ui_ctx.anon_group_service
+                self.client.anon_groups()
                     .send_delete_for_everyone(id, target_sent_timestamp)
                     .await?;
+                // Persist locally
+                if let Some(user_id) = self.client.auth_state().get().current_user_id {
+                    let _ = self.client.anon_groups().delete_message_by_timestamp(id, &user_id, target_sent_timestamp);
+                }
                 Ok(())
             }
             ActiveConversation::Dm { peer_id, .. } => {
                 let content = crate::services::build_delete_for_everyone_content(
                     target_sent_timestamp,
                 );
-                self.send_dm_content(content, peer_id).await
+                self.send_dm_content(content, peer_id).await?;
+                // Persist deletion locally (sender doesn't get their own delete back)
+                self.delete_local_by_timestamp(target_sent_timestamp);
+                Ok(())
             }
             ActiveConversation::Channel(channel_id) => {
                 let content = crate::services::build_delete_for_everyone_content_with_channel(
                     target_sent_timestamp, Some(&channel_id.to_string()),
                 );
-                self.send_channel_content(content, channel_id).await
+                self.send_channel_content(content, channel_id).await?;
+                self.delete_local_by_timestamp(target_sent_timestamp);
+                Ok(())
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
@@ -266,13 +289,13 @@ impl ConversationHandle {
     ) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                self.ui_ctx.anon_dm_service
+                self.client.anon_dms()
                     .delete_message_by_timestamp(id, target_author, target_sent_timestamp)
                     .map(|_| ())
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
             ActiveConversation::AnonGroup(id) => {
-                self.ui_ctx.anon_group_service
+                self.client.anon_groups()
                     .delete_message_by_timestamp(id, target_author, target_sent_timestamp)
                     .map(|_| ())
                     .map_err(|e| ConversationError::Other(e.to_string()))
@@ -284,7 +307,7 @@ impl ConversationHandle {
                     &peer_id.to_string(), &author_aci, target_sent_timestamp,
                 );
                 self.send_dm_content(content, peer_id).await?;
-                self.ui_ctx.message_service.delete_message_local(&msg.id)
+                self.client.messages().delete_message_local(&msg.id)
                     .map_err(ConversationError::Message)
             }
             ActiveConversation::Channel(channel_id) => {
@@ -294,7 +317,7 @@ impl ConversationHandle {
                     &channel_id.to_string(), &author_aci, target_sent_timestamp,
                 );
                 self.send_channel_content(content, channel_id).await?;
-                self.ui_ctx.message_service.delete_message_local(&msg.id)
+                self.client.messages().delete_message_local(&msg.id)
                     .map_err(ConversationError::Message)
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
@@ -309,14 +332,14 @@ impl ConversationHandle {
     ) -> ConversationResult<Option<String>> {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                match self.ui_ctx.anon_dm_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                match self.client.anon_dms().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
                     Ok(Some(msg)) => Ok(msg.as_text()),
                     Ok(None) => Ok(None),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
             ActiveConversation::AnonGroup(id) => {
-                match self.ui_ctx.anon_group_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                match self.client.anon_groups().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
                     Ok(Some(msg)) => Ok(msg.as_text()),
                     Ok(None) => Ok(None),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
@@ -338,14 +361,14 @@ impl ConversationHandle {
     ) -> ConversationResult<Vec<crate::domain::AttachmentId>> {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                match self.ui_ctx.anon_dm_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                match self.client.anon_dms().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
                     Ok(Some(msg)) => Ok(msg.attachment_ids()),
                     Ok(None) => Ok(vec![]),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
             ActiveConversation::AnonGroup(id) => {
-                match self.ui_ctx.anon_group_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                match self.client.anon_groups().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
                     Ok(Some(msg)) => Ok(msg.attachment_ids()),
                     Ok(None) => Ok(vec![]),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
@@ -365,17 +388,17 @@ impl ConversationHandle {
         target_author: &UserId,
         target_sent_timestamp: u64,
     ) -> ConversationResult<bool> {
-        let current_user_id = self.ui_ctx.auth_state.get().current_user_id;
+        let current_user_id = self.client.auth_state().get().current_user_id;
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                match self.ui_ctx.anon_dm_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                match self.client.anon_dms().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
                     Ok(Some(msg)) => Ok(Some(msg.sender_id) == current_user_id),
                     Ok(None) => Err(ConversationError::Other("Message not found".into())),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
             ActiveConversation::AnonGroup(id) => {
-                match self.ui_ctx.anon_group_service.get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                match self.client.anon_groups().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
                     Ok(Some(msg)) => Ok(Some(msg.sender_id) == current_user_id),
                     Ok(None) => Err(ConversationError::Other("Message not found".into())),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
@@ -388,6 +411,7 @@ impl ConversationHandle {
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }
+
 
     // ========================================================================
     // Receipts
@@ -437,26 +461,26 @@ impl ConversationHandle {
     pub async fn mark_as_read(&self) -> ConversationResult {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
-                if let Err(e) = self.ui_ctx.anon_dm_service.mark_as_read(id) {
+                if let Err(e) = self.client.anon_dms().mark_as_read(id) {
                     tracing::warn!("Failed to mark anon DM as read: {}", e);
                 }
                 // Send read receipts for peer messages
-                let current_user = self.ui_ctx.auth_state.get().current_user_id;
-                if let Ok(messages) = self.ui_ctx.anon_dm_service.get_messages(id, None, 50) {
+                let current_user = self.client.auth_state().get().current_user_id;
+                if let Ok(messages) = self.client.anon_dms().get_messages(id, None, 50) {
                     let timestamps: Vec<u64> = messages.iter()
                         .filter(|m| current_user.map(|uid| m.sender_id != uid).unwrap_or(true))
                         .map(|m| m.sent_at)
                         .collect();
                     if !timestamps.is_empty() {
-                        let _ = self.ui_ctx.anon_dm_service.send_read_receipt(id, timestamps).await;
+                        let _ = self.client.anon_dms().send_read_receipt(id, timestamps).await;
                     }
                 }
                 Ok(())
             }
             ActiveConversation::AnonGroup(_) => Ok(()),
-            ActiveConversation::Dm { channel_id, peer_id } => {
-                let my_user_id = self.ui_ctx.auth_state.get().current_user_id;
-                if let Ok(messages) = self.ui_ctx.message_service.get_messages_local(channel_id, None, 50) {
+            ActiveConversation::Dm { channel_id, .. } => {
+                let my_user_id = self.client.auth_state().get().current_user_id;
+                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, None, 50) {
                     let timestamps: Vec<u64> = messages.iter()
                         .filter(|m| m.sender_id.as_ref() != my_user_id.as_ref())
                         .map(|m| m.sent_at)
@@ -466,8 +490,8 @@ impl ConversationHandle {
                 Ok(())
             }
             ActiveConversation::Channel(channel_id) => {
-                let my_user_id = self.ui_ctx.auth_state.get().current_user_id.map(|id| id.to_string());
-                if let Ok(messages) = self.ui_ctx.message_service.get_messages_local(channel_id, None, 50) {
+                let my_user_id = self.client.auth_state().get().current_user_id.map(|id| id.to_string());
+                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, None, 50) {
                     let timestamps: Vec<u64> = messages.iter()
                         .filter(|m| m.sender_id.as_ref().map(|id| id.to_string()).as_ref() != my_user_id.as_ref())
                         .map(|m| m.sent_at)
@@ -485,6 +509,25 @@ impl ConversationHandle {
     // ========================================================================
 
     /// Look up a message by sender + timestamp (for standard DM/Channel paths).
+    /// Persist an edit to local DB (for sender's own edits).
+    fn persist_edit(&self, sent_timestamp: u64, new_text: &str) {
+        if let Some(user_id) = self.client.auth_state().get().current_user_id {
+            if let Ok(Some(msg)) = self.client.messages().get_by_sender_timestamp(&user_id, sent_timestamp) {
+                let new_content = crate::domain::message::MessageContent::Text(new_text.to_string());
+                let _ = self.client.messages().update_message_body(&msg.id, &new_content);
+            }
+        }
+    }
+
+    /// Delete a message from local DB by timestamp (for sender's own deletes).
+    fn delete_local_by_timestamp(&self, sent_timestamp: u64) {
+        if let Some(user_id) = self.client.auth_state().get().current_user_id {
+            if let Ok(Some(msg)) = self.client.messages().get_by_sender_timestamp(&user_id, sent_timestamp) {
+                let _ = self.client.messages().delete_message_local(&msg.id);
+            }
+        }
+    }
+
     fn lookup_message(
         &self,
         sender_id_str: &str,
@@ -492,7 +535,7 @@ impl ConversationHandle {
     ) -> ConversationResult<crate::domain::Message> {
         let sender_id: UserId = sender_id_str.parse()
             .map_err(|_| ConversationError::Other("Invalid sender ID".into()))?;
-        self.ui_ctx.message_service
+        self.client.messages()
             .get_by_sender_timestamp(&sender_id, sent_timestamp)
             .map_err(|e| ConversationError::Message(e))?
             .ok_or_else(|| ConversationError::Other("Message not found".into()))
@@ -504,8 +547,8 @@ impl ConversationHandle {
         content: crate::proto::content_v1::Content,
         peer_id: &UserId,
     ) -> ConversationResult {
-        self.ui_ctx.message_service
-            .send_dm(peer_id, content, &self.ui_ctx.mailbox_manager)
+        self.client.messages()
+            .send_dm(peer_id, content, &**self.client.mailbox_manager())
             .await
             .map_err(ConversationError::Message)
     }
@@ -516,7 +559,7 @@ impl ConversationHandle {
         content: crate::proto::content_v1::Content,
         channel_id: &ChannelId,
     ) -> ConversationResult {
-        self.ui_ctx.message_service
+        self.client.messages()
             .send_control(channel_id, content, None)
             .await
             .map(|_| ())

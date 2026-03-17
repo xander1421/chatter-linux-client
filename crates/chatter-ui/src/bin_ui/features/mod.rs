@@ -28,11 +28,11 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 /// Wire all UI callbacks to their handlers.
-pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     auth::wire(window, ui_ctx);
     navigation::wire(window);
     chat::wire(window, ui_ctx);

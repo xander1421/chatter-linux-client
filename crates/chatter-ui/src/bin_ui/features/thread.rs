@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, MessageId};
 use chatter_core::services::attachment::AttachmentService;
 use chatter_core::services::channel::ChannelService;
@@ -15,15 +15,15 @@ use chatter_core::state::ChatState;
 use crate::bin_ui::converters::message_to_display_data;
 use crate::MainWindow;
 
-pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_close_thread(window, ui_ctx);
     wire_send_thread_reply(window, ui_ctx);
     wire_load_more_thread_replies(window, ui_ctx);
 }
 
-fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state.clone();
+    let chat_state = ui_ctx.chat_state().clone();
     window.on_close_thread_clicked(move || {
         let weak = weak_window.clone();
         if let Some(thread) = chat_state.active_thread() { chat_state.close_thread(thread.root_message_id); }
@@ -34,10 +34,10 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state.clone();
-    let message_service = ui_ctx.message_service.clone();
+    let chat_state = ui_ctx.chat_state().clone();
+    let message_service = ui_ctx.messages().clone();
     window.on_send_thread_reply(move |text: SharedString| {
         let text = text.to_string();
         if text.trim().is_empty() { return; }
@@ -58,12 +58,12 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
     });
 }
 
-fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let chat_state = ui_ctx.chat_state.clone();
-    let message_service = ui_ctx.message_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
+    let chat_state = ui_ctx.chat_state().clone();
+    let message_service = ui_ctx.messages().clone();
+    let user_service = ui_ctx.users().clone();
+    let attachment_service = ui_ctx.attachments().clone();
     window.on_load_more_thread_replies(move || {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();

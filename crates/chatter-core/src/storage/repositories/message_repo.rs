@@ -493,6 +493,26 @@ impl MessageRepository {
         Ok(rows > 0)
     }
 
+    /// Update delivery status by sent_at timestamp only (no channel_id needed).
+    /// Used for delivery/read receipts where the channel isn't always known.
+    pub fn update_delivery_status_by_timestamp(
+        &self,
+        sent_at: u64,
+        status: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE messages SET delivery_status = ?1, updated_at = ?2
+             WHERE sent_at = ?3",
+            params![
+                status,
+                Utc::now().to_rfc3339(),
+                sent_at as i64,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Insert or update thread metadata.
     pub fn upsert_thread(&self, thread: &Thread) -> Result<(), StorageError> {
         let conn = self.db.connection()?;

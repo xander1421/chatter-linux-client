@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 #[cfg(not(target_os = "android"))]
 use chatter_core::calls::ScreenCapture;
 use chatter_core::inbox::handlers::DomainEvent;
@@ -17,8 +17,8 @@ use super::call_history::create_call_history_message;
 use super::timers::{get_call_duration_secs, stop_call_timer, stop_video_frame_timer};
 
 /// Wire active call control callbacks.
-pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let call_service = ui_ctx.call_service.clone();
+pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let call_service = ui_ctx.call_service().clone();
 
     // Toggle mute
     window.on_call_toggle_mute({
@@ -109,38 +109,19 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         }
     });
 
-    let weak = window.as_weak();
-    let message_service = ui_ctx.message_service.clone();
-    let mailbox_manager = ui_ctx.mailbox_manager.clone();
-    let session_service = ui_ctx.session_service.clone();
-    let channel_service = ui_ctx.channel_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let anon_dm_service = ui_ctx.anon_dm_service.clone();
-    let chat_state = ui_ctx.chat_state.clone();
-
     // End call
     window.on_call_end({
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
         let call_service = call_service.clone();
-        let message_service = message_service.clone();
-        let mailbox_manager = mailbox_manager.clone();
-        let session_service = session_service.clone();
-        let channel_service = channel_service.clone();
-        let user_service = user_service.clone();
-        let anon_dm_service = anon_dm_service.clone();
-        let chat_state = chat_state.clone();
 
         move || {
-            tracing::info!("End call");
-
+            let ui_ctx = ui_ctx.clone();
             let weak = weak.clone();
             let call_service = call_service.clone();
-            let message_service = message_service.clone();
-            let mailbox_manager = mailbox_manager.clone();
-            let session_service = session_service.clone();
-            let channel_service = channel_service.clone();
-            let user_service = user_service.clone();
-            let anon_dm_service_clone = anon_dm_service.clone();
-            let conversation = chat_state.active_conversation();
+            tracing::info!("End call");
+
+            let conversation = ui_ctx.chat_state().active_conversation();
             
             // Get call info before the async block
             let (call_id_str, is_anonymous) = if let Some(w) = weak.upgrade() {
@@ -162,7 +143,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 // Check if this is an anonymous call
                 if is_anonymous {
                     // Try to get the pending call from service
-                    if let Some(pending_anon) = anon_dm_service_clone.take_pending_anon_call(&call_id_str) {
+                    if let Some(pending_anon) = ui_ctx.anon_dms().take_pending_anon_call(&call_id_str) {
                     // Send anonymous call hangup
                     tracing::info!(
                         conversation_id = %pending_anon.conversation_id,
@@ -170,7 +151,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         "Sending anonymous call hangup"
                     );
                     
-                    if let Err(e) = anon_dm_service_clone.send_call_hangup(
+                    if let Err(e) = ui_ctx.anon_dms().send_call_hangup(
                         &pending_anon.conversation_id,
                         &pending_anon.call_room_id,
                         chatter_core::proto::content_v1::anon_call_hangup::Reason::Normal,
@@ -196,8 +177,8 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                     // Store in anon DM message store
                     let sent_at = super::timers::current_time_ns();
-                    let our_user_id = session_service.current_user_id().unwrap_or_else(chatter_core::domain::ids::UserId::new);
-                    if let Err(e) = anon_dm_service_clone.store_message(
+                    let our_user_id = ui_ctx.auth_state().get().current_user_id.unwrap_or_else(chatter_core::domain::ids::UserId::new);
+                    if let Err(e) = ui_ctx.anon_dms().store_message(
                         &pending_anon.conversation_id,
                         &our_user_id,
                         0, // text content type
@@ -266,64 +247,46 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                     if let Some(ref call) = call_info {
                         let channel_id = &call.channel_id;
 
-                        // Get current user ID
-                        if let Some(user_id) = session_service.current_user_id() {
-                            // Check if this is a DM call (use channel service)
-                            if let Ok(Some(peer_id)) = channel_service.get_dm_peer_local(channel_id) {
-                                tracing::info!(
-                                    peer_id = %peer_id,
-                                    call_id = %call.id,
-                                    "Sending call hangup notification"
-                                );
-
-                                // Build hangup content
-                                let content = chatter_core::services::build_call_hangup_content(
-                                    &call.id.to_string(),
-                                    chatter_core::services::CallHangupReason::Normal,
-                                );
-
-                                // Send via sealed sender
-                                if let Err(e) = message_service
-                                    .send_dm(&peer_id, content, &mailbox_manager)
-                                    .await
-                                {
-                                    tracing::error!(
-                                        peer_id = %peer_id,
-                                        error = %e,
-                                        "Failed to send hangup notification"
-                                    );
+                        // Send hangup via CallSignalingService
+                        {
+                            let signaling = ui_ctx.call_signaling();
+                            let call_id_str = call.id.to_string();
+                            let ch_id = *channel_id;
+                            tokio::spawn(async move {
+                                if let Err(e) = signaling.send_call_hangup(
+                                    &ch_id,
+                                    &call_id_str,
+                                    chatter_core::services::gateway::CallHangupReason::Normal,
+                                ).await {
+                                    tracing::error!(error = %e, "Failed to send hangup notification");
                                 } else {
-                                    tracing::info!(
-                                        peer_id = %peer_id,
-                                        call_id = %call.id,
-                                        "Hangup notification sent successfully"
-                                    );
+                                    tracing::info!(call_id = %call_id_str, "Hangup notification sent");
                                 }
-                            }
-
-                            // Create call history message
-                            let is_outgoing = call.initiator_id == user_id;
-                            let duration_secs = get_call_duration_secs();
-
-                            // Get initiator display name (via user service)
-                            let initiator_name = user_service
-                                .get_user_local(&call.initiator_id)
-                                .ok()
-                                .flatten()
-                                .map(|u| u.username.clone())
-                                .unwrap_or_else(|| call.initiator_id.to_string());
-
-                            create_call_history_message(
-                                message_service.clone(),
-                                channel_id,
-                                &call.id.to_string(),
-                                &call.initiator_id,
-                                &initiator_name,
-                                is_outgoing,
-                                duration_secs,
-                                false, // not missed - call was answered and ended normally
-                            );
+                            });
                         }
+
+                        // Create call history message
+                        let user_id = ui_ctx.auth_state().get().current_user_id.unwrap_or_else(|| chatter_core::domain::ids::UserId::from_uuid(uuid::Uuid::nil()));
+                        let is_outgoing = call.initiator_id == user_id;
+                        let duration_secs = get_call_duration_secs();
+
+                        let initiator_name = ui_ctx.users()
+                            .get_user_local(&call.initiator_id)
+                            .ok()
+                            .flatten()
+                            .map(|u| u.username.clone())
+                            .unwrap_or_else(|| call.initiator_id.to_string());
+
+                        create_call_history_message(
+                            ui_ctx.messages().clone(),
+                            channel_id,
+                            &call.id.to_string(),
+                            &call.initiator_id,
+                            &initiator_name,
+                            is_outgoing,
+                            duration_secs,
+                            false,
+                        );
                     }
 
                     // Leave the call (async cleanup - UI already updated above)
@@ -345,13 +308,11 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 ///
 /// Subscribes to `DomainEvent::CallHangupReceived` from the event bus
 /// and calls `leave_call()` on the CallService to disconnect from LiveKit.
-pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
-    let call_service = ui_ctx.call_service.clone();
-    let mut event_rx = ui_ctx.event_bus.subscribe_domain();
+pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let call_service = ui_ctx.call_service().clone();
+    let mut event_rx = ui_ctx.event_bus().subscribe_domain();
     let weak = window.as_weak();
-    let message_service = ui_ctx.message_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let session_service = ui_ctx.session_service.clone();
+    let ui_ctx = ui_ctx.clone();
 
     // Spawn a task to handle incoming hangup events
     // Note: This runs in a slint::spawn_local context which keeps CallService on UI thread
@@ -385,12 +346,10 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         // Create call history message before disconnecting
                         if let Some(ref call) = call_info {
                             // Get current user ID to determine if this was incoming
-                            if let Some(current_user_id) = session_service.current_user_id() {
-                                // Incoming call = we didn't initiate it
+                            if let Some(current_user_id) = ui_ctx.auth_state().get().current_user_id {
                                 let is_outgoing = call.initiator_id == current_user_id;
 
-                                // Get initiator display name (via user service)
-                                let initiator_name = user_service
+                                let initiator_name = ui_ctx.users()
                                     .get_user_local(&call.initiator_id)
                                     .ok()
                                     .flatten()
@@ -398,7 +357,7 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                                     .unwrap_or_else(|| call.initiator_id.to_string());
 
                                 create_call_history_message(
-                                    message_service.clone(),
+                                    ui_ctx.messages().clone(),
                                     &call.channel_id,
                                     &call.id.to_string(),
                                     &call.initiator_id,

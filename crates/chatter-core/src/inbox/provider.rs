@@ -503,7 +503,7 @@ impl DeviceInboxProvider {
                     .map(|keys| keys.len())
                     .unwrap_or(0);
 
-                tracing::info!(
+                tracing::trace!(
                     mailbox_count = mailbox_count,
                     "[ANON_DM] Polling anonymous DM mailboxes"
                 );

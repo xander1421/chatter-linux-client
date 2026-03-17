@@ -4,18 +4,18 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
 
 /// Wire status change callbacks.
-pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_status_change(window, ui_ctx);
     wire_status_getter(window);
 }
 
 /// Wire the status change callback.
-fn wire_status_change(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+fn wire_status_change(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
     

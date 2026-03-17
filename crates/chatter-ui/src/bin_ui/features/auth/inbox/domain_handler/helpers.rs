@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::{Model, Weak};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 /// Update unread count badge in sidebar.
@@ -21,13 +21,13 @@ pub(super) fn update_unread_count(window: &MainWindow, channel_id: &str, count: 
 /// and the `PinnedState` so that navigation arrows work correctly.
 pub(super) fn handle_pin_ui_update(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     channel_id: chatter_core::domain::ids::ChannelId,
     target_sent_timestamp: u64,
     unpin: bool,
 ) {
     let weak = window.clone();
-    let pinned_state = ui_ctx.pinned_state.clone();
+    let pinned_state = ui_ctx.pinned_state().clone();
     let channel_id_str = channel_id.to_string();
     let target_ts_str = target_sent_timestamp.to_string();
 

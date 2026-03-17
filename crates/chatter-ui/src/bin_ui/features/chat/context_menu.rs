@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
+use chatter_core::domain::channel::Permissions;
 use chatter_core::domain::UserId;
 use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
@@ -13,7 +14,7 @@ use crate::MainWindow;
 
 /// Wire more-clicked callback to show context menu.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
-pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = Arc::clone(ui_ctx);
     let weak_window = window.as_weak();
 
@@ -25,7 +26,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
         let menu_x = click_x;
         let menu_y = click_y;
 
-        let conversation = ui_ctx.chat_state.active_conversation();
+        let conversation = ui_ctx.chat_state().active_conversation();
         if matches!(conversation, ActiveConversation::None) {
             return;
         }
@@ -56,6 +57,16 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
+            // Derive delete-for-everyone from permissions:
+            // DMs use Permissions::dm() (both users can delete any message),
+            // channels use role-based permissions checked via is_own_message.
+            let can_delete_for_everyone = match &conversation {
+                ActiveConversation::Dm { .. } | ActiveConversation::AnonDm(_) => {
+                    Permissions::dm().can_delete_any_message
+                }
+                _ => is_own_message,
+            };
+
             if conversation.is_anon() {
                 // Anon conversations: get pin state and attachments from UI model
                 let _ = slint::invoke_from_event_loop(move || {
@@ -63,14 +74,14 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                         let (is_pinned, has_attachments) = find_message_ui_state(
                             &w, &sender_id_str, &timestamp_ns_str,
                         );
-                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, is_pinned, has_attachments, menu_x, menu_y);
+                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, can_delete_for_everyone, is_pinned, has_attachments, menu_x, menu_y);
                     }
                 });
             } else {
                 // DM/Channel: get pin state and attachments from service data
                 let msg = match handle.conversation() {
                     ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
-                        match ui_ctx.message_service.get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
+                        match ui_ctx.messages().get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                             Ok(Some(msg)) => msg,
                             Ok(None) => {
                                 tracing::error!("Message not found for context menu");
@@ -90,7 +101,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, is_pinned, has_attachments, menu_x, menu_y);
+                        set_context_menu(&w, sender_id_str, timestamp_ns_str, is_own_message, can_delete_for_everyone, is_pinned, has_attachments, menu_x, menu_y);
                     }
                 });
             }
@@ -117,6 +128,7 @@ fn set_context_menu(
     sender_id: String,
     timestamp_ns: String,
     is_own_message: bool,
+    can_delete_for_everyone: bool,
     is_pinned: bool,
     has_attachments: bool,
     menu_x: f32,
@@ -125,6 +137,7 @@ fn set_context_menu(
     w.set_context_menu_sender_id(sender_id.into());
     w.set_context_menu_timestamp_ns(timestamp_ns.into());
     w.set_context_menu_is_own_message(is_own_message);
+    w.set_context_menu_can_delete_for_everyone(can_delete_for_everyone);
     w.set_context_menu_is_pinned(is_pinned);
     w.set_context_menu_has_attachments(has_attachments);
     w.set_context_menu_x(menu_x);

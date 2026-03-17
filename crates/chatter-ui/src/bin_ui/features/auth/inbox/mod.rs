@@ -39,24 +39,29 @@ use std::sync::Arc;
 
 use slint::Model;
 
-use chatter_core::app::UIContext;
-use chatter_core::inbox::handlers::DomainEvent;
+use chatter_core::client::ChatterClient;
 use chatter_core::inbox::InboxEvent;
 
 use crate::bin_ui::features::calls::cleanup_call_ui_state;
-use chatter_core::services::conversation::ConversationHandle;
 use crate::MainWindow;
 
 // Re-export public items
 pub use utils::update_reaction_summary;
 
 /// Handle inbox events and update UI accordingly.
+///
+/// Protocol-only logic (delivery receipts, convergence, sender keys, etc.)
+/// is handled by `InboxEventProcessor` in chatter-core. This function
+/// only handles events that require UI updates (Slint model changes).
 pub async fn handle_inbox_event(
     event: InboxEvent,
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
 ) {
     match event {
+        // =================================================================
+        // DM Events (UI-only parts — protocol handled by InboxEventProcessor)
+        // =================================================================
         InboxEvent::DmReceived {
             peer_id,
             channel_id,
@@ -65,89 +70,43 @@ pub async fn handle_inbox_event(
             message_id,
             attachments,
         } => {
+            // UI display only — delivery receipt is sent by InboxEventProcessor
             dm::handle_dm_received(weak_window, ui_ctx, peer_id, channel_id, text.clone(), timestamp, message_id, attachments);
+        }
 
-            // Send delivery receipt back to sender (Signal Protocol)
-            tracing::info!(
-                peer_id = %peer_id,
-                timestamp,
-                "DELIVERY_RECEIPT: Triggering delivery receipt for received DM"
-            );
-            {
-                let handle = ConversationHandle::new(
-                    chatter_core::state::ActiveConversation::Dm { channel_id, peer_id },
-                    ui_ctx.clone(),
-                );
-                tokio::spawn(async move {
-                    if let Err(e) = handle.send_delivery_receipt(&[timestamp]).await {
-                        tracing::warn!("Failed to send DM delivery receipt: {}", e);
-                    }
-                });
-            }
+        // Protocol-only: handled entirely by InboxEventProcessor
+        InboxEvent::DmDecryptionFailed { .. }
+        | InboxEvent::DmRetryRequested { .. }
+        | InboxEvent::DmMailboxExpired { .. }
+        | InboxEvent::DmPollCompleted { .. }
+        | InboxEvent::MessageReceived { .. }
+        | InboxEvent::MessageProcessed { .. }
+        | InboxEvent::MessageFailed { .. }
+        | InboxEvent::PollCompleted { .. }
+        | InboxEvent::PollFailed { .. }
+        | InboxEvent::AcknowledgeFailed { .. }
+        | InboxEvent::GroupMailboxPollCompleted { .. }
+        | InboxEvent::GroupMailboxAnnouncement { .. }
+        | InboxEvent::CallKeyAnswerReceived { .. }
+        | InboxEvent::GroupCallKeyReceived { .. }
+        | InboxEvent::SenderKeyNeeded { .. }
+        | InboxEvent::RespondWithSkdm { .. }
+        | InboxEvent::AnonGroupJoinAck { .. }
+        | InboxEvent::AnonGroupMemberList { .. }
+        | InboxEvent::AnonGroupLeave { .. }
+        | InboxEvent::AnonGroupKick { .. }
+        | InboxEvent::AnonGroupUpdate { .. }
+        | InboxEvent::AnonDmMessage { .. } => {
+            // Fully handled by InboxEventProcessor — nothing to do here
         }
-        InboxEvent::DmDecryptionFailed { peer_id, error, convergence_failed } => {
-            tracing::error!(
-                "DM decryption failed from {}: {} (convergence_failed={})",
-                peer_id, error, convergence_failed
-            );
 
-            if convergence_failed {
-                ui_ctx.dm_bootstrap_service.handle_convergence_failure(peer_id);
-            }
-        }
-        InboxEvent::DmRetryRequested { peer_id, original_timestamp } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                original_timestamp,
-                "DM retry requested - resetting session"
-            );
-
-            ui_ctx.dm_bootstrap_service.handle_convergence_failure(peer_id);
-        }
-        InboxEvent::DmMailboxExpired { peer_id } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                "HEALING: DmMailboxExpired event received, triggering re-bootstrap"
-            );
-            ui_ctx.dm_bootstrap_service.handle_mailbox_expired(peer_id);
-        }
-        InboxEvent::DmPollCompleted { total_messages } => {
-            if total_messages > 0 {
-                tracing::debug!("DM poll completed: {} messages", total_messages);
-            }
-        }
         InboxEvent::ChannelMessageReceived {
             channel_id,
-            sender_id,
             text,
-            timestamp,
             attachments,
             ..
         } => {
-            // Pre-fetch sender's profile if not cached
-            if ui_ctx.user_service.get_user_local(&sender_id).ok().flatten().is_none() {
-                tracing::debug!(
-                    sender_id = %sender_id,
-                    "Fetching sender profile for channel message"
-                );
-                match ui_ctx.user_service.get_user_profile(&sender_id).await {
-                    Ok(profile) => {
-                        tracing::debug!(
-                            sender_id = %sender_id,
-                            display_name = %profile.display_name,
-                            "Fetched and cached sender profile"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            sender_id = %sender_id,
-                            error = %e,
-                            "Failed to fetch sender profile, will show UUID"
-                        );
-                    }
-                }
-            }
-
+            // UI display only — profile prefetch + delivery receipt handled by InboxEventProcessor
             channel_handlers::handle_channel_message_received(
                 weak_window,
                 ui_ctx,
@@ -164,40 +123,8 @@ pub async fn handle_inbox_event(
                     attachments,
                 );
             }
+        }
 
-            // Send delivery receipt for channel message
-            {
-                let handle = ConversationHandle::new(
-                    chatter_core::state::ActiveConversation::Channel(channel_id),
-                    ui_ctx.clone(),
-                );
-                tokio::spawn(async move {
-                    if let Err(e) = handle.send_delivery_receipt(&[timestamp]).await {
-                        tracing::warn!("Failed to send channel delivery receipt: {}", e);
-                    }
-                });
-            }
-        }
-        InboxEvent::MessageReceived { message_id, .. } => {
-            tracing::trace!("Inbox message received: {}", message_id);
-        }
-        InboxEvent::MessageProcessed { message_id } => {
-            tracing::trace!("Inbox message processed: {}", message_id);
-        }
-        InboxEvent::MessageFailed { message_id, error } => {
-            tracing::warn!("Inbox message failed: {} - {}", message_id, error);
-        }
-        InboxEvent::PollCompleted { count, .. } => {
-            if count > 0 {
-                tracing::trace!("Inbox poll completed: {} messages", count);
-            }
-        }
-        InboxEvent::PollFailed { error } => {
-            tracing::warn!("Inbox poll failed: {}", error);
-        }
-        InboxEvent::AcknowledgeFailed { message_ids, error } => {
-            tracing::warn!("Inbox ack failed for {:?}: {}", message_ids, error);
-        }
         InboxEvent::DmUnreadCountUpdated {
             channel_id,
             peer_id,
@@ -206,14 +133,14 @@ pub async fn handle_inbox_event(
             dm::handle_dm_unread_count(weak_window, channel_id, peer_id, unread_count);
         }
         InboxEvent::DmTyping { peer_id, action } => {
-            unified_actions::handle_typing(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), action == 1);
+            unified_actions::handle_typing(weak_window, &ui_ctx.chat_state() , unified_actions::EventSource::Peer(peer_id), action == 1);
         }
         InboxEvent::DmReceipt {
             peer_id,
             receipt_type,
             timestamps,
         } => {
-            unified_actions::handle_receipt(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), receipt_type, timestamps);
+            unified_actions::handle_receipt(weak_window, &ui_ctx.chat_state() , unified_actions::EventSource::Peer(peer_id), receipt_type, timestamps);
         }
         InboxEvent::DmReaction {
             peer_id,
@@ -222,7 +149,7 @@ pub async fn handle_inbox_event(
             target_sent_timestamp,
             ..
         } => {
-            unified_actions::handle_reaction(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), emoji, remove, target_sent_timestamp);
+            unified_actions::handle_reaction(weak_window, &ui_ctx.chat_state() , unified_actions::EventSource::Peer(peer_id), emoji, remove, target_sent_timestamp);
         }
         InboxEvent::DmPin {
             peer_id,
@@ -230,14 +157,14 @@ pub async fn handle_inbox_event(
             unpin,
             ..
         } => {
-            unified_actions::handle_pin(weak_window, &ui_ctx.chat_state, &ui_ctx.pinned_state, unified_actions::EventSource::Peer(peer_id), target_sent_timestamp, !unpin);
+            unified_actions::handle_pin(weak_window, &ui_ctx.chat_state() , &ui_ctx.pinned_state(), unified_actions::EventSource::Peer(peer_id), target_sent_timestamp, !unpin);
         }
         InboxEvent::DmEdit {
             peer_id,
             target_sent_timestamp,
             new_body,
         } => {
-            unified_actions::handle_edit(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), target_sent_timestamp, new_body);
+            unified_actions::handle_edit(weak_window, &ui_ctx.chat_state() , unified_actions::EventSource::Peer(peer_id), target_sent_timestamp, new_body);
         }
         InboxEvent::DmDeleteForMe {
             conversation_id,
@@ -245,14 +172,14 @@ pub async fn handle_inbox_event(
             ..
         } => {
             if let Ok(channel_id) = conversation_id.parse() {
-                unified_actions::handle_delete(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Channel(channel_id), target_sent_timestamp);
+                unified_actions::handle_delete(weak_window, &ui_ctx.chat_state() , unified_actions::EventSource::Channel(channel_id), target_sent_timestamp);
             }
         }
         InboxEvent::DmDeleteForEveryone {
             peer_id,
             target_sent_timestamp,
         } => {
-            unified_actions::handle_delete(weak_window, &ui_ctx.chat_state, unified_actions::EventSource::Peer(peer_id), target_sent_timestamp);
+            unified_actions::handle_delete(weak_window, &ui_ctx.chat_state() , unified_actions::EventSource::Peer(peer_id), target_sent_timestamp);
         }
         InboxEvent::ChannelTyping {
             channel_id,
@@ -276,7 +203,7 @@ pub async fn handle_inbox_event(
             unpin,
             ..
         } => {
-            channel_handlers::handle_channel_pin(weak_window, ui_ctx.pinned_state.clone(), channel_id, target_sent_timestamp, unpin);
+            channel_handlers::handle_channel_pin(weak_window, ui_ctx.pinned_state().clone(), channel_id, target_sent_timestamp, unpin);
         }
         InboxEvent::ChannelEdit {
             channel_id,
@@ -313,80 +240,6 @@ pub async fn handle_inbox_event(
             unread_count,
         } => {
             channel_handlers::handle_channel_unread_count(weak_window, channel_id, unread_count);
-        }
-        InboxEvent::GroupMailboxPollCompleted {
-            total_groups,
-            total_messages,
-        } => {
-            tracing::trace!(
-                total_groups,
-                total_messages,
-                "Group mailbox poll completed"
-            );
-        }
-        InboxEvent::GroupMailboxAnnouncement {
-            channel_id,
-            member_id,
-            mailbox_pk,
-            timestamp: _,
-        } => {
-            tracing::info!(
-                channel_id = %channel_id,
-                member_id = %member_id,
-                mailbox_pk_len = mailbox_pk.len(),
-                "Group mailbox announcement received - storing member mailbox"
-            );
-
-            // Store via service layer
-            if mailbox_pk.len() == 32 {
-                let mut pk_array = [0u8; 32];
-                pk_array.copy_from_slice(&mailbox_pk);
-
-                match ui_ctx.channel_service.store_member_mailbox(&channel_id, &member_id, &pk_array) {
-                    Ok(is_new) => {
-                        tracing::info!(
-                            channel_id = %channel_id,
-                            member_id = %member_id,
-                            is_new,
-                            "Stored member mailbox for group fanout"
-                        );
-
-                        if is_new {
-                            let message_service = ui_ctx.message_service.clone();
-                            let channel_id_clone = channel_id;
-                            let member_id_clone = member_id;
-                            tokio::spawn(async move {
-                                if let Err(e) = message_service
-                                    .respond_with_mailbox_to_member(&channel_id_clone, &member_id_clone)
-                                    .await
-                                {
-                                    tracing::warn!(
-                                        channel_id = %channel_id_clone,
-                                        member_id = %member_id_clone,
-                                        error = %e,
-                                        "Failed to respond with our mailbox to new member"
-                                    );
-                                }
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            channel_id = %channel_id,
-                            member_id = %member_id,
-                            error = %e,
-                            "Failed to store member mailbox"
-                        );
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    channel_id = %channel_id,
-                    member_id = %member_id,
-                    mailbox_pk_len = mailbox_pk.len(),
-                    "Invalid mailbox public key length (expected 32)"
-                );
-            }
         }
         InboxEvent::FriendRequestsUpdated { received, sent } => {
             tracing::debug!(
@@ -455,11 +308,8 @@ pub async fn handle_inbox_event(
             .await;
         }
         InboxEvent::DmBootstrapCompleted { peer_id } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                "BOOTSTRAP[4/4] DmBootstrapCompleted event received - will flush pending messages"
-            );
-
+            // Protocol part (handle_bootstrap_completed) is handled by InboxEventProcessor
+            // UI part: update composer placeholder and message delivery status
             let peer_id_str = peer_id.to_string();
             let weak = weak_window.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -487,8 +337,6 @@ pub async fn handle_inbox_event(
                     }
                 }
             });
-
-            ui_ctx.dm_bootstrap_service.handle_bootstrap_completed(peer_id);
         }
         InboxEvent::CallKeyOfferReceived {
             peer_id,
@@ -510,7 +358,7 @@ pub async fn handle_inbox_event(
             let mut identity_warning = String::new();
             let is_identity_verified;
 
-            match ui_ctx.signal_service.get_peer_identity(&peer_id.to_string()) {
+            match ui_ctx.signal().get_peer_identity(&peer_id.to_string()) {
                 Ok(Some(_trusted_key)) => {
                     is_identity_verified = true;
                 }
@@ -525,7 +373,7 @@ pub async fn handle_inbox_event(
                 }
             }
 
-            let caller_name = ui_ctx.user_service.get_display_name(&peer_id);
+            let caller_name = ui_ctx.users().get_display_name(&peer_id);
             let is_video = call_type.contains("Video");
             let peer_id_str = peer_id.to_string();
             let weak = weak_window.clone();
@@ -557,68 +405,12 @@ pub async fn handle_inbox_event(
                 }
             });
         }
-        InboxEvent::CallKeyAnswerReceived {
-            peer_id,
-            call_id,
-            ephemeral_public_key,
-            timestamp: _,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                call_id = %call_id,
-                "Call key answer received - completing key exchange"
-            );
-
-            ui_ctx.event_bus.emit_domain(DomainEvent::CallKeyAnswerReceived {
-                call_id: call_id.clone(),
-                peer_id,
-                ephemeral_public_key,
-            });
-        }
-        InboxEvent::GroupCallKeyReceived {
-            sender_id,
-            call_id,
-            key_material,
-            key_epoch,
-            channel_id,
-            timestamp,
-        } => {
-            tracing::info!(
-                sender_id = %sender_id,
-                call_id = %call_id,
-                key_epoch = key_epoch,
-                channel_id = %channel_id,
-                timestamp = timestamp,
-                "Group call key received - updating encryption"
-            );
-
-            ui_ctx.event_bus.emit_domain(DomainEvent::GroupCallKeyReceived {
-                call_id: call_id.clone(),
-                sender_id,
-                key_material,
-                key_epoch,
-                channel_id,
-            });
-        }
         InboxEvent::CallHangup {
-            peer_id,
             call_id,
-            reason,
-            timestamp: _,
+            ..
         } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                call_id = %call_id,
-                reason = %reason,
-                "Call hangup received - emitting domain event for cleanup"
-            );
-
-            ui_ctx.event_bus.emit_domain(DomainEvent::CallHangupReceived {
-                call_id: call_id.clone(),
-                peer_id,
-                reason: reason.clone(),
-            });
-
+            // Protocol part (emit_domain CallHangupReceived) is handled by InboxEventProcessor
+            // UI cleanup only
             let weak = weak_window.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
@@ -632,168 +424,21 @@ pub async fn handle_inbox_event(
                 }
             });
         }
-        InboxEvent::SenderKeyNeeded { channel_id, sender_id } => {
-            tracing::info!(
-                channel_id = %channel_id,
-                sender_id = %sender_id,
-                "Sender key needed - sending request"
-            );
-            let msg_svc = ui_ctx.message_service.clone();
-            let ch_id = channel_id;
-            let s_id = sender_id;
-            tokio::spawn(async move {
-                    if let Err(e) = msg_svc.send_sender_key_request(&ch_id, &s_id).await {
-                        tracing::warn!(
-                            channel_id = %ch_id,
-                            sender_id = %s_id,
-                            error = %e,
-                            "Failed to send sender key request"
-                        );
-                    } else {
-                        tracing::info!(
-                            channel_id = %ch_id,
-                            sender_id = %s_id,
-                            "Sent sender key request to peer"
-                        );
-                    }
-            });
-        }
-        InboxEvent::RespondWithSkdm { channel_id, requester_id, skdm_bytes } => {
-            tracing::info!(
-                channel_id = %channel_id,
-                requester_id = %requester_id,
-                skdm_len = skdm_bytes.len(),
-                "Responding with our SKDM"
-            );
-            let msg_svc = ui_ctx.message_service.clone();
-            let ch_id = channel_id;
-            let req_id = requester_id;
-            tokio::spawn(async move {
-                let skdm_result: Result<chatter_core::proto::content_v1::SenderKeyDistribution, String> = if skdm_bytes.is_empty() {
-                    msg_svc.create_sender_key_for_channel(&ch_id).await
-                        .map_err(|e| e.to_string())
-                } else {
-                    use prost::Message as ProstMessage;
-                    chatter_core::proto::content_v1::SenderKeyDistribution::decode(skdm_bytes.as_slice())
-                        .map_err(|e| e.to_string())
-                };
-
-                match skdm_result {
-                    Ok(skdm) => {
-                        if let Err(e) = msg_svc.send_skdm_to_member(&ch_id, &req_id, &skdm).await {
-                            tracing::warn!(
-                                channel_id = %ch_id,
-                                requester_id = %req_id,
-                                error = %e,
-                                "Failed to send SKDM response"
-                            );
-                        } else {
-                            tracing::info!(
-                                channel_id = %ch_id,
-                                requester_id = %req_id,
-                                "Sent SKDM response to requester"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            channel_id = %ch_id,
-                            error = ?e,
-                            "Failed to create/decode SKDM"
-                        );
-                    }
-                }
-            });
-        }
         // =========================================================================
-        // Anonymous Group Events (NDSS'21 style server-oblivious groups)
+        // Anonymous Group Invite (UI part — protocol handled by InboxEventProcessor)
         // =========================================================================
         InboxEvent::AnonGroupInvite {
-            peer_id,
             group_id,
             group_name,
-            inviter_mailbox_pk,
-            timestamp,
-            profile_key,
-            encrypted_display_name,
-            encrypted_avatar,
+            ..
         } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                group_id = ?group_id,
-                group_name = %group_name,
-                timestamp = timestamp,
-                has_profile = profile_key.is_some(),
-                "Received anonymous group invite"
-            );
-
-            // Convert Vec<u8> to AnonGroupId and [u8; 32]
+            // Protocol part (decrypt profile, emit domain event) handled by InboxEventProcessor
+            // UI part: add to sidebar
             let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
                 Some(id) => id,
-                None => {
-                    tracing::warn!(
-                        group_id = ?group_id,
-                        "Invalid group_id length for AnonGroupInvite (expected 16 bytes)"
-                    );
-                    return;
-                }
+                None => return,
             };
 
-            let mailbox_pk: [u8; 32] = match inviter_mailbox_pk.as_slice().try_into() {
-                Ok(pk) => pk,
-                Err(_) => {
-                    tracing::warn!(
-                        mailbox_pk_len = inviter_mailbox_pk.len(),
-                        "Invalid mailbox_pk length for AnonGroupInvite (expected 32 bytes)"
-                    );
-                    return;
-                }
-            };
-
-            // Parse and decrypt profile data
-            let profile_key_arr: Option<[u8; 32]> = profile_key.as_ref().and_then(|pk| {
-                if pk.len() == 32 {
-                    let mut key = [0u8; 32];
-                    key.copy_from_slice(pk);
-                    Some(key)
-                } else {
-                    None
-                }
-            });
-
-            use chatter_core::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
-
-            let inviter_display_name: Option<String> = match (&profile_key_arr, &encrypted_display_name) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    decrypt_display_name(pk, encrypted).ok().filter(|n| !n.is_empty())
-                }
-                _ => None,
-            };
-
-            let inviter_avatar: Option<Vec<u8>> = match (&profile_key_arr, &encrypted_avatar) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    decrypt_avatar(pk, encrypted).ok()
-                }
-                _ => None,
-            };
-
-            tracing::debug!(
-                peer_id = %peer_id,
-                inviter_display_name = ?inviter_display_name,
-                "Decrypted inviter profile for group invite"
-            );
-
-            // Emit domain event for UI to show invite dialog
-            ui_ctx.event_bus.emit_domain(DomainEvent::AnonGroupInviteReceived {
-                group_id: anon_group_id,
-                group_name: group_name.clone(),
-                inviter_id: peer_id,
-                inviter_mailbox_pk: mailbox_pk,
-                profile_key: profile_key_arr,
-                inviter_display_name,
-                inviter_avatar,
-            });
-            // Add to sidebar as pending private group
             if let Some(w) = weak_window.upgrade() {
                 crate::bin_ui::features::sidebar::add_private_group_to_sidebar(
                     &w,
@@ -801,265 +446,14 @@ pub async fn handle_inbox_event(
                     &format!("\u{1F6E1} {}", group_name), // Shield emoji for private group
                     1, // Just the inviter known for now
                 );
-                
+
                 // Increment message requests badge
                 w.set_pending_message_requests(w.get_pending_message_requests() + 1);
             }
         }
-        InboxEvent::AnonGroupJoinAck {
-            peer_id,
-            group_id,
-            joiner_mailbox_pk,
-            timestamp,
-            profile_key,
-            encrypted_display_name,
-            encrypted_avatar,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                group_id = ?group_id,
-                timestamp = timestamp,
-                has_profile = profile_key.is_some(),
-                "Received anonymous group join acknowledgment"
-            );
-
-            // Convert Vec<u8> to AnonGroupId and [u8; 32]
-            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Invalid group_id length for AnonGroupJoinAck");
-                    return;
-                }
-            };
-
-            let mailbox_pk: [u8; 32] = match joiner_mailbox_pk.as_slice().try_into() {
-                Ok(pk) => pk,
-                Err(_) => {
-                    tracing::warn!("Invalid mailbox_pk length for AnonGroupJoinAck");
-                    return;
-                }
-            };
-
-            // Parse and decrypt profile data
-            let profile_key_arr: Option<[u8; 32]> = profile_key.as_ref().and_then(|pk| {
-                if pk.len() == 32 {
-                    let mut key = [0u8; 32];
-                    key.copy_from_slice(pk);
-                    Some(key)
-                } else {
-                    None
-                }
-            });
-
-            use chatter_core::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
-
-            let display_name: Option<String> = match (&profile_key_arr, &encrypted_display_name) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    decrypt_display_name(pk, encrypted).ok().filter(|n| !n.is_empty())
-                }
-                _ => None,
-            };
-
-            let avatar: Option<Vec<u8>> = match (&profile_key_arr, &encrypted_avatar) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    decrypt_avatar(pk, encrypted).ok()
-                }
-                _ => None,
-            };
-
-            tracing::debug!(
-                peer_id = %peer_id,
-                display_name = ?display_name,
-                "Decrypted profile for join ack"
-            );
-
-            let anon_service = ui_ctx.anon_group_service.clone();
-            let peer_id_clone = peer_id;
-
-            tokio::spawn(async move {
-                    if let Err(e) = anon_service.handle_join_ack(
-                        anon_group_id,
-                        peer_id_clone,
-                        mailbox_pk,
-                        profile_key_arr,
-                        display_name,
-                        avatar,
-                    ).await {
-                        tracing::error!(
-                            group_id = ?anon_group_id,
-                            peer_id = %peer_id_clone,
-                            error = %e,
-                            "Failed to handle join ack"
-                        );
-                    }
-            });
-        }
-        InboxEvent::AnonGroupMemberList {
-            peer_id,
-            group_id,
-            members,
-            timestamp,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                group_id = ?group_id,
-                member_count = members.len(),
-                timestamp = timestamp,
-                "Received anonymous group member list"
-            );
-
-            // Convert Vec<u8> to AnonGroupId
-            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Invalid group_id length for AnonGroupMemberList");
-                    return;
-                }
-            };
-
-            // Update local member list via service (sync method)
-            let anon_service = ui_ctx.anon_group_service.clone();
-            let members_clone = members.clone();
-
-            // handle_member_list is a sync method, so we run it in a blocking task
-            let sender_id = peer_id;
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Err(e) = anon_service.handle_member_list(anon_group_id, sender_id, members_clone) {
-                    tracing::error!(
-                        group_id = ?anon_group_id,
-                        error = %e,
-                        "Failed to handle member list"
-                    );
-                }
-            });
-        }
-        InboxEvent::AnonGroupLeave {
-            peer_id,
-            group_id,
-            timestamp,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                group_id = ?group_id,
-                timestamp = timestamp,
-                "Received anonymous group leave notification"
-            );
-
-            // Convert Vec<u8> to AnonGroupId
-            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Invalid group_id length for AnonGroupLeave");
-                    return;
-                }
-            };
-
-            // Remove member via service (sync method)
-            let anon_service = ui_ctx.anon_group_service.clone();
-            let peer_id_clone = peer_id;
-
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Err(e) = anon_service.handle_leave(anon_group_id, peer_id_clone) {
-                    tracing::error!(
-                        group_id = ?anon_group_id,
-                        peer_id = %peer_id_clone,
-                        error = %e,
-                        "Failed to handle leave"
-                    );
-                }
-            });
-        }
-        InboxEvent::AnonGroupKick {
-            peer_id,
-            group_id,
-            kicked_user_id,
-            admin_signature,
-            timestamp,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                group_id = ?group_id,
-                kicked_user_id = ?kicked_user_id,
-                timestamp = timestamp,
-                "Received anonymous group kick notification"
-            );
-
-            // Convert Vec<u8> to AnonGroupId
-            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Invalid group_id length for AnonGroupKick");
-                    return;
-                }
-            };
-
-            // Convert Vec<u8> to UserId
-            let kicked_user = match chatter_core::domain::UserId::try_from_slice(&kicked_user_id) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Invalid kicked_user_id for AnonGroupKick");
-                    return;
-                }
-            };
-
-            // Verify signature and remove member via service (sync method)
-            let anon_service = ui_ctx.anon_group_service.clone();
-            let admin_signature_clone = admin_signature.clone();
-            let peer_id_clone = peer_id;
-
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Err(e) = anon_service.handle_kick(
-                    anon_group_id,
-                    kicked_user,
-                    peer_id_clone,
-                    &admin_signature_clone,
-                    timestamp,
-                ) {
-                    tracing::error!(
-                        group_id = ?anon_group_id,
-                        error = %e,
-                        "Failed to handle kick"
-                    );
-                }
-            });
-        }
-        InboxEvent::AnonGroupUpdate {
-            peer_id,
-            group_id,
-            update,
-            timestamp,
-        } => {
-            // Convert Vec<u8> to AnonGroupId
-            let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Invalid group_id length for AnonGroupUpdate");
-                    return;
-                }
-            };
-
-            tracing::info!(
-                peer_id = %peer_id,
-                group_id = %anon_group_id,
-                timestamp = timestamp,
-                "Received anonymous group update"
-            );
-
-            // Apply update via service (sync method)
-            let anon_service = ui_ctx.anon_group_service.clone();
-            let update_clone = update.clone();
-            let peer_id_clone = peer_id;
-
-            let _ = tokio::task::spawn_blocking(move || {
-                if let Err(e) = anon_service.handle_update(anon_group_id, peer_id_clone, &update_clone) {
-                    tracing::error!(
-                        group_id = %anon_group_id,
-                        error = %e,
-                        "Failed to handle update"
-                    );
-                }
-            });
-        }
+        // =========================================================================
+        // Anonymous Group Message (UI part — protocol handled by InboxEventProcessor)
+        // =========================================================================
         InboxEvent::AnonGroupMessage {
             peer_id,
             group_id,
@@ -1069,18 +463,11 @@ pub async fn handle_inbox_event(
             let anon_group_id = match chatter_core::domain::anon_group::AnonGroupId::try_from_slice(&group_id) {
                 Some(id) => id,
                 None => {
-                    tracing::warn!("Invalid group_id length for AnonGroupMessage");
                     return;
                 }
             };
 
-            tracing::debug!(
-                peer_id = %peer_id,
-                group_id = %anon_group_id,
-                "Received anonymous group message"
-            );
-
-            // Route based on inner content type
+            // Route based on inner content type (UI updates only)
             use chatter_core::proto::content_v1::content;
 
             match &inner_content.content {
@@ -1088,7 +475,7 @@ pub async fn handle_inbox_event(
                 Some(content::Content::Typing(typing)) => {
                     let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_typing(
-                        weak_window, &ui_ctx.chat_state,
+                        weak_window, &ui_ctx.chat_state() ,
                         unified_actions::EventSource::Channel(channel_id),
                         typing.action == 1,
                     );
@@ -1097,7 +484,7 @@ pub async fn handle_inbox_event(
                 // Handle reaction
                 Some(content::Content::Reaction(reaction)) => {
                     // Persist to DB
-                    let service = ui_ctx.anon_group_service.clone();
+                    let service = ui_ctx.anon_groups().clone();
                     let emoji_db = reaction.emoji.clone();
                     let gid = anon_group_id;
                     let ts = reaction.target_sent_timestamp;
@@ -1114,7 +501,7 @@ pub async fn handle_inbox_event(
                     // Update UI
                     let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_reaction(
-                        weak_window, &ui_ctx.chat_state,
+                        weak_window, &ui_ctx.chat_state() ,
                         unified_actions::EventSource::Channel(channel_id),
                         reaction.emoji.clone(), reaction.remove, reaction.target_sent_timestamp,
                     );
@@ -1122,15 +509,12 @@ pub async fn handle_inbox_event(
 
                 // Handle pin/unpin
                 Some(content::Content::Pin(pin)) => {
-                    // Persist to DB
-                    let _ = ui_ctx.anon_group_service.set_message_pinned(
-                        &anon_group_id, pin.target_sent_timestamp, !pin.unpin,
-                    );
+                    // DB persistence handled by InboxEventProcessor → EventHandlers
 
                     // Update UI
                     let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_pin(
-                        weak_window, &ui_ctx.chat_state, &ui_ctx.pinned_state,
+                        weak_window, &ui_ctx.chat_state() , &ui_ctx.pinned_state(),
                         unified_actions::EventSource::Channel(channel_id),
                         pin.target_sent_timestamp, !pin.unpin,
                     );
@@ -1145,7 +529,7 @@ pub async fn handle_inbox_event(
                         .unwrap_or_default();
 
                     // Persist edit to DB (must happen before UI update to avoid data loss on channel switch)
-                    let service = ui_ctx.anon_group_service.clone();
+                    let service = ui_ctx.anon_groups().clone();
                     let gid = anon_group_id;
                     let pid = peer_id;
                     let ts = edit.target_sent_timestamp;
@@ -1180,7 +564,7 @@ pub async fn handle_inbox_event(
                     // Update UI immediately
                     let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_edit(
-                        weak_window, &ui_ctx.chat_state,
+                        weak_window, &ui_ctx.chat_state() ,
                         unified_actions::EventSource::Channel(channel_id),
                         edit.target_sent_timestamp, new_body,
                     );
@@ -1192,7 +576,7 @@ pub async fn handle_inbox_event(
                     if let Some(delete) = &data_msg.delete {
                         let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                         unified_actions::handle_delete(
-                            weak_window, &ui_ctx.chat_state,
+                            weak_window, &ui_ctx.chat_state() ,
                             unified_actions::EventSource::Channel(channel_id),
                             delete.target_sent_timestamp,
                         );
@@ -1210,12 +594,12 @@ pub async fn handle_inbox_event(
                         // Try to resolve author UUID to display name
                         if let Ok(author_id) = q.author_aci.parse::<chatter_core::domain::UserId>() {
                             // Try group member name first, then user service
-                            ui_ctx.anon_group_service
+                            ui_ctx.anon_groups()
                                 .get_member_display_name(&anon_group_id, &author_id)
                                 .ok()
                                 .flatten()
                                 .filter(|n| !n.is_empty())
-                                .unwrap_or_else(|| ui_ctx.user_service.get_display_name(&author_id))
+                                .unwrap_or_else(|| ui_ctx.users().get_display_name(&author_id))
                         } else {
                             q.author_aci.clone()
                         }
@@ -1235,8 +619,8 @@ pub async fn handle_inbox_event(
                     let sent_at = inner_content.timestamp;
 
                     // Store message and update UI
-                    let anon_service = ui_ctx.anon_group_service.clone();
-                    let user_service = ui_ctx.user_service.clone();
+                    let anon_service = ui_ctx.anon_groups().clone();
+                    let user_service = ui_ctx.users().clone();
                     let peer_id_clone = peer_id;
                     let weak = weak_window.clone();
                     let group_id_str = anon_group_id.to_string();
@@ -1265,7 +649,7 @@ pub async fn handle_inbox_event(
 
                         if !download_pointers.is_empty() {
                             // Create attachment records BEFORE spawning download
-                            ui_ctx.attachment_service.create_from_pointers(&download_pointers);
+                            ui_ctx.attachments().create_from_pointers(&download_pointers);
 
                             let ui_ctx_download = ui_ctx.clone();
                             let weak_download = weak_window.clone();
@@ -1429,340 +813,47 @@ pub async fn handle_inbox_event(
                     });
                 }
 
-                // Handle receipt (read/delivery)
-                Some(content::Content::Receipt(receipt)) => {
-                    tracing::debug!(
-                        group_id = %anon_group_id,
-                        peer_id = %peer_id,
-                        receipt_type = receipt.r#type,
-                        timestamps = ?receipt.timestamps,
-                        "Received anon group receipt (not yet implemented in UI)"
-                    );
-                    // TODO: Implement receipt handling for anon groups if needed
-                }
-
-                // Handle anonymous group call offer
-                Some(content::Content::AnonCallOffer(offer)) => {
-                    tracing::info!(
-                        group_id = %anon_group_id,
-                        sender_id = %peer_id,
-                        room_name = %offer.room_name,
-                        "Received anonymous group call offer"
-                    );
-                    ui_ctx.event_bus.emit_domain(chatter_core::inbox::DomainEvent::AnonGroupCallOfferReceived {
-                        group_id: anon_group_id,
-                        sender_id: peer_id,
-                        call_room_id: offer.call_room_id.clone(),
-                        room_name: offer.room_name.clone(),
-                        call_type: offer.call_type,
-                        caller_display_name: offer.caller_display_name.clone(),
-                        call_encryption_key: offer.call_encryption_key.clone(),
-                        timestamp: offer.timestamp,
-                    });
-                }
-
-                // Handle anonymous group call answer
-                Some(content::Content::AnonCallAnswer(answer)) => {
-                    tracing::info!(
-                        group_id = %anon_group_id,
-                        sender_id = %peer_id,
-                        accepted = answer.accepted,
-                        "Received anonymous group call answer"
-                    );
-                    ui_ctx.event_bus.emit_domain(chatter_core::inbox::DomainEvent::AnonGroupCallAnswerReceived {
-                        group_id: anon_group_id,
-                        sender_id: peer_id,
-                        call_room_id: answer.call_room_id.clone(),
-                        accepted: answer.accepted,
-                        callee_display_name: answer.callee_display_name.clone(),
-                        timestamp: answer.timestamp,
-                    });
-                }
-
-                // Handle anonymous group call hangup
-                Some(content::Content::AnonCallHangup(hangup)) => {
-                    tracing::info!(
-                        group_id = %anon_group_id,
-                        sender_id = %peer_id,
-                        "Received anonymous group call hangup"
-                    );
-                    ui_ctx.event_bus.emit_domain(chatter_core::inbox::DomainEvent::AnonGroupCallHangupReceived {
-                        group_id: anon_group_id,
-                        sender_id: peer_id,
-                        call_room_id: hangup.call_room_id.clone(),
-                        reason: hangup.reason,
-                        timestamp: hangup.timestamp,
-                    });
-                }
-
-                _ => {
-                    tracing::debug!(
-                        group_id = %anon_group_id,
-                        peer_id = %peer_id,
-                        "Received unhandled anonymous group message content type"
-                    );
-                }
+                // Receipt, call offer/answer/hangup are handled by InboxEventProcessor
+                // Other content types not handled by UI
+                _ => {}
             }
         }
+
         // =========================================================================
-        // Anonymous DM Events
+        // Anonymous DM Request (UI part — sidebar addition)
+        // Protocol part (decrypt profile, emit domain event) handled by InboxEventProcessor
         // =========================================================================
         InboxEvent::AnonDmRequest {
             peer_id,
             conversation_id,
-            initiator_mailbox_pk,
-            intro_message,
-            profile_key,
-            encrypted_display_name,
-            encrypted_avatar,
-            timestamp,
+            ..
         } => {
-            tracing::info!(
+            // InboxEventProcessor handles decryption + domain event emission
+            // UI: listen for DomainEvent::AnonDmRequestReceived via domain_handler
+            // The sidebar update is handled by domain_handler when it receives the domain event
+            tracing::debug!(
                 peer_id = %peer_id,
                 conversation_id_len = conversation_id.len(),
-                has_intro = intro_message.is_some(),
-                has_encrypted_name = encrypted_display_name.is_some(),
-                has_encrypted_avatar = encrypted_avatar.is_some(),
-                timestamp = timestamp,
-                "Received anonymous DM request"
+                "AnonDmRequest UI stub - protocol handled by InboxEventProcessor"
             );
-
-            // Convert Vec<u8> to AnonDmId
-            let anon_dm_id = match chatter_core::domain::anon_dm::AnonDmId::try_from_slice(&conversation_id) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Invalid conversation_id length for AnonDmRequest");
-                    return;
-                }
-            };
-
-            let mailbox_pk: [u8; 32] = match initiator_mailbox_pk.as_slice().try_into() {
-                Ok(pk) => pk,
-                Err(_) => {
-                    tracing::warn!(
-                        mailbox_pk_len = initiator_mailbox_pk.len(),
-                        "Invalid mailbox_pk length for AnonDmRequest (expected 32 bytes)"
-                    );
-                    return;
-                }
-            };
-
-            // Delegate decryption + storage to service layer (crypto isolated from UI)
-            let anon_dm_service = ui_ctx.anon_dm_service.clone();
-            let event_bus = ui_ctx.event_bus.clone();
-            let intro_msg = intro_message.clone();
-            let weak = weak_window.clone();
-
-            tokio::spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    anon_dm_service.handle_request_encrypted(
-                        anon_dm_id,
-                        peer_id,
-                        mailbox_pk,
-                        intro_msg.as_deref(),
-                        profile_key,
-                        encrypted_display_name,
-                        encrypted_avatar,
-                    )
-                }).await;
-
-                match result {
-                    Ok(Ok((_dm, profile))) => {
-                        // Emit domain event for UI to show request modal
-                        event_bus.emit_domain(DomainEvent::AnonDmRequestReceived {
-                            conversation_id: anon_dm_id,
-                            sender_id: peer_id,
-                            sender_mailbox_pk: mailbox_pk,
-                            intro_message,
-                            profile_key: profile.profile_key,
-                            sender_display_name: Some(profile.display_name.clone()),
-                            sender_avatar: profile.avatar.clone(),
-                        });
-
-                        // Add to sidebar as pending DM (upgrade weak ref inside event loop)
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                crate::bin_ui::features::sidebar::dm::add_anon_dm_to_sidebar(
-                                    &w,
-                                    &anon_dm_id.to_string(),
-                                    &peer_id.to_string(),
-                                    &profile.display_name,
-                                    "New message request",
-                                    "Just now",
-                                    true, // is_pending
-                                    profile.avatar,
-                                );
-                                w.set_pending_message_requests(w.get_pending_message_requests() + 1);
-                            }
-                        });
-                    }
-                    Ok(Err(e)) => {
-                        tracing::debug!(peer_id = %peer_id, error = %e, "Failed to handle AnonDmRequest");
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "spawn_blocking panicked in AnonDmRequest handler");
-                    }
-                }
-            });
         }
+
+        // =========================================================================
+        // Anonymous DM Accept (UI part — sidebar update)
+        // Protocol part (decrypt profile, emit domain event) handled by InboxEventProcessor
+        // =========================================================================
         InboxEvent::AnonDmAccept {
             peer_id,
             conversation_id,
-            responder_mailbox_pk,
-            profile_key,
-            responder_display_name: _, // Ignored - we decrypt ourselves
-            encrypted_display_name,
-            encrypted_avatar,
-            timestamp,
+            ..
         } => {
-            tracing::info!(
+            // InboxEventProcessor handles decryption + domain event emission
+            // UI: listen for DomainEvent::AnonDmRequestAccepted via domain_handler
+            tracing::debug!(
                 peer_id = %peer_id,
                 conversation_id_len = conversation_id.len(),
-                has_encrypted_display_name = encrypted_display_name.is_some(),
-                has_encrypted_avatar = encrypted_avatar.as_ref().map(|v| !v.is_empty()).unwrap_or(false),
-                timestamp = timestamp,
-                "Received anonymous DM acceptance"
+                "AnonDmAccept UI stub - protocol handled by InboxEventProcessor"
             );
-
-            // Convert Vec<u8> to AnonDmId
-            let anon_dm_id = match chatter_core::domain::anon_dm::AnonDmId::try_from_slice(&conversation_id) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Invalid conversation_id length for AnonDmAccept");
-                    return;
-                }
-            };
-
-            let mailbox_pk: [u8; 32] = match responder_mailbox_pk.as_slice().try_into() {
-                Ok(pk) => pk,
-                Err(_) => {
-                    tracing::warn!(
-                        mailbox_pk_len = responder_mailbox_pk.len(),
-                        "Invalid mailbox_pk length for AnonDmAccept (expected 32 bytes)"
-                    );
-                    return;
-                }
-            };
-
-            // Delegate decryption + storage to service layer (crypto isolated from UI)
-            let anon_dm_service = ui_ctx.anon_dm_service.clone();
-            let event_bus = ui_ctx.event_bus.clone();
-            let weak = weak_window.clone();
-
-            tokio::spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    anon_dm_service.handle_acceptance_encrypted(
-                        anon_dm_id,
-                        peer_id,
-                        mailbox_pk,
-                        profile_key,
-                        encrypted_display_name,
-                        encrypted_avatar,
-                    )
-                }).await;
-
-                match result {
-                    Ok(Ok(profile)) => {
-                        // Emit domain event for UI notification
-                        event_bus.emit_domain(DomainEvent::AnonDmRequestAccepted {
-                            conversation_id: anon_dm_id,
-                            peer_id,
-                            peer_mailbox_pk: mailbox_pk,
-                            profile_key: profile.profile_key,
-                            peer_display_name: profile.display_name.clone(),
-                            peer_avatar: profile.avatar.clone(),
-                        });
-
-                        // Update sidebar entry from "pending" to active (upgrade weak ref inside event loop)
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                crate::bin_ui::features::sidebar::dm::add_anon_dm_to_sidebar(
-                                    &w,
-                                    &anon_dm_id.to_string(),
-                                    &peer_id.to_string(),
-                                    &profile.display_name,
-                                    "Request accepted!",
-                                    "Just now",
-                                    false, // Not pending anymore
-                                    profile.avatar,
-                                );
-                            }
-                        });
-                    }
-                    Ok(Err(e)) => {
-                        tracing::debug!(peer_id = %peer_id, error = %e, "Failed to handle AnonDmAccept");
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "spawn_blocking panicked in AnonDmAccept handler");
-                    }
-                }
-            });
-        }
-        InboxEvent::AnonDmMessage {
-            peer_id,
-            conversation_id,
-            inner_content,
-        } => {
-            // Convert Vec<u8> to AnonDmId
-            let anon_dm_id = match chatter_core::domain::anon_dm::AnonDmId::try_from_slice(&conversation_id) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Invalid conversation_id length for AnonDmMessage");
-                    return;
-                }
-            };
-
-            // Extract attachments - create records FIRST, then spawn download
-            if let Some(chatter_core::proto::content_v1::content::Content::DataMessage(data_msg)) = &inner_content.content {
-                if !data_msg.attachments.is_empty() {
-                    let download_pointers: Vec<_> = data_msg.attachments
-                        .iter()
-                        .filter(|p| !p.cdn_key.is_empty())
-                        .cloned()
-                        .collect();
-
-                    if !download_pointers.is_empty() {
-                        // Create attachment records BEFORE spawning download
-                        // This prevents race condition where download checks for record that doesn't exist yet
-                        ui_ctx.attachment_service.create_from_pointers(&download_pointers);
-
-                        let ui_ctx_download = ui_ctx.clone();
-                        let weak_download = weak_window.clone();
-                        let conv_id_str = anon_dm_id.to_string();
-
-                        tokio::spawn(async move {
-                            dm::auto_download_attachments(
-                                download_pointers,
-                                ui_ctx_download,
-                                weak_download,
-                                conv_id_str,
-                            ).await;
-                        });
-                    }
-                }
-            }
-
-            // Delegate to service layer for business logic (proper separation of concerns)
-            let anon_dm_service = ui_ctx.anon_dm_service.clone();
-            let event_bus = ui_ctx.event_bus.clone();
-            let inner_content_ref = (*inner_content).clone();
-
-            let _ = tokio::task::spawn_blocking(move || {
-                match anon_dm_service.process_incoming_content(&anon_dm_id, &peer_id, &inner_content_ref) {
-                    Ok(events) => {
-                        for event in events {
-                            event_bus.emit_domain(event);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            conversation_id = %anon_dm_id,
-                            error = %e,
-                            "[ANON_DM] Failed to process incoming message"
-                        );
-                    }
-                }
-            });
         }
     }
 }

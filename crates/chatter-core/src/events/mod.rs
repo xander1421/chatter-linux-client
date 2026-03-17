@@ -50,7 +50,6 @@
 pub mod bus;
 pub mod domain_events;
 pub mod handlers;
-pub mod pin_persistence;
 pub mod ui_events;
 
 // Re-export EventBus

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use tokio::time::{sleep, Duration};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
 
@@ -16,12 +16,13 @@ use crate::bin_ui::converters::channel_to_slint;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
 use crate::{ChannelListItemData, MainWindow, SearchResultChannel};
 
-pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let search_counter = Arc::new(AtomicU64::new(0));
+    let ui_ctx = ui_ctx.clone();
 
     // Search channels callback (with debounce)
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
+    let channel_service = ui_ctx.channels().clone();
     let search_counter_clone = search_counter.clone();
 
     window.on_search_channels(move |query: SharedString| {
@@ -124,14 +125,15 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
 
     // Join channel callback
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channel_service.clone();
-    let message_service = ui_ctx.message_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let attachment_service = ui_ctx.attachment_service.clone();
-    let chat_state = ui_ctx.chat_state.clone();
+    let channel_service = ui_ctx.channels().clone();
+    let message_service = ui_ctx.messages().clone();
+    let user_service = ui_ctx.users().clone();
+    let attachment_service = ui_ctx.attachments().clone();
+    let chat_state = ui_ctx.chat_state().clone();
 
     window.on_join_channel(move |channel_id_str: SharedString| {
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx.clone();
         let channel_service = channel_service.clone();
         let message_service = message_service.clone();
         let user_service = user_service.clone();
@@ -164,51 +166,9 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
                 }
             };
 
-            // Join channel using ChannelService (handles mailbox setup internally)
-            match channel_service
-                .join_channel(&channel_id, None, true)
-                .await
-            {
-                Ok((channel, mailbox_setup)) => {
-                    // If group mailbox was setup, send the announcement and distribute SKDM
-                    if let Some(setup_result) = mailbox_setup {
-                        // Send mailbox announcement to other members
-                        if let Err(e) = message_service
-                            .announce_group_mailbox(&channel.id, setup_result.announcement)
-                            .await
-                        {
-                            tracing::warn!(
-                                channel_id = %channel.id,
-                                error = %e,
-                                "Failed to send group mailbox announcement on join"
-                            );
-                        } else {
-                            tracing::info!(
-                                channel_id = %channel.id,
-                                "Sent group mailbox announcement after join"
-                            );
-                        }
-
-                        // Distribute SKDM to all channel members via Double Ratchet
-                        // This is critical - without SKDM, other members can't decrypt our messages
-                        if let Some(skdm) = setup_result.skdm {
-                            if let Err(e) = message_service
-                                .distribute_skdm(&channel.id, &skdm)
-                                .await
-                            {
-                                tracing::error!(
-                                    channel_id = %channel.id,
-                                    error = %e,
-                                    "Failed to distribute SKDM after join - other members won't receive our messages!"
-                                );
-                            } else {
-                                tracing::info!(
-                                    channel_id = %channel.id,
-                                    "Distributed SKDM to channel members after join"
-                                );
-                            }
-                        }
-                    }
+            // Join channel via ChatterClient (handles mailbox + SKDM automatically)
+            match ui_ctx.join_channel(&channel_id, None).await {
+                Ok(channel) => {
                     let channel_id = channel.id;
                     let channel_id_str: SharedString = channel_id.to_string().into();
 

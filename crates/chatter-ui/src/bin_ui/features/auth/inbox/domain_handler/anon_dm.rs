@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::ids::UserId;
 use crate::MainWindow;
@@ -12,7 +12,7 @@ use crate::MainWindow;
 /// Handle anonymous DM request received.
 pub(super) fn handle_request_received(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
 ) {
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
@@ -22,7 +22,7 @@ pub(super) fn handle_request_received(
             super::super::super::initial_data::refresh_anon_dms(&w, &ui_ctx);
 
             // Update pending message request count
-            if let Ok(requests) = ui_ctx.anon_dm_service.list_message_requests() {
+            if let Ok(requests) = ui_ctx.anon_dms().list_message_requests() {
                 w.set_pending_message_requests(requests.len() as i32);
             }
         }
@@ -32,7 +32,7 @@ pub(super) fn handle_request_received(
 /// Handle anonymous DM request accepted.
 pub(super) fn handle_request_accepted(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     conversation_id: AnonDmId,
     peer_id: UserId,
 ) {
@@ -54,7 +54,7 @@ pub(super) fn handle_request_accepted(
 /// Handle anonymous DM message received.
 pub(super) fn handle_message_received(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
 ) {
     // Message display handled by message state
     // But we need to refresh the sidebar to update latest message preview
@@ -70,7 +70,7 @@ pub(super) fn handle_message_received(
 /// Handle anonymous DM init received.
 pub(super) fn handle_init_received(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
 ) {
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();

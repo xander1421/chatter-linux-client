@@ -327,6 +327,51 @@ impl MessageService {
         Ok(())
     }
 
+    /// Persist an edit to the database (update body + set is_edited flag).
+    pub fn update_message_body(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+        new_content: &crate::domain::message::MessageContent,
+    ) -> Result<(), MessageError> {
+        if let Some(mut message) = self.message_repo.get(message_id)? {
+            message.content = new_content.clone();
+            message.is_edited = true;
+            message.edited_at = Some(chrono::Utc::now());
+            message.updated_at = chrono::Utc::now();
+            self.message_repo.update(&message)?;
+        }
+        Ok(())
+    }
+
+    /// Add or remove a reaction on a message and persist to DB.
+    pub fn update_reaction(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+        emoji: &str,
+        add: bool,
+    ) -> Result<(), MessageError> {
+        if let Some(mut message) = self.message_repo.get(message_id)? {
+            if add {
+                if let Some(rc) = message.reaction_counts.iter_mut().find(|r| r.emoji == emoji) {
+                    rc.count += 1;
+                } else {
+                    message.reaction_counts.push(crate::domain::message::ReactionCount {
+                        emoji: emoji.to_string(),
+                        count: 1,
+                    });
+                }
+            } else {
+                if let Some(rc) = message.reaction_counts.iter_mut().find(|r| r.emoji == emoji) {
+                    rc.count = rc.count.saturating_sub(1);
+                }
+                message.reaction_counts.retain(|r| r.count > 0);
+            }
+            message.updated_at = chrono::Utc::now();
+            self.message_repo.update(&message)?;
+        }
+        Ok(())
+    }
+
     /// Update delivery status for a message by sent_at timestamp.
     ///
     /// Used when receipts (delivered/read) are received.
@@ -338,6 +383,17 @@ impl MessageService {
     ) -> Result<bool, MessageError> {
         self.message_repo
             .update_delivery_status(channel_id, sent_at, status)
+            .map_err(MessageError::from)
+    }
+
+    /// Update delivery status by timestamp only (no channel_id needed).
+    pub fn update_delivery_status_by_timestamp(
+        &self,
+        sent_at: u64,
+        status: &str,
+    ) -> Result<bool, MessageError> {
+        self.message_repo
+            .update_delivery_status_by_timestamp(sent_at, status)
             .map_err(MessageError::from)
     }
 

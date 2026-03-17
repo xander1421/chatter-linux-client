@@ -1,276 +1,1420 @@
-//! Inbox event processor - converts InboxEvent to DomainEvent.
+//! Inbox event processor - handles protocol-level InboxEvent concerns.
 //!
-//! This processor handles protocol-level concerns and emits clean domain events
-//! for UI consumption.
+//! Processes InboxEvents that are purely protocol logic (no UI dependency),
+//! returning `true` if the event was fully handled or `false` if the UI
+//! should also process it.
 
 use std::sync::Arc;
 
-use tokio::sync::broadcast;
-
+use crate::domain::UserId;
+use crate::events::EventBus;
 use crate::inbox::events::InboxEvent;
 use crate::inbox::handlers::DomainEvent;
-use crate::services::message::MessageService;
+use crate::services::anon_dm::AnonDmService;
+use crate::services::anon_group::AnonGroupService;
+use crate::services::attachment::AttachmentService;
+use crate::services::channel::ChannelService;
+use crate::services::conversation::ConversationHandle;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
-use crate::services::mailbox_manager::MailboxManager;
-use crate::storage::KeyStore;
-use crate::domain::{Message, MessageContent, UserId};
+use crate::services::message::MessageService;
+use crate::services::signal_service::SignalService;
+use crate::services::user::UserService;
+use crate::state::ActiveConversation;
 
-/// Processes inbox events and converts them to domain events.
+/// Processes inbox events and handles protocol-level concerns.
+///
+/// Returns `true` from `process()` if the event was fully handled (UI
+/// does not need to see it), `false` if UI should also process it.
 pub struct InboxEventProcessor {
-    /// Domain event sender.
-    domain_tx: broadcast::Sender<DomainEvent>,
-    /// Message service for message operations.
     message_service: Arc<MessageService>,
-    /// DM bootstrap service.
+    channel_service: Arc<ChannelService>,
     dm_bootstrap_service: Arc<DmBootstrapService>,
-    /// Mailbox manager.
-    mailbox_manager: Arc<MailboxManager>,
-    /// Key store.
-    key_store: Arc<KeyStore>,
+    anon_dm_service: Arc<AnonDmService>,
+    anon_group_service: Arc<AnonGroupService>,
+    #[allow(dead_code)] // Reserved for future identity validation in call handling
+    signal_service: Arc<SignalService>,
+    user_service: Arc<UserService>,
+    attachment_service: Arc<AttachmentService>,
+    event_bus: EventBus,
+    /// ChatterClient for ConversationHandle construction.
+    client: Arc<crate::client::ChatterClient>,
 }
 
 impl InboxEventProcessor {
     /// Create a new inbox event processor.
     pub fn new(
-        domain_tx: broadcast::Sender<DomainEvent>,
         message_service: Arc<MessageService>,
+        channel_service: Arc<ChannelService>,
         dm_bootstrap_service: Arc<DmBootstrapService>,
-        mailbox_manager: Arc<MailboxManager>,
-        key_store: Arc<KeyStore>,
+        anon_dm_service: Arc<AnonDmService>,
+        anon_group_service: Arc<AnonGroupService>,
+        signal_service: Arc<SignalService>,
+        user_service: Arc<UserService>,
+        attachment_service: Arc<AttachmentService>,
+        event_bus: EventBus,
+        client: Arc<crate::client::ChatterClient>,
     ) -> Self {
         Self {
-            domain_tx,
             message_service,
+            channel_service,
             dm_bootstrap_service,
-            mailbox_manager,
-            key_store,
+            anon_dm_service,
+            anon_group_service,
+            signal_service,
+            user_service,
+            attachment_service,
+            event_bus,
+            client,
+        }
+    }
+
+    /// Create from a UIContext (convenience constructor).
+    pub fn from_client(client: &Arc<crate::client::ChatterClient>) -> Self {
+        Self {
+            message_service: client.messages().clone(),
+            channel_service: client.channels().clone(),
+            dm_bootstrap_service: client.dm_bootstrap().clone(),
+            anon_dm_service: client.anon_dms().clone(),
+            anon_group_service: client.anon_groups().clone(),
+            signal_service: client.signal().clone(),
+            user_service: client.users().clone(),
+            attachment_service: client.attachments().clone(),
+            event_bus: client.event_bus().clone(),
+            client: client.clone(),
         }
     }
 
     /// Process an inbox event.
-    pub async fn process(&self, event: InboxEvent) {
+    ///
+    /// Returns `true` if the event was fully handled (UI does not need it),
+    /// `false` if the UI should also process it.
+    pub async fn process(&self, event: &InboxEvent) -> bool {
         match event {
-            InboxEvent::DmReceived { peer_id, text: _, timestamp, .. } => {
-                // This is a notification that a DM arrived
-                tracing::debug!("DM notification from {} at {}", peer_id, timestamp);
-                
-                // Check session state using KeyStore
-                let identity = self.key_store.get_identity(&peer_id.to_string());
-                if identity.is_err() || identity.as_ref().unwrap().is_none() {
-                    tracing::warn!("No identity key for {}, may need session bootstrap", peer_id);
-                    
-                    // Trigger DM bootstrap for session recovery
-                    let pending_messages = self.dm_bootstrap_service.take_pending_messages(&peer_id).await;
-                    if !pending_messages.is_empty() {
-                        tracing::info!(
-                            "Processing {} pending messages from {} after bootstrap",
-                            pending_messages.len(),
-                            peer_id
-                        );
-                        // Create proper Message structs for domain events
-                        for text in pending_messages {
-                            let now = chrono::Utc::now();
-                            let message = Message {
-                                id: crate::domain::ids::MessageId::new(),
-                                channel_id: crate::domain::ids::ChannelId::new(),
-                                sender_id: Some(UserId::from(peer_id.clone())),
-                                content: MessageContent::Text(text),
-                                thread_id: None,
-                                reply_to: None,
-                                attachments: Vec::new(),
-                                is_pinned: false,
-                                is_edited: false,
-                                is_deleted: false,
-                                sent_at: timestamp,
-                                created_at: now,
-                                updated_at: now,
-                                edited_at: None,
-                                reaction_counts: Vec::new(),
-                                current_user_reactions: Vec::new(),
-                                mentioned_integrations: Vec::new(),
-                                targets_ai_bot: false,
-                                delivery_status: "sent".to_string(),
-                            };
-                            let _ = self.domain_tx.send(DomainEvent::MessageReceived { message });
-                        }
-                    }
+            // =================================================================
+            // Pure protocol events (fully handled here, return true)
+            // =================================================================
+
+            InboxEvent::DmDecryptionFailed { peer_id, error, convergence_failed } => {
+                tracing::error!(
+                    "DM decryption failed from {}: {} (convergence_failed={})",
+                    peer_id, error, convergence_failed
+                );
+                if *convergence_failed {
+                    self.dm_bootstrap_service.handle_convergence_failure(*peer_id);
                 }
-                
-                // Check for mailbox using MailboxManager
-                // get_or_create_mailbox is the actual method for DMs
-                let mailbox_manager = self.mailbox_manager.clone();
-                let peer_id_mailbox = peer_id.clone();
-                let dm_channel = crate::domain::ids::ChannelId::new();
-                
+                true
+            }
+
+            InboxEvent::DmRetryRequested { peer_id, original_timestamp } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    original_timestamp,
+                    "DM retry requested - resetting session"
+                );
+                self.dm_bootstrap_service.handle_convergence_failure(*peer_id);
+                true
+            }
+
+            InboxEvent::DmMailboxExpired { peer_id } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    "HEALING: DmMailboxExpired event received, triggering re-bootstrap"
+                );
+                self.dm_bootstrap_service.handle_mailbox_expired(*peer_id);
+                true
+            }
+
+            InboxEvent::DmPollCompleted { total_messages } => {
+                if *total_messages > 0 {
+                    tracing::debug!("DM poll completed: {} messages", total_messages);
+                }
+                true
+            }
+
+            InboxEvent::MessageReceived { message_id, .. } => {
+                tracing::trace!("Inbox message received: {}", message_id);
+                true
+            }
+
+            InboxEvent::MessageProcessed { message_id } => {
+                tracing::trace!("Inbox message processed: {}", message_id);
+                true
+            }
+
+            InboxEvent::MessageFailed { message_id, error } => {
+                tracing::warn!("Inbox message failed: {} - {}", message_id, error);
+                true
+            }
+
+            InboxEvent::PollCompleted { count, .. } => {
+                if *count > 0 {
+                    tracing::trace!("Inbox poll completed: {} messages", count);
+                }
+                true
+            }
+
+            InboxEvent::PollFailed { error } => {
+                tracing::warn!("Inbox poll failed: {}", error);
+                true
+            }
+
+            InboxEvent::AcknowledgeFailed { message_ids, error } => {
+                tracing::warn!("Inbox ack failed for {:?}: {}", message_ids, error);
+                true
+            }
+
+            InboxEvent::GroupMailboxPollCompleted { total_groups, total_messages } => {
+                tracing::trace!(
+                    total_groups,
+                    total_messages,
+                    "Group mailbox poll completed"
+                );
+                true
+            }
+
+            InboxEvent::GroupMailboxAnnouncement {
+                channel_id,
+                member_id,
+                mailbox_pk,
+                timestamp: _,
+            } => {
+                self.handle_group_mailbox_announcement(channel_id, member_id, mailbox_pk);
+                true
+            }
+
+            InboxEvent::CallKeyAnswerReceived {
+                peer_id,
+                call_id,
+                ephemeral_public_key,
+                timestamp: _,
+            } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    call_id = %call_id,
+                    "Call key answer received - completing key exchange"
+                );
+                self.event_bus.emit_domain(DomainEvent::CallKeyAnswerReceived {
+                    call_id: call_id.clone(),
+                    peer_id: *peer_id,
+                    ephemeral_public_key: *ephemeral_public_key,
+                });
+                true
+            }
+
+            InboxEvent::GroupCallKeyReceived {
+                sender_id,
+                call_id,
+                key_material,
+                key_epoch,
+                channel_id,
+                timestamp,
+            } => {
+                tracing::info!(
+                    sender_id = %sender_id,
+                    call_id = %call_id,
+                    key_epoch = key_epoch,
+                    channel_id = %channel_id,
+                    timestamp = timestamp,
+                    "Group call key received - updating encryption"
+                );
+                self.event_bus.emit_domain(DomainEvent::GroupCallKeyReceived {
+                    call_id: call_id.clone(),
+                    sender_id: *sender_id,
+                    key_material: *key_material,
+                    key_epoch: *key_epoch,
+                    channel_id: *channel_id,
+                });
+                true
+            }
+
+            InboxEvent::SenderKeyNeeded { channel_id, sender_id } => {
+                tracing::info!(
+                    channel_id = %channel_id,
+                    sender_id = %sender_id,
+                    "Sender key needed - sending request"
+                );
+                let msg_svc = self.message_service.clone();
+                let ch_id = *channel_id;
+                let s_id = *sender_id;
                 tokio::spawn(async move {
-                    // get_or_create_mailbox takes conversation_id and ttl_seconds
-                    let context_id = format!("dm:{}", peer_id_mailbox);
-                    let ttl_seconds = 86400; // 24 hours for DM mailboxes
-                    match mailbox_manager.get_or_create_mailbox(&context_id, ttl_seconds).await {
-                        Ok(mailbox) => {
-                            tracing::debug!("Found/created mailbox for peer {} with ID {}", peer_id_mailbox, mailbox.mailbox_id);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to get mailbox for {}: {}", peer_id_mailbox, e);
-                        }
+                    if let Err(e) = msg_svc.send_sender_key_request(&ch_id, &s_id).await {
+                        tracing::warn!(
+                            channel_id = %ch_id,
+                            sender_id = %s_id,
+                            error = %e,
+                            "Failed to send sender key request"
+                        );
+                    } else {
+                        tracing::info!(
+                            channel_id = %ch_id,
+                            sender_id = %s_id,
+                            "Sent sender key request to peer"
+                        );
                     }
                 });
-                
-                // Trigger message polling through MessageService
-                match self.message_service.get_messages_local(&dm_channel, None, 10) {
-                    Ok(messages) => {
-                        tracing::trace!(
-                            "Message poll for {} returned {} messages",
-                            peer_id,
-                            messages.len()
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to poll messages for {}: {}", peer_id, e);
-                    }
-                }
+                true
             }
-            InboxEvent::ChannelMessageReceived { channel_id, sender_id, text: _, timestamp, .. } => {
-                // Channel message notification
-                tracing::debug!("Channel message in {} from {} at {}", channel_id, sender_id, timestamp);
-                
-                // Verify sender's identity key for group encryption
-                let sender_identity = self.key_store.get_identity(&sender_id.to_string());
-                if sender_identity.is_err() || sender_identity.as_ref().unwrap().is_none() {
-                    tracing::warn!(
-                        "Missing identity key for sender {} in channel {}, requesting key exchange",
-                        sender_id,
-                        channel_id
-                    );
-                    // Trigger key exchange if needed
-                }
-                
-                // Check if this is an anonymous group using MailboxManager
-                let mailbox_manager = self.mailbox_manager.clone();
-                let sender_id_mb = sender_id.clone();
-                let channel_id_mb = channel_id.clone();
-                
+
+            InboxEvent::RespondWithSkdm { channel_id, requester_id, skdm_bytes } => {
+                tracing::info!(
+                    channel_id = %channel_id,
+                    requester_id = %requester_id,
+                    skdm_len = skdm_bytes.len(),
+                    "Responding with our SKDM"
+                );
+                let msg_svc = self.message_service.clone();
+                let ch_id = *channel_id;
+                let req_id = *requester_id;
+                let skdm_bytes = skdm_bytes.clone();
                 tokio::spawn(async move {
-                    // For anonymous groups, check mailboxes
-                    match mailbox_manager.active_mailbox_count().await {
-                        0 => {
-                            tracing::trace!("No active mailboxes, regular group message");
-                        }
-                        count => {
-                            tracing::debug!("Active mailboxes: {}, checking for anon group", count);
-                            // Anonymous groups use pairwise mailboxes (NDSS'21)
-                            let context_id = format!("anon_group:{}:{}", channel_id_mb, sender_id_mb);
-                            let ttl_seconds = 3600; // 1 hour for anon group mailboxes
-                            match mailbox_manager.get_or_create_mailbox(&context_id, ttl_seconds).await {
-                                Ok(mailbox) => {
-                                    tracing::debug!(
-                                        "Processing anon group {} message from {} via mailbox {}",
-                                        channel_id_mb,
-                                        sender_id_mb,
-                                        mailbox.mailbox_id
-                                    );
-                                }
-                                Err(e) => {
-                                    tracing::trace!("Not an anon group message: {}", e);
-                                }
+                    let skdm_result: Result<crate::proto::content_v1::SenderKeyDistribution, String> = if skdm_bytes.is_empty() {
+                        msg_svc.create_sender_key_for_channel(&ch_id).await
+                            .map_err(|e| e.to_string())
+                    } else {
+                        use prost::Message as ProstMessage;
+                        crate::proto::content_v1::SenderKeyDistribution::decode(skdm_bytes.as_slice())
+                            .map_err(|e| e.to_string())
+                    };
+
+                    match skdm_result {
+                        Ok(skdm) => {
+                            if let Err(e) = msg_svc.send_skdm_to_member(&ch_id, &req_id, &skdm).await {
+                                tracing::warn!(
+                                    channel_id = %ch_id,
+                                    requester_id = %req_id,
+                                    error = %e,
+                                    "Failed to send SKDM response"
+                                );
+                            } else {
+                                tracing::info!(
+                                    channel_id = %ch_id,
+                                    requester_id = %req_id,
+                                    "Sent SKDM response to requester"
+                                );
                             }
                         }
+                        Err(e) => {
+                            tracing::error!(
+                                channel_id = %ch_id,
+                                error = ?e,
+                                "Failed to create/decode SKDM"
+                            );
+                        }
                     }
                 });
-                
-                // Fetch and decrypt channel messages
-                match self.message_service.get_messages_local(&channel_id, None, 20) {
-                    Ok(messages) => {
-                        // Process latest message
-                        if !messages.is_empty() {
-                            let _latest = &messages[0];
-                            // Create a proper Message struct
-                            let now = chrono::Utc::now();
-                            let message = Message {
-                                id: crate::domain::ids::MessageId::new(),
-                                channel_id: channel_id.clone(),
-                                sender_id: Some(UserId::from(sender_id.clone())),
-                                content: MessageContent::Text(format!("Channel message at {}", timestamp)),
-                                thread_id: None,
-                                reply_to: None,
-                                attachments: Vec::new(),
-                                is_pinned: false,
-                                is_edited: false,
-                                is_deleted: false,
-                                sent_at: timestamp,
-                                created_at: now,
-                                updated_at: now,
-                                edited_at: None,
-                                reaction_counts: Vec::new(),
-                                current_user_reactions: Vec::new(),
-                                mentioned_integrations: Vec::new(),
-                                targets_ai_bot: false,
-                                delivery_status: "sent".to_string(),
-                            };
-                            let _ = self.domain_tx.send(DomainEvent::MessageReceived { message });
-                        }
-                        
-                        tracing::trace!(
-                            "Processed channel {} message from {}, {} total messages",
-                            channel_id,
-                            sender_id,
-                            messages.len()
+                true
+            }
+
+            // =================================================================
+            // Anonymous Group Events (fully handled, return true)
+            // =================================================================
+
+            InboxEvent::AnonGroupInvite {
+                peer_id,
+                group_id,
+                group_name,
+                inviter_mailbox_pk,
+                timestamp: _,
+                profile_key,
+                encrypted_display_name,
+                encrypted_avatar,
+            } => {
+                self.handle_anon_group_invite(
+                    *peer_id, group_id, group_name, inviter_mailbox_pk,
+                    profile_key, encrypted_display_name, encrypted_avatar,
+                );
+                // Return false - UI needs to add sidebar entry
+                false
+            }
+
+            InboxEvent::AnonGroupJoinAck {
+                peer_id,
+                group_id,
+                joiner_mailbox_pk,
+                timestamp: _,
+                profile_key,
+                encrypted_display_name,
+                encrypted_avatar,
+            } => {
+                self.handle_anon_group_join_ack(
+                    *peer_id, group_id, joiner_mailbox_pk,
+                    profile_key, encrypted_display_name, encrypted_avatar,
+                );
+                true
+            }
+
+            InboxEvent::AnonGroupMemberList {
+                peer_id,
+                group_id,
+                members,
+                timestamp,
+            } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    group_id = ?group_id,
+                    member_count = members.len(),
+                    timestamp = timestamp,
+                    "Received anonymous group member list"
+                );
+
+                let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+                    Some(id) => id,
+                    None => {
+                        tracing::warn!("Invalid group_id length for AnonGroupMemberList");
+                        return true;
+                    }
+                };
+
+                let anon_service = self.anon_group_service.clone();
+                let members_clone = members.clone();
+                let sender_id = *peer_id;
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(e) = anon_service.handle_member_list(anon_group_id, sender_id, members_clone) {
+                        tracing::error!(
+                            group_id = ?anon_group_id,
+                            error = %e,
+                            "Failed to handle member list"
                         );
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to fetch messages for channel {}: {}", channel_id, e);
+                });
+                true
+            }
+
+            InboxEvent::AnonGroupLeave {
+                peer_id,
+                group_id,
+                timestamp,
+            } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    group_id = ?group_id,
+                    timestamp = timestamp,
+                    "Received anonymous group leave notification"
+                );
+
+                let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+                    Some(id) => id,
+                    None => {
+                        tracing::warn!("Invalid group_id length for AnonGroupLeave");
+                        return true;
+                    }
+                };
+
+                let anon_service = self.anon_group_service.clone();
+                let peer_id_clone = *peer_id;
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(e) = anon_service.handle_leave(anon_group_id, peer_id_clone) {
+                        tracing::error!(
+                            group_id = ?anon_group_id,
+                            peer_id = %peer_id_clone,
+                            error = %e,
+                            "Failed to handle leave"
+                        );
+                    }
+                });
+                true
+            }
+
+            InboxEvent::AnonGroupKick {
+                peer_id,
+                group_id,
+                kicked_user_id,
+                admin_signature,
+                timestamp,
+            } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    group_id = ?group_id,
+                    kicked_user_id = ?kicked_user_id,
+                    timestamp = timestamp,
+                    "Received anonymous group kick notification"
+                );
+
+                let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+                    Some(id) => id,
+                    None => {
+                        tracing::warn!("Invalid group_id length for AnonGroupKick");
+                        return true;
+                    }
+                };
+
+                let kicked_user = match UserId::try_from_slice(kicked_user_id) {
+                    Some(id) => id,
+                    None => {
+                        tracing::warn!("Invalid kicked_user_id for AnonGroupKick");
+                        return true;
+                    }
+                };
+
+                let anon_service = self.anon_group_service.clone();
+                let admin_signature_clone = admin_signature.clone();
+                let peer_id_clone = *peer_id;
+                let timestamp = *timestamp;
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(e) = anon_service.handle_kick(
+                        anon_group_id,
+                        kicked_user,
+                        peer_id_clone,
+                        &admin_signature_clone,
+                        timestamp,
+                    ) {
+                        tracing::error!(
+                            group_id = ?anon_group_id,
+                            error = %e,
+                            "Failed to handle kick"
+                        );
+                    }
+                });
+                true
+            }
+
+            InboxEvent::AnonGroupUpdate {
+                peer_id,
+                group_id,
+                update,
+                timestamp,
+            } => {
+                let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+                    Some(id) => id,
+                    None => {
+                        tracing::warn!("Invalid group_id length for AnonGroupUpdate");
+                        return true;
+                    }
+                };
+
+                tracing::info!(
+                    peer_id = %peer_id,
+                    group_id = %anon_group_id,
+                    timestamp = timestamp,
+                    "Received anonymous group update"
+                );
+
+                let anon_service = self.anon_group_service.clone();
+                let update_clone = update.clone();
+                let peer_id_clone = *peer_id;
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(e) = anon_service.handle_update(anon_group_id, peer_id_clone, &update_clone) {
+                        tracing::error!(
+                            group_id = %anon_group_id,
+                            error = %e,
+                            "Failed to handle update"
+                        );
+                    }
+                });
+                true
+            }
+
+            InboxEvent::AnonGroupMessage {
+                peer_id,
+                group_id,
+                inner_content,
+            } => {
+                self.handle_anon_group_message(*peer_id, group_id, inner_content);
+                // Return false - UI needs to handle display parts (message list, sidebar, etc.)
+                false
+            }
+
+            // =================================================================
+            // Anonymous DM Events (protocol part handled, some return false for UI)
+            // =================================================================
+
+            InboxEvent::AnonDmRequest {
+                peer_id,
+                conversation_id,
+                initiator_mailbox_pk,
+                intro_message,
+                profile_key,
+                encrypted_display_name,
+                encrypted_avatar,
+                timestamp: _,
+            } => {
+                self.handle_anon_dm_request(
+                    *peer_id, conversation_id, initiator_mailbox_pk,
+                    intro_message, profile_key, encrypted_display_name, encrypted_avatar,
+                );
+                // Return false - UI needs to add sidebar entry
+                false
+            }
+
+            InboxEvent::AnonDmAccept {
+                peer_id,
+                conversation_id,
+                responder_mailbox_pk,
+                profile_key,
+                responder_display_name: _,
+                encrypted_display_name,
+                encrypted_avatar,
+                timestamp: _,
+            } => {
+                self.handle_anon_dm_accept(
+                    *peer_id, conversation_id, responder_mailbox_pk,
+                    profile_key, encrypted_display_name, encrypted_avatar,
+                );
+                // Return false - UI needs to update sidebar entry
+                false
+            }
+
+            InboxEvent::AnonDmMessage {
+                peer_id,
+                conversation_id,
+                inner_content,
+            } => {
+                self.handle_anon_dm_message(*peer_id, conversation_id, inner_content);
+                true
+            }
+
+            // =================================================================
+            // Mixed events (protocol part handled here, return false for UI)
+            // =================================================================
+
+            InboxEvent::DmReceived {
+                peer_id,
+                channel_id,
+                timestamp,
+                attachments,
+                ..
+            } => {
+                // Create attachment records BEFORE UI handler reads from DB
+                if !attachments.is_empty() {
+                    let pointers: Vec<_> = attachments.iter()
+                        .filter(|p| !p.cdn_key.is_empty())
+                        .cloned()
+                        .collect();
+                    if !pointers.is_empty() {
+                        self.attachment_service.create_from_pointers(&pointers);
+                    }
+                }
+
+                // Protocol: send delivery receipt
+                tracing::info!(
+                    peer_id = %peer_id,
+                    timestamp,
+                    "DELIVERY_RECEIPT: Triggering delivery receipt for received DM"
+                );
+                let handle = ConversationHandle::new(
+                    ActiveConversation::Dm { channel_id: *channel_id, peer_id: *peer_id },
+                    self.client.clone(),
+                );
+                let ts = *timestamp;
+                tokio::spawn(async move {
+                    if let Err(e) = handle.send_delivery_receipt(&[ts]).await {
+                        tracing::warn!("Failed to send DM delivery receipt: {}", e);
+                    }
+                });
+                // UI still needs to display the message
+                false
+            }
+
+            InboxEvent::ChannelMessageReceived {
+                channel_id,
+                sender_id,
+                timestamp,
+                attachments,
+                ..
+            } => {
+                // Create attachment records BEFORE UI handler reads from DB
+                // This prevents the "empty bubble" race condition
+                if !attachments.is_empty() {
+                    let pointers: Vec<_> = attachments.iter()
+                        .filter(|p| !p.cdn_key.is_empty())
+                        .cloned()
+                        .collect();
+                    if !pointers.is_empty() {
+                        self.attachment_service.create_from_pointers(&pointers);
+                    }
+                }
+
+                // Protocol: pre-fetch sender profile + send delivery receipt
+                if self.user_service.get_user_local(sender_id).ok().flatten().is_none() {
+                    tracing::debug!(
+                        sender_id = %sender_id,
+                        "Fetching sender profile for channel message"
+                    );
+                    let user_svc = self.user_service.clone();
+                    let sid = *sender_id;
+                    tokio::spawn(async move {
+                        match user_svc.get_user_profile(&sid).await {
+                            Ok(profile) => {
+                                tracing::debug!(
+                                    sender_id = %sid,
+                                    display_name = %profile.display_name,
+                                    "Fetched and cached sender profile"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    sender_id = %sid,
+                                    error = %e,
+                                    "Failed to fetch sender profile, will show UUID"
+                                );
+                            }
+                        }
+                    });
+                }
+
+                // Send delivery receipt
+                let handle = ConversationHandle::new(
+                    ActiveConversation::Channel(*channel_id),
+                    self.client.clone(),
+                );
+                let ts = *timestamp;
+                tokio::spawn(async move {
+                    if let Err(e) = handle.send_delivery_receipt(&[ts]).await {
+                        tracing::warn!("Failed to send channel delivery receipt: {}", e);
+                    }
+                });
+                // UI still needs to display the message
+                false
+            }
+
+            InboxEvent::CallHangup {
+                peer_id,
+                call_id,
+                reason,
+                timestamp: _,
+            } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    call_id = %call_id,
+                    reason = %reason,
+                    "Call hangup received - emitting domain event for cleanup"
+                );
+                self.event_bus.emit_domain(DomainEvent::CallHangupReceived {
+                    call_id: call_id.clone(),
+                    peer_id: *peer_id,
+                    reason: reason.clone(),
+                });
+                // UI still needs to clean up call UI state
+                false
+            }
+
+            InboxEvent::DmBootstrapCompleted { peer_id } => {
+                tracing::info!(
+                    peer_id = %peer_id,
+                    "BOOTSTRAP[4/4] DmBootstrapCompleted event received - will flush pending messages"
+                );
+                self.dm_bootstrap_service.handle_bootstrap_completed(*peer_id);
+                // UI still needs to update composer placeholder and message status
+                false
+            }
+
+            // =================================================================
+            // Ephemeral events — emit DomainEvent for DB persistence, UI also handles
+            // =================================================================
+
+            InboxEvent::DmReaction { peer_id, emoji, remove, target_sent_timestamp, target_author_aci, .. } => {
+                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
+                    let event = if *remove {
+                        DomainEvent::ReactionRemoved { message_id: msg.id, author_id: msg.sender_id.unwrap_or(*peer_id), reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                    } else {
+                        DomainEvent::ReactionAdded { message_id: msg.id, author_id: msg.sender_id.unwrap_or(*peer_id), reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                    };
+                    self.event_bus.emit_domain(event);
+                }
+                false
+            }
+
+            InboxEvent::ChannelReaction { channel_id: _, sender_id, emoji, remove, target_sent_timestamp, target_author_aci, .. } => {
+                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
+                    let event = if *remove {
+                        DomainEvent::ReactionRemoved { message_id: msg.id, author_id: msg.sender_id.unwrap_or(*sender_id), reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                    } else {
+                        DomainEvent::ReactionAdded { message_id: msg.id, author_id: msg.sender_id.unwrap_or(*sender_id), reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                    };
+                    self.event_bus.emit_domain(event);
+                }
+                false
+            }
+
+            InboxEvent::DmEdit { peer_id, target_sent_timestamp, new_body } => {
+                if let Some(msg) = self.lookup_message(&peer_id.to_string(), *target_sent_timestamp) {
+                    self.event_bus.emit_domain(DomainEvent::MessageEdited {
+                        message_id: msg.id,
+                        new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
+                        channel_id: msg.channel_id,
+                    });
+                }
+                false
+            }
+
+            InboxEvent::ChannelEdit { channel_id, target_sent_timestamp, new_body, sender_id, .. } => {
+                if let Some(msg) = self.lookup_message(&sender_id.to_string(), *target_sent_timestamp) {
+                    self.event_bus.emit_domain(DomainEvent::MessageEdited {
+                        message_id: msg.id,
+                        new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
+                        channel_id: *channel_id,
+                    });
+                }
+                false
+            }
+
+            InboxEvent::DmDeleteForEveryone { peer_id, target_sent_timestamp } => {
+                if let Some(msg) = self.lookup_message(&peer_id.to_string(), *target_sent_timestamp) {
+                    self.event_bus.emit_domain(DomainEvent::MessageDeleted {
+                        message_id: msg.id,
+                        author_id: *peer_id,
+                        channel_id: Some(msg.channel_id),
+                    });
+                }
+                false
+            }
+
+            InboxEvent::ChannelDeleteForEveryone { channel_id, sender_id, target_sent_timestamp, .. } => {
+                if let Some(msg) = self.lookup_message(&sender_id.to_string(), *target_sent_timestamp) {
+                    self.event_bus.emit_domain(DomainEvent::MessageDeleted {
+                        message_id: msg.id,
+                        author_id: *sender_id,
+                        channel_id: Some(*channel_id),
+                    });
+                }
+                false
+            }
+
+            InboxEvent::DmPin { peer_id, target_sent_timestamp, unpin, target_author_aci, .. } => {
+                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
+                    if *unpin {
+                        self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
+                            message_id: msg.id, unpinner_id: *peer_id,
+                            channel_id: msg.channel_id, target_sent_timestamp: *target_sent_timestamp,
+                        });
+                    } else {
+                        self.event_bus.emit_domain(DomainEvent::MessagePinned {
+                            message_id: msg.id, pinner_id: *peer_id,
+                            channel_id: msg.channel_id, target_sent_timestamp: *target_sent_timestamp,
+                        });
+                    }
+                }
+                false
+            }
+
+            InboxEvent::ChannelPin { channel_id, sender_id, target_sent_timestamp, unpin, target_author_aci, .. } => {
+                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
+                    if *unpin {
+                        self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
+                            message_id: msg.id, unpinner_id: *sender_id,
+                            channel_id: *channel_id, target_sent_timestamp: *target_sent_timestamp,
+                        });
+                    } else {
+                        self.event_bus.emit_domain(DomainEvent::MessagePinned {
+                            message_id: msg.id, pinner_id: *sender_id,
+                            channel_id: *channel_id, target_sent_timestamp: *target_sent_timestamp,
+                        });
+                    }
+                }
+                false
+            }
+
+            InboxEvent::DmDeleteForMe { conversation_id, target_author_aci, target_sent_timestamp } => {
+                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
+                    if let Ok(channel_id) = conversation_id.parse() {
+                        self.event_bus.emit_domain(DomainEvent::DeleteForMeSync {
+                            conversation_id: channel_id,
+                            target_author_id: msg.sender_id.unwrap_or_else(crate::domain::ids::UserId::new),
+                            target_message_id: msg.id,
+                            timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+                        });
+                    }
+                }
+                false
+            }
+
+            InboxEvent::ChannelDeleteForMe { conversation_id, target_author_aci, target_sent_timestamp } => {
+                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
+                    if let Ok(channel_id) = conversation_id.parse() {
+                        self.event_bus.emit_domain(DomainEvent::DeleteForMeSync {
+                            conversation_id: channel_id,
+                            target_author_id: msg.sender_id.unwrap_or_else(crate::domain::ids::UserId::new),
+                            target_message_id: msg.id,
+                            timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+                        });
+                    }
+                }
+                false
+            }
+
+            InboxEvent::ChannelReceipt { channel_id: _, sender_id: _, receipt_type, timestamps, .. } => {
+                let status = match receipt_type {
+                    1 => "delivered",
+                    2 => "read",
+                    3 => "read", // viewed = read
+                    _ => "sent",
+                };
+                for ts in timestamps {
+                    if let Some(ref svc) = Some(&self.message_service) {
+                        let _ = svc.update_delivery_status_by_timestamp(*ts, status);
+                    }
+                }
+                false
+            }
+
+            // =================================================================
+            // Events the UI handles entirely (no DB persistence needed)
+            // =================================================================
+            _ => false,
+        }
+    }
+
+    // =====================================================================
+    // Helper methods
+    // =====================================================================
+
+    /// Look up a message by sender UUID string + sent_at timestamp.
+    fn lookup_message(&self, sender_id_str: &str, sent_timestamp: u64) -> Option<crate::domain::Message> {
+        let sender_id: UserId = sender_id_str.parse().ok()?;
+        self.message_service.get_by_sender_timestamp(&sender_id, sent_timestamp).ok().flatten()
+    }
+
+    fn handle_group_mailbox_announcement(
+        &self,
+        channel_id: &crate::domain::ChannelId,
+        member_id: &UserId,
+        mailbox_pk: &[u8],
+    ) {
+        tracing::info!(
+            channel_id = %channel_id,
+            member_id = %member_id,
+            mailbox_pk_len = mailbox_pk.len(),
+            "Group mailbox announcement received - storing member mailbox"
+        );
+
+        if mailbox_pk.len() == 32 {
+            let mut pk_array = [0u8; 32];
+            pk_array.copy_from_slice(mailbox_pk);
+
+            match self.channel_service.store_member_mailbox(channel_id, member_id, &pk_array) {
+                Ok(is_new) => {
+                    tracing::info!(
+                        channel_id = %channel_id,
+                        member_id = %member_id,
+                        is_new,
+                        "Stored member mailbox for group fanout"
+                    );
+
+                    if is_new {
+                        let message_service = self.message_service.clone();
+                        let channel_id_clone = *channel_id;
+                        let member_id_clone = *member_id;
+                        tokio::spawn(async move {
+                            if let Err(e) = message_service
+                                .respond_with_mailbox_to_member(&channel_id_clone, &member_id_clone)
+                                .await
+                            {
+                                tracing::warn!(
+                                    channel_id = %channel_id_clone,
+                                    member_id = %member_id_clone,
+                                    error = %e,
+                                    "Failed to respond with our mailbox to new member"
+                                );
+                            }
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        channel_id = %channel_id,
+                        member_id = %member_id,
+                        error = %e,
+                        "Failed to store member mailbox"
+                    );
+                }
+            }
+        } else {
+            tracing::warn!(
+                channel_id = %channel_id,
+                member_id = %member_id,
+                mailbox_pk_len = mailbox_pk.len(),
+                "Invalid mailbox public key length (expected 32)"
+            );
+        }
+    }
+
+    fn handle_anon_group_invite(
+        &self,
+        peer_id: UserId,
+        group_id: &[u8],
+        group_name: &str,
+        inviter_mailbox_pk: &[u8],
+        profile_key: &Option<Vec<u8>>,
+        encrypted_display_name: &Option<Vec<u8>>,
+        encrypted_avatar: &Option<Vec<u8>>,
+    ) {
+        tracing::info!(
+            peer_id = %peer_id,
+            group_id = ?group_id,
+            group_name = %group_name,
+            has_profile = profile_key.is_some(),
+            "Received anonymous group invite"
+        );
+
+        let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+            Some(id) => id,
+            None => {
+                tracing::warn!(
+                    group_id = ?group_id,
+                    "Invalid group_id length for AnonGroupInvite (expected 16 bytes)"
+                );
+                return;
+            }
+        };
+
+        let mailbox_pk: [u8; 32] = match inviter_mailbox_pk.try_into() {
+            Ok(pk) => pk,
+            Err(_) => {
+                tracing::warn!(
+                    mailbox_pk_len = inviter_mailbox_pk.len(),
+                    "Invalid mailbox_pk length for AnonGroupInvite (expected 32 bytes)"
+                );
+                return;
+            }
+        };
+
+        // Parse and decrypt profile data
+        let profile_key_arr: Option<[u8; 32]> = profile_key.as_ref().and_then(|pk| {
+            if pk.len() == 32 {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(pk);
+                Some(key)
+            } else {
+                None
+            }
+        });
+
+        use crate::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
+
+        let inviter_display_name: Option<String> = match (&profile_key_arr, encrypted_display_name) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                decrypt_display_name(pk, encrypted).ok().filter(|n| !n.is_empty())
+            }
+            _ => None,
+        };
+
+        let inviter_avatar: Option<Vec<u8>> = match (&profile_key_arr, encrypted_avatar) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                decrypt_avatar(pk, encrypted).ok()
+            }
+            _ => None,
+        };
+
+        tracing::debug!(
+            peer_id = %peer_id,
+            inviter_display_name = ?inviter_display_name,
+            "Decrypted inviter profile for group invite"
+        );
+
+        // Emit domain event for UI to show invite dialog
+        self.event_bus.emit_domain(DomainEvent::AnonGroupInviteReceived {
+            group_id: anon_group_id,
+            group_name: group_name.to_string(),
+            inviter_id: peer_id,
+            inviter_mailbox_pk: mailbox_pk,
+            profile_key: profile_key_arr,
+            inviter_display_name,
+            inviter_avatar,
+        });
+    }
+
+    fn handle_anon_group_join_ack(
+        &self,
+        peer_id: UserId,
+        group_id: &[u8],
+        joiner_mailbox_pk: &[u8],
+        profile_key: &Option<Vec<u8>>,
+        encrypted_display_name: &Option<Vec<u8>>,
+        encrypted_avatar: &Option<Vec<u8>>,
+    ) {
+        tracing::info!(
+            peer_id = %peer_id,
+            group_id = ?group_id,
+            has_profile = profile_key.is_some(),
+            "Received anonymous group join acknowledgment"
+        );
+
+        let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+            Some(id) => id,
+            None => {
+                tracing::warn!("Invalid group_id length for AnonGroupJoinAck");
+                return;
+            }
+        };
+
+        let mailbox_pk: [u8; 32] = match joiner_mailbox_pk.try_into() {
+            Ok(pk) => pk,
+            Err(_) => {
+                tracing::warn!("Invalid mailbox_pk length for AnonGroupJoinAck");
+                return;
+            }
+        };
+
+        // Parse and decrypt profile data
+        let profile_key_arr: Option<[u8; 32]> = profile_key.as_ref().and_then(|pk| {
+            if pk.len() == 32 {
+                let mut key = [0u8; 32];
+                key.copy_from_slice(pk);
+                Some(key)
+            } else {
+                None
+            }
+        });
+
+        use crate::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
+
+        let display_name: Option<String> = match (&profile_key_arr, encrypted_display_name) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                decrypt_display_name(pk, encrypted).ok().filter(|n| !n.is_empty())
+            }
+            _ => None,
+        };
+
+        let avatar: Option<Vec<u8>> = match (&profile_key_arr, encrypted_avatar) {
+            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                decrypt_avatar(pk, encrypted).ok()
+            }
+            _ => None,
+        };
+
+        tracing::debug!(
+            peer_id = %peer_id,
+            display_name = ?display_name,
+            "Decrypted profile for join ack"
+        );
+
+        let anon_service = self.anon_group_service.clone();
+        let peer_id_clone = peer_id;
+
+        tokio::spawn(async move {
+            if let Err(e) = anon_service.handle_join_ack(
+                anon_group_id,
+                peer_id_clone,
+                mailbox_pk,
+                profile_key_arr,
+                display_name,
+                avatar,
+            ).await {
+                tracing::error!(
+                    group_id = ?anon_group_id,
+                    peer_id = %peer_id_clone,
+                    error = %e,
+                    "Failed to handle join ack"
+                );
+            }
+        });
+    }
+
+    fn handle_anon_group_message(
+        &self,
+        peer_id: UserId,
+        group_id: &[u8],
+        inner_content: &crate::proto::content_v1::Content,
+    ) {
+        let anon_group_id = match crate::domain::anon_group::AnonGroupId::try_from_slice(group_id) {
+            Some(id) => id,
+            None => {
+                tracing::warn!("Invalid group_id length for AnonGroupMessage");
+                return;
+            }
+        };
+
+        tracing::debug!(
+            peer_id = %peer_id,
+            group_id = %anon_group_id,
+            "Received anonymous group message"
+        );
+
+        use crate::proto::content_v1::content;
+
+        match &inner_content.content {
+            // Handle call signaling events (protocol-only, no UI needed)
+            Some(content::Content::AnonCallOffer(offer)) => {
+                tracing::info!(
+                    group_id = %anon_group_id,
+                    sender_id = %peer_id,
+                    room_name = %offer.room_name,
+                    "Received anonymous group call offer"
+                );
+                self.event_bus.emit_domain(DomainEvent::AnonGroupCallOfferReceived {
+                    group_id: anon_group_id,
+                    sender_id: peer_id,
+                    call_room_id: offer.call_room_id.clone(),
+                    room_name: offer.room_name.clone(),
+                    call_type: offer.call_type,
+                    caller_display_name: offer.caller_display_name.clone(),
+                    call_encryption_key: offer.call_encryption_key.clone(),
+                    timestamp: offer.timestamp,
+                });
+            }
+
+            Some(content::Content::AnonCallAnswer(answer)) => {
+                tracing::info!(
+                    group_id = %anon_group_id,
+                    sender_id = %peer_id,
+                    accepted = answer.accepted,
+                    "Received anonymous group call answer"
+                );
+                self.event_bus.emit_domain(DomainEvent::AnonGroupCallAnswerReceived {
+                    group_id: anon_group_id,
+                    sender_id: peer_id,
+                    call_room_id: answer.call_room_id.clone(),
+                    accepted: answer.accepted,
+                    callee_display_name: answer.callee_display_name.clone(),
+                    timestamp: answer.timestamp,
+                });
+            }
+
+            Some(content::Content::AnonCallHangup(hangup)) => {
+                tracing::info!(
+                    group_id = %anon_group_id,
+                    sender_id = %peer_id,
+                    "Received anonymous group call hangup"
+                );
+                self.event_bus.emit_domain(DomainEvent::AnonGroupCallHangupReceived {
+                    group_id: anon_group_id,
+                    sender_id: peer_id,
+                    call_room_id: hangup.call_room_id.clone(),
+                    reason: hangup.reason,
+                    timestamp: hangup.timestamp,
+                });
+            }
+
+            // Handle receipt (protocol-only logging)
+            Some(content::Content::Receipt(receipt)) => {
+                tracing::debug!(
+                    group_id = %anon_group_id,
+                    peer_id = %peer_id,
+                    receipt_type = receipt.r#type,
+                    timestamps = ?receipt.timestamps,
+                    "Received anon group receipt (not yet implemented in UI)"
+                );
+            }
+
+            // Handle attachment auto-download for data messages
+            Some(content::Content::DataMessage(data_msg)) => {
+                if data_msg.delete.is_none() && !data_msg.attachments.is_empty() {
+                    let download_pointers: Vec<_> = data_msg.attachments
+                        .iter()
+                        .filter(|p| !p.cdn_key.is_empty())
+                        .cloned()
+                        .collect();
+
+                    if !download_pointers.is_empty() {
+                        // Create attachment records before spawning download
+                        self.attachment_service.create_from_pointers(&download_pointers);
                     }
                 }
             }
-            InboxEvent::FriendRequestsUpdated { received, sent } => {
-                // Convert to domain event with proper data
-                tracing::debug!("Friend requests: {} received, {} sent", received.len(), sent.len());
-                
-                let _ = self.domain_tx.send(DomainEvent::FriendRequestsUpdated {
-                    received,
-                    sent,
-                });
-            }
-            InboxEvent::DmTyping { peer_id, action } => {
-                // Look up the DM channel ID from peer_id
-                tracing::debug!("DM typing from {} action={}", peer_id, action);
-                
-                // Try to find the DM channel for this peer
-                // In a real implementation, we'd query the channel repository
-                let channel_id = crate::domain::ids::ChannelId::new(); // Placeholder
-                
-                let event = if action == 1 {
-                    DomainEvent::TypingStarted { 
-                        user_id: peer_id,
-                        channel_id,
-                    }
-                } else {
-                    DomainEvent::TypingStopped { 
-                        user_id: peer_id,
-                        channel_id,
-                    }
-                };
-                let _ = self.domain_tx.send(event);
-            }
-            InboxEvent::ChannelTyping { channel_id, sender_id, action } => {
-                // action: 1=Started, 2=Stopped
-                let event = if action == 1 {
-                    DomainEvent::TypingStarted { 
-                        user_id: sender_id, 
-                        channel_id
-                    }
-                } else {
-                    DomainEvent::TypingStopped { 
-                        user_id: sender_id, 
-                        channel_id
-                    }
-                };
-                let _ = self.domain_tx.send(event);
-            }
+
             _ => {
-                // Other protocol events
-                tracing::trace!("Other inbox event type");
+                // Typing, reaction, pin, edit, delete are handled by UI layer
+                // (they need slint model updates)
             }
         }
+    }
+
+    fn handle_anon_dm_request(
+        &self,
+        peer_id: UserId,
+        conversation_id: &[u8],
+        initiator_mailbox_pk: &[u8],
+        intro_message: &Option<String>,
+        profile_key: &Option<Vec<u8>>,
+        encrypted_display_name: &Option<Vec<u8>>,
+        encrypted_avatar: &Option<Vec<u8>>,
+    ) {
+        tracing::info!(
+            peer_id = %peer_id,
+            conversation_id_len = conversation_id.len(),
+            has_intro = intro_message.is_some(),
+            has_encrypted_name = encrypted_display_name.is_some(),
+            has_encrypted_avatar = encrypted_avatar.is_some(),
+            "Received anonymous DM request"
+        );
+
+        let anon_dm_id = match crate::domain::anon_dm::AnonDmId::try_from_slice(conversation_id) {
+            Some(id) => id,
+            None => {
+                tracing::warn!("Invalid conversation_id length for AnonDmRequest");
+                return;
+            }
+        };
+
+        let mailbox_pk: [u8; 32] = match initiator_mailbox_pk.try_into() {
+            Ok(pk) => pk,
+            Err(_) => {
+                tracing::warn!(
+                    mailbox_pk_len = initiator_mailbox_pk.len(),
+                    "Invalid mailbox_pk length for AnonDmRequest (expected 32 bytes)"
+                );
+                return;
+            }
+        };
+
+        let anon_dm_service = self.anon_dm_service.clone();
+        let event_bus = self.event_bus.clone();
+        let intro_msg = intro_message.clone();
+        let profile_key = profile_key.clone();
+        let encrypted_display_name = encrypted_display_name.clone();
+        let encrypted_avatar = encrypted_avatar.clone();
+
+        tokio::spawn(async move {
+            let intro_msg_for_event = intro_msg.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                anon_dm_service.handle_request_encrypted(
+                    anon_dm_id,
+                    peer_id,
+                    mailbox_pk,
+                    intro_msg.as_deref(),
+                    profile_key,
+                    encrypted_display_name,
+                    encrypted_avatar,
+                )
+            }).await;
+
+            match result {
+                Ok(Ok((_dm, profile))) => {
+                    event_bus.emit_domain(DomainEvent::AnonDmRequestReceived {
+                        conversation_id: anon_dm_id,
+                        sender_id: peer_id,
+                        sender_mailbox_pk: mailbox_pk,
+                        intro_message: intro_msg_for_event,
+                        profile_key: profile.profile_key,
+                        sender_display_name: Some(profile.display_name.clone()),
+                        sender_avatar: profile.avatar.clone(),
+                    });
+                }
+                Ok(Err(e)) => {
+                    tracing::debug!(peer_id = %peer_id, error = %e, "Failed to handle AnonDmRequest");
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "spawn_blocking panicked in AnonDmRequest handler");
+                }
+            }
+        });
+    }
+
+    fn handle_anon_dm_accept(
+        &self,
+        peer_id: UserId,
+        conversation_id: &[u8],
+        responder_mailbox_pk: &[u8],
+        profile_key: &Option<Vec<u8>>,
+        encrypted_display_name: &Option<Vec<u8>>,
+        encrypted_avatar: &Option<Vec<u8>>,
+    ) {
+        tracing::info!(
+            peer_id = %peer_id,
+            conversation_id_len = conversation_id.len(),
+            has_encrypted_display_name = encrypted_display_name.is_some(),
+            has_encrypted_avatar = encrypted_avatar.as_ref().map(|v| !v.is_empty()).unwrap_or(false),
+            "Received anonymous DM acceptance"
+        );
+
+        let anon_dm_id = match crate::domain::anon_dm::AnonDmId::try_from_slice(conversation_id) {
+            Some(id) => id,
+            None => {
+                tracing::warn!("Invalid conversation_id length for AnonDmAccept");
+                return;
+            }
+        };
+
+        let mailbox_pk: [u8; 32] = match responder_mailbox_pk.try_into() {
+            Ok(pk) => pk,
+            Err(_) => {
+                tracing::warn!(
+                    mailbox_pk_len = responder_mailbox_pk.len(),
+                    "Invalid mailbox_pk length for AnonDmAccept (expected 32 bytes)"
+                );
+                return;
+            }
+        };
+
+        let anon_dm_service = self.anon_dm_service.clone();
+        let event_bus = self.event_bus.clone();
+        let profile_key = profile_key.clone();
+        let encrypted_display_name = encrypted_display_name.clone();
+        let encrypted_avatar = encrypted_avatar.clone();
+
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                anon_dm_service.handle_acceptance_encrypted(
+                    anon_dm_id,
+                    peer_id,
+                    mailbox_pk,
+                    profile_key,
+                    encrypted_display_name,
+                    encrypted_avatar,
+                )
+            }).await;
+
+            match result {
+                Ok(Ok(profile)) => {
+                    event_bus.emit_domain(DomainEvent::AnonDmRequestAccepted {
+                        conversation_id: anon_dm_id,
+                        peer_id,
+                        peer_mailbox_pk: mailbox_pk,
+                        profile_key: profile.profile_key,
+                        peer_display_name: profile.display_name.clone(),
+                        peer_avatar: profile.avatar.clone(),
+                    });
+                }
+                Ok(Err(e)) => {
+                    tracing::debug!(peer_id = %peer_id, error = %e, "Failed to handle AnonDmAccept");
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "spawn_blocking panicked in AnonDmAccept handler");
+                }
+            }
+        });
+    }
+
+    fn handle_anon_dm_message(
+        &self,
+        peer_id: UserId,
+        conversation_id: &[u8],
+        inner_content: &crate::proto::content_v1::Content,
+    ) {
+        let anon_dm_id = match crate::domain::anon_dm::AnonDmId::try_from_slice(conversation_id) {
+            Some(id) => id,
+            None => {
+                tracing::warn!("Invalid conversation_id length for AnonDmMessage");
+                return;
+            }
+        };
+
+        // Extract attachments - create records first, then spawn download
+        if let Some(crate::proto::content_v1::content::Content::DataMessage(data_msg)) = &inner_content.content {
+            if !data_msg.attachments.is_empty() {
+                let download_pointers: Vec<_> = data_msg.attachments
+                    .iter()
+                    .filter(|p| !p.cdn_key.is_empty())
+                    .cloned()
+                    .collect();
+
+                if !download_pointers.is_empty() {
+                    // Create attachment records BEFORE spawning download
+                    self.attachment_service.create_from_pointers(&download_pointers);
+                }
+            }
+        }
+
+        // Delegate to service layer for business logic
+        let anon_dm_service = self.anon_dm_service.clone();
+        let event_bus = self.event_bus.clone();
+        let inner_content_ref = inner_content.clone();
+
+        let _ = tokio::task::spawn_blocking(move || {
+            match anon_dm_service.process_incoming_content(&anon_dm_id, &peer_id, &inner_content_ref) {
+                Ok(events) => {
+                    for event in events {
+                        event_bus.emit_domain(event);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        conversation_id = %anon_dm_id,
+                        error = %e,
+                        "[ANON_DM] Failed to process incoming message"
+                    );
+                }
+            }
+        });
     }
 }

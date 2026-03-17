@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 mod active;
@@ -46,7 +46,7 @@ pub fn cleanup_call_ui_state() {
 ///
 /// Note: call_service is passed separately because it's initialized post-boot
 /// via AppContext.init_call_service() and stored in a OnceLock.
-pub fn wire(window: &MainWindow, ui_ctx: &Arc<UIContext>) {
+pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     outgoing::wire_start_call(window, ui_ctx);
     incoming::wire_incoming_call(window, ui_ctx);
     active::wire_active_call(window, ui_ctx);

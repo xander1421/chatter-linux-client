@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::Weak;
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::inbox::DomainEvent;
 use crate::MainWindow;
 
@@ -18,11 +18,11 @@ use crate::MainWindow;
 /// Returns a handle to the spawned task.
 pub fn spawn_anon_group_invite_handler(
     weak_window: Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
-    let anon_group_service = ui_ctx.anon_group_service.clone();
-    let user_service = ui_ctx.user_service.clone();
-    let mut event_rx = ui_ctx.event_bus.subscribe_domain();
+    let anon_group_service = ui_ctx.anon_groups().clone();
+    let user_service = ui_ctx.users().clone();
+    let mut event_rx = ui_ctx.event_bus().subscribe_domain();
 
     tokio::spawn(async move {
         while let Ok(event) = event_rx.recv().await {

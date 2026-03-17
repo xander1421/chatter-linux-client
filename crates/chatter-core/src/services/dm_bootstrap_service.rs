@@ -87,6 +87,39 @@ impl DmBootstrapService {
         pending.remove(peer_id).unwrap_or_default()
     }
 
+    /// Flush pending UI messages for a peer by sending them as DMs.
+    ///
+    /// Called after DM bootstrap completes on the responder side.
+    /// Builds Content protos and sends via Double Ratchet.
+    pub async fn flush_pending_ui_messages(
+        &self,
+        peer_id: &UserId,
+    ) {
+        let pending = self.take_pending_messages(peer_id).await;
+        if pending.is_empty() {
+            return;
+        }
+
+        tracing::info!(
+            peer_id = %peer_id,
+            count = pending.len(),
+            "Flushing pending UI messages after bootstrap"
+        );
+
+        let msg_svc = self.message_service.clone();
+        let mailbox = self.mailbox_manager.clone();
+        let peer = *peer_id;
+        tokio::spawn(async move {
+            for text in pending {
+                let now = chrono::Utc::now().timestamp_millis() as u64;
+                let content = crate::services::gateway::build_text_content(&text, now);
+                if let Err(e) = msg_svc.send_dm(&peer, content, &*mailbox).await {
+                    tracing::warn!(peer_id = %peer, error = %e, "Failed to send pending message");
+                }
+            }
+        });
+    }
+
     /// Handle session convergence failure by resetting and re-establishing sessions.
     ///
     /// Multi-device: resets sessions for ALL peer devices, not just primary.

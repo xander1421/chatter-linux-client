@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel};
 
-use chatter_core::app::UIContext;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::UserId;
 
@@ -15,13 +15,13 @@ use crate::MainWindow;
 use crate::MessageItemData;
 
 /// Helper to get a member's display name, trying the group profile first, then falling back to user profile.
-pub(crate) fn get_anon_member_name(ui_ctx: &Arc<UIContext>, group_id: &AnonGroupId, user_id: &UserId) -> String {
-    if let Ok(Some(name)) = ui_ctx.anon_group_service.get_member_display_name(group_id, user_id) {
+pub(crate) fn get_anon_member_name(ui_ctx: &Arc<ChatterClient>, group_id: &AnonGroupId, user_id: &UserId) -> String {
+    if let Ok(Some(name)) = ui_ctx.anon_groups().get_member_display_name(group_id, user_id) {
         if !name.is_empty() {
             return name;
         }
     }
-    ui_ctx.user_service.get_display_name(user_id)
+    ui_ctx.users().get_display_name(user_id)
 }
 
 // =============================================================================
@@ -33,7 +33,7 @@ pub(crate) fn get_anon_member_name(ui_ctx: &Arc<UIContext>, group_id: &AnonGroup
 /// Adds a system message to the chat indicating someone joined.
 pub(crate) fn handle_anon_group_member_joined(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
     user_id: UserId,
 ) {
@@ -112,7 +112,7 @@ pub(crate) fn handle_anon_group_member_joined(
 /// Adds a system message to the chat indicating someone left.
 pub(crate) fn handle_anon_group_member_left(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
     user_id: UserId,
 ) {
@@ -191,7 +191,7 @@ pub(crate) fn handle_anon_group_member_left(
 /// Adds a system message to the chat indicating someone was kicked.
 pub(crate) fn handle_anon_group_member_kicked(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<UIContext>,
+    ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
     user_id: UserId,
     kicked_by: UserId,

@@ -92,6 +92,8 @@ pub struct EventHandlers {
     offline_state: OfflineState,
     /// Group mailbox coordinator for NDSS '21 per-group mailboxes.
     group_coordinator: Option<Arc<GroupCoordinator>>,
+    /// Message service for DB persistence of edits/deletes.
+    message_service: Option<Arc<crate::services::message::MessageService>>,
 }
 
 impl EventHandlers {
@@ -125,7 +127,14 @@ impl EventHandlers {
             streaming_state,
             offline_state,
             group_coordinator: None,
+            message_service: None,
         }
+    }
+
+    /// Set the message service for DB persistence.
+    pub fn with_message_service(mut self, service: Arc<crate::services::message::MessageService>) -> Self {
+        self.message_service = Some(service);
+        self
     }
 
     /// Set the group coordinator for handling NDSS '21 mailbox events.
@@ -197,12 +206,18 @@ impl EventHandlers {
                 new_content,
                 channel_id,
             } => {
-                trace!(?channel_id, ?message_id, "Updating message content in state");
+                trace!(?channel_id, ?message_id, "Updating message content in state + DB");
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
                         msg.content = new_content.clone();
                         msg.is_edited = true;
                     });
+                // Persist to DB so is_edited survives reload
+                if let Some(ref svc) = self.message_service {
+                    if let Err(e) = svc.update_message_body(&message_id, &new_content) {
+                        tracing::warn!(?message_id, error = %e, "Failed to persist edit to DB");
+                    }
+                }
             }
 
             DomainEvent::MessageDeleted {
@@ -216,29 +231,16 @@ impl EventHandlers {
                     ?channel_id,
                     "Inbox event: MessageDeleted received"
                 );
-                // For DM deletes, channel_id may be None - derive from author_id
-                // (DM channel is the conversation with that author)
+                // Remove from in-memory state
                 if let Some(ch_id) = channel_id {
-                    tracing::debug!(?ch_id, ?message_id, "Removing message from state");
                     self.message_state.remove_message(&ch_id, &message_id);
-                } else {
-                    // DM delete - we need to find the message by ID across all channels
-                    // or derive DM channel from author. For now, try to find and remove.
-                    tracing::debug!(
-                        ?author_id,
-                        ?message_id,
-                        "DM delete: searching for message to remove"
-                    );
-                    // Try to find the channel containing this message
-                    if let Some(ch_id) = self.message_state.find_channel_for_message(&message_id) {
-                        self.message_state.remove_message(&ch_id, &message_id);
-                        tracing::info!(?ch_id, ?message_id, "Removed deleted message from state");
-                    } else {
-                        tracing::warn!(
-                            ?author_id,
-                            ?message_id,
-                            "Could not find channel for deleted message"
-                        );
+                } else if let Some(ch_id) = self.message_state.find_channel_for_message(&message_id) {
+                    self.message_state.remove_message(&ch_id, &message_id);
+                }
+                // Persist deletion to DB
+                if let Some(ref svc) = self.message_service {
+                    if let Err(e) = svc.delete_message_local(&message_id) {
+                        tracing::warn!(?message_id, error = %e, "Failed to persist delete to DB");
                     }
                 }
             }
@@ -279,8 +281,16 @@ impl EventHandlers {
                     receipt_timestamp,
                     "Read receipt received"
                 );
-                // Note: UI-level handling for anon DM read receipts is done
-                // in bin_ui/features/modals/anon_dm_request.rs
+                // Persist read status to DB
+                self.message_state
+                    .update_delivery_status_by_timestamps(&message_timestamps, "read");
+                if let Some(ref svc) = self.message_service {
+                    for ts in &message_timestamps {
+                        if let Err(e) = svc.update_delivery_status_by_timestamp(*ts, "read") {
+                            tracing::trace!(timestamp = ts, error = %e, "Failed to persist read status");
+                        }
+                    }
+                }
             }
 
             DomainEvent::MessagesDelivered {
@@ -296,6 +306,14 @@ impl EventHandlers {
                 );
                 self.message_state
                     .update_delivery_status_by_timestamps(&message_timestamps, "delivered");
+                // Persist delivery status to DB
+                if let Some(ref svc) = self.message_service {
+                    for ts in &message_timestamps {
+                        if let Err(e) = svc.update_delivery_status_by_timestamp(*ts, "delivered") {
+                            tracing::trace!(timestamp = ts, error = %e, "Failed to persist delivery status");
+                        }
+                    }
+                }
             }
 
             DomainEvent::ViewedReceipt {
@@ -311,6 +329,9 @@ impl EventHandlers {
                 );
                 self.message_state
                     .update_delivery_status_by_timestamps(&[message_timestamp], "read");
+                if let Some(ref svc) = self.message_service {
+                    let _ = svc.update_delivery_status_by_timestamp(message_timestamp, "read");
+                }
             }
 
             // ================================================================
@@ -332,7 +353,12 @@ impl EventHandlers {
                 // For now, assume not current user unless services layer provides that info
                 self.streaming_state
                     .update_reaction(&message_id, emoji.clone(), 1, None);
-                tracing::debug!(?message_id, %emoji, "Updated reaction count in streaming state (+1)");
+                // Persist to DB so reactions survive reload
+                if let Some(ref svc) = self.message_service {
+                    if let Err(e) = svc.update_reaction(&message_id, &emoji, true) {
+                        tracing::warn!(?message_id, error = %e, "Failed to persist reaction add to DB");
+                    }
+                }
             }
 
             DomainEvent::ReactionRemoved {
@@ -349,7 +375,11 @@ impl EventHandlers {
                 );
                 self.streaming_state
                     .update_reaction(&message_id, emoji.clone(), -1, None);
-                tracing::debug!(?message_id, %emoji, "Updated reaction count in streaming state (-1)");
+                if let Some(ref svc) = self.message_service {
+                    if let Err(e) = svc.update_reaction(&message_id, &emoji, false) {
+                        tracing::warn!(?message_id, error = %e, "Failed to persist reaction remove to DB");
+                    }
+                }
             }
 
             // ================================================================
@@ -368,17 +398,16 @@ impl EventHandlers {
                     "Inbox event: MessagePinned received"
                 );
                 
-                // Update message state to mark as pinned
-                // Note: Database persistence should happen in the message service layer
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
                         msg.is_pinned = true;
                     });
-                
-                // Add to pinned state
                 self.pinned_state.add_pinned_message(message_id);
-                
-                tracing::debug!(?channel_id, ?message_id, "Marked message as pinned in state and DB");
+                if let Some(ref svc) = self.message_service {
+                    if let Err(e) = svc.set_message_pinned(&message_id, true) {
+                        tracing::warn!(?message_id, error = %e, "Failed to persist pin to DB");
+                    }
+                }
             }
 
             DomainEvent::MessageUnpinned {
@@ -394,12 +423,15 @@ impl EventHandlers {
                     "Inbox event: MessageUnpinned received"
                 );
                 
-                // Update message state to mark as unpinned
-                // Note: Database persistence should happen in the message service layer
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
                         msg.is_pinned = false;
                     });
+                if let Some(ref svc) = self.message_service {
+                    if let Err(e) = svc.set_message_pinned(&message_id, false) {
+                        tracing::warn!(?message_id, error = %e, "Failed to persist unpin to DB");
+                    }
+                }
                 
                 // Remove from pinned state
                 self.pinned_state.remove_pinned_message(&message_id);
@@ -416,8 +448,8 @@ impl EventHandlers {
                 channel_id,
             } => {
                 trace!(?channel_id, ?message_id, attachment_id = ?attachment.id, "Attachment ready");
-                // TODO: Services layer should download and update message with attachment
-                // The actual attachment download would be handled by a dedicated service
+                // Attachment records are created by InboxEventProcessor::create_from_pointers()
+                // before the UI handler runs. Download is triggered by UI's trigger_channel_attachment_download().
             }
 
             // ================================================================
@@ -473,9 +505,14 @@ impl EventHandlers {
                 ..
             } => {
                 trace!(?conversation_id, ?target_message_id, "DeleteForMeSync: removing message locally");
-                // Remove from local message cache (this syncs the deletion across devices)
                 self.message_state
                     .remove_message(&conversation_id, &target_message_id);
+                // Persist deletion to DB
+                if let Some(ref svc) = self.message_service {
+                    if let Err(e) = svc.delete_message_local(&target_message_id) {
+                        tracing::warn!(?target_message_id, error = %e, "Failed to persist delete-for-me to DB");
+                    }
+                }
             }
 
             // ================================================================
