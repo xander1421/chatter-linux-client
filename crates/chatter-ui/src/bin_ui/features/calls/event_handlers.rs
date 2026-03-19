@@ -15,10 +15,10 @@ use super::key_exchange::handle_call_key_answer;
 /// Wire call key answer handler to process incoming answer events.
 ///
 /// Subscribes to `DomainEvent::CallKeyAnswerReceived` from the event bus
-/// and completes the ephemeral key exchange for the caller.
+/// and completes the ephemeral key exchange for the caller (via core).
 pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let call_service = ui_ctx.call_service().clone();
-    let signal_service = ui_ctx.signal().clone();
+    let ui_ctx = ui_ctx.clone();
     let mut event_rx = ui_ctx.event_bus().subscribe_domain();
     let weak = window.as_weak();
 
@@ -45,12 +45,12 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                         }
                     };
 
-                    // Handle the answer on the UI thread
+                    // Handle the answer on the UI thread (delegates to core)
                     if weak.upgrade().is_some() {
                         handle_call_key_answer(
                             &weak,
                             &service,
-                            &signal_service,
+                            &ui_ctx,
                             ephemeral_public_key,
                             call_id,
                             peer_id,

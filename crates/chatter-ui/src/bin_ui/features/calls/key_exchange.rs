@@ -1,147 +1,82 @@
 //! Ephemeral key exchange for call encryption.
 //!
-//! Manages outgoing call state for E2EE calls.
-//! All crypto operations (ECDH, identity key lookup, HKDF) are delegated
-//! to the Signal service actor.
+//! DM call key exchange state and crypto are fully managed by core
+//! (CallSignalingService). This module provides the UI-side handler
+//! that delegates to core and updates Slint properties from the result.
 
-use std::cell::RefCell;
 use std::sync::Arc;
 
-use chatter_core::crypto::EphemeralCallKey;
-use chatter_core::domain::ids::{CallId, ChannelId, UserId};
+use chatter_core::client::ChatterClient;
+use chatter_core::domain::ids::UserId;
 use chatter_core::services::CallWorkerHandle;
-use chatter_core::services::signal::SignalService;
 use crate::MainWindow;
 
 use super::timers::{start_call_timer, start_video_frame_timer};
 
-thread_local! {
-    /// Pending outgoing call state (waiting for answer with peer's ephemeral key).
-    pub(super) static PENDING_OUTGOING_CALL: RefCell<Option<PendingOutgoingCall>> = const { RefCell::new(None) };
-}
-
-/// State for an outgoing call waiting for the peer's ephemeral key answer.
-pub struct PendingOutgoingCall {
-    /// Call ID.
-    pub call_id: CallId,
-    /// Channel ID (stored for potential future use, e.g., call history).
-    #[allow(dead_code)]
-    pub channel_id: ChannelId,
-    /// Our ephemeral X25519 keypair (private key zeroized on drop).
-    pub ephemeral_key: EphemeralCallKey,
-    /// Peer's user ID (stored for verification, used via call_id matching).
-    #[allow(dead_code)]
-    pub peer_id: UserId,
-    /// Call type string.
-    pub call_type: String,
-    /// Whether this is a video call.
-    pub is_video_call: bool,
-}
-
-/// Store a pending outgoing call.
-pub fn set_pending_call(call: PendingOutgoingCall) {
-    PENDING_OUTGOING_CALL.with(|pending| {
-        *pending.borrow_mut() = Some(call);
-    });
-}
-
 /// Clear any pending outgoing call state.
+///
+/// Since pending state is now managed in core (CallSignalingService),
+/// this is a no-op on the UI side. Kept for API compatibility with
+/// cleanup_call_ui_state().
 pub fn clear_pending_call() {
-    PENDING_OUTGOING_CALL.with(|pending| {
-        *pending.borrow_mut() = None;
-    });
+    // Pending state lives in core's CallSignalingService now.
+    // It is consumed by complete_dm_call() or cleared on hangup via core.
 }
 
 /// Handle receiving a call key answer (peer's ephemeral key).
 ///
-/// This completes the caller's side of the ephemeral key exchange:
-/// 1. Pass ephemeral keys to Signal service (ECDH + identity lookup + HKDF)
-/// 2. Update LiveKit encryption key
-/// 3. Start call timers and publish media
+/// Delegates to core's complete_dm_call() which handles:
+/// 1. Taking pending call state
+/// 2. Verifying call ID match
+/// 3. ECDH + identity lookup + HKDF (via Signal actor)
+/// 4. Updating LiveKit encryption key
+/// 5. Deriving verification emojis
 ///
-/// All crypto operations are delegated to the Signal service actor.
+/// This function only handles UI updates (Slint properties, timers, media).
 /// Must be called on the UI thread.
 pub async fn handle_call_key_answer(
     weak_window: &slint::Weak<MainWindow>,
     call_service: &CallWorkerHandle,
-    signal_service: &Arc<SignalService>,
+    ui_ctx: &Arc<ChatterClient>,
     peer_ephemeral_pk: [u8; 32],
     call_id: String,
     peer_id: UserId,
 ) {
-    // Take the pending call state
-    let pending = PENDING_OUTGOING_CALL.with(|pending| pending.borrow_mut().take());
+    tracing::info!(
+        call_id = %call_id,
+        peer_id = %peer_id,
+        "Processing call key answer via core"
+    );
 
-    let pending = match pending {
-        Some(p) => p,
-        None => {
-            tracing::warn!(
-                call_id = %call_id,
-                "Received call answer but no pending outgoing call"
-            );
+    // Delegate all crypto and state management to core (gRPC - run on tokio)
+    let result = {
+        let ctx = ui_ctx.clone();
+        let cid = call_id.clone();
+        let pid = peer_id;
+        tokio::spawn(async move {
+            ctx.complete_dm_call(peer_ephemeral_pk, &cid, &pid).await
+        }).await.unwrap()
+    };
+
+    let setup = match result {
+        Ok(setup) => setup,
+        Err(e) => {
+            tracing::error!(call_id = %call_id, error = %e, "Failed to complete DM call");
             return;
         }
     };
 
-    // Verify this answer is for our pending call
-    if pending.call_id.to_string() != call_id {
-        tracing::warn!(
-            expected = %pending.call_id,
-            received = %call_id,
-            "Call ID mismatch in answer"
-        );
-        // Put it back
-        PENDING_OUTGOING_CALL.with(|p| {
-            *p.borrow_mut() = Some(pending);
-        });
-        return;
-    }
-
     tracing::info!(
         call_id = %call_id,
-        peer_id = %peer_id,
-        "Received call answer, deriving call key"
+        "DM call completed, updating UI"
     );
 
-    // Delegate all crypto to the Signal service (actor call - run on tokio)
-    let call_key = {
-        let actor = signal_service.actor.clone();
-        let priv_key = pending.ephemeral_key.private_key_bytes();
-        let cid = call_id.clone();
-        match tokio::spawn(async move {
-            actor.complete_call_key_exchange(
-                priv_key,
-                peer_ephemeral_pk,
-                peer_id,
-                cid,
-                true, // we_are_caller
-            ).await
-        }).await.unwrap() {
-            Ok(key) => key,
-            Err(e) => {
-                tracing::error!("Failed to derive call key: {}", e);
-                return;
-            }
-        }
-    };
-
-    tracing::info!(
-        call_id = %call_id,
-        "Call key derived successfully, updating LiveKit encryption"
-    );
-
-    // Update LiveKit encryption key and publish media
+    // Publish media (gRPC - run on tokio)
     let call_service_clone = call_service.clone();
-    let call_key_clone = call_key;
-    let is_video_call = pending.is_video_call;
+    let is_video_call = weak_window.upgrade()
+        .map(|w| w.get_active_call_data().is_video_call)
+        .unwrap_or(false);
     tokio::spawn(async move {
-        let success = call_service_clone.set_encryption_key(call_key_clone.to_vec()).await;
-        if success {
-            tracing::info!("Call encryption key updated");
-        } else {
-            tracing::error!("Failed to set call encryption key");
-        }
-
         // Publish microphone
         if let Err(e) = call_service_clone.publish_microphone(None).await {
             tracing::error!("Failed to publish microphone: {}", e);
@@ -155,28 +90,23 @@ pub async fn handle_call_key_answer(
         }
     });
 
-    // Update UI with verification emojis
+    // Update UI with verification emojis from core result
     if let Some(w) = weak_window.upgrade() {
-        let verification = chatter_core::services::CallVerification::derive_verification_emojis(
-            &call_key,
-            &call_id,
-        );
-        let (e1, e2, e3, e4) = chatter_core::services::CallVerification::to_slint_tuple(&verification);
-
-        // Update verification emojis in active call data
         let mut call_data = w.get_active_call_data();
-        call_data.verification_emoji_1 = e1.into();
-        call_data.verification_emoji_2 = e2.into();
-        call_data.verification_emoji_3 = e3.into();
-        call_data.verification_emoji_4 = e4.into();
-        call_data.title = pending.call_type.clone().into();
+        call_data.verification_emoji_1 = setup.verification_emojis[0].clone().into();
+        call_data.verification_emoji_2 = setup.verification_emojis[1].clone().into();
+        call_data.verification_emoji_3 = setup.verification_emojis[2].clone().into();
+        call_data.verification_emoji_4 = setup.verification_emojis[3].clone().into();
+        // Update title from "Calling..." to the call type
+        // (get from the active call data since core doesn't track UI title)
+        let current_title = call_data.title.to_string();
+        if current_title == "Calling..." {
+            call_data.title = "Call".into();
+        }
         w.set_active_call_data(call_data);
 
         // Start call timer now that we're connected
         start_call_timer(&w, None);
         start_video_frame_timer(&w, call_service);
     }
-
-    // ephemeral_key is dropped here, zeroizing the private key
-    tracing::debug!("Ephemeral private key zeroized");
 }

@@ -8,8 +8,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::crypto::EphemeralCallKey;
-use chatter_core::domain::ids::{CallId, UserId};
+use chatter_core::domain::ids::UserId;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
 use super::timers::{start_call_timer, start_video_frame_timer};
@@ -20,7 +19,6 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let ctx_call_service = ui_ctx.call_service().clone();
     let ctx_session_service = ui_ctx.sessions().clone();
-    let ctx_signal_service = ui_ctx.signal().clone();
     let ctx_anon_dm_service = ui_ctx.anon_dms().clone();
     let ctx_anon_group_service = ui_ctx.anon_groups().clone();
 
@@ -30,7 +28,6 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let call_service = ctx_call_service.clone();
         let session_service = ctx_session_service.clone();
-        let signal_service = ctx_signal_service.clone();
         let anon_dm_service = ctx_anon_dm_service.clone();
         let anon_group_service = ctx_anon_group_service.clone();
 
@@ -350,10 +347,9 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             let weak = weak.clone();
-            let call_service = call_service.clone();
             let session_service = session_service.clone();
-            let signal_service = signal_service.clone();
             let ui_ctx = ui_ctx.clone();
+            let call_service = call_service.clone();
 
             slint::spawn_local(async move {
                 // Get incoming call data to extract caller's ephemeral key and caller ID
@@ -364,7 +360,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .parse::<u64>()
                         .ok();
                     (
-                        data.encryption_key.to_string(), // Now contains caller's ephemeral public key
+                        data.encryption_key.to_string(), // Contains caller's ephemeral public key
                         data.is_video_call,
                         data.caller_name.to_string(),
                         timestamp_ns,
@@ -403,76 +399,6 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 };
 
-                // =============================================================
-                // Ephemeral Key Exchange (Callee Side)
-                // =============================================================
-                // 1. Generate our ephemeral keypair
-                // 2. Compute ECDH(our_ephemeral, caller_ephemeral)
-                // 3. Delegate identity lookup + key derivation to Signal service
-                // 4. Send answer with our ephemeral public key
-                // 5. Join the call with derived key
-                // =============================================================
-
-                // Generate our ephemeral keypair
-                let our_ephemeral = EphemeralCallKey::generate();
-                let our_ephemeral_pk = our_ephemeral.public_key_bytes();
-
-                // Delegate all crypto to the Signal service (actor call - run on tokio)
-                let encryption_key = {
-                    let actor = signal_service.actor.clone();
-                    let priv_key = our_ephemeral.private_key_bytes();
-                    let cid_str = call_id_str.clone();
-                    match tokio::spawn(async move {
-                        actor.complete_call_key_exchange(
-                            priv_key,
-                            caller_ephemeral_pk,
-                            caller_id,
-                            cid_str,
-                            false, // we_are_caller = false (we're the callee)
-                        ).await
-                    }).await.unwrap() {
-                        Ok(key) => key,
-                        Err(e) => {
-                            tracing::error!("Failed to derive call key: {}", e);
-                            return;
-                        }
-                    }
-                };
-
-                tracing::info!(
-                    call_id = %call_id_str,
-                    caller_id = %caller_id,
-                    "Derived call key, sending answer"
-                );
-
-                // Send answer with our ephemeral public key via CallSignalingService (gRPC - run on tokio)
-                let answer_result = {
-                    let ctx = ui_ctx.clone();
-                    let cid = caller_id;
-                    let call_str = call_id_str.clone();
-                    let eph_pk = our_ephemeral_pk;
-                    tokio::spawn(async move {
-                        ctx.call_signaling().send_call_answer(&cid, &call_str, eph_pk).await
-                    }).await.unwrap()
-                };
-                if let Err(e) = answer_result {
-                    tracing::error!(caller_id = %caller_id, error = %e, "Failed to send call key answer");
-                    // Continue anyway - caller might timeout, but we can still try to connect
-                }
-
-                // our_ephemeral is dropped here, zeroizing the private key
-                drop(our_ephemeral);
-                tracing::debug!("Ephemeral private key zeroized");
-
-                // Parse call ID
-                let call_id = match CallId::from_str(&call_id_str) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        tracing::error!("Invalid call ID: {}", e);
-                        return;
-                    }
-                };
-
                 // Get current user ID
                 let user_id = match session_service.current_user_id() {
                     Some(id) => id,
@@ -482,21 +408,30 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 };
 
-                // Get the CallService from context (same instance used for room events)
-                let service = match call_service.get() {
-                    Some(svc) => svc.clone(),
-                    None => {
-                        tracing::error!("CallService not initialized");
-                        if let Some(w) = weak.upgrade() {
-                            w.set_incoming_call_visible(false);
-                        }
-                        return;
-                    }
+                // Delegate all crypto + signaling + joining to core
+                let result = {
+                    let ctx = ui_ctx.clone();
+                    let cid = call_id_str.clone();
+                    tokio::spawn(async move {
+                        ctx.accept_dm_call(caller_ephemeral_pk, &cid, &caller_id, user_id).await
+                    }).await.unwrap()
                 };
 
-                match service.join_call(call_id, &encryption_key, user_id).await {
-                    Ok(call) => {
-                        tracing::info!("Joined call: {:?}", call.id);
+                match result {
+                    Ok(setup) => {
+                        tracing::info!(call_id = %call_id_str, "DM call accepted via core");
+
+                        // Get the call service for media publishing
+                        let service = match call_service.get() {
+                            Some(svc) => svc.clone(),
+                            None => {
+                                tracing::error!("CallService not initialized");
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_incoming_call_visible(false);
+                                }
+                                return;
+                            }
+                        };
 
                         // Publish microphone immediately after joining
                         if let Err(e) = service.publish_microphone(None).await {
@@ -522,7 +457,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                             // Create caller participant
                             let caller_participant = CallParticipantData {
-                                user_id: call.initiator_id.to_string().into(),
+                                user_id: caller_id.to_string().into(),
                                 display_name: caller_name.into(),
                                 avatar_url: "".into(),
                                 is_muted: false,
@@ -531,17 +466,10 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 is_speaking: false,
                             };
 
-                            // Derive verification emojis for secure call verification
-                            let verification = chatter_core::services::CallVerification::derive_verification_emojis(
-                                &encryption_key,
-                                &call.id.to_string(),
-                            );
-                            let (e1, e2, e3, e4) = chatter_core::services::CallVerification::to_slint_tuple(&verification);
-
-                            // Create call data for UI
+                            // Use verification emojis from core result
                             let call_data = ActiveCallData {
-                                call_id: call.id.to_string().into(),
-                                channel_id: call.channel_id.to_string().into(),
+                                call_id: setup.call_id.to_string().into(),
+                                channel_id: setup.channel_id.to_string().into(),
                                 title: "Call".into(),
                                 is_video_call,
                                 is_anonymous_call: false,
@@ -551,10 +479,10 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 participant_count: 2, // We + caller
                                 duration_seconds: 0,
                                 participants: ModelRc::new(VecModel::from(vec![caller_participant, local_participant])),
-                                verification_emoji_1: e1.into(),
-                                verification_emoji_2: e2.into(),
-                                verification_emoji_3: e3.into(),
-                                verification_emoji_4: e4.into(),
+                                verification_emoji_1: setup.verification_emojis[0].clone().into(),
+                                verification_emoji_2: setup.verification_emojis[1].clone().into(),
+                                verification_emoji_3: setup.verification_emojis[2].clone().into(),
+                                verification_emoji_4: setup.verification_emojis[3].clone().into(),
                             };
 
                             w.set_active_call_data(call_data);
@@ -583,7 +511,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Failed to join call: {}", e);
+                        tracing::error!("Failed to accept DM call: {}", e);
                         if let Some(w) = weak.upgrade() {
                             w.set_incoming_call_visible(false);
                         }

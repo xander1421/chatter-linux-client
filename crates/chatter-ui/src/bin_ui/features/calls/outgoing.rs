@@ -7,14 +7,12 @@ use std::sync::Arc;
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::crypto::EphemeralCallKey;
 use chatter_core::domain::call::CallType;
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::services::CallWorkerHandle;
 use chatter_core::state::ActiveConversation;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
 
-use super::key_exchange::{set_pending_call, PendingOutgoingCall};
 use super::timers::{start_call_timer, start_video_frame_timer};
 
 /// Wire start call callbacks.
@@ -447,67 +445,18 @@ async fn start_call_impl(
                 }
             }
         } else {
-            // Regular DM call with ephemeral key exchange
-            // Generate ephemeral keypair for PFS
-            let ephemeral_key = EphemeralCallKey::generate();
-            let ephemeral_public = ephemeral_key.public_key_bytes();
+            // Regular DM call — delegate to core orchestration
+            let start_result = {
+                let ctx = ui_ctx.clone();
+                let peer = peer_id;
+                tokio::spawn(async move {
+                    ctx.start_dm_call(&peer, channel_id, call_type, user_id).await
+                }).await.unwrap()
+            };
 
-            tracing::info!(
-                peer_id = %peer_id,
-                "Generated ephemeral key for DM call, sending offer"
-            );
-
-            // Create call on server (temporary placeholder key - will update when answer arrives)
-            let placeholder_key = [0u8; 32];
-            match call_service.initiate_call(
-                channel_id,
-                call_type_str,
-                call_type,
-                &placeholder_key,
-                user_id,
-            ).await {
-                Ok(call) => {
-                    tracing::info!("Created call on server: {:?}, waiting for peer's ephemeral key", call.id);
-
-                    // Send offer via CallSignalingService (gRPC - run on tokio)
-                    let send_result = {
-                        let ctx = ui_ctx.clone();
-                        let peer = peer_id;
-                        let cid = call.id.to_string();
-                        let eph = ephemeral_public;
-                        let ctype = call_type_str.to_string();
-                        let chid = channel_id.to_string();
-                        tokio::spawn(async move {
-                            ctx.call_signaling().send_call_offer(&peer, &cid, eph, &ctype, &chid).await
-                        }).await.unwrap()
-                    };
-
-                    if let Err(e) = send_result {
-                        tracing::error!(
-                            peer_id = %peer_id,
-                            error = %e,
-                            "Failed to send call offer"
-                        );
-                        // Clean up the call on server
-                        let _ = call_service.leave_call().await;
-                        return;
-                    }
-
-                    tracing::info!(
-                        peer_id = %peer_id,
-                        call_id = %call.id,
-                        "Call offer sent, storing pending state"
-                    );
-
-                    // Store pending call state (ephemeral key kept until answer)
-                    set_pending_call(PendingOutgoingCall {
-                        call_id: call.id,
-                        channel_id,
-                        ephemeral_key,
-                        peer_id,
-                        call_type: call_type_str.to_string(),
-                        is_video_call,
-                    });
+            match start_result {
+                Ok(call_id) => {
+                    tracing::info!(call_id = %call_id, "DM call started via core, waiting for answer");
 
                     // Show "Calling..." UI (not connected yet)
                     if let Some(w) = weak.upgrade() {
@@ -523,7 +472,7 @@ async fn start_call_impl(
 
                         // Placeholder verification (will update when connected)
                         let call_data = ActiveCallData {
-                            call_id: call.id.to_string().into(),
+                            call_id: call_id.to_string().into(),
                             channel_id: channel_id.to_string().into(),
                             title: if channel_name.is_empty() { format!("Calling...").into() } else { channel_name.into() },
                             is_video_call,
@@ -534,7 +483,7 @@ async fn start_call_impl(
                             participant_count: 1,
                             duration_seconds: 0,
                             participants: ModelRc::new(VecModel::from(vec![local_participant])),
-                            verification_emoji_1: "⏳".into(),
+                            verification_emoji_1: "\u{23F3}".into(),
                             verification_emoji_2: "".into(),
                             verification_emoji_3: "".into(),
                             verification_emoji_4: "".into(),
@@ -548,7 +497,7 @@ async fn start_call_impl(
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to create call on server: {}", e);
+                    tracing::error!("Failed to start DM call: {}", e);
                 }
             }
         }
