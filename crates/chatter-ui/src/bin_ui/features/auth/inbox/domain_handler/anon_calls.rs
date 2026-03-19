@@ -102,288 +102,120 @@ pub(super) fn handle_anon_call_answer(
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak.upgrade() {
-            if accepted {
-                // Call was accepted - connect to LiveKit
-                tracing::info!(
-                    conversation_id = %conversation_id,
-                    "Anonymous call accepted, connecting to LiveKit"
-                );
+        if weak.upgrade().is_some() {
+            // Delegate to core — handles token, room join, LiveKit connect, call history
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            let call_service = ui_ctx.call_service().clone();
 
-                // Get the pending call info from the service
-                let room_name = format!("anon-{}", uuid::Uuid::from_bytes(call_room_id.as_slice().try_into().unwrap_or_default()));
-                if let Some(pending) = ui_ctx.anon_dms().take_pending_anon_call(&room_name) {
-                    // Validate that this matches our pending call
-                    if call_room_id.as_slice() != pending.call_room_id.as_slice() {
-                        tracing::warn!(
-                            "Call answer received for different room ID: expected {:?}, got {:?}",
-                            pending.call_room_id,
-                            call_room_id
-                        );
-                        return;
-                    }
+            slint::spawn_local(async move {
+                let result = {
+                    let ctx = ui_ctx.clone();
+                    let crid = call_room_id.clone();
+                    let dn = callee_display_name.clone();
+                    tokio::spawn(async move {
+                        ctx.handle_anon_call_answer(&crid, accepted, &dn).await
+                    }).await.unwrap()
+                };
 
-                    // Mark call as started for duration tracking
-                    ui_ctx.anon_dms().mark_anon_call_started(&pending.room_name);
+                match result {
+                    Ok(Some(setup)) => {
+                        // Call accepted — show active call UI
+                        tracing::info!(room_name = %setup.room_name, "Anonymous call answer handled via core");
 
-                    // Join the call room using our token
-                    let anon_dm_service = ui_ctx.anon_dms().clone();
-                    let weak = weak.clone();
-
-                    let call_service = ui_ctx.call_service().clone();
-                    slint::spawn_local(async move {
-                        // Get a fresh token for joining (the stored one may have been used for signaling)
-                        let join_token = match anon_dm_service.get_available_call_room_token() {
-                            Ok(Some(t)) => {
-                                let _ = anon_dm_service.mark_call_room_token_used(&t.id);
-                                t
-                            }
-                            _ => {
-                                // Try requesting more tokens (gRPC - run on tokio)
-                                let token_req = {
-                                    let svc = anon_dm_service.clone();
-                                    tokio::spawn(async move { svc.request_call_room_tokens(5).await }).await.unwrap()
-                                };
-                                match token_req {
-                                    Ok(_) => match anon_dm_service.get_available_call_room_token() {
-                                        Ok(Some(t)) => {
-                                            let _ = anon_dm_service.mark_call_room_token_used(&t.id);
-                                            t
-                                        }
-                                        _ => {
-                                            tracing::error!("No call room tokens available for join");
-                                            return;
-                                        }
-                                    },
-                                    Err(e) => {
-                                        tracing::error!("Failed to request call room tokens: {}", e);
-                                        return;
-                                    }
-                                }
+                        // Get call service for media publishing
+                        let service = match call_service.get() {
+                            Some(svc) => svc.clone(),
+                            None => {
+                                tracing::error!("CallService not initialized");
+                                return;
                             }
                         };
-                        // Use fresh token for joining the call room (gRPC - run on tokio)
-                        let join_room_result = {
-                            let svc = anon_dm_service.clone();
-                            let rn = pending.room_name.clone();
-                            let tok = join_token.clone();
-                            let dn = pending.display_name.clone();
-                            let is_video = pending.is_video_call;
-                            tokio::spawn(async move {
-                                svc.join_anon_call_room(&rn, &tok, &dn, is_video).await
-                            }).await.unwrap()
-                        };
-                        match join_room_result {
-                            Ok(room_info) => {
-                                tracing::info!(
-                                    "Got LiveKit credentials for anonymous call with token"
-                                );
 
-                                // Get CallService and connect to LiveKit
-                                let service = match call_service.get() {
-                                    Some(svc) => svc.clone(),
-                                    None => {
-                                        tracing::error!("CallService not initialized");
-                                        if let Some(w) = weak.upgrade() {
-                                            super::super::super::initial_data::hide_incoming_call(&w);
-                                        }
-                                        ui_ctx.anon_dms().clear_pending_anon_call(&pending.room_name);
-                                        return;
+                        // Publish microphone immediately
+                        if let Err(e) = service.publish_microphone(None).await {
+                            tracing::error!("Failed to publish microphone: {}", e);
+                        }
+
+                        if let Some(w) = weak.upgrade() {
+                            super::super::super::initial_data::hide_incoming_call(&w);
+
+                            let local_participant = crate::CallParticipantData {
+                                user_id: "You".into(),
+                                display_name: "You".into(),
+                                avatar_url: "".into(),
+                                is_muted: false,
+                                is_video_enabled: setup.is_video,
+                                is_screen_sharing: false,
+                                is_speaking: false,
+                            };
+
+                            let remote_participant = crate::CallParticipantData {
+                                user_id: "Anonymous".into(),
+                                display_name: setup.peer_display_name.clone().into(),
+                                avatar_url: "".into(),
+                                is_muted: false,
+                                is_video_enabled: setup.is_video,
+                                is_screen_sharing: false,
+                                is_speaking: false,
+                            };
+
+                            let call_data = crate::ActiveCallData {
+                                call_id: setup.room_name.clone().into(),
+                                channel_id: setup.channel_id.to_string().into(),
+                                title: "Anonymous Call".into(),
+                                is_video_call: setup.is_video,
+                                is_anonymous_call: true,
+                                is_encrypted: true,
+                                is_identity_verified: true,
+                                identity_warning: "".into(),
+                                participant_count: 2,
+                                duration_seconds: 0,
+                                participants: slint::ModelRc::new(slint::VecModel::from(vec![
+                                    local_participant,
+                                    remote_participant,
+                                ])),
+                                verification_emoji_1: setup.verification_emojis[0].clone().into(),
+                                verification_emoji_2: setup.verification_emojis[1].clone().into(),
+                                verification_emoji_3: setup.verification_emojis[2].clone().into(),
+                                verification_emoji_4: setup.verification_emojis[3].clone().into(),
+                            };
+
+                            w.set_active_call_data(call_data);
+                            w.set_call_is_muted(false);
+                            w.set_call_is_video_enabled(setup.is_video);
+                            w.set_call_is_screen_sharing(false);
+                            w.set_active_call_visible(true);
+
+                            crate::bin_ui::features::calls::timers::start_call_timer(&w, None);
+                            crate::bin_ui::features::calls::timers::start_video_frame_timer(&w, &service);
+
+                            if setup.is_video {
+                                let service = service.clone();
+                                slint::spawn_local(async move {
+                                    if let Err(e) = service.publish_camera(None).await {
+                                        tracing::error!("Failed to publish camera: {}", e);
                                     }
-                                };
-
-                                // Create dummy IDs for anonymous calls
-                                let call_id = chatter_core::domain::ids::CallId::new();
-                                let channel_id = chatter_core::domain::ids::ChannelId::new();
-
-                                // Connect to LiveKit with the access token and E2EE key (network - run on tokio)
-                                let connect_result = {
-                                    let svc = service.clone();
-                                    let lk_token = room_info.livekit_token.clone();
-                                    let lk_url = room_info.livekit_url.clone();
-                                    let enc_key = pending.encryption_key.clone();
-                                    let rn = pending.room_name.clone();
-                                    tokio::spawn(async move {
-                                        svc.connect_with_token(&lk_token, &lk_url, enc_key, &rn, call_id, channel_id).await
-                                    }).await.unwrap()
-                                };
-                                match connect_result {
-                                    Ok(()) => {
-                                        tracing::info!("Connected to LiveKit for anonymous call (outgoing)");
-
-                                        // Publish microphone immediately
-                                        if let Err(e) = service.publish_microphone(None).await {
-                                            tracing::error!("Failed to publish microphone: {}", e);
-                                        } else {
-                                            tracing::info!("Microphone published successfully");
-                                        }
-
-                                        // Update UI
-                                        if let Some(w) = weak.upgrade() {
-                                            super::super::super::initial_data::hide_incoming_call(&w);
-
-                                            // Create participants for UI
-                                            let local_participant = crate::CallParticipantData {
-                                                user_id: "You".into(),
-                                                display_name: "You".into(),
-                                                avatar_url: "".into(),
-                                                is_muted: false,
-                                                is_video_enabled: pending.is_video_call,
-                                                is_screen_sharing: false,
-                                                is_speaking: false,
-                                            };
-
-                                            let remote_participant = crate::CallParticipantData {
-                                                user_id: "Anonymous".into(),
-                                                display_name: callee_display_name.into(),
-                                                avatar_url: "".into(),
-                                                is_muted: false,
-                                                is_video_enabled: pending.is_video_call,
-                                                is_screen_sharing: false,
-                                                is_speaking: false,
-                                            };
-
-                                            // Derive verification emojis from shared E2EE key + room name
-                                            let mut e2ee_key = [0u8; 32];
-                                            if pending.encryption_key.len() >= 32 { e2ee_key.copy_from_slice(&pending.encryption_key[..32]); }
-                                            let verification = chatter_core::services::CallVerification::derive_verification_emojis(
-                                                &e2ee_key,
-                                                &pending.room_name,
-                                            );
-                                            let (e1, e2, e3, e4) = chatter_core::services::CallVerification::to_slint_tuple(&verification);
-
-                                            // Create call data for UI (use room_name as call_id so "anon-" prefix is preserved for cleanup)
-                                            let call_data = crate::ActiveCallData {
-                                                call_id: pending.room_name.clone().into(),
-                                                channel_id: channel_id.to_string().into(),
-                                                title: "Anonymous Call".into(),
-                                                is_video_call: pending.is_video_call,
-                                                is_anonymous_call: true,
-                                                is_encrypted: true,
-                                                is_identity_verified: true,
-                                                identity_warning: "".into(),
-                                                participant_count: 2,
-                                                duration_seconds: 0,
-                                                participants: slint::ModelRc::new(slint::VecModel::from(vec![
-                                                    local_participant,
-                                                    remote_participant,
-                                                ])),
-                                                verification_emoji_1: e1.into(),
-                                                verification_emoji_2: e2.into(),
-                                                verification_emoji_3: e3.into(),
-                                                verification_emoji_4: e4.into(),
-                                            };
-
-                                            w.set_active_call_data(call_data);
-                                            w.set_call_is_muted(false);
-                                            w.set_call_is_video_enabled(pending.is_video_call);
-                                            w.set_call_is_screen_sharing(false);
-                                            w.set_active_call_visible(true);
-
-                                            // Start timers
-                                            crate::bin_ui::features::calls::timers::start_call_timer(&w, None);
-                                            crate::bin_ui::features::calls::timers::start_video_frame_timer(&w, &service);
-
-                                            // Publish camera if video call
-                                            if pending.is_video_call {
-                                                let service = service.clone();
-                                                slint::spawn_local(async move {
-                                                    if let Err(e) = service.publish_camera(None).await {
-                                                        tracing::error!("Failed to publish camera: {}", e);
-                                                    } else {
-                                                        tracing::info!("Camera published successfully");
-                                                    }
-                                                }).unwrap();
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to connect to LiveKit: {}", e);
-
-                                        // Create failed call history entry
-                                        let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
-                                        if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
-                                            let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                                            ui_ctx.store_call_history(
-                                                &channel_id,
-                                                &pending.room_name,
-                                                &anonymous_user_id,
-                                                &pending.display_name,
-                                                pending.is_outgoing,
-                                                0, // Failed call, no duration
-                                                true, // Mark as missed/failed
-                                            );
-                                        }
-
-                                        // Show error to user
-                                        if let Some(w) = weak.upgrade() {
-                                            super::super::super::initial_data::hide_incoming_call(&w);
-                                            // TODO: Show toast notification about call failure
-                                        }
-                                        ui_ctx.anon_dms().clear_pending_anon_call(&pending.room_name);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    "Failed to join anonymous call room: {}", e
-                                );
-
-                                // Create failed call history entry
-                                let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
-                                if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
-                                    let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                                    ui_ctx.store_call_history(
-                                        &channel_id,
-                                        &pending.room_name,
-                                        &anonymous_user_id,
-                                        &pending.display_name,
-                                        pending.is_outgoing,
-                                        0, // Failed call, no duration
-                                        true, // Mark as missed/failed
-                                    );
-                                }
-
-                                // Hide call UI on error
-                                if let Some(w) = weak.upgrade() {
-                                    super::super::super::initial_data::hide_incoming_call(&w);
-                                    // TODO: Show toast notification about room join failure
-                                }
-                                ui_ctx.anon_dms().clear_pending_anon_call(&pending.room_name);
+                                }).unwrap();
                             }
                         }
-                    }).unwrap();
-                }
-            } else {
-                // Call was declined
-                tracing::info!(
-                    conversation_id = %conversation_id,
-                    "Anonymous call declined by peer"
-                );
-
-                // Create declined call history entry
-                // Construct room name from call_room_id
-                let room_name = format!("anon-{}", uuid::Uuid::from_bytes(call_room_id.as_slice().try_into().unwrap_or_default()));
-                if let Some(pending) = ui_ctx.anon_dms().take_pending_anon_call(&room_name) {
-                    let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
-                    if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
-                        let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                        ui_ctx.store_call_history(
-                            &channel_id,
-                            &pending.room_name,
-                            &anonymous_user_id,
-                            &callee_display_name,
-                            pending.is_outgoing,
-                            0, // Declined call, no duration
-                            true, // Mark as missed/declined
-                        );
                     }
-                    // Already consumed by take_pending_anon_call
+                    Ok(None) => {
+                        // Call was declined by peer — core already stored call history
+                        tracing::info!(conversation_id = %conversation_id, "Anonymous call declined by peer");
+                        if let Some(w) = weak.upgrade() {
+                            w.set_active_call_visible(false);
+                            super::super::super::initial_data::hide_incoming_call(&w);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to handle anonymous call answer: {}", e);
+                        if let Some(w) = weak.upgrade() {
+                            super::super::super::initial_data::hide_incoming_call(&w);
+                        }
+                    }
                 }
-
-                w.set_active_call_visible(false);
-                super::super::super::initial_data::hide_incoming_call(&w);
-            }
+            }).unwrap();
         }
     });
 }
@@ -491,136 +323,19 @@ pub(super) fn handle_anon_group_call_answer(
     call_room_id: Vec<u8>,
     callee_display_name: String,
 ) {
-    // Reuse the same answer handling as anon DM calls
-    let weak = window.clone();
-    let ui_ctx = ui_ctx.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(_w) = weak.upgrade() {
-            if accepted {
-                tracing::info!(
-                    group_id = %group_id,
-                    "Anonymous group call accepted, connecting to LiveKit"
-                );
-
-                let room_name = format!("anon-{}", uuid::Uuid::from_bytes(
-                    call_room_id.as_slice().try_into().unwrap_or_default()
-                ));
-                if let Some(pending) = ui_ctx.anon_dms().take_pending_anon_call(&room_name) {
-                    ui_ctx.anon_dms().mark_anon_call_started(&pending.room_name);
-
-                    let anon_dm_service = ui_ctx.anon_dms().clone();
-                    let call_service = ui_ctx.call_service().clone();
-                    let weak = weak.clone();
-
-                    slint::spawn_local(async move {
-                        let join_token = match anon_dm_service.get_available_call_room_token() {
-                            Ok(Some(t)) => {
-                                let _ = anon_dm_service.mark_call_room_token_used(&t.id);
-                                t
-                            }
-                            _ => {
-                                // gRPC - run on tokio
-                                let token_req = {
-                                    let svc = anon_dm_service.clone();
-                                    tokio::spawn(async move { svc.request_call_room_tokens(5).await }).await.unwrap()
-                                };
-                                match token_req {
-                                    Ok(_) => match anon_dm_service.get_available_call_room_token() {
-                                        Ok(Some(t)) => {
-                                            let _ = anon_dm_service.mark_call_room_token_used(&t.id);
-                                            t
-                                        }
-                                        _ => {
-                                            tracing::error!("No call room tokens for group call join");
-                                            return;
-                                        }
-                                    },
-                                    Err(e) => {
-                                        tracing::error!("Failed to request tokens: {}", e);
-                                        return;
-                                    }
-                                }
-                            }
-                        };
-
-                        // gRPC - run on tokio
-                        let join_room_result = {
-                            let svc = anon_dm_service.clone();
-                            let rn = pending.room_name.clone();
-                            let tok = join_token.clone();
-                            let dn = pending.display_name.clone();
-                            let is_video = pending.is_video_call;
-                            tokio::spawn(async move {
-                                svc.join_anon_call_room(&rn, &tok, &dn, is_video).await
-                            }).await.unwrap()
-                        };
-                        match join_room_result {
-                            Ok(room_info) => {
-                                tracing::info!("Got LiveKit credentials for anonymous group call");
-
-                                let service = match call_service.get() {
-                                    Some(svc) => svc.clone(),
-                                    None => {
-                                        tracing::error!("CallService not initialized");
-                                        return;
-                                    }
-                                };
-
-                                let call_id = chatter_core::domain::ids::CallId::new();
-                                let channel_id = chatter_core::domain::ids::ChannelId::new();
-
-                                // network - run on tokio
-                                let connect_result = {
-                                    let svc = service.clone();
-                                    let lk_token = room_info.livekit_token.clone();
-                                    let lk_url = room_info.livekit_url.clone();
-                                    let enc_key = pending.encryption_key.clone();
-                                    let rn = pending.room_name.clone();
-                                    tokio::spawn(async move {
-                                        svc.connect_with_token(&lk_token, &lk_url, enc_key, &rn, call_id, channel_id).await
-                                    }).await.unwrap()
-                                };
-                                match connect_result {
-                                    Ok(_) => {
-                                        tracing::info!("Connected to anonymous group call room");
-                                        if let Err(e) = service.publish_microphone(None).await {
-                                            tracing::error!("Failed to publish mic: {}", e);
-                                        }
-                                        if pending.is_video_call {
-                                            if let Err(e) = service.publish_camera(None).await {
-                                                tracing::error!("Failed to publish camera: {}", e);
-                                            }
-                                        }
-                                        if let Some(w) = weak.upgrade() {
-                                            let mut call_data = w.get_active_call_data();
-                                            call_data.title = format!("Group Call").into();
-                                            w.set_active_call_data(call_data);
-                                            crate::bin_ui::features::calls::timers::start_call_timer(&w, None);
-                                            if let Some(svc) = call_service.get() {
-                                                crate::bin_ui::features::calls::timers::start_video_frame_timer(&w, svc);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to connect to group call: {}", e);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to join group call room: {}", e);
-                            }
-                        }
-                    }).unwrap();
-                }
-            } else {
-                tracing::info!(
-                    group_id = %group_id,
-                    callee = %callee_display_name,
-                    "Group call member declined"
-                );
-            }
-        }
-    });
+    // Reuse the same core delegation as anon DM call answers
+    // (pending call state is stored in the same infrastructure)
+    handle_anon_call_answer(
+        window,
+        ui_ctx,
+        // Convert group_id to AnonDmId (same bytes, different type — stored that way in pending)
+        chatter_core::domain::anon_dm::AnonDmId::try_from_slice(
+            group_id.as_bytes()
+        ).expect("AnonGroupId is 16 bytes"),
+        accepted,
+        call_room_id,
+        callee_display_name,
+    );
 }
 
 /// Handle anonymous group call hangup received.

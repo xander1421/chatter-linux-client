@@ -8,7 +8,6 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::call::CallType;
-use chatter_core::domain::ids::ChannelId;
 use chatter_core::services::CallWorkerHandle;
 use chatter_core::state::ActiveConversation;
 use crate::{ActiveCallData, CallParticipantData, MainWindow};
@@ -23,8 +22,6 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ctx_message_service = ui_ctx.messages().clone();
     let ctx_mailbox_manager = ui_ctx.mailbox_manager().clone();
     let ctx_channel_service = ui_ctx.channels().clone();
-    let ctx_anon_dm_service = ui_ctx.anon_dms().clone();
-    let ctx_anon_group_service = ui_ctx.anon_groups().clone();
     let ctx_chat_state = ui_ctx.chat_state().clone();
     let ctx_ui = ui_ctx.clone();
 
@@ -36,8 +33,6 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let message_service = ctx_message_service.clone();
         let mailbox_manager = ctx_mailbox_manager.clone();
         let channel_service = ctx_channel_service.clone();
-        let anon_dm_service = ctx_anon_dm_service.clone();
-        let anon_group_service = ctx_anon_group_service.clone();
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
 
@@ -47,8 +42,6 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let message_service = message_service.clone();
             let mailbox_manager = mailbox_manager.clone();
             let channel_service = channel_service.clone();
-            let anon_dm_service = anon_dm_service.clone();
-            let anon_group_service = anon_group_service.clone();
             let conversation = chat_state.active_conversation();
             let ui_ctx = ui_ctx.clone();
 
@@ -72,8 +65,6 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         message_service,
                         mailbox_manager,
                         channel_service,
-                        anon_dm_service,
-                        anon_group_service,
                         conversation,
                         ui_ctx,
                     ),
@@ -95,8 +86,6 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let message_service = ctx_message_service.clone();
         let mailbox_manager = ctx_mailbox_manager.clone();
         let channel_service = ctx_channel_service.clone();
-        let anon_dm_service = ctx_anon_dm_service.clone();
-        let anon_group_service = ctx_anon_group_service.clone();
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
 
@@ -106,8 +95,6 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let message_service = message_service.clone();
             let mailbox_manager = mailbox_manager.clone();
             let channel_service = channel_service.clone();
-            let anon_dm_service = anon_dm_service.clone();
-            let anon_group_service = anon_group_service.clone();
             let conversation = chat_state.active_conversation();
             let ui_ctx = ui_ctx.clone();
 
@@ -131,8 +118,6 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         message_service,
                         mailbox_manager,
                         channel_service,
-                        anon_dm_service,
-                        anon_group_service,
                         conversation,
                         ui_ctx,
                     ),
@@ -156,8 +141,6 @@ async fn start_call_impl(
     _message_service: Arc<chatter_core::services::message::MessageService>,
     _mailbox_manager: Arc<chatter_core::services::mailbox_manager::MailboxManager>,
     channel_service: Arc<chatter_core::services::channel::ChannelService>,
-    anon_dm_service: Arc<chatter_core::services::anon_dm::AnonDmService>,
-    anon_group_service: Arc<chatter_core::services::anon_group::AnonGroupService>,
     conversation: ActiveConversation,
     ui_ctx: Arc<ChatterClient>,
 ) {
@@ -170,7 +153,7 @@ async fn start_call_impl(
         }
     };
 
-    let display_name = anon_dm_service.get_my_display_name().unwrap_or_else(|| "Anonymous".to_string());
+    let display_name = ui_ctx.anon_dms().get_my_display_name().unwrap_or_else(|| "Anonymous".to_string());
 
     let is_video_call = matches!(call_type, CallType::Video);
     let call_type_str = match call_type {
@@ -189,8 +172,7 @@ async fn start_call_impl(
                 user_id,
                 is_video_call,
                 call_type_str,
-                anon_dm_service,
-                anon_group_service,
+                ui_ctx,
             ).await;
             return;
         }
@@ -231,7 +213,7 @@ async fn start_call_impl(
         // Get peer ID - different lookup for anon DMs vs regular DMs
         let peer_id = if let ActiveConversation::AnonDm(anon_dm_id) = conversation {
             // For anon DMs, look up the conversation to get peer_id
-            match anon_dm_service.get_conversation(&anon_dm_id) {
+            match ui_ctx.anon_dms().get_conversation(&anon_dm_id) {
                 Ok(Some(dm)) => dm.peer_id,
                 Ok(None) => {
                     tracing::error!("Anon DM conversation not found: {}", anon_dm_id);
@@ -259,130 +241,19 @@ async fn start_call_impl(
 
         // Handle anonymous DM calls differently
         if let ActiveConversation::AnonDm(anon_dm_id) = conversation {
-            
-            // Get a blind signature token for the call (request more if needed)
-            let token = match anon_dm_service.get_available_call_room_token() {
-                Ok(Some(token)) => token,
-                Ok(None) => {
-                    tracing::info!("No call room tokens available - requesting more");
-                    
-                    // Request 5 call room tokens (gRPC - run on tokio)
-                    let token_request = {
-                        let svc = anon_dm_service.clone();
-                        tokio::spawn(async move { svc.request_call_room_tokens(5).await }).await.unwrap()
-                    };
-                    match token_request {
-                        Ok(count) => {
-                            tracing::info!("Successfully requested {} call room tokens", count);
-                            
-                            // Try again to get a token
-                            match anon_dm_service.get_available_call_room_token() {
-                                Ok(Some(token)) => token,
-                                _ => {
-                                    tracing::error!("Still no tokens available after request");
-                                    
-                                    // Create failed call history entry
-                                    let channel_id_str = format!("anon-dm-{}", anon_dm_id);
-                                    if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
-                                                                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                                        ui_ctx.store_call_history(
-                                            &channel_id,
-                                            "no-tokens-available",
-                                            &anonymous_user_id,
-                                            &display_name,
-                                            true, // This was an outgoing call
-                                            0, // Failed call, no duration
-                                            true, // Mark as missed/failed
-                                        );
-                                    }
-                                    return;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to request call room tokens: {}", e);
-                            
-                            // Create failed call history entry
-                            let channel_id_str = format!("anon-dm-{}", anon_dm_id);
-                            if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
-                                                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                                ui_ctx.store_call_history(
-                                    &channel_id,
-                                    "token-request-failed",
-                                    &anonymous_user_id,
-                                    &display_name,
-                                    true, // This was an outgoing call
-                                    0, // Failed call, no duration
-                                    true, // Mark as missed/failed
-                                );
-                            }
-                            return;
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to get call room token: {}", e);
-                    
-                    // Create failed call history entry
-                    let channel_id_str = format!("anon-dm-{}", anon_dm_id);
-                    if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
-                                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                        ui_ctx.store_call_history(
-                            &channel_id,
-                            "get-token-failed",
-                            &anonymous_user_id,
-                            &display_name,
-                            true, // This was an outgoing call
-                            0, // Failed call, no duration
-                            true, // Mark as missed/failed
-                        );
-                    }
-                    return;
-                }
-            };
-            
-            // Send anonymous call offer (gRPC - run on tokio)
-            let send_result = {
-                let svc = anon_dm_service.clone();
-                let anon_dm_id = anon_dm_id;
-                let token = token.clone();
+            // Delegate to core — handles token acquisition, offer, pending state, and failed call history
+            let start_result = {
+                let ctx = ui_ctx.clone();
                 let display_name = display_name.clone();
                 tokio::spawn(async move {
-                    svc.send_call_offer(
-                        &anon_dm_id,
-                        &token,
-                        is_video_call,
-                        Some(&display_name),
-                    ).await
+                    ctx.start_anon_dm_call(&anon_dm_id, is_video_call, &display_name).await
                 }).await.unwrap()
             };
-            match send_result {
+
+            match start_result {
                 Ok(offer_result) => {
-                    tracing::info!(
-                        room_name = %offer_result.room_name,
-                        "Sent anonymous call offer"
-                    );
-                    
-                    // Mark token as used
-                    let _ = anon_dm_service.mark_call_room_token_used(&token.id);
-                    
-                    // Store pending anonymous call state in the service
-                    anon_dm_service.store_pending_anon_call(
-                        offer_result.room_name.clone(),
-                        chatter_core::services::anon_dm::PendingAnonCall {
-                            call_room_id: offer_result.call_room_id,
-                            room_name: offer_result.room_name.clone(),
-                            conversation_id: anon_dm_id,
-                            token,
-                            is_video_call,
-                            is_outgoing: true,
-                            display_name: display_name.clone(),
-                            encryption_key: offer_result.call_encryption_key,
-                            sender_id: None,
-                            started_at: None, // Will be set when call is accepted
-                        },
-                    );
-                    
+                    tracing::info!(room_name = %offer_result.room_name, "Anon DM call started via core");
+
                     // Show "Calling..." UI
                     if let Some(w) = weak.upgrade() {
                         let local_participant = CallParticipantData {
@@ -394,7 +265,7 @@ async fn start_call_impl(
                             is_screen_sharing: false,
                             is_speaking: false,
                         };
-                        
+
                         let call_data = ActiveCallData {
                             call_id: offer_result.room_name.clone().into(),
                             channel_id: channel_id.to_string().into(),
@@ -402,17 +273,17 @@ async fn start_call_impl(
                             is_video_call,
                             is_anonymous_call: true,
                             is_encrypted: true,
-                            is_identity_verified: true, // Anonymous calls are always verified
+                            is_identity_verified: true,
                             identity_warning: "".into(),
                             participant_count: 1,
                             duration_seconds: 0,
                             participants: ModelRc::new(VecModel::from(vec![local_participant])),
-                            verification_emoji_1: "🔒".into(),
+                            verification_emoji_1: "\u{1F512}".into(),
                             verification_emoji_2: "".into(),
                             verification_emoji_3: "".into(),
                             verification_emoji_4: "".into(),
                         };
-                        
+
                         w.set_active_call_data(call_data);
                         w.set_call_is_muted(false);
                         w.set_call_is_video_enabled(is_video_call);
@@ -421,24 +292,7 @@ async fn start_call_impl(
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to send anonymous call offer: {}", e);
-                    
-                    // Create failed call history entry
-                    let channel_id_str = format!("anon-dm-{}", anon_dm_id);
-                    if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
-                                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                        ui_ctx.store_call_history(
-                            &channel_id,
-                            "failed-call",
-                            &anonymous_user_id,
-                            &display_name,
-                            true, // This was an outgoing call
-                            0, // Failed call, no duration
-                            true, // Mark as missed/failed
-                        );
-                    }
-                    
-                    // No pending state to clear - we only store it after successful offer
+                    tracing::error!("Failed to start anon DM call: {}", e);
                     if let Some(w) = weak.upgrade() {
                         w.set_active_call_visible(false);
                     }
@@ -599,9 +453,7 @@ async fn start_call_impl(
 
 /// Start a call in a private (anonymous) group.
 ///
-/// Uses blind signature tokens for anonymous call rooms, same as anon DM calls.
-/// The offer is sent to all group members via the group messaging channel.
-#[allow(clippy::too_many_arguments)]
+/// Delegates to core for token acquisition, offer sending, and pending state management.
 async fn start_private_group_call(
     weak: slint::Weak<MainWindow>,
     group_id_str: &str,
@@ -609,8 +461,7 @@ async fn start_private_group_call(
     user_id: chatter_core::domain::ids::UserId,
     is_video_call: bool,
     call_type_str: &str,
-    anon_dm_service: Arc<chatter_core::services::anon_dm::AnonDmService>,
-    anon_group_service: Arc<chatter_core::services::anon_group::AnonGroupService>,
+    ui_ctx: Arc<ChatterClient>,
 ) {
     use chatter_core::domain::anon_group::AnonGroupId;
 
@@ -624,78 +475,19 @@ async fn start_private_group_call(
 
     tracing::info!("Starting {} in private group {}", call_type_str, anon_group_id);
 
-    // Get a blind signature token for the call
-    let token = match anon_group_service.get_available_call_room_token() {
-        Ok(Some(token)) => token,
-        Ok(None) => {
-            tracing::info!("No call room tokens available - requesting more");
-            // gRPC - run on tokio
-            let token_request = {
-                let svc = anon_group_service.clone();
-                tokio::spawn(async move { svc.request_call_room_tokens(5).await }).await.unwrap()
-            };
-            match token_request {
-                Ok(count) => {
-                    tracing::info!("Successfully requested {} call room tokens", count);
-                    match anon_group_service.get_available_call_room_token() {
-                        Ok(Some(token)) => token,
-                        _ => {
-                            tracing::error!("Still no tokens available after request");
-                            return;
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to request call room tokens: {}", e);
-                    return;
-                }
-            }
-        }
-        Err(e) => {
-            tracing::error!("Failed to get call room token: {}", e);
-            return;
-        }
-    };
-
-    // Send call offer to all group members (gRPC - run on tokio)
-    let offer_send_result = {
-        let svc = anon_group_service.clone();
+    // Delegate to core — handles token acquisition, offer, pending state
+    let start_result = {
+        let ctx = ui_ctx.clone();
         let gid = anon_group_id;
-        let tok = token.clone();
         let dn = display_name.to_string();
         tokio::spawn(async move {
-            svc.send_call_offer(&gid, &tok, is_video_call, Some(&dn)).await
+            ctx.start_anon_group_call(&gid, is_video_call, &dn).await
         }).await.unwrap()
     };
-    match offer_send_result {
+
+    match start_result {
         Ok(offer_result) => {
-            tracing::info!(
-                room_name = %offer_result.room_name,
-                "Sent anonymous group call offer"
-            );
-
-            // Mark token as used
-            let _ = anon_group_service.mark_call_room_token_used(&token.id);
-
-            // Store pending call state (reuse anon DM pending call storage)
-            anon_dm_service.store_pending_anon_call(
-                offer_result.room_name.clone(),
-                chatter_core::services::anon_dm::PendingAnonCall {
-                    call_room_id: offer_result.call_room_id,
-                    room_name: offer_result.room_name.clone(),
-                    // Use a synthetic AnonDmId from the group ID bytes for storage
-                    conversation_id: chatter_core::domain::anon_dm::AnonDmId::try_from_slice(
-                        anon_group_id.as_bytes()
-                    ).expect("AnonGroupId is 16 bytes like AnonDmId"),
-                    token,
-                    is_video_call,
-                    is_outgoing: true,
-                    display_name: display_name.to_string(),
-                    encryption_key: offer_result.call_encryption_key.clone(),
-                    sender_id: None,
-                    started_at: None,
-                },
-            );
+            tracing::info!(room_name = %offer_result.room_name, "Anon group call started via core");
 
             // Show "Calling..." UI
             if let Some(w) = weak.upgrade() {
@@ -721,7 +513,7 @@ async fn start_private_group_call(
                     participant_count: 1,
                     duration_seconds: 0,
                     participants: ModelRc::new(VecModel::from(vec![local_participant])),
-                    verification_emoji_1: "🔒".into(),
+                    verification_emoji_1: "\u{1F512}".into(),
                     verification_emoji_2: "".into(),
                     verification_emoji_3: "".into(),
                     verification_emoji_4: "".into(),
@@ -735,7 +527,7 @@ async fn start_private_group_call(
             }
         }
         Err(e) => {
-            tracing::error!("Failed to send anonymous group call offer: {}", e);
+            tracing::error!("Failed to start anon group call: {}", e);
             if let Some(w) = weak.upgrade() {
                 w.set_active_call_visible(false);
             }
