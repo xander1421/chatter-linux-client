@@ -81,10 +81,17 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                         Ok(None) => {
                             tracing::info!("No call room tokens available, requesting more");
-                            match tokio::time::timeout(
-                                std::time::Duration::from_secs(5),
-                                anon_dm_service.request_call_room_tokens(5),
-                            ).await {
+                            // gRPC - run on tokio
+                            let token_req = {
+                                let svc = anon_dm_service.clone();
+                                tokio::spawn(async move {
+                                    tokio::time::timeout(
+                                        std::time::Duration::from_secs(5),
+                                        svc.request_call_room_tokens(5),
+                                    ).await
+                                }).await.unwrap()
+                            };
+                            match token_req {
                                 Ok(Ok(count)) => {
                                     tracing::info!("Requested {} call room tokens", count);
                                     match anon_dm_service.get_available_call_room_token() {
@@ -137,13 +144,18 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 return;
                             }
                         };
-                        if let Err(e) = anon_group_service.send_call_answer(
-                            &group_id,
-                            &pending.call_room_id,
-                            true,
-                            Some(&token),
-                            Some(&my_display_name),
-                        ).await {
+                        // gRPC - run on tokio
+                        let group_answer_result = {
+                            let svc = anon_group_service.clone();
+                            let gid = group_id;
+                            let crid = pending.call_room_id;
+                            let tok = token.clone();
+                            let dn = my_display_name.clone();
+                            tokio::spawn(async move {
+                                svc.send_call_answer(&gid, &crid, true, Some(&tok), Some(&dn)).await
+                            }).await.unwrap()
+                        };
+                        if let Err(e) = group_answer_result {
                             tracing::error!("Failed to send group call accept: {}", e);
                             if let Some(w) = weak.upgrade() {
                                 w.set_incoming_call_visible(false);
@@ -151,15 +163,18 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             return;
                         }
                     } else {
-                        // Route through anon DM service
-                        if let Err(e) = anon_dm_service.send_call_answer(
-                            &pending.conversation_id,
-                            &pending.call_room_id,
-                            true,
-                            Some(&token),
-                            None,
-                            Some(&my_display_name),
-                        ).await {
+                        // Route through anon DM service (gRPC - run on tokio)
+                        let dm_answer_result = {
+                            let svc = anon_dm_service.clone();
+                            let cid = pending.conversation_id;
+                            let crid = pending.call_room_id;
+                            let tok = token.clone();
+                            let dn = my_display_name.clone();
+                            tokio::spawn(async move {
+                                svc.send_call_answer(&cid, &crid, true, Some(&tok), None, Some(&dn)).await
+                            }).await.unwrap()
+                        };
+                        if let Err(e) = dm_answer_result {
                             tracing::error!("Failed to send call accept: {}", e);
                             if let Some(w) = weak.upgrade() {
                                 w.set_incoming_call_visible(false);
@@ -170,13 +185,18 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                     tracing::info!("Anonymous call accept sent, joining LiveKit room");
 
-                    // Join the LiveKit room
-                    match anon_dm_service.join_anon_call_room(
-                        &pending.room_name,
-                        &token,
-                        &my_display_name,
-                        pending.is_video_call,
-                    ).await {
+                    // Join the LiveKit room (gRPC - run on tokio)
+                    let join_result = {
+                        let svc = anon_dm_service.clone();
+                        let rn = pending.room_name.clone();
+                        let tok = token.clone();
+                        let dn = my_display_name.clone();
+                        let is_video = pending.is_video_call;
+                        tokio::spawn(async move {
+                            svc.join_anon_call_room(&rn, &tok, &dn, is_video).await
+                        }).await.unwrap()
+                    };
+                    match join_result {
                         Ok(room_info) => {
                             tracing::info!(
                                 "Joined anonymous call room with LiveKit token"
@@ -200,15 +220,18 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let call_id = chatter_core::domain::ids::CallId::new();
                             let channel_id = chatter_core::domain::ids::ChannelId::new();
                             
-                            // Connect to LiveKit with the access token and E2EE key
-                            match service.connect_with_token(
-                                &room_info.livekit_token,
-                                &room_info.livekit_url,
-                                pending.encryption_key.clone(),
-                                &pending.room_name,
-                                call_id,
-                                channel_id,
-                            ).await {
+                            // Connect to LiveKit with the access token and E2EE key (network - run on tokio)
+                            let connect_result = {
+                                let svc = service.clone();
+                                let lk_token = room_info.livekit_token.clone();
+                                let lk_url = room_info.livekit_url.clone();
+                                let enc_key = pending.encryption_key.clone();
+                                let rn = pending.room_name.clone();
+                                tokio::spawn(async move {
+                                    svc.connect_with_token(&lk_token, &lk_url, enc_key, &rn, call_id, channel_id).await
+                                }).await.unwrap()
+                            };
+                            match connect_result {
                                 Ok(()) => {
                                     tracing::info!("Connected to LiveKit for anonymous call");
                                     
@@ -394,18 +417,25 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let our_ephemeral = EphemeralCallKey::generate();
                 let our_ephemeral_pk = our_ephemeral.public_key_bytes();
 
-                // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
-                let encryption_key = match signal_service.actor.complete_call_key_exchange(
-                    our_ephemeral.private_key_bytes(),
-                    caller_ephemeral_pk,
-                    caller_id,
-                    call_id_str.clone(),
-                    false, // we_are_caller = false (we're the callee)
-                ).await {
-                    Ok(key) => key,
-                    Err(e) => {
-                        tracing::error!("Failed to derive call key: {}", e);
-                        return;
+                // Delegate all crypto to the Signal service (actor call - run on tokio)
+                let encryption_key = {
+                    let actor = signal_service.actor.clone();
+                    let priv_key = our_ephemeral.private_key_bytes();
+                    let cid_str = call_id_str.clone();
+                    match tokio::spawn(async move {
+                        actor.complete_call_key_exchange(
+                            priv_key,
+                            caller_ephemeral_pk,
+                            caller_id,
+                            cid_str,
+                            false, // we_are_caller = false (we're the callee)
+                        ).await
+                    }).await.unwrap() {
+                        Ok(key) => key,
+                        Err(e) => {
+                            tracing::error!("Failed to derive call key: {}", e);
+                            return;
+                        }
                     }
                 };
 
@@ -415,9 +445,17 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     "Derived call key, sending answer"
                 );
 
-                // Send answer with our ephemeral public key via CallSignalingService
-                let signaling = ui_ctx.call_signaling();
-                if let Err(e) = signaling.send_call_answer(&caller_id, &call_id_str, our_ephemeral_pk).await {
+                // Send answer with our ephemeral public key via CallSignalingService (gRPC - run on tokio)
+                let answer_result = {
+                    let ctx = ui_ctx.clone();
+                    let cid = caller_id;
+                    let call_str = call_id_str.clone();
+                    let eph_pk = our_ephemeral_pk;
+                    tokio::spawn(async move {
+                        ctx.call_signaling().send_call_answer(&cid, &call_str, eph_pk).await
+                    }).await.unwrap()
+                };
+                if let Err(e) = answer_result {
                     tracing::error!(caller_id = %caller_id, error = %e, "Failed to send call key answer");
                     // Continue anyway - caller might timeout, but we can still try to connect
                 }
@@ -576,7 +614,8 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_incoming_call_visible(false);
             }
             
-            slint::spawn_local(async move {
+            // gRPC calls only, no UI updates needed - run entirely on tokio
+            tokio::spawn(async move {
                 // Get stored offer details from pending state (consume it since we're declining)
                 if let Some(pending) = ui_ctx.anon_dms().take_pending_anon_call(&call_id_str) {
                     // Route decline through DM or group service
@@ -615,7 +654,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 } else {
                     tracing::warn!("No pending anonymous call state found for decline: {}", call_id_str);
                 }
-            }).unwrap();
+            });
             return;
         }
 
@@ -627,8 +666,8 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             w.set_incoming_call_visible(false);
         }
 
-        // Notify server that call was declined by attempting to leave
-        slint::spawn_local(async move {
+        // Notify server that call was declined (gRPC - run on tokio)
+        tokio::spawn(async move {
             // Leave call signals decline (we never joined, so this just marks our intent)
             if let Err(e) = ui_ctx.decline_call(&call_id_str).await {
                 // This error is expected if we never joined - just log at debug level
@@ -636,6 +675,6 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             } else {
                 tracing::info!("Call decline notification sent for {}", call_id_str);
             }
-        }).unwrap();
+        });
     });
 }

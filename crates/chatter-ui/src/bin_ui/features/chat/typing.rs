@@ -77,7 +77,7 @@ pub fn wire_typing_changed(window: &crate::MainWindow, ui_ctx: &Arc<ChatterClien
         }
 
         // Skip if typing to self (DM only)
-        if let ActiveConversation::Dm { peer_id, .. } = &conversation {
+        if let ActiveConversation::MailboxDm { peer_id, .. } | ActiveConversation::ServerDm { peer_id, .. } = &conversation {
             if let Some(user_id) = ui_ctx.auth_state().get().current_user_id {
                 if peer_id == &user_id {
                     return;

@@ -256,7 +256,18 @@ impl AnonDmService {
                 let message_id = crate::domain::MessageId::from_timestamp(reaction.target_sent_timestamp);
                 let author_id = reaction.target_author_aci.parse().unwrap_or(*sender_id);
 
+                // Persist reaction to anon_dm_reactions table
                 if reaction.remove {
+                    match self.remove_reaction(conversation_id, reaction.target_sent_timestamp, sender_id, &reaction.emoji) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                conversation_id = %conversation_id,
+                                error = %e,
+                                "[ANON_DM] Failed to remove reaction from DB"
+                            );
+                        }
+                    }
                     events.push(DomainEvent::ReactionRemoved {
                         message_id,
                         author_id,
@@ -265,6 +276,16 @@ impl AnonDmService {
                         timestamp: reaction.target_sent_timestamp,
                     });
                 } else {
+                    match self.add_reaction(conversation_id, reaction.target_sent_timestamp, sender_id, &reaction.emoji) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                conversation_id = %conversation_id,
+                                error = %e,
+                                "[ANON_DM] Failed to add reaction to DB"
+                            );
+                        }
+                    }
                     events.push(DomainEvent::ReactionAdded {
                         message_id,
                         author_id,
@@ -294,6 +315,9 @@ impl AnonDmService {
                 );
 
                 if receipt.r#type == receipt_message::Type::Read as i32 {
+                    // Persist read status to anon DM DB
+                    let _ = self.update_delivery_status(conversation_id, &receipt.timestamps, "read");
+
                     events.push(DomainEvent::MessagesRead {
                         reader_id: *sender_id,
                         message_timestamps: receipt.timestamps.clone(),
@@ -307,6 +331,9 @@ impl AnonDmService {
                         "[ANON_DM_RECEIPT_PROCESS] Emitting MessagesRead event"
                     );
                 } else if receipt.r#type == receipt_message::Type::Delivery as i32 {
+                    // Persist delivery status to anon DM DB
+                    let _ = self.update_delivery_status(conversation_id, &receipt.timestamps, "delivered");
+
                     events.push(DomainEvent::MessagesDelivered {
                         recipient_id: *sender_id,
                         message_timestamps: receipt.timestamps.clone(),
@@ -320,7 +347,18 @@ impl AnonDmService {
                 }
             }
             Some(ContentType::Pin(pin)) => {
-                let message_id = crate::domain::MessageId::from_timestamp(pin.target_sent_timestamp);
+                let new_pinned = !pin.unpin;
+
+                // Persist pin state to anon DM messages table
+                if let Err(e) = self.set_message_pinned(conversation_id, pin.target_sent_timestamp, new_pinned) {
+                    tracing::warn!(error = %e, "Failed to persist anon DM pin state");
+                }
+
+                // Look up real message ID from DB (not fabricated) for correct pinned_state tracking
+                let message_id = self.get_message_by_timestamp(conversation_id, pin.target_sent_timestamp)
+                    .ok().flatten()
+                    .and_then(|m| m.id.as_str().parse::<crate::domain::ids::MessageId>().ok())
+                    .unwrap_or_else(|| crate::domain::MessageId::from_timestamp(pin.target_sent_timestamp));
                 let channel_id: crate::domain::ChannelId = (*conversation_id).into();
 
                 if pin.unpin {
@@ -621,6 +659,16 @@ impl AnonDmService {
     /// Mark a conversation as read.
     pub fn mark_as_read(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
         Ok(self.anon_dm_repo.mark_as_read(conversation_id)?)
+    }
+
+    /// Update delivery status for messages by timestamps.
+    pub fn update_delivery_status(
+        &self,
+        conversation_id: &AnonDmId,
+        timestamps: &[u64],
+        status: &str,
+    ) -> Result<usize, AnonDmError> {
+        Ok(self.anon_dm_repo.update_delivery_status_by_timestamps(conversation_id, timestamps, status)?)
     }
 
     /// Update message text (for handling edits from peer).

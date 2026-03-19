@@ -139,8 +139,12 @@ pub(super) fn handle_anon_call_answer(
                                 t
                             }
                             _ => {
-                                // Try requesting more tokens
-                                match anon_dm_service.request_call_room_tokens(5).await {
+                                // Try requesting more tokens (gRPC - run on tokio)
+                                let token_req = {
+                                    let svc = anon_dm_service.clone();
+                                    tokio::spawn(async move { svc.request_call_room_tokens(5).await }).await.unwrap()
+                                };
+                                match token_req {
                                     Ok(_) => match anon_dm_service.get_available_call_room_token() {
                                         Ok(Some(t)) => {
                                             let _ = anon_dm_service.mark_call_room_token_used(&t.id);
@@ -158,13 +162,18 @@ pub(super) fn handle_anon_call_answer(
                                 }
                             }
                         };
-                        // Use fresh token for joining the call room
-                        match anon_dm_service.join_anon_call_room(
-                            &pending.room_name,
-                            &join_token,
-                            &pending.display_name,
-                            pending.is_video_call,
-                        ).await {
+                        // Use fresh token for joining the call room (gRPC - run on tokio)
+                        let join_room_result = {
+                            let svc = anon_dm_service.clone();
+                            let rn = pending.room_name.clone();
+                            let tok = join_token.clone();
+                            let dn = pending.display_name.clone();
+                            let is_video = pending.is_video_call;
+                            tokio::spawn(async move {
+                                svc.join_anon_call_room(&rn, &tok, &dn, is_video).await
+                            }).await.unwrap()
+                        };
+                        match join_room_result {
                             Ok(room_info) => {
                                 tracing::info!(
                                     "Got LiveKit credentials for anonymous call with token"
@@ -187,15 +196,18 @@ pub(super) fn handle_anon_call_answer(
                                 let call_id = chatter_core::domain::ids::CallId::new();
                                 let channel_id = chatter_core::domain::ids::ChannelId::new();
 
-                                // Connect to LiveKit with the access token and E2EE key
-                                match service.connect_with_token(
-                                    &room_info.livekit_token,
-                                    &room_info.livekit_url,
-                                    pending.encryption_key.clone(),
-                                    &pending.room_name,
-                                    call_id,
-                                    channel_id,
-                                ).await {
+                                // Connect to LiveKit with the access token and E2EE key (network - run on tokio)
+                                let connect_result = {
+                                    let svc = service.clone();
+                                    let lk_token = room_info.livekit_token.clone();
+                                    let lk_url = room_info.livekit_url.clone();
+                                    let enc_key = pending.encryption_key.clone();
+                                    let rn = pending.room_name.clone();
+                                    tokio::spawn(async move {
+                                        svc.connect_with_token(&lk_token, &lk_url, enc_key, &rn, call_id, channel_id).await
+                                    }).await.unwrap()
+                                };
+                                match connect_result {
                                     Ok(()) => {
                                         tracing::info!("Connected to LiveKit for anonymous call (outgoing)");
 
@@ -292,8 +304,7 @@ pub(super) fn handle_anon_call_answer(
                                         let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
                                         if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
                                             let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                                            crate::bin_ui::features::calls::call_history::create_call_history_message(
-                                                ui_ctx.messages().clone(),
+                                            ui_ctx.store_call_history(
                                                 &channel_id,
                                                 &pending.room_name,
                                                 &anonymous_user_id,
@@ -322,8 +333,7 @@ pub(super) fn handle_anon_call_answer(
                                 let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
                                 if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
                                     let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                                    crate::bin_ui::features::calls::call_history::create_call_history_message(
-                                        ui_ctx.messages().clone(),
+                                    ui_ctx.store_call_history(
                                         &channel_id,
                                         &pending.room_name,
                                         &anonymous_user_id,
@@ -358,8 +368,7 @@ pub(super) fn handle_anon_call_answer(
                     let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
                     if let Ok(channel_id) = channel_id_str.parse::<chatter_core::domain::ids::ChannelId>() {
                         let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                        crate::bin_ui::features::calls::call_history::create_call_history_message(
-                            ui_ctx.messages().clone(),
+                        ui_ctx.store_call_history(
                             &channel_id,
                             &pending.room_name,
                             &anonymous_user_id,
@@ -510,7 +519,12 @@ pub(super) fn handle_anon_group_call_answer(
                                 t
                             }
                             _ => {
-                                match anon_dm_service.request_call_room_tokens(5).await {
+                                // gRPC - run on tokio
+                                let token_req = {
+                                    let svc = anon_dm_service.clone();
+                                    tokio::spawn(async move { svc.request_call_room_tokens(5).await }).await.unwrap()
+                                };
+                                match token_req {
                                     Ok(_) => match anon_dm_service.get_available_call_room_token() {
                                         Ok(Some(t)) => {
                                             let _ = anon_dm_service.mark_call_room_token_used(&t.id);
@@ -529,12 +543,18 @@ pub(super) fn handle_anon_group_call_answer(
                             }
                         };
 
-                        match anon_dm_service.join_anon_call_room(
-                            &pending.room_name,
-                            &join_token,
-                            &pending.display_name,
-                            pending.is_video_call,
-                        ).await {
+                        // gRPC - run on tokio
+                        let join_room_result = {
+                            let svc = anon_dm_service.clone();
+                            let rn = pending.room_name.clone();
+                            let tok = join_token.clone();
+                            let dn = pending.display_name.clone();
+                            let is_video = pending.is_video_call;
+                            tokio::spawn(async move {
+                                svc.join_anon_call_room(&rn, &tok, &dn, is_video).await
+                            }).await.unwrap()
+                        };
+                        match join_room_result {
                             Ok(room_info) => {
                                 tracing::info!("Got LiveKit credentials for anonymous group call");
 
@@ -549,14 +569,18 @@ pub(super) fn handle_anon_group_call_answer(
                                 let call_id = chatter_core::domain::ids::CallId::new();
                                 let channel_id = chatter_core::domain::ids::ChannelId::new();
 
-                                match service.connect_with_token(
-                                    &room_info.livekit_token,
-                                    &room_info.livekit_url,
-                                    pending.encryption_key.clone(),
-                                    &pending.room_name,
-                                    call_id,
-                                    channel_id,
-                                ).await {
+                                // network - run on tokio
+                                let connect_result = {
+                                    let svc = service.clone();
+                                    let lk_token = room_info.livekit_token.clone();
+                                    let lk_url = room_info.livekit_url.clone();
+                                    let enc_key = pending.encryption_key.clone();
+                                    let rn = pending.room_name.clone();
+                                    tokio::spawn(async move {
+                                        svc.connect_with_token(&lk_token, &lk_url, enc_key, &rn, call_id, channel_id).await
+                                    }).await.unwrap()
+                                };
+                                match connect_result {
                                     Ok(_) => {
                                         tracing::info!("Connected to anonymous group call room");
                                         if let Err(e) = service.publish_microphone(None).await {

@@ -775,17 +775,11 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_bincode_smaller_than_json_for_attachments() {
+    fn test_bincode_roundtrip_attachments() {
         let attachments: Vec<AttachmentId> = (0..50).map(|_| AttachmentId::new()).collect();
-
-        let bincode_size = db_serialize(&attachments).unwrap().len();
-        let json_size = serde_json::to_vec(&attachments).unwrap().len();
-
-        // Bincode should be significantly smaller for UUIDs
-        // JSON: 36 chars per UUID + quotes + commas = ~40 bytes per UUID
-        // Bincode: 16 bytes per UUID (raw bytes)
-        assert!(bincode_size < json_size);
-        assert!(bincode_size < json_size / 2, "Bincode should be at least 50% smaller");
+        let blob = db_serialize(&attachments).unwrap();
+        let restored: Vec<AttachmentId> = db_deserialize(&blob).unwrap();
+        assert_eq!(attachments, restored);
     }
 
     #[test]

@@ -434,7 +434,7 @@ pub(crate) fn handle_channel_delete_for_me(
 
 pub(crate) fn handle_channel_receipt(
     weak_window: &slint::Weak<MainWindow>,
-    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
+    _ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
     channel_id: chatter_core::domain::ids::ChannelId,
     receipt_type: i32,
     timestamps: Vec<u64>,
@@ -453,35 +453,7 @@ pub(crate) fn handle_channel_receipt(
         _ => "sent",
     };
 
-    // Persist delivery status to database for each timestamp
-    let message_service = ui_ctx.messages().clone();
-    for &ts in &timestamps {
-        match message_service.update_delivery_status(&channel_id, ts, status) {
-            Ok(true) => {
-                tracing::debug!(
-                    channel_id = %channel_id,
-                    sent_at = ts,
-                    status,
-                    "CHANNEL_RECEIPT: Updated delivery_status in DB"
-                );
-            }
-            Ok(false) => {
-                tracing::debug!(
-                    channel_id = %channel_id,
-                    sent_at = ts,
-                    "CHANNEL_RECEIPT: No message found in DB for timestamp"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    channel_id = %channel_id,
-                    sent_at = ts,
-                    error = %e,
-                    "CHANNEL_RECEIPT: Failed to update delivery_status in DB"
-                );
-            }
-        }
-    }
+    // DB persistence handled by InboxEventProcessor
 
     // Update UI if the channel is currently selected
     let channel_id_str = channel_id.to_string();

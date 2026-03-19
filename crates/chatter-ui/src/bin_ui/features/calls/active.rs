@@ -13,7 +13,6 @@ use chatter_core::inbox::handlers::DomainEvent;
 use chatter_core::state::ActiveConversation;
 use crate::MainWindow;
 
-use super::call_history::create_call_history_message;
 use super::timers::{get_call_duration_secs, stop_call_timer, stop_video_frame_timer};
 
 /// Wire active call control callbacks.
@@ -151,11 +150,20 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         "Sending anonymous call hangup"
                     );
                     
-                    if let Err(e) = ui_ctx.anon_dms().send_call_hangup(
-                        &pending_anon.conversation_id,
-                        &pending_anon.call_room_id,
-                        chatter_core::proto::content_v1::anon_call_hangup::Reason::Normal,
-                    ).await {
+                    // gRPC - run on tokio
+                    let hangup_result = {
+                        let svc = ui_ctx.anon_dms().clone();
+                        let cid = pending_anon.conversation_id;
+                        let crid = pending_anon.call_room_id;
+                        tokio::spawn(async move {
+                            svc.send_call_hangup(
+                                &cid,
+                                &crid,
+                                chatter_core::proto::content_v1::anon_call_hangup::Reason::Normal,
+                            ).await
+                        }).await.unwrap()
+                    };
+                    if let Err(e) = hangup_result {
                         tracing::error!(
                             "Failed to send anonymous call hangup: {}", e
                         );
@@ -175,20 +183,17 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let call_type_label = if pending_anon.is_outgoing { "Outgoing call" } else { "Incoming call" };
                     let call_text = format!("📞 {} · {}", call_type_label, duration_str);
 
-                    // Store in anon DM message store
-                    let sent_at = super::timers::current_time_ns();
-                    let our_user_id = ui_ctx.auth_state().get().current_user_id.unwrap_or_else(chatter_core::domain::ids::UserId::new);
-                    if let Err(e) = ui_ctx.anon_dms().store_message(
+                    // Store call history via SDK
+                    ui_ctx.store_anon_call_history(
                         &pending_anon.conversation_id,
-                        &our_user_id,
-                        0, // text content type
-                        &call_text,
-                        sent_at,
-                    ) {
-                        tracing::error!("Failed to store anon call history: {}", e);
-                    }
+                        pending_anon.is_outgoing,
+                        call_duration,
+                    );
 
                     // Push call bubble to UI if viewing this conversation
+                    let our_user_id = ui_ctx.auth_state().get().current_user_id
+                        .map(|id| id.to_string()).unwrap_or_default();
+                    let sent_at = crate::bin_ui::features::calls::timers::current_time_ns();
                     let is_viewing = matches!(conversation, ActiveConversation::AnonDm(id) if id == pending_anon.conversation_id);
                     if is_viewing {
                         if let Some(w) = weak.upgrade() {
@@ -196,7 +201,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
                                 let msg_item = crate::MessageItemData {
                                     message_id: uuid::Uuid::new_v4().to_string().into(),
-                                    sender_id: our_user_id.to_string().into(),
+                                    sender_id: our_user_id.into(),
                                     sender_name: "".into(),
                                     sender_initials: "".into(),
                                     sender_avatar_url: "".into(),
@@ -277,8 +282,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             .map(|u| u.username.clone())
                             .unwrap_or_else(|| call.initiator_id.to_string());
 
-                        create_call_history_message(
-                            ui_ctx.messages().clone(),
+                        ui_ctx.store_call_history(
                             channel_id,
                             &call.id.to_string(),
                             &call.initiator_id,
@@ -356,15 +360,14 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                                     .map(|u| u.username.clone())
                                     .unwrap_or_else(|| call.initiator_id.to_string());
 
-                                create_call_history_message(
-                                    ui_ctx.messages().clone(),
+                                ui_ctx.store_call_history(
                                     &call.channel_id,
                                     &call.id.to_string(),
                                     &call.initiator_id,
                                     &initiator_name,
                                     is_outgoing,
                                     duration_secs,
-                                    false, // not missed - peer hung up after call was connected
+                                    false,
                                 );
                             }
                         }

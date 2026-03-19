@@ -136,11 +136,11 @@ pub fn open_channel_settings(
 
 fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channels().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_channel_settings_save(move |name, description| {
         let weak = weak_window.clone();
-        let channel_service = channel_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let name_str = name.to_string();
         let desc_str = description.to_string();
 
@@ -153,7 +153,7 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             let desc_opt = if desc_str.is_empty() { None } else { Some(desc_str.as_str()) };
-            match channel_service.update_channel(&channel_uuid, Some(&name_str), desc_opt, None, None).await {
+            match ui_ctx.update_channel(&channel_uuid, Some(&name_str), desc_opt).await {
                 Ok(_) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() { w.set_active_modal("none".into()); }
@@ -267,11 +267,11 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channels().clone();
+    let ui_ctx_archive = ui_ctx.clone();
 
     window.on_channel_settings_archive(move || {
         let weak = weak_window.clone();
-        let channel_service = channel_service.clone();
+        let ui_ctx = ui_ctx_archive.clone();
         tokio::spawn(async move {
             let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
@@ -280,7 +280,7 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(_) => return,
             };
             let currently_archived = weak.upgrade().map(|w| w.get_channel_settings_archived()).unwrap_or(false);
-            let result = if currently_archived { channel_service.unarchive_channel(&channel_uuid).await } else { channel_service.archive_channel(&channel_uuid).await };
+            let result = ui_ctx.archive_channel(&channel_uuid, !currently_archived).await;
             if result.is_ok() {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() { w.set_active_modal("none".into()); }
@@ -290,10 +290,10 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channels().clone();
+    let ui_ctx_leave = ui_ctx.clone();
     window.on_channel_settings_leave(move || {
         let weak = weak_window.clone();
-        let channel_service = channel_service.clone();
+        let ui_ctx = ui_ctx_leave.clone();
         tokio::spawn(async move {
             let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
@@ -301,7 +301,7 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
             };
-            if channel_service.leave_channel(&channel_uuid).await.is_ok() {
+            if ui_ctx.leave_channel(&channel_uuid).await.is_ok() {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.set_active_modal("none".into());

@@ -67,6 +67,7 @@ export component ChatHeader inherits Rectangle {
     callback pin-clicked();
     callback voice-call-clicked();
     callback video-call-clicked();
+    callback invite-clicked();
 
     // Type detection properties
     property <bool> is-private: channel-type == "private";
@@ -311,6 +312,12 @@ export component ChatHeader inherits Rectangle {
                 // Utility buttons group
                 HorizontalLayout {
                     spacing: Spacing.xs;
+
+                    // Invite button (channels and private groups)
+                    if root.show-settings: IconButton {
+                        icon: Icons.user-plus;
+                        clicked => { root.invite-clicked(); }
+                    }
 
                     // Pin button (shows when there are pinned messages)
                     if root.has-any-pinned: IconButton {

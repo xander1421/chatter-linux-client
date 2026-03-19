@@ -36,6 +36,7 @@ pub enum CallSignalingError {
 }
 
 /// Handles call signaling (key exchange, hangup) over the Signal Protocol.
+#[derive(Clone)]
 pub struct CallSignalingService {
     message_service: Arc<MessageService>,
     mailbox_manager: Arc<MailboxManager>,

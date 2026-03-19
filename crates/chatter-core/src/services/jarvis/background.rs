@@ -208,6 +208,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "Requires database mocking"]
     fn test_builder_default_interval() {
         let jarvis = Arc::new(create_test_jarvis());
         let builder = JarvisBackgroundBuilder::new(jarvis);
@@ -215,7 +216,6 @@ mod tests {
     }
 
     fn create_test_jarvis() -> JarvisService {
-        // This would need proper mocking in a real test
-        panic!("Test not implemented - requires database mocking")
+        unimplemented!("Requires database mocking")
     }
 }

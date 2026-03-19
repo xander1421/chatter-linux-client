@@ -481,23 +481,8 @@ pub async fn handle_inbox_event(
                     );
                 }
 
-                // Handle reaction
+                // Handle reaction (DB persistence in InboxEventProcessor)
                 Some(content::Content::Reaction(reaction)) => {
-                    // Persist to DB
-                    let service = ui_ctx.anon_groups().clone();
-                    let emoji_db = reaction.emoji.clone();
-                    let gid = anon_group_id;
-                    let ts = reaction.target_sent_timestamp;
-                    let remove = reaction.remove;
-                    let pid = peer_id;
-                    let _ = std::thread::spawn(move || {
-                        if remove {
-                            let _ = service.remove_reaction(&gid, ts, &pid, &emoji_db);
-                        } else {
-                            let _ = service.add_reaction(&gid, ts, &pid, &emoji_db);
-                        }
-                    });
-
                     // Update UI
                     let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_reaction(
@@ -507,10 +492,8 @@ pub async fn handle_inbox_event(
                     );
                 }
 
-                // Handle pin/unpin
+                // Handle pin/unpin (DB persistence in InboxEventProcessor)
                 Some(content::Content::Pin(pin)) => {
-                    // DB persistence handled by InboxEventProcessor → EventHandlers
-
                     // Update UI
                     let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_pin(
@@ -520,48 +503,14 @@ pub async fn handle_inbox_event(
                     );
                 }
 
-                // Handle edit message (separate content type)
+                // Handle edit message (DB persistence in InboxEventProcessor)
                 Some(content::Content::Edit(edit)) => {
-                    // EditMessage contains target_sent_timestamp and optional data_message with new body
                     let new_body = edit.data_message
                         .as_ref()
                         .map(|dm| dm.body.clone())
                         .unwrap_or_default();
 
-                    // Persist edit to DB (must happen before UI update to avoid data loss on channel switch)
-                    let service = ui_ctx.anon_groups().clone();
-                    let gid = anon_group_id;
-                    let pid = peer_id;
-                    let ts = edit.target_sent_timestamp;
-                    let text = new_body.clone();
-                    let _ = tokio::task::spawn_blocking(move || {
-                        match service.update_message_text_by_sender(&gid, &pid, ts, &text) {
-                            Ok(true) => {
-                                tracing::info!(
-                                    group_id = %gid,
-                                    sender_id = %pid,
-                                    target_timestamp = ts,
-                                    "Persisted anon group edit to DB"
-                                );
-                            }
-                            Ok(false) => {
-                                tracing::debug!(
-                                    group_id = %gid,
-                                    sender_id = %pid,
-                                    target_timestamp = ts,
-                                    "Edit target not found or sender mismatch"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    error = %e,
-                                    "Failed to persist anon group edit to DB"
-                                );
-                            }
-                        }
-                    });
-
-                    // Update UI immediately
+                    // Update UI
                     let channel_id: chatter_core::domain::ChannelId = anon_group_id.into();
                     unified_actions::handle_edit(
                         weak_window, &ui_ctx.chat_state() ,
@@ -618,14 +567,13 @@ pub async fn handle_inbox_event(
                     // Use sender's timestamp for consistent ordering across devices
                     let sent_at = inner_content.timestamp;
 
-                    // Store message and update UI
-                    let anon_service = ui_ctx.anon_groups().clone();
+                    // Message storage handled by InboxEventProcessor
                     let user_service = ui_ctx.users().clone();
                     let peer_id_clone = peer_id;
                     let weak = weak_window.clone();
                     let group_id_str = anon_group_id.to_string();
                     let attachments = data_msg.attachments.clone();
-                    let sent_at_for_ui = sent_at; // Capture for UI closure
+                    let sent_at_for_ui = sent_at;
 
                     // Convert attachment pointers to display data BEFORE spawn_blocking
                     let mut attachment_display: Vec<_> = attachments
@@ -648,8 +596,7 @@ pub async fn handle_inbox_event(
                             .collect();
 
                         if !download_pointers.is_empty() {
-                            // Create attachment records BEFORE spawning download
-                            ui_ctx.attachments().create_from_pointers(&download_pointers);
+                            // Attachment records already created by InboxEventProcessor
 
                             let ui_ctx_download = ui_ctx.clone();
                             let weak_download = weak_window.clone();
@@ -666,67 +613,40 @@ pub async fn handle_inbox_event(
                         }
                     }
 
+                    // Message storage handled by InboxEventProcessor.
+                    // UI just displays the message.
+                    let anon_service = ui_ctx.anon_groups().clone();
                     let _ = tokio::task::spawn_blocking(move || {
-                        // Create attachment records from pointers if any
-                        let attachment_ids = if !attachments.is_empty() {
-                            let ids = anon_service.create_attachments_from_pointers(&attachments);
-                            tracing::info!(
-                                group_id = %anon_group_id,
-                                attachment_count = ids.len(),
-                                "[ANON_GROUP] Created attachment records from pointers"
-                            );
-                            ids
-                        } else {
-                            Vec::new()
-                        };
+                        let message_id = anon_service.get_latest_message(&anon_group_id)
+                            .ok().flatten()
+                            .map(|m| m.id.as_str().to_string())
+                            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-                        // Store message with attachments (and quote metadata if reply)
-                        let store_result = if let Some(ref q) = quote {
-                            let content_json = serde_json::json!({
-                                "text": text,
-                                "quote": {
-                                    "author_id": q.author_aci,
-                                    "author_name": quote_sender_name,
-                                    "timestamp": q.id,
-                                    "preview": q.text,
-                                }
-                            }).to_string();
-                            anon_service.store_message_with_content_json(
-                                &anon_group_id,
-                                &peer_id_clone,
-                                3,
-                                &content_json,
-                                &attachment_ids,
-                                sent_at,
-                            )
-                        } else {
-                            anon_service.store_message_with_attachments(
-                                &anon_group_id,
-                                &peer_id_clone,
-                                &text,
-                                &attachment_ids,
-                                sent_at,
-                            )
-                        };
-                        match store_result {
-                            Ok(message_id) => {
-                                tracing::debug!(
-                                    group_id = %anon_group_id,
-                                    peer_id = %peer_id_clone,
-                                    message_id = %message_id,
-                                    "Stored anonymous group message"
-                                );
+                        // Look up member profile for display name and avatar
+                        let member = anon_service
+                            .get_member(&anon_group_id, &peer_id_clone)
+                            .ok()
+                            .flatten();
 
-                                // Update UI if viewing this group
-                                // Look up display name from group member list first, then fall back to user service
-                                let sender_name = anon_service
-                                    .get_member_display_name(&anon_group_id, &peer_id_clone)
-                                    .ok()
-                                    .flatten()
-                                    .filter(|n| !n.is_empty())
-                                    .unwrap_or_else(|| user_service.get_display_name(&peer_id_clone));
-                                let text_clone = text.clone();
-                                let _ = slint::invoke_from_event_loop(move || {
+                        let sender_name = member.as_ref()
+                            .and_then(|m| m.display_name.clone())
+                            .filter(|n| !n.is_empty())
+                            .unwrap_or_else(|| user_service.get_display_name(&peer_id_clone));
+
+                        // Pre-decode avatar bytes outside the UI thread
+                        let avatar_decoded = member
+                            .and_then(|m| m.avatar)
+                            .and_then(|bytes| {
+                                if bytes.is_empty() { return None; }
+                                image::load_from_memory(&bytes).ok().map(|img| {
+                                    let rgba = img.to_rgba8();
+                                    let (w, h) = rgba.dimensions();
+                                    (rgba.into_raw(), w, h)
+                                })
+                            });
+
+                        let text_clone = text.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak.upgrade() {
                                         let selected_group = w.get_selected_private_group_id().to_string();
                                         if selected_group == group_id_str {
@@ -739,6 +659,16 @@ pub async fn handle_inbox_event(
                                                     .map(|a| a.to_slint())
                                                     .collect();
 
+                                                // Convert pre-decoded avatar to Slint Image
+                                                let (sender_avatar_source, has_avatar) = if let Some((pixels, w, h)) = avatar_decoded {
+                                                    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                                                        &pixels, w, h,
+                                                    );
+                                                    (slint::Image::from_rgba8(buffer), true)
+                                                } else {
+                                                    (slint::Image::default(), false)
+                                                };
+
                                                 // Use actual sent_at for correct ordering
                                                 let new_msg = crate::MessageItemData {
                                                     message_id: message_id.to_string().into(),
@@ -746,8 +676,8 @@ pub async fn handle_inbox_event(
                                                     sender_name: sender_name.into(),
                                                     sender_initials: "".into(),
                                                     sender_avatar_url: "".into(),
-                                                    sender_avatar_source: slint::Image::default(),
-                                                    has_avatar: false,
+                                                    sender_avatar_source,
+                                                    has_avatar,
                                                     content: text_clone.clone().into(),
                                                     timestamp: chrono::Utc::now().format("%H:%M").to_string().into(),
                                                     timestamp_ns: sent_at_for_ui.to_string().into(),
@@ -800,17 +730,7 @@ pub async fn handle_inbox_event(
                                         );
                                     }
                                 });
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    group_id = %anon_group_id,
-                                    peer_id = %peer_id_clone,
-                                    error = %e,
-                                    "Failed to store message"
-                                );
-                            }
-                        }
-                    });
+                        });
                 }
 
                 // Receipt, call offer/answer/hangup are handled by InboxEventProcessor

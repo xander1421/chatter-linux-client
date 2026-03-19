@@ -19,7 +19,6 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 mod active;
-pub mod call_history;
 mod device_picker;
 mod event_handlers;
 mod incoming;

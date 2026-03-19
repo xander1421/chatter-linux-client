@@ -191,10 +191,10 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     let weak_window = window.as_weak();
-    let anon_group_service = ui_ctx.anon_groups().clone();
+    let ui_ctx_group = ui_ctx.clone();
     window.on_create_private_group(move |name: SharedString, friends: ModelRc<PrivateGroupFriend>| {
         let weak = weak_window.clone();
-        let anon_group_service = anon_group_service.clone();
+        let ui_ctx = ui_ctx_group.clone();
         let name = name.to_string();
 
         // Extract selected friends with their roles
@@ -225,7 +225,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 
         tokio::spawn(async move {
-            match anon_group_service.create_group_with_roles(name.clone(), selected_friends).await {
+            match ui_ctx.create_anon_group(name.clone(), selected_friends).await {
                 Ok(group) => {
                     let weak_success = weak.clone();
                     let group_id = group.id.to_string();
@@ -362,10 +362,10 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
 
     // Submit invite
     let weak_window = window.as_weak();
-    let anon_group_service = ui_ctx.anon_groups().clone();
+    let ui_ctx_invite = ui_ctx.clone();
     window.on_invite_to_private_group(move |friends: ModelRc<PrivateGroupFriend>| {
         let weak = weak_window.clone();
-        let anon_group_service = anon_group_service.clone();
+        let ui_ctx = ui_ctx_invite.clone();
 
         let group_id_str = weak
             .upgrade()
@@ -413,7 +413,7 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 }
             };
 
-            match anon_group_service.invite_members(&group_id, selected_friends).await {
+            match ui_ctx.invite_to_anon_group(&group_id, selected_friends).await {
                 Ok(_) => {
                     tracing::info!("Successfully invited members to group {}", group_id);
                     let _ = slint::invoke_from_event_loop(move || {

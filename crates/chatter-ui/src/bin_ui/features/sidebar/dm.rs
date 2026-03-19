@@ -134,6 +134,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     user_service,
                     attachment_service,
                     auth_state,
+                    ui_ctx.clone(),
                 ).await;
                 return;
             }
@@ -150,7 +151,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             // Update chat state
             chat_state.set_active_channel(channel_id);
             if let Some(peer_id) = peer_id_for_dm {
-                chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Dm { channel_id, peer_id });
+                chat_state.set_active_conversation(chatter_core::state::ActiveConversation::MailboxDm { channel_id, peer_id });
             } else {
                 // Fallback if peer lookup fails (shouldn't happen for real DMs)
                 chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
@@ -233,7 +234,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
                                 if !unread_timestamps.is_empty() {
                                     let handle = ConversationHandle::new(
-                                        chatter_core::state::ActiveConversation::Dm { channel_id, peer_id },
+                                        chatter_core::state::ActiveConversation::MailboxDm { channel_id, peer_id },
                                         ui_ctx.clone(),
                                     );
                                     tokio::spawn(async move {
@@ -259,6 +260,7 @@ async fn load_anon_dm_into_ui(
     user_service: Arc<UserService>,
     attachment_service: Arc<chatter_core::services::attachment::AttachmentService>,
     auth_state: chatter_core::state::AuthState,
+    ui_ctx: Arc<ChatterClient>,
 ) {
     // Get conversation info
     let dm = match anon_dm_service.get_conversation(&dm_id) {
@@ -297,13 +299,28 @@ async fn load_anon_dm_into_ui(
     let my_avatar = anon_dm_service.get_my_avatar();
 
     // Load messages
-    let messages = match anon_dm_service.get_messages(&dm_id, None, 50) {
+    let mut messages = match anon_dm_service.get_messages(&dm_id, None, 50) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to load anon DM messages: {}", e);
             Vec::new()
         }
     };
+
+    // Load reaction counts from DB and populate messages
+    if let Ok(reaction_map) = anon_dm_service.get_all_reaction_counts(&dm_id) {
+        for msg in &mut messages {
+            if let Some(counts) = reaction_map.get(&msg.sent_at) {
+                msg.reaction_counts = counts
+                    .iter()
+                    .map(|(emoji, count): &(String, u32)| chatter_core::domain::message::ReactionCount {
+                        emoji: emoji.clone(),
+                        count: *count,
+                    })
+                    .collect();
+            }
+        }
+    }
 
     // Convert messages to display data
     let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
@@ -353,50 +370,17 @@ async fn load_anon_dm_into_ui(
         msg.decode_attachment_thumbnails();
     }
 
-    // Mark conversation as read locally
-    if let Err(e) = anon_dm_service.mark_as_read(&dm_id) {
-        tracing::warn!("Failed to mark anon DM as read: {}", e);
-    }
-
-    // Send read receipts for messages from the peer
-    // Collect sent_at timestamps (sender's canonical timestamp for proper ordering)
-    let unread_timestamps: Vec<u64> = messages
-        .iter()
-        .filter(|m| current_user_id.map(|uid| m.sender_id != uid).unwrap_or(true))
-        .map(|m| m.sent_at)
-        .collect();
-
-    tracing::info!(
-        dm_id = %dm_id,
-        message_count = messages.len(),
-        unread_count = unread_timestamps.len(),
-        timestamps = ?unread_timestamps,
-        "[ANON_DM_UI] Preparing read receipts for anon DM"
-    );
-
-    if !unread_timestamps.is_empty() {
-        let service = anon_dm_service.clone();
-        let dm_id_for_receipt = dm_id;
+    // Mark as read + send read receipts via SDK
+    {
+        let handle = chatter_core::services::conversation::ConversationHandle::new(
+            chatter_core::state::ActiveConversation::AnonDm(dm_id),
+            ui_ctx.clone(),
+        );
         tokio::spawn(async move {
-            tracing::info!(
-                dm_id = %dm_id_for_receipt,
-                count = unread_timestamps.len(),
-                "[ANON_DM_UI] Spawned task to send read receipts"
-            );
-            if let Err(e) = service.send_read_receipt(&dm_id_for_receipt, unread_timestamps).await {
-                tracing::warn!("Failed to send anon DM read receipts: {}", e);
-            } else {
-                tracing::info!(
-                    dm_id = %dm_id_for_receipt,
-                    "[ANON_DM_UI] Successfully sent read receipts"
-                );
+            if let Err(e) = handle.mark_as_read().await {
+                tracing::warn!("Failed to mark anon DM as read: {}", e);
             }
         });
-    } else {
-        tracing::debug!(
-            dm_id = %dm_id,
-            "[ANON_DM_UI] No unread timestamps to send"
-        );
     }
 
     // Update UI

@@ -10,16 +10,15 @@ use crate::MainWindow;
 
 pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let signal_service = ui_ctx.signal().clone();
-    let auth_service = ui_ctx.auth().clone();
     let session_service = ui_ctx.sessions().clone();
 
     // Change password
     let weak_window = window.as_weak();
-    let auth_service_pw = auth_service.clone();
+    let ui_ctx_pw = ui_ctx.clone();
 
     window.on_settings_change_password(move |current: SharedString, new: SharedString| {
         let weak = weak_window.clone();
-        let auth_service = auth_service_pw.clone();
+        let ui_ctx = ui_ctx_pw.clone();
         let current = current.to_string();
         let new = new.to_string();
 
@@ -32,7 +31,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 }
             });
 
-            match auth_service.change_password(&current, &new).await {
+            match ui_ctx.change_password(&current, &new).await {
                 Ok(()) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {

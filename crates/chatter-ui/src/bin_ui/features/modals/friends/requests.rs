@@ -13,11 +13,11 @@ use crate::{DMListItemData, FriendRequestData, MainWindow};
 
 pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_friends_send_request(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -42,12 +42,12 @@ pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 }
             };
 
-            match user_service.send_friend_request(&friend_id, None).await {
+            match ui_ctx.send_friend_request(&friend_id, None).await {
                 Ok(_) => {
                     tracing::info!("Friend request sent to {}", user_id_str);
 
                     // Refresh sent requests list
-                    refresh_sent_requests(weak.clone(), user_service.clone()).await;
+                    refresh_sent_requests(weak.clone(), ui_ctx.users().clone()).await;
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -135,13 +135,11 @@ pub(crate) async fn refresh_sent_requests(
 
 pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
-    let channel_service = ui_ctx.channels().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_friends_accept_request(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
-        let channel_service = channel_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -166,7 +164,7 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                 }
             };
 
-            match user_service.respond_friend_request(&friend_id, true).await {
+            match ui_ctx.respond_friend_request(&friend_id, true).await {
                 Ok(result) => {
                     tracing::info!("Accepted friend request from {}", user_id_str);
 
@@ -176,8 +174,8 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                         // Add the DM to the sidebar using services
                         add_dm_to_sidebar(
                             weak.clone(),
-                            channel_service.clone(),
-                            user_service.clone(),
+                            ui_ctx.channels().clone(),
+                            ui_ctx.users().clone(),
                             channel_id,
                             &user_id_str,
                         )
@@ -187,7 +185,7 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                     }
 
                     // Refresh friend requests list to remove the accepted request
-                    refresh_received_requests(weak.clone(), user_service.clone()).await;
+                    refresh_received_requests(weak.clone(), ui_ctx.users().clone()).await;
 
                     let weak_done = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
@@ -366,11 +364,11 @@ pub(crate) async fn refresh_received_requests(
 
 pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_friends_decline_request(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -395,12 +393,12 @@ pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 }
             };
 
-            match user_service.respond_friend_request(&friend_id, false).await {
+            match ui_ctx.respond_friend_request(&friend_id, false).await {
                 Ok(_) => {
                     tracing::info!("Declined friend request from {}", user_id_str);
 
                     // Refresh received requests to remove the declined one
-                    refresh_received_requests(weak.clone(), user_service.clone()).await;
+                    refresh_received_requests(weak.clone(), ui_ctx.users().clone()).await;
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -423,11 +421,11 @@ pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<ChatterClie
 
 pub(crate) fn wire_cancel_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_friends_cancel_request(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -453,12 +451,12 @@ pub(crate) fn wire_cancel_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             };
 
             // Cancelling a sent request is done via remove_friend
-            match user_service.remove_friend(&friend_id).await {
+            match ui_ctx.remove_friend(&friend_id).await {
                 Ok(_) => {
                     tracing::info!("Cancelled friend request to {}", user_id_str);
 
                     // Refresh sent requests to remove the cancelled one
-                    refresh_sent_requests(weak.clone(), user_service.clone()).await;
+                    refresh_sent_requests(weak.clone(), ui_ctx.users().clone()).await;
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {

@@ -592,7 +592,7 @@ impl InboxEventProcessor {
                     "DELIVERY_RECEIPT: Triggering delivery receipt for received DM"
                 );
                 let handle = ConversationHandle::new(
-                    ActiveConversation::Dm { channel_id: *channel_id, peer_id: *peer_id },
+                    ActiveConversation::MailboxDm { channel_id: *channel_id, peer_id: *peer_id },
                     self.client.clone(),
                 );
                 let ts = *timestamp;
@@ -1186,25 +1186,82 @@ impl InboxEventProcessor {
                 );
             }
 
-            // Handle attachment auto-download for data messages
+            // Handle data messages (store + delete + attachment download)
             Some(content::Content::DataMessage(data_msg)) => {
-                if data_msg.delete.is_none() && !data_msg.attachments.is_empty() {
-                    let download_pointers: Vec<_> = data_msg.attachments
-                        .iter()
-                        .filter(|p| !p.cdn_key.is_empty())
-                        .cloned()
-                        .collect();
+                // Handle delete
+                if let Some(delete) = &data_msg.delete {
+                    let _ = self.anon_group_service.delete_message_by_timestamp(
+                        &anon_group_id, &peer_id, delete.target_sent_timestamp,
+                    );
+                } else {
+                    // Store the message to DB
+                    let text = &data_msg.body;
+                    let sent_at = inner_content.timestamp;
 
-                    if !download_pointers.is_empty() {
-                        // Create attachment records before spawning download
-                        self.attachment_service.create_from_pointers(&download_pointers);
+                    if !text.is_empty() || !data_msg.attachments.is_empty() {
+                        // Create attachment records
+                        let attachment_ids = if !data_msg.attachments.is_empty() {
+                            let pointers: Vec<_> = data_msg.attachments.iter()
+                                .filter(|p| !p.cdn_key.is_empty())
+                                .cloned()
+                                .collect();
+                            if !pointers.is_empty() {
+                                self.attachment_service.create_from_pointers(&pointers);
+                            }
+                            self.anon_group_service.create_attachments_from_pointers(&data_msg.attachments)
+                        } else {
+                            Vec::new()
+                        };
+
+                        // Build content JSON (with quote if present)
+                        let store_result = if let Some(ref q) = data_msg.quote {
+                            let content_json = serde_json::json!({
+                                "text": text,
+                                "quote": {
+                                    "author_id": q.author_aci,
+                                    "timestamp": q.id,
+                                    "preview": q.text,
+                                }
+                            }).to_string();
+                            self.anon_group_service.store_message_with_content_json(
+                                &anon_group_id, &peer_id, 3, &content_json, &attachment_ids, sent_at,
+                            )
+                        } else {
+                            self.anon_group_service.store_message_with_attachments(
+                                &anon_group_id, &peer_id, text, &attachment_ids, sent_at,
+                            )
+                        };
+
+                        match store_result {
+                            Ok(msg_id) => tracing::debug!(group_id = %anon_group_id, message_id = %msg_id, "Stored anon group message"),
+                            Err(e) => tracing::error!(group_id = %anon_group_id, error = %e, "Failed to store anon group message"),
+                        }
                     }
                 }
             }
 
+            // Persist ephemeral actions to anon group DB (UI handles display)
+            Some(content::Content::Reaction(reaction)) => {
+                let svc = self.anon_group_service.clone();
+                if reaction.remove {
+                    let _ = svc.remove_reaction(&anon_group_id, reaction.target_sent_timestamp, &peer_id, &reaction.emoji);
+                } else {
+                    let _ = svc.add_reaction(&anon_group_id, reaction.target_sent_timestamp, &peer_id, &reaction.emoji);
+                }
+            }
+            Some(content::Content::Pin(pin)) => {
+                let _ = self.anon_group_service.set_message_pinned(
+                    &anon_group_id, pin.target_sent_timestamp, !pin.unpin,
+                );
+            }
+            Some(content::Content::Edit(edit)) => {
+                let new_text = edit.data_message.as_ref().map(|dm| dm.body.clone()).unwrap_or_default();
+                let _ = self.anon_group_service.update_message_text_by_sender(
+                    &anon_group_id, &peer_id, edit.target_sent_timestamp, &new_text,
+                );
+            }
             _ => {
-                // Typing, reaction, pin, edit, delete are handled by UI layer
-                // (they need slint model updates)
+                // Typing and unknown content types — UI only
             }
         }
     }

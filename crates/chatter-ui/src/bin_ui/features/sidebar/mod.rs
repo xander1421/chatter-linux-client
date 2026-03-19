@@ -97,7 +97,7 @@ pub(crate) fn update_sidebar_preview(
         let selected_group = window.get_selected_private_group_id().to_string();
 
         match conversation {
-            ActiveConversation::Dm { peer_id, channel_id, .. } => {
+            ActiveConversation::MailboxDm { peer_id, channel_id, .. } | ActiveConversation::ServerDm { peer_id, channel_id, .. } => {
                 selected_dm == channel_id.to_string() || selected_dm == peer_id.to_string()
             }
             ActiveConversation::Channel(id) => selected_channel == id.to_string(),
@@ -110,7 +110,7 @@ pub(crate) fn update_sidebar_preview(
     let should_increment = increment_unread && !is_currently_viewed;
 
     match conversation {
-        ActiveConversation::Dm { peer_id, .. } => {
+        ActiveConversation::MailboxDm { peer_id, .. } | ActiveConversation::ServerDm { peer_id, .. } => {
             let peer_id_str = peer_id.to_string();
             let model = window.get_dm_conversations();
             let mut others = Vec::new();

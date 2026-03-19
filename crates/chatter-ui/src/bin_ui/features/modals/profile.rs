@@ -121,11 +121,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Add friend
     let weak_window = window.as_weak();
-    let user_service_add = user_service.clone();
+    let ui_ctx_add = ui_ctx.clone();
 
     window.on_profile_add_friend(move || {
         let weak = weak_window.clone();
-        let user_service = user_service_add.clone();
+        let ui_ctx = ui_ctx_add.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
         let profile_user_id = match profile_user_id {
@@ -159,13 +159,13 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                user_service.send_friend_request(&friend_id, None),
+                ui_ctx.send_friend_request(&friend_id, None),
             ).await {
                 Ok(Ok(_)) => {
                     tracing::info!("Friend request sent to {}", friend_id);
 
                     // Refresh sent requests list via UserService
-                    match user_service.list_friend_requests(FriendRequestFilter::Sent, 50, 0).await {
+                    match ui_ctx.users().list_friend_requests(FriendRequestFilter::Sent, 50, 0).await {
                         Ok(friendships) => {
                             // We need to get the full profile info for each friend
                             // For now, just use friend_id as display info
@@ -224,11 +224,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Remove friend
     let weak_window = window.as_weak();
-    let user_service_remove = user_service.clone();
+    let ui_ctx_remove = ui_ctx.clone();
 
     window.on_profile_remove_friend(move || {
         let weak = weak_window.clone();
-        let user_service = user_service_remove.clone();
+        let ui_ctx = ui_ctx_remove.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
         let profile_user_id = match profile_user_id {
@@ -262,7 +262,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                user_service.remove_friend(&friend_id),
+                ui_ctx.remove_friend(&friend_id),
             ).await {
                 Ok(Ok(())) => {
                     let _ = slint::invoke_from_event_loop(move || {
@@ -295,11 +295,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Block user
     let weak_window = window.as_weak();
-    let user_service_block = user_service.clone();
+    let ui_ctx_block = ui_ctx.clone();
 
     window.on_profile_block_user(move || {
         let weak = weak_window.clone();
-        let user_service = user_service_block.clone();
+        let ui_ctx = ui_ctx_block.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
         let profile_user_id = match profile_user_id {
@@ -333,7 +333,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                user_service.block_user(&user_id),
+                ui_ctx.block_user(&user_id),
             ).await {
                 Ok(Ok(())) => {
                     let _ = slint::invoke_from_event_loop(move || {
@@ -367,11 +367,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Unblock user
     let weak_window = window.as_weak();
-    let user_service_unblock = user_service.clone();
+    let ui_ctx_unblock = ui_ctx.clone();
 
     window.on_profile_unblock_user(move || {
         let weak = weak_window.clone();
-        let user_service = user_service_unblock.clone();
+        let ui_ctx = ui_ctx_unblock.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
         let profile_user_id = match profile_user_id {
@@ -405,7 +405,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                user_service.unblock_user(&user_id),
+                ui_ctx.unblock_user(&user_id),
             ).await {
                 Ok(Ok(())) => {
                     let _ = slint::invoke_from_event_loop(move || {

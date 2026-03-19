@@ -18,11 +18,11 @@ use crate::{DMListItemData, FriendRequestData, MainWindow};
 /// The conversation_id is passed as user-id field in the FriendRequestData struct.
 pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_dm_service = ui_ctx.anon_dms().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_friends_accept_private_request(move |conversation_id: SharedString| {
         let weak = weak_window.clone();
-        let anon_dm_service = anon_dm_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let conv_id_str = conversation_id.to_string();
 
         tokio::spawn(async move {
@@ -49,7 +49,7 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
             };
 
             // Accept the request
-            match anon_dm_service.accept_request(conv_id).await {
+            match ui_ctx.accept_anon_dm(&conv_id).await {
                 Ok(dm) => {
                     let peer_id = dm.peer_id;
                     // Use stored display name, not user_service (strangers aren't in the database)
@@ -64,7 +64,7 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     );
 
                     // Refresh private requests and add to DM sidebar
-                    refresh_private_requests(weak.clone(), anon_dm_service.clone()).await;
+                    refresh_private_requests(weak.clone(), ui_ctx.anon_dms().clone()).await;
 
                     // Add to DM sidebar
                     add_anon_dm_to_sidebar(weak.clone(), &dm, &peer_name);
@@ -91,11 +91,11 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
 /// Wire callback to decline an anonymous DM request.
 pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_dm_service = ui_ctx.anon_dms().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_friends_decline_private_request(move |conversation_id: SharedString| {
         let weak = weak_window.clone();
-        let anon_dm_service = anon_dm_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let conv_id_str = conversation_id.to_string();
 
         tokio::spawn(async move {
@@ -122,12 +122,12 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
             };
 
             // Decline the request
-            match anon_dm_service.decline_request(&conv_id) {
+            match ui_ctx.decline_anon_dm(&conv_id) {
                 Ok(_) => {
                     tracing::info!("Declined private message request {}", conv_id_str);
 
                     // Refresh private requests list
-                    refresh_private_requests(weak.clone(), anon_dm_service.clone()).await;
+                    refresh_private_requests(weak.clone(), ui_ctx.anon_dms().clone()).await;
 
                     // Remove from DM sidebar
                     let channel_id = format!("anon_dm:{}", conv_id_str);

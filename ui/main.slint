@@ -11,7 +11,8 @@ export component MainWindow inherits Window {
     icon: @image-url("../assets/icon-256.png");
     min-width: 800px;
     min-height: 600px;
-    default-font-family: "Inter, Roboto, Noto Sans, Ubuntu, Cantarell, sans-serif";
+    default-font-family: "Fira Code, monospace";
+    default-font-size: 14px;
 
     // Expose App properties through MainWindow for Rust binding
     // ========== View routing ==========
@@ -414,6 +415,7 @@ export component MainWindow inherits Window {
     // ========== Chat callbacks ==========
     callback search-clicked <=> app.search-clicked;
     callback chat-settings-clicked <=> app.chat-settings-clicked;
+    callback invite-member <=> app.invite-member;
     callback message-clicked <=> app.message-clicked;
     callback reply-clicked <=> app.reply-clicked;
     callback react-clicked <=> app.react-clicked;

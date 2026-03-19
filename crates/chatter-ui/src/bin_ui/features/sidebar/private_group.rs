@@ -193,6 +193,7 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
 }
 
 pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_ctx = ui_ctx.clone();
     let anon_group_service = ui_ctx.anon_groups().clone();
     let user_service = ui_ctx.users().clone();
     let attachment_service = ui_ctx.attachments().clone();
@@ -204,6 +205,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
     window.on_private_group_selected(move |group_id: SharedString| {
         let group_id_str = group_id.to_string();
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx.clone();
         let anon_group_service = anon_group_service.clone();
         let user_service = user_service.clone();
         let attachment_service = attachment_service.clone();
@@ -245,7 +247,11 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
 
             // Mark messages as read when opening the group
-            if let Err(e) = anon_group_service.mark_as_read(&group_id) {
+            let handle = chatter_core::services::conversation::ConversationHandle::new(
+                chatter_core::state::ActiveConversation::AnonGroup(group_id),
+                ui_ctx.clone(),
+            );
+            if let Err(e) = handle.mark_as_read().await {
                 tracing::warn!(error = %e, "Failed to mark group messages as read");
             }
 

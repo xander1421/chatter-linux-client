@@ -83,6 +83,14 @@ impl ConversationHandle {
                 self.client.anon_dms()
                     .send_reaction(id, emoji, target_author, target_sent_timestamp, remove)
                     .await?;
+                // Persist own reaction
+                if let Some(user_id) = self.client.auth_state().get().current_user_id {
+                    if remove {
+                        let _ = self.client.anon_dms().remove_reaction(id, target_sent_timestamp, &user_id, emoji);
+                    } else {
+                        let _ = self.client.anon_dms().add_reaction(id, target_sent_timestamp, &user_id, emoji);
+                    }
+                }
                 Ok(())
             }
             ActiveConversation::AnonGroup(id) => {
@@ -95,13 +103,25 @@ impl ConversationHandle {
                 }
                 Ok(())
             }
-            ActiveConversation::Dm { peer_id, .. } => {
+            ActiveConversation::MailboxDm { peer_id, .. } => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_reaction_content(
                     emoji, remove, &author_aci, target_sent_timestamp,
                 );
                 self.send_dm_content(content, peer_id).await?;
+                // Persist own reaction to DB
+                let _ = self.client.messages().update_reaction(&msg.id, emoji, !remove);
+                Ok(())
+            }
+            ActiveConversation::ServerDm { channel_id, .. } => {
+                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
+                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
+                let content = crate::services::build_reaction_content_with_channel(
+                    emoji, remove, &author_aci, target_sent_timestamp,
+                    Some(&channel_id.to_string()),
+                );
+                self.send_channel_content(content, channel_id).await?;
                 // Persist own reaction to DB
                 let _ = self.client.messages().update_reaction(&msg.id, emoji, !remove);
                 Ok(())
@@ -133,9 +153,15 @@ impl ConversationHandle {
                 self.client.anon_groups().send_typing_indicator(id, started).await?;
                 Ok(())
             }
-            ActiveConversation::Dm { peer_id, .. } => {
+            ActiveConversation::MailboxDm { peer_id, .. } => {
                 let content = crate::services::build_typing_content(started);
                 self.send_dm_content(content, peer_id).await
+            }
+            ActiveConversation::ServerDm { channel_id, .. } => {
+                let content = crate::services::build_typing_content_with_channel(
+                    started, Some(&channel_id.to_string()),
+                );
+                self.send_channel_content(content, channel_id).await
             }
             ActiveConversation::Channel(channel_id) => {
                 let content = crate::services::build_typing_content_with_channel(
@@ -170,13 +196,24 @@ impl ConversationHandle {
                 let _ = self.client.anon_groups().set_message_pinned(id, target_sent_timestamp, new_pinned);
                 Ok(())
             }
-            ActiveConversation::Dm { peer_id, .. } => {
+            ActiveConversation::MailboxDm { peer_id, .. } => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_pin_content(
                     &author_aci, target_sent_timestamp, unpin,
                 );
                 self.send_dm_content(content, peer_id).await?;
+                let _ = self.client.messages().set_message_pinned(&msg.id, new_pinned);
+                Ok(())
+            }
+            ActiveConversation::ServerDm { channel_id, .. } => {
+                let msg = self.lookup_message(target_author, target_sent_timestamp)?;
+                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
+                let content = crate::services::build_pin_content_with_channel(
+                    &author_aci, target_sent_timestamp, unpin,
+                    Some(&channel_id.to_string()),
+                );
+                self.send_channel_content(content, channel_id).await?;
                 let _ = self.client.messages().set_message_pinned(&msg.id, new_pinned);
                 Ok(())
             }
@@ -216,12 +253,20 @@ impl ConversationHandle {
                     .await?;
                 Ok(())
             }
-            ActiveConversation::Dm { peer_id, .. } => {
+            ActiveConversation::MailboxDm { peer_id, .. } => {
                 let content = crate::services::gateway::builders::build_edit_content(
                     target_sent_timestamp, new_text,
                 );
                 self.send_dm_content(content, peer_id).await?;
                 // Persist edit locally
+                self.persist_edit(target_sent_timestamp, new_text);
+                Ok(())
+            }
+            ActiveConversation::ServerDm { channel_id, .. } => {
+                let content = crate::services::gateway::builders::build_edit_content_with_channel(
+                    target_sent_timestamp, new_text, Some(&channel_id.to_string()),
+                );
+                self.send_channel_content(content, channel_id).await?;
                 self.persist_edit(target_sent_timestamp, new_text);
                 Ok(())
             }
@@ -260,12 +305,20 @@ impl ConversationHandle {
                 }
                 Ok(())
             }
-            ActiveConversation::Dm { peer_id, .. } => {
+            ActiveConversation::MailboxDm { peer_id, .. } => {
                 let content = crate::services::build_delete_for_everyone_content(
                     target_sent_timestamp,
                 );
                 self.send_dm_content(content, peer_id).await?;
                 // Persist deletion locally (sender doesn't get their own delete back)
+                self.delete_local_by_timestamp(target_sent_timestamp);
+                Ok(())
+            }
+            ActiveConversation::ServerDm { channel_id, .. } => {
+                let content = crate::services::build_delete_for_everyone_content_with_channel(
+                    target_sent_timestamp, Some(&channel_id.to_string()),
+                );
+                self.send_channel_content(content, channel_id).await?;
                 self.delete_local_by_timestamp(target_sent_timestamp);
                 Ok(())
             }
@@ -300,13 +353,23 @@ impl ConversationHandle {
                     .map(|_| ())
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
-            ActiveConversation::Dm { peer_id, .. } => {
+            ActiveConversation::MailboxDm { peer_id, .. } => {
                 let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
                 let content = crate::services::build_delete_for_me_content(
                     &peer_id.to_string(), &author_aci, target_sent_timestamp,
                 );
                 self.send_dm_content(content, peer_id).await?;
+                self.client.messages().delete_message_local(&msg.id)
+                    .map_err(ConversationError::Message)
+            }
+            ActiveConversation::ServerDm { channel_id, .. } => {
+                let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
+                let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
+                let content = crate::services::build_delete_for_me_content(
+                    &channel_id.to_string(), &author_aci, target_sent_timestamp,
+                );
+                self.send_channel_content(content, channel_id).await?;
                 self.client.messages().delete_message_local(&msg.id)
                     .map_err(ConversationError::Message)
             }
@@ -345,7 +408,7 @@ impl ConversationHandle {
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
-            ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+            ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                 let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
                 Ok(msg.as_text().map(|s| s.to_string()))
             }
@@ -374,7 +437,7 @@ impl ConversationHandle {
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
-            ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+            ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                 let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
                 Ok(msg.attachments)
             }
@@ -404,7 +467,7 @@ impl ConversationHandle {
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
-            ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+            ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                 let msg = self.lookup_message(&target_author.to_string(), target_sent_timestamp)?;
                 Ok(msg.sender_id == current_user_id)
             }
@@ -421,9 +484,15 @@ impl ConversationHandle {
         if timestamps.is_empty() { return Ok(()); }
         match &self.conversation {
             ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_) => Ok(()),
-            ActiveConversation::Dm { peer_id, .. } => {
+            ActiveConversation::MailboxDm { peer_id, .. } => {
                 let content = crate::services::gateway::build_read_receipt_content(timestamps.to_vec());
                 self.send_dm_content(content, peer_id).await
+            }
+            ActiveConversation::ServerDm { channel_id, .. } => {
+                let content = crate::services::gateway::build_read_receipt_content_with_channel(
+                    timestamps.to_vec(), Some(&channel_id.to_string()),
+                );
+                self.send_channel_content(content, channel_id).await
             }
             ActiveConversation::Channel(channel_id) => {
                 let content = crate::services::gateway::build_read_receipt_content_with_channel(
@@ -439,9 +508,15 @@ impl ConversationHandle {
         if timestamps.is_empty() { return Ok(()); }
         match &self.conversation {
             ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_) => Ok(()),
-            ActiveConversation::Dm { peer_id, .. } => {
+            ActiveConversation::MailboxDm { peer_id, .. } => {
                 let content = crate::services::gateway::build_delivery_receipt_content(timestamps.to_vec());
                 self.send_dm_content(content, peer_id).await
+            }
+            ActiveConversation::ServerDm { channel_id, .. } => {
+                let content = crate::services::gateway::build_delivery_receipt_content_with_channel(
+                    timestamps.to_vec(), Some(&channel_id.to_string()),
+                );
+                self.send_channel_content(content, channel_id).await
             }
             ActiveConversation::Channel(channel_id) => {
                 let content = crate::services::gateway::build_delivery_receipt_content_with_channel(
@@ -477,8 +552,14 @@ impl ConversationHandle {
                 }
                 Ok(())
             }
-            ActiveConversation::AnonGroup(_) => Ok(()),
-            ActiveConversation::Dm { channel_id, .. } => {
+            ActiveConversation::AnonGroup(id) => {
+                if let Err(e) = self.client.anon_groups().mark_as_read(id) {
+                    tracing::warn!("Failed to mark anon group as read: {}", e);
+                }
+                Ok(())
+            }
+            ActiveConversation::MailboxDm { channel_id, .. }
+            | ActiveConversation::ServerDm { channel_id, .. } => {
                 let my_user_id = self.client.auth_state().get().current_user_id;
                 if let Ok(messages) = self.client.messages().get_messages_local(channel_id, None, 50) {
                     let timestamps: Vec<u64> = messages.iter()

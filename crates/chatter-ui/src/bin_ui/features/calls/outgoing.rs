@@ -155,7 +155,7 @@ async fn start_call_impl(
     call_service: CallWorkerHandle,
     session_service: Arc<chatter_core::services::session_service::SessionService>,
     call_type: CallType,
-    message_service: Arc<chatter_core::services::message::MessageService>,
+    _message_service: Arc<chatter_core::services::message::MessageService>,
     _mailbox_manager: Arc<chatter_core::services::mailbox_manager::MailboxManager>,
     channel_service: Arc<chatter_core::services::channel::ChannelService>,
     anon_dm_service: Arc<chatter_core::services::anon_dm::AnonDmService>,
@@ -207,7 +207,7 @@ async fn start_call_impl(
         .map(|w| w.get_channel_name().to_string())
         .unwrap_or_default();
 
-    let is_dm = matches!(conversation, ActiveConversation::Dm { .. } | ActiveConversation::AnonDm(_));
+    let is_dm = matches!(conversation, ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::AnonDm(_));
 
     let channel_id = match conversation.channel_id() {
         Some(id) => id,
@@ -268,8 +268,12 @@ async fn start_call_impl(
                 Ok(None) => {
                     tracing::info!("No call room tokens available - requesting more");
                     
-                    // Request 5 call room tokens
-                    match anon_dm_service.request_call_room_tokens(5).await {
+                    // Request 5 call room tokens (gRPC - run on tokio)
+                    let token_request = {
+                        let svc = anon_dm_service.clone();
+                        tokio::spawn(async move { svc.request_call_room_tokens(5).await }).await.unwrap()
+                    };
+                    match token_request {
                         Ok(count) => {
                             tracing::info!("Successfully requested {} call room tokens", count);
                             
@@ -282,10 +286,8 @@ async fn start_call_impl(
                                     // Create failed call history entry
                                     let channel_id_str = format!("anon-dm-{}", anon_dm_id);
                                     if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
-                                        use crate::bin_ui::features::calls::call_history::create_call_history_message;
-                                        let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                                        create_call_history_message(
-                                            message_service.clone(),
+                                                                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
+                                        ui_ctx.store_call_history(
                                             &channel_id,
                                             "no-tokens-available",
                                             &anonymous_user_id,
@@ -305,10 +307,8 @@ async fn start_call_impl(
                             // Create failed call history entry
                             let channel_id_str = format!("anon-dm-{}", anon_dm_id);
                             if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
-                                use crate::bin_ui::features::calls::call_history::create_call_history_message;
-                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                                create_call_history_message(
-                                    message_service.clone(),
+                                                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
+                                ui_ctx.store_call_history(
                                     &channel_id,
                                     "token-request-failed",
                                     &anonymous_user_id,
@@ -328,10 +328,8 @@ async fn start_call_impl(
                     // Create failed call history entry
                     let channel_id_str = format!("anon-dm-{}", anon_dm_id);
                     if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
-                        use crate::bin_ui::features::calls::call_history::create_call_history_message;
-                        let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                        create_call_history_message(
-                            message_service.clone(),
+                                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
+                        ui_ctx.store_call_history(
                             &channel_id,
                             "get-token-failed",
                             &anonymous_user_id,
@@ -345,13 +343,22 @@ async fn start_call_impl(
                 }
             };
             
-            // Send anonymous call offer
-            match anon_dm_service.send_call_offer(
-                &anon_dm_id,
-                &token,
-                is_video_call,
-                Some(&display_name),
-            ).await {
+            // Send anonymous call offer (gRPC - run on tokio)
+            let send_result = {
+                let svc = anon_dm_service.clone();
+                let anon_dm_id = anon_dm_id;
+                let token = token.clone();
+                let display_name = display_name.clone();
+                tokio::spawn(async move {
+                    svc.send_call_offer(
+                        &anon_dm_id,
+                        &token,
+                        is_video_call,
+                        Some(&display_name),
+                    ).await
+                }).await.unwrap()
+            };
+            match send_result {
                 Ok(offer_result) => {
                     tracing::info!(
                         room_name = %offer_result.room_name,
@@ -421,10 +428,8 @@ async fn start_call_impl(
                     // Create failed call history entry
                     let channel_id_str = format!("anon-dm-{}", anon_dm_id);
                     if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
-                        use crate::bin_ui::features::calls::call_history::create_call_history_message;
-                        let anonymous_user_id = chatter_core::domain::ids::UserId::new();
-                        create_call_history_message(
-                            message_service.clone(),
+                                                let anonymous_user_id = chatter_core::domain::ids::UserId::new();
+                        ui_ctx.store_call_history(
                             &channel_id,
                             "failed-call",
                             &anonymous_user_id,
@@ -464,12 +469,18 @@ async fn start_call_impl(
                 Ok(call) => {
                     tracing::info!("Created call on server: {:?}, waiting for peer's ephemeral key", call.id);
 
-                    // Send offer via CallSignalingService
-                    let signaling = ui_ctx.call_signaling();
-                    let send_result = signaling.send_call_offer(
-                        &peer_id, &call.id.to_string(), ephemeral_public,
-                        call_type_str, &channel_id.to_string(),
-                    ).await;
+                    // Send offer via CallSignalingService (gRPC - run on tokio)
+                    let send_result = {
+                        let ctx = ui_ctx.clone();
+                        let peer = peer_id;
+                        let cid = call.id.to_string();
+                        let eph = ephemeral_public;
+                        let ctype = call_type_str.to_string();
+                        let chid = channel_id.to_string();
+                        tokio::spawn(async move {
+                            ctx.call_signaling().send_call_offer(&peer, &cid, eph, &ctype, &chid).await
+                        }).await.unwrap()
+                    };
 
                     if let Err(e) = send_result {
                         tracing::error!(
@@ -575,7 +586,8 @@ async fn start_call_impl(
                 let call_id_str = call.id.to_string();
                 let signaling = ui_ctx.call_signaling();
 
-                let _ = slint::spawn_local(async move {
+                // gRPC - run on tokio (fire-and-forget, no UI update needed)
+                tokio::spawn(async move {
                     match signaling.distribute_group_call_key(
                         &channel_id_clone, &call_id_str, group_key, 0,
                     ).await {
@@ -668,7 +680,12 @@ async fn start_private_group_call(
         Ok(Some(token)) => token,
         Ok(None) => {
             tracing::info!("No call room tokens available - requesting more");
-            match anon_group_service.request_call_room_tokens(5).await {
+            // gRPC - run on tokio
+            let token_request = {
+                let svc = anon_group_service.clone();
+                tokio::spawn(async move { svc.request_call_room_tokens(5).await }).await.unwrap()
+            };
+            match token_request {
                 Ok(count) => {
                     tracing::info!("Successfully requested {} call room tokens", count);
                     match anon_group_service.get_available_call_room_token() {
@@ -691,13 +708,17 @@ async fn start_private_group_call(
         }
     };
 
-    // Send call offer to all group members
-    match anon_group_service.send_call_offer(
-        &anon_group_id,
-        &token,
-        is_video_call,
-        Some(display_name),
-    ).await {
+    // Send call offer to all group members (gRPC - run on tokio)
+    let offer_send_result = {
+        let svc = anon_group_service.clone();
+        let gid = anon_group_id;
+        let tok = token.clone();
+        let dn = display_name.to_string();
+        tokio::spawn(async move {
+            svc.send_call_offer(&gid, &tok, is_video_call, Some(&dn)).await
+        }).await.unwrap()
+    };
+    match offer_send_result {
         Ok(offer_result) => {
             tracing::info!(
                 room_name = %offer_result.room_name,

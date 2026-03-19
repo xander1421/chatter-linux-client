@@ -108,7 +108,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // For DM/Channel, generate preview from stored message + attachments
             let preview_text = match handle.conversation() {
-                ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+                ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                     if let Ok(sender_id) = sender_id_str.parse::<chatter_core::domain::UserId>() {
                         if let Ok(Some(message)) = ui_ctx.messages().get_by_sender_timestamp(&sender_id, target_sent_timestamp) {
                             let attachments = resolve_attachments(&message, &ui_ctx.attachments());

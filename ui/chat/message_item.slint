@@ -35,6 +35,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> is-deleted: false;
     in property <bool> is-system: false;
     in property <bool> is-ai: false;
+    in property <bool> is-pinned: false;
     in property <bool> show-sender: true;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
     in property <string> delivery-status: "";  // "sent", "delivered", "read" for own messages
@@ -800,6 +801,14 @@ export component MessageItem inherits Rectangle {
                             // Own messages: timestamp+status
                             if root.is-own: HorizontalLayout {
                                 spacing: 4px;
+                                alignment: end;
+
+                                if root.is-pinned: Image {
+                                    source: Icons.pin;
+                                    width: 12px;
+                                    height: 12px;
+                                    colorize: Colors.primary;
+                                }
 
                                 Text {
                                     text: root.timestamp;
@@ -825,6 +834,13 @@ export component MessageItem inherits Rectangle {
                             // Others' messages: timestamp
                             if !root.is-own: HorizontalLayout {
                                 spacing: 4px;
+
+                                if root.is-pinned: Image {
+                                    source: Icons.pin;
+                                    width: 12px;
+                                    height: 12px;
+                                    colorize: Colors.primary;
+                                }
 
                                 if root.is-edited: Text {
                                     text: "edited";

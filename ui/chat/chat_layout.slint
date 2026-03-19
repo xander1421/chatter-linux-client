@@ -74,6 +74,7 @@ export component ChatLayout inherits Rectangle {
     // Header callbacks
     callback search-clicked();
     callback settings-clicked();
+    callback invite-clicked();
     callback voice-call-clicked();
     callback video-call-clicked();
 
@@ -139,6 +140,9 @@ export component ChatLayout inherits Rectangle {
             }
             settings-clicked => {
                 root.settings-clicked();
+            }
+            invite-clicked => {
+                root.invite-clicked();
             }
             pin-clicked => {
                 root.pinned-show-clicked();

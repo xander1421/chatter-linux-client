@@ -37,6 +37,9 @@ impl AnonGroupService {
         // Send to all members
         self.send_message(group_id, inner_content).await?;
 
+        // Mark as "sent" for delivery status indicator
+        let _ = self.anon_group_repo.update_delivery_status(&message_id, "sent");
+
         Ok((message_id, sent_at))
     }
 
@@ -79,12 +82,8 @@ impl AnonGroupService {
         // Send to all members
         self.send_message(group_id, inner_content).await?;
 
-        tracing::info!(
-            group_id = %group_id,
-            text_len = text.len(),
-            attachment_count = attachment_ids.len(),
-            "Sent group message with attachments"
-        );
+        // Mark as "sent" for delivery status indicator
+        let _ = self.anon_group_repo.update_delivery_status(&message_id, "sent");
 
         Ok((message_id, sent_at))
     }
@@ -158,11 +157,8 @@ impl AnonGroupService {
 
         self.send_message(group_id, inner_content).await?;
 
-        tracing::info!(
-            group_id = %group_id,
-            reply_to = reply_to_timestamp,
-            "Sent reply in group"
-        );
+        // Mark as "sent" for delivery status indicator
+        let _ = self.anon_group_repo.update_delivery_status(&message_id, "sent");
 
         Ok((message_id, sent_at))
     }

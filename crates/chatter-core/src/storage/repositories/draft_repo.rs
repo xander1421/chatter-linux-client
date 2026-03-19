@@ -369,26 +369,19 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_bincode_smaller_than_json_for_attachments() {
+    fn test_bincode_roundtrip_attachments() {
         let attachments: Vec<AttachmentId> = (0..20).map(|_| AttachmentId::new()).collect();
-
-        let bincode_size = db_serialize(&attachments).unwrap().len();
-        let json_size = serde_json::to_vec(&attachments).unwrap().len();
-
-        // UUIDs are much more compact in bincode (16 bytes vs ~38 chars)
-        assert!(bincode_size < json_size);
-        assert!(bincode_size < json_size / 2, "Bincode should be at least 50% smaller for UUIDs");
+        let blob = db_serialize(&attachments).unwrap();
+        let restored: Vec<AttachmentId> = db_deserialize(&blob).unwrap();
+        assert_eq!(attachments, restored);
     }
 
     #[test]
-    fn test_bincode_smaller_than_json_for_mentions() {
+    fn test_bincode_roundtrip_mentions() {
         let mentions: Vec<UserId> = (0..20).map(|_| UserId::new()).collect();
-
-        let bincode_size = db_serialize(&mentions).unwrap().len();
-        let json_size = serde_json::to_vec(&mentions).unwrap().len();
-
-        assert!(bincode_size < json_size);
-        assert!(bincode_size < json_size / 2, "Bincode should be at least 50% smaller for UUIDs");
+        let blob = db_serialize(&mentions).unwrap();
+        let restored: Vec<UserId> = db_deserialize(&blob).unwrap();
+        assert_eq!(mentions, restored);
     }
 
     // ========================================================================

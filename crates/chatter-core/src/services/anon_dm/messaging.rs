@@ -153,6 +153,11 @@ impl AnonDmService {
         // Send to peer
         self.send_message(conversation_id, inner_content).await?;
 
+        // Mark as "sent" for delivery status indicator
+        let _ = self.anon_dm_repo.update_delivery_status_by_timestamps(
+            conversation_id, &[sent_at], "sent",
+        );
+
         Ok((message_id, sent_at))
     }
 

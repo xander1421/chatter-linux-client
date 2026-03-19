@@ -18,6 +18,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_search_callbacks(window, ui_ctx);
     wire_pinned_navigation(window, ui_ctx);
     wire_chat_settings_clicked(window, ui_ctx);
+    wire_invite_member(window, ui_ctx);
     wire_load_more(window, ui_ctx);
     wire_scroll_to_bottom(window);
 }
@@ -466,7 +467,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
         // Regular channel settings
         let channel_id = match conversation {
-            ActiveConversation::Channel(id) | ActiveConversation::Dm { channel_id: id, .. } => id,
+            ActiveConversation::Channel(id) | ActiveConversation::MailboxDm { channel_id: id, .. } | ActiveConversation::ServerDm { channel_id: id, .. } => id,
             _ => {
                 tracing::warn!("Cannot open channel settings: no active channel");
                 return;
@@ -479,6 +480,36 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             user_service.clone(),
             channel_id,
         );
+    });
+}
+
+fn wire_invite_member(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let chat_state = ui_ctx.chat_state().clone();
+
+    window.on_invite_member(move || {
+        let conversation = chat_state.active_conversation();
+        let weak = weak_window.clone();
+
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(w) = weak.upgrade() else { return };
+
+            match conversation {
+                ActiveConversation::AnonGroup(group_id) => {
+                    // Open private group invite modal
+                    w.set_invite_private_group_id(group_id.to_string().into());
+                    w.set_active_modal("invite-private-group".into());
+                }
+                ActiveConversation::Channel(channel_id) => {
+                    // Open channel invite modal
+                    w.set_invite_member_channel_id(channel_id.to_string().into());
+                    w.set_active_modal("invite-member".into());
+                }
+                _ => {
+                    tracing::debug!("Invite not available for this conversation type");
+                }
+            }
+        });
     });
 }
 

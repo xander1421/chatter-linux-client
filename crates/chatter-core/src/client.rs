@@ -521,12 +521,54 @@ impl ChatterClient {
         Ok(())
     }
 
+    /// Update a channel's name and/or description.
+    pub async fn update_channel(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<Channel, crate::services::channel::ChannelError> {
+        self.channels().update_channel(channel_id, name, description, None, None).await
+    }
+
+    /// Archive or unarchive a channel.
+    pub async fn archive_channel(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        archive: bool,
+    ) -> Result<Channel, crate::services::channel::ChannelError> {
+        if archive {
+            self.channels().archive_channel(channel_id).await
+        } else {
+            self.channels().unarchive_channel(channel_id).await
+        }
+    }
+
+    /// Leave a channel.
+    pub async fn leave_channel(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        self.channels().leave_channel(channel_id).await
+    }
+
+    /// Search public channels.
+    pub async fn search_channels(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
+        self.channels().search_channels(query, limit, 0, vec![ChannelType::Public]).await
+    }
+
+    // ── Conversation listing ────────────────────────────────────────
+
     /// List all channels the user is a member of.
     pub fn list_channels(&self) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
         self.channels().get_channels_for_user()
     }
 
-    /// List all DM channels. Returns `(channel, peer_display_name)` pairs.
+    /// List all DM channels.
     pub fn list_dms(&self) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
         let all = self.channels().get_channels_for_user()?;
         Ok(all.into_iter().filter(|c| c.channel_type == ChannelType::DirectMessage).collect())
@@ -542,6 +584,141 @@ impl ChatterClient {
         self.anon_groups().list_groups()
     }
 
+    /// List pending anon DM message requests (incoming).
+    pub fn list_anon_dm_requests(&self) -> Result<Vec<crate::domain::anon_dm::AnonDm>, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().list_message_requests()
+    }
+
+    // ── Friend / social operations ──────────────────────────────────
+
+    /// Send a friend request.
+    pub async fn send_friend_request(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        message: Option<&str>,
+    ) -> Result<crate::domain::user::Friendship, crate::services::user::UserError> {
+        self.users().send_friend_request(user_id, message).await
+    }
+
+    /// Accept or decline a friend request.
+    pub async fn respond_friend_request(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        accept: bool,
+    ) -> Result<crate::services::user::FriendResponseResult, crate::services::user::UserError> {
+        self.users().respond_friend_request(user_id, accept).await
+    }
+
+    /// Remove a friend.
+    pub async fn remove_friend(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::user::UserError> {
+        self.users().remove_friend(user_id).await
+    }
+
+    /// Block a user.
+    pub async fn block_user(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::user::UserError> {
+        self.users().block_user(user_id).await
+    }
+
+    /// Unblock a user.
+    pub async fn unblock_user(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), crate::services::user::UserError> {
+        self.users().unblock_user(user_id).await
+    }
+
+    /// List friends.
+    pub async fn list_friends(&self) -> Result<Vec<crate::domain::user::Friendship>, crate::services::user::UserError> {
+        self.users().list_friends(100, 0).await
+    }
+
+    // ── Anon DM management ──────────────────────────────────────────
+
+    /// Start an anonymous DM conversation with a user.
+    pub async fn start_anon_dm(
+        &self,
+        peer_id: crate::domain::ids::UserId,
+        message: Option<&str>,
+    ) -> Result<crate::domain::anon_dm::AnonDm, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().start_conversation(peer_id, message).await
+    }
+
+    /// Accept an incoming anon DM request.
+    pub async fn accept_anon_dm(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Result<crate::domain::anon_dm::AnonDm, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().accept_request(*conversation_id).await
+    }
+
+    /// Decline an incoming anon DM request.
+    pub fn decline_anon_dm(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Result<(), crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().decline_request(conversation_id)
+    }
+
+    // ── Anon group management ───────────────────────────────────────
+
+    /// Create an anonymous group.
+    pub async fn create_anon_group(
+        &self,
+        name: String,
+        members: Vec<(crate::domain::ids::UserId, crate::domain::anon_group::AnonGroupRole)>,
+    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().create_group_with_roles(name, members).await
+    }
+
+    /// Invite members to an anonymous group.
+    pub async fn invite_to_anon_group(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        members: Vec<(crate::domain::ids::UserId, crate::domain::anon_group::AnonGroupRole)>,
+    ) -> Result<(), crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().invite_members(group_id, members).await
+    }
+
+    // ── Profile ─────────────────────────────────────────────────────
+
+    /// Update the current user's profile.
+    pub async fn update_profile(
+        &self,
+        display_name: Option<&str>,
+        avatar_url: Option<&str>,
+        status: Option<&crate::domain::user::StatusMessage>,
+    ) -> Result<crate::domain::Profile, crate::services::user::UserError> {
+        self.users().update_user_profile(display_name, avatar_url, status).await
+    }
+
+    /// Change password.
+    pub async fn change_password(
+        &self,
+        current: &str,
+        new: &str,
+    ) -> Result<(), crate::services::auth_service::AuthError> {
+        self.auth().change_password(current, new).await
+    }
+
+    /// Get a user's display name.
+    pub fn get_display_name(&self, user_id: &crate::domain::ids::UserId) -> String {
+        self.users().get_display_name(user_id)
+    }
+
+    /// Get a user's profile.
+    pub async fn get_user_profile(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Result<crate::domain::Profile, crate::services::user::UserError> {
+        self.users().get_user_profile(user_id).await
+    }
+
     // ── Message history ─────────────────────────────────────────────
 
     /// Get recent messages for any conversation type.
@@ -553,7 +730,7 @@ impl ChatterClient {
         limit: u32,
     ) -> Result<Vec<Message>, crate::services::message::MessageError> {
         match conversation {
-            ActiveConversation::Channel(id) | ActiveConversation::Dm { channel_id: id, .. } => {
+            ActiveConversation::Channel(id) | ActiveConversation::MailboxDm { channel_id: id, .. } | ActiveConversation::ServerDm { channel_id: id, .. } => {
                 self.messages().get_messages_local(id, None, limit)
             }
             // Anon paths use their own message types — return empty for now.
@@ -617,6 +794,92 @@ impl ChatterClient {
             if let Err(e) = self.messages().distribute_skdm(channel_id, &skdm).await {
                 tracing::error!(channel_id = %channel_id, error = %e, "Failed to distribute SKDM");
             }
+        }
+    }
+
+    // ── Call history ──────────────────────────────────────────────────
+
+    /// Store a call history message for a standard DM/channel call.
+    pub fn store_call_history(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        call_id: &str,
+        initiator_id: &crate::domain::ids::UserId,
+        initiator_name: &str,
+        _is_outgoing: bool,
+        duration_secs: i64,
+        is_missed: bool,
+    ) {
+        use crate::domain::message::*;
+
+        let call_type = if is_missed { CallMessageType::Missed } else { CallMessageType::Ended };
+        let duration = if duration_secs > 0 {
+            Some(chrono::Duration::seconds(duration_secs))
+        } else {
+            None
+        };
+
+        let call_msg = CallMessage {
+            call_id: call_id.to_string(),
+            call_type,
+            initiator_id: *initiator_id,
+            initiator_name: initiator_name.to_string(),
+            started_at: None,
+            ended_at: Some(chrono::Utc::now()),
+            duration,
+            participant_count: 2,
+        };
+
+        let message = Message {
+            id: crate::domain::ids::MessageId::new(),
+            channel_id: *channel_id,
+            sender_id: Some(*initiator_id),
+            content: MessageContent::Call(call_msg),
+            thread_id: None,
+            reply_to: None,
+            attachments: vec![],
+            is_pinned: false,
+            is_edited: false,
+            is_deleted: false,
+            sent_at: crate::util::time::TimestampNanos::now().as_u64(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            edited_at: None,
+            reaction_counts: vec![],
+            current_user_reactions: vec![],
+            mentioned_integrations: vec![],
+            targets_ai_bot: false,
+            delivery_status: String::new(),
+        };
+
+        if let Err(e) = self.messages().store_message_local(&message) {
+            tracing::error!(error = %e, "Failed to save call history");
+        }
+    }
+
+    /// Store a call history entry in an anon DM conversation.
+    pub fn store_anon_call_history(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        is_outgoing: bool,
+        duration_seconds: i64,
+    ) {
+        let duration_str = if duration_seconds > 0 {
+            format!("{}:{:02}", duration_seconds / 60, duration_seconds % 60)
+        } else {
+            "0:00".to_string()
+        };
+        let label = if is_outgoing { "Outgoing call" } else { "Incoming call" };
+        let text = format!("\u{1F4DE} {} \u{00B7} {}", label, duration_str);
+        let content_json = format!(r#"{{"text":"{}"}}"#, text);
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        let user_id = self.auth_state().get().current_user_id
+            .unwrap_or_else(crate::domain::ids::UserId::new);
+
+        if let Err(e) = self.anon_dms().store_message(
+            conversation_id, &user_id, 1, &content_json, sent_at,
+        ) {
+            tracing::error!(error = %e, "Failed to store anon call history");
         }
     }
 
@@ -752,9 +1015,15 @@ fn build_intent(
         ActiveConversation::AnonGroup(id) => Ok(OutgoingIntent::AnonGroup {
             group_id: id, text: text.to_string(), attachment_pointers, quote,
         }),
-        ActiveConversation::Dm { channel_id, peer_id } => Ok(OutgoingIntent::ChannelDm {
+        ActiveConversation::MailboxDm { channel_id, peer_id } => Ok(OutgoingIntent::ChannelDm {
             peer_id, dm_channel_id: channel_id, text: text.to_string(),
             attachment_pointers, file_paths: vec![], quote,
+        }),
+        ActiveConversation::ServerDm { channel_id, .. } => Ok(OutgoingIntent::Channel {
+            channel_id, text: text.to_string(), attachment_pointers,
+            file_paths: vec![], thread_id: options.thread_id,
+            mentioned_integrations: options.mentioned_integrations.clone(),
+            targets_ai_bot: options.targets_ai_bot,
         }),
         ActiveConversation::Channel(id) => {
             let is_saved = channel_service.get_channel_local(&id).ok().flatten()

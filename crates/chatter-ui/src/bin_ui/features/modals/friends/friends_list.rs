@@ -76,11 +76,11 @@ pub(crate) fn get_dm_channel_from_user(window: &MainWindow, user_id: &str) -> Op
 
 pub(crate) fn wire_remove_friend(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_friends_remove_friend(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -107,7 +107,7 @@ pub(crate) fn wire_remove_friend(window: &MainWindow, ui_ctx: &Arc<ChatterClient
 
             match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                user_service.remove_friend(&friend_id),
+                ui_ctx.remove_friend(&friend_id),
             ).await {
                 Ok(Ok(_)) => {
                     tracing::info!("Removed friend {}", user_id_str);
@@ -140,11 +140,11 @@ pub(crate) fn wire_remove_friend(window: &MainWindow, ui_ctx: &Arc<ChatterClient
 
 pub(crate) fn wire_unblock_user(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_friends_unblock_user(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -171,7 +171,7 @@ pub(crate) fn wire_unblock_user(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 
             match tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                user_service.unblock_user(&blocked_user_id),
+                ui_ctx.unblock_user(&blocked_user_id),
             ).await {
                 Ok(Ok(_)) => {
                     tracing::info!("Unblocked user {}", user_id_str);

@@ -731,13 +731,22 @@ pub fn build_intent(
             attachment_pointers,
             quote,
         }),
-        ActiveConversation::Dm { channel_id, peer_id } => Ok(OutgoingIntent::ChannelDm {
+        ActiveConversation::MailboxDm { channel_id, peer_id } => Ok(OutgoingIntent::ChannelDm {
             peer_id,
             dm_channel_id: channel_id,
             text: text.to_string(),
             attachment_pointers,
             file_paths: vec![],
             quote,
+        }),
+        ActiveConversation::ServerDm { channel_id, .. } => Ok(OutgoingIntent::Channel {
+            channel_id,
+            text: text.to_string(),
+            attachment_pointers,
+            file_paths: vec![],
+            thread_id: options.thread_id,
+            mentioned_integrations: options.mentioned_integrations.clone(),
+            targets_ai_bot: options.targets_ai_bot,
         }),
         ActiveConversation::Channel(id) => {
             let is_saved = channel_service

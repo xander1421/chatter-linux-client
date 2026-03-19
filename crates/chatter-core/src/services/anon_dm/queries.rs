@@ -62,6 +62,15 @@ impl AnonDmService {
     ///
     /// This is used for context menu operations, reactions, etc. where we identify
     /// messages by (sender_id, sent_at) tuple per Signal Protocol convention.
+    /// Look up a message by conversation + timestamp (any sender).
+    pub fn get_message_by_timestamp(
+        &self,
+        conversation_id: &AnonDmId,
+        timestamp_ns: u64,
+    ) -> Result<Option<DomainAnonDmMessage>, AnonDmError> {
+        Ok(self.anon_dm_repo.get_message_by_timestamp(conversation_id, timestamp_ns)?)
+    }
+
     pub fn get_message_by_sender_timestamp(
         &self,
         conversation_id: &AnonDmId,
@@ -119,5 +128,37 @@ impl AnonDmService {
     /// List all pinned messages for a conversation.
     pub fn list_pinned(&self, conversation_id: &AnonDmId) -> Result<Vec<crate::domain::anon_dm::AnonDmMessage>, AnonDmError> {
         Ok(self.anon_dm_repo.list_pinned(conversation_id)?)
+    }
+
+    /// Add a reaction to an anon DM message in the DB.
+    pub fn add_reaction(
+        &self,
+        conversation_id: &AnonDmId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, AnonDmError> {
+        Ok(self.anon_dm_repo.add_reaction(conversation_id, sent_timestamp, user_id, emoji)?)
+    }
+
+    /// Remove a reaction from an anon DM message in the DB.
+    pub fn remove_reaction(
+        &self,
+        conversation_id: &AnonDmId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, AnonDmError> {
+        Ok(self.anon_dm_repo.remove_reaction(conversation_id, sent_timestamp, user_id, emoji)?)
+    }
+
+    /// Get all reaction counts for an anon DM conversation's messages.
+    ///
+    /// Returns a map of sent_at -> Vec<(emoji, count)>.
+    pub fn get_all_reaction_counts(
+        &self,
+        conversation_id: &AnonDmId,
+    ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonDmError> {
+        Ok(self.anon_dm_repo.get_all_reaction_counts(conversation_id)?)
     }
 }

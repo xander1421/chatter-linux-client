@@ -236,7 +236,7 @@ pub fn handle_dm_received(
         }
 
         // Always update sidebar (with unread increment for received messages)
-        let conv = chatter_core::state::ActiveConversation::Dm {
+        let conv = chatter_core::state::ActiveConversation::MailboxDm {
             channel_id: dm_channel_id,
             peer_id: peer_id_cloned,
         };

@@ -15,7 +15,6 @@ use crate::bin_ui::converters::get_initials;
 use crate::{DMListItemData, MainWindow};
 
 pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let user_service = ui_ctx.users().clone();
     let channel_service = ui_ctx.channels().clone();
 
     // Switch tab
@@ -34,12 +33,12 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Accept friend request
     let weak_window = window.as_weak();
-    let user_service_accept = user_service.clone();
+    let ui_ctx_accept = ui_ctx.clone();
     let channel_service_accept = channel_service.clone();
 
     window.on_friend_request_accept(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service_accept.clone();
+        let ui_ctx = ui_ctx_accept.clone();
         let channel_service = channel_service_accept.clone();
         let user_id_str = user_id.to_string();
 
@@ -64,7 +63,7 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            match user_service.respond_friend_request(&friend_id, true).await {
+            match ui_ctx.respond_friend_request(&friend_id, true).await {
                 Ok(result) => {
                     tracing::info!("Accepted friend request from {}", friend_id);
 
@@ -73,7 +72,7 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         add_dm_to_sidebar_on_accept(
                             weak.clone(),
                             channel_service.clone(),
-                            user_service.clone(),
+                            ui_ctx.users().clone(),
                             &channel_id,
                             &user_id_str,
                         )
@@ -100,11 +99,11 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Decline friend request
     let weak_window = window.as_weak();
-    let user_service_decline = user_service.clone();
+    let ui_ctx_decline = ui_ctx.clone();
 
     window.on_friend_request_decline(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service_decline.clone();
+        let ui_ctx = ui_ctx_decline.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -128,7 +127,7 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            match user_service.respond_friend_request(&friend_id, false).await {
+            match ui_ctx.respond_friend_request(&friend_id, false).await {
                 Ok(_) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -151,11 +150,11 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Cancel friend request
     let weak_window = window.as_weak();
-    let user_service_cancel = user_service.clone();
+    let ui_ctx_cancel = ui_ctx.clone();
 
     window.on_friend_request_cancel(move |user_id: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service_cancel.clone();
+        let ui_ctx = ui_ctx_cancel.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -179,7 +178,7 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            match user_service.remove_friend(&friend_id).await {
+            match ui_ctx.remove_friend(&friend_id).await {
                 Ok(()) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {

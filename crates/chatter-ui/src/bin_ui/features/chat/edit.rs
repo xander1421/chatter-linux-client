@@ -92,11 +92,6 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return;
         }
 
-        let is_anon = matches!(
-            handle.conversation(),
-            ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_)
-        );
-        let message_service = ui_ctx.messages().clone();
         let weak = weak_window.clone();
 
         let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
@@ -116,6 +111,10 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     // For anon conversations, update message content in the UI model
+                    let is_anon = matches!(
+                        handle.conversation(),
+                        ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_)
+                    );
                     if is_anon {
                         let current_model = w.get_messages();
                         let messages: Vec<_> = (0..current_model.row_count())

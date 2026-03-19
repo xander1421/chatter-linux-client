@@ -31,7 +31,7 @@ fn is_active(chat_state: &ChatState, source: &EventSource) -> bool {
             active.channel_id().map(|id| id == *channel_id).unwrap_or(false)
         }
         EventSource::Peer(peer_id) => {
-            matches!(active, ActiveConversation::Dm { peer_id: active_peer, .. } if active_peer == *peer_id)
+            matches!(active, ActiveConversation::MailboxDm { peer_id: active_peer, .. } | ActiveConversation::ServerDm { peer_id: active_peer, .. } if active_peer == *peer_id)
         }
     }
 }
@@ -40,7 +40,7 @@ fn is_active(chat_state: &ChatState, source: &EventSource) -> bool {
 fn typing_key(chat_state: &ChatState, source: &EventSource) -> String {
     let active = chat_state.active_conversation();
     match active {
-        ActiveConversation::Dm { peer_id, .. } => peer_id.to_string(),
+        ActiveConversation::MailboxDm { peer_id, .. } | ActiveConversation::ServerDm { peer_id, .. } => peer_id.to_string(),
         ActiveConversation::AnonDm(id) => format!("anon_dm:{}", ChannelId::from(id)),
         ActiveConversation::AnonGroup(id) => id.to_string(),
         ActiveConversation::Channel(id) => id.to_string(),

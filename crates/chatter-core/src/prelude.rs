@@ -15,7 +15,8 @@ pub use crate::domain::{
 };
 pub use crate::domain::channel::{ChannelConfig, MessagePersistence};
 pub use crate::domain::anon_dm::{AnonDm, AnonDmId};
-pub use crate::domain::anon_group::{AnonGroup, AnonGroupId};
+pub use crate::domain::anon_group::{AnonGroup, AnonGroupId, AnonGroupRole};
+pub use crate::domain::user::{Friendship, StatusMessage};
 
 // Events
 pub use crate::events::{DomainEvent, EventBus, UiEvent};

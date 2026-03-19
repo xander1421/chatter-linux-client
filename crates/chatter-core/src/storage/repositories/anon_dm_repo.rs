@@ -319,6 +319,25 @@ impl AnonDmRepository {
         Ok(())
     }
 
+    /// Update delivery_status for messages by sent_at timestamps.
+    pub fn update_delivery_status_by_timestamps(
+        &self,
+        conversation_id: &AnonDmId,
+        timestamps: &[u64],
+        status: &str,
+    ) -> Result<usize, StorageError> {
+        let conn = self.db.connection()?;
+        let mut updated = 0;
+        for &ts in timestamps {
+            let rows = conn.execute(
+                "UPDATE anon_dm_messages SET delivery_status = ?1 WHERE conversation_id = ?2 AND sent_at = ?3",
+                params![status, conversation_id.to_string(), ts as i64],
+            )?;
+            updated += rows;
+        }
+        Ok(updated)
+    }
+
     // ========================================================================
     // Mailbox CRUD
     // ========================================================================
@@ -571,6 +590,30 @@ impl AnonDmRepository {
     ///
     /// This is used for context menu operations, reactions, etc. where we identify
     /// messages by (sender_id, sent_at) tuple per Signal Protocol convention.
+    /// Look up a message by conversation + timestamp (any sender).
+    pub fn get_message_by_timestamp(
+        &self,
+        conversation_id: &AnonDmId,
+        timestamp_ns: u64,
+    ) -> Result<Option<AnonDmMessage>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned
+             FROM anon_dm_messages
+             WHERE conversation_id = ?1 AND sent_at = ?2 AND is_deleted = 0
+             LIMIT 1",
+        )?;
+        let result = stmt.query_row(
+            params![conversation_id.to_string(), timestamp_ns as i64],
+            row_to_message,
+        );
+        match result {
+            Ok(msg) => Ok(Some(msg)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::from(e)),
+        }
+    }
+
     pub fn get_message_by_sender_timestamp(
         &self,
         conversation_id: &AnonDmId,
@@ -735,6 +778,148 @@ impl AnonDmRepository {
             .query_map(params![conversation_id.to_string()], row_to_message)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(messages)
+    }
+
+    // ========================================================================
+    // Reactions
+    // ========================================================================
+
+    /// Add a reaction to a message (by sent_at timestamp).
+    ///
+    /// Uses INSERT OR IGNORE to handle duplicates gracefully (UNIQUE constraint
+    /// on message_id, user_id, emoji).
+    pub fn add_reaction(
+        &self,
+        conversation_id: &AnonDmId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+
+        // Look up message_id by conversation_id + sent_at
+        let message_id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM anon_dm_messages WHERE conversation_id = ?1 AND sent_at = ?2 LIMIT 1",
+                params![conversation_id.to_string(), sent_timestamp as i64],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let Some(message_id) = message_id else {
+            tracing::debug!(
+                conversation_id = %conversation_id,
+                sent_timestamp,
+                "Cannot add reaction: anon DM message not found"
+            );
+            return Ok(false);
+        };
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
+        let rows = conn.execute(
+            "INSERT OR IGNORE INTO anon_dm_reactions (id, message_id, user_id, emoji, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, message_id, user_id.to_string(), emoji, now],
+        )?;
+
+        Ok(rows > 0)
+    }
+
+    /// Remove a reaction from a message (by sent_at timestamp).
+    pub fn remove_reaction(
+        &self,
+        conversation_id: &AnonDmId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+
+        // Look up message_id by conversation_id + sent_at
+        let message_id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM anon_dm_messages WHERE conversation_id = ?1 AND sent_at = ?2 LIMIT 1",
+                params![conversation_id.to_string(), sent_timestamp as i64],
+                |row| row.get(0),
+            )
+            .ok();
+
+        let Some(message_id) = message_id else {
+            return Ok(false);
+        };
+
+        let rows = conn.execute(
+            "DELETE FROM anon_dm_reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3",
+            params![message_id, user_id.to_string(), emoji],
+        )?;
+
+        Ok(rows > 0)
+    }
+
+    /// Get reaction counts for a message (by sent_at timestamp).
+    ///
+    /// Returns a list of (emoji, count) pairs.
+    pub fn get_reaction_counts(
+        &self,
+        conversation_id: &AnonDmId,
+        sent_timestamp: u64,
+    ) -> Result<Vec<(String, u32)>, StorageError> {
+        let conn = self.db.read_connection()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT r.emoji, COUNT(*) as cnt
+             FROM anon_dm_reactions r
+             JOIN anon_dm_messages m ON r.message_id = m.id
+             WHERE m.conversation_id = ?1 AND m.sent_at = ?2
+             GROUP BY r.emoji
+             ORDER BY cnt DESC",
+        )?;
+
+        let mut rows = stmt.query(params![
+            conversation_id.to_string(),
+            sent_timestamp as i64,
+        ])?;
+
+        let mut counts = Vec::new();
+        while let Some(row) = rows.next()? {
+            let emoji: String = row.get(0)?;
+            let count: u32 = row.get(1)?;
+            counts.push((emoji, count));
+        }
+
+        Ok(counts)
+    }
+
+    /// Get all reaction counts for messages in a conversation.
+    ///
+    /// Returns a map of sent_at -> Vec<(emoji, count)>.
+    /// Used when loading messages to populate reaction_counts.
+    pub fn get_all_reaction_counts(
+        &self,
+        conversation_id: &AnonDmId,
+    ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, StorageError> {
+        let conn = self.db.read_connection()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT m.sent_at, r.emoji, COUNT(*) as cnt
+             FROM anon_dm_reactions r
+             JOIN anon_dm_messages m ON r.message_id = m.id
+             WHERE m.conversation_id = ?1
+             GROUP BY m.sent_at, r.emoji
+             ORDER BY m.sent_at, cnt DESC",
+        )?;
+
+        let mut rows = stmt.query(params![conversation_id.to_string()])?;
+
+        let mut map: std::collections::HashMap<u64, Vec<(String, u32)>> = std::collections::HashMap::new();
+        while let Some(row) = rows.next()? {
+            let sent_at: i64 = row.get(0)?;
+            let emoji: String = row.get(1)?;
+            let count: u32 = row.get(2)?;
+            map.entry(sent_at as u64).or_default().push((emoji, count));
+        }
+
+        Ok(map)
     }
 
     // ========================================================================

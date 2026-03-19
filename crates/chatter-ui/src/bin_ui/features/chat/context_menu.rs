@@ -61,7 +61,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // DMs use Permissions::dm() (both users can delete any message),
             // channels use role-based permissions checked via is_own_message.
             let can_delete_for_everyone = match &conversation {
-                ActiveConversation::Dm { .. } | ActiveConversation::AnonDm(_) => {
+                ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::AnonDm(_) => {
                     Permissions::dm().can_delete_any_message
                 }
                 _ => is_own_message,
@@ -80,7 +80,7 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             } else {
                 // DM/Channel: get pin state and attachments from service data
                 let msg = match handle.conversation() {
-                    ActiveConversation::Dm { .. } | ActiveConversation::Channel(_) => {
+                    ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                         match ui_ctx.messages().get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
                             Ok(Some(msg)) => msg,
                             Ok(None) => {

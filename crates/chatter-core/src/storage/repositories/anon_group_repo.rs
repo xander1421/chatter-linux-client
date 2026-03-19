@@ -908,6 +908,20 @@ impl AnonGroupRepository {
 
     /// Add a reaction to a message (by sent_at timestamp).
     ///
+    /// Update delivery status for a message by ID.
+    pub fn update_delivery_status(
+        &self,
+        message_id: &AnonGroupMessageId,
+        status: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE anon_group_messages SET delivery_status = ?1 WHERE id = ?2",
+            params![status, message_id.as_str()],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Uses INSERT OR IGNORE to handle duplicates gracefully (UNIQUE constraint
     /// on message_id, user_id, emoji).
     pub fn add_reaction(

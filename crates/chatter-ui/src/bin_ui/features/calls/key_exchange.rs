@@ -103,18 +103,25 @@ pub async fn handle_call_key_answer(
         "Received call answer, deriving call key"
     );
 
-    // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
-    let call_key = match signal_service.actor.complete_call_key_exchange(
-        pending.ephemeral_key.private_key_bytes(),
-        peer_ephemeral_pk,
-        peer_id,
-        call_id.clone(),
-        true, // we_are_caller
-    ).await {
-        Ok(key) => key,
-        Err(e) => {
-            tracing::error!("Failed to derive call key: {}", e);
-            return;
+    // Delegate all crypto to the Signal service (actor call - run on tokio)
+    let call_key = {
+        let actor = signal_service.actor.clone();
+        let priv_key = pending.ephemeral_key.private_key_bytes();
+        let cid = call_id.clone();
+        match tokio::spawn(async move {
+            actor.complete_call_key_exchange(
+                priv_key,
+                peer_ephemeral_pk,
+                peer_id,
+                cid,
+                true, // we_are_caller
+            ).await
+        }).await.unwrap() {
+            Ok(key) => key,
+            Err(e) => {
+                tracing::error!("Failed to derive call key: {}", e);
+                return;
+            }
         }
     };
 

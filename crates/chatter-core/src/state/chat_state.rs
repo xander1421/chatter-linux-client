@@ -25,12 +25,20 @@ pub enum ActiveConversation {
     None,
     /// A server-managed channel (public/private).
     Channel(ChannelId),
-    /// A server-managed DM (Signal Protocol, pairwise).
-    Dm {
+    /// A server-routed DM (gRPC transport, Signal Protocol E2EE).
+    /// Server sees who talks to whom but not message content.
+    ServerDm {
         channel_id: ChannelId,
         peer_id: UserId,
     },
-    /// An anonymous DM (NDSS'21 mailbox, pairwise).
+    /// A mailbox-routed DM (NDSS'21 ephemeral mailbox, Signal Protocol E2EE).
+    /// Server cannot see who talks to whom or message content.
+    MailboxDm {
+        channel_id: ChannelId,
+        peer_id: UserId,
+    },
+    /// An anonymous DM (NDSS'21 mailbox, pairwise, HPKE bootstrap).
+    /// Server cannot link conversation to registered users.
     AnonDm(AnonDmId),
     /// An anonymous group (NDSS'21 mailbox, fanout).
     AnonGroup(AnonGroupId),
@@ -50,7 +58,7 @@ impl ActiveConversation {
     pub fn channel_id(&self) -> Option<ChannelId> {
         match self {
             Self::Channel(id) => Some(*id),
-            Self::Dm { channel_id, .. } => Some(*channel_id),
+            Self::ServerDm { channel_id, .. } | Self::MailboxDm { channel_id, .. } => Some(*channel_id),
             Self::AnonDm(id) => Some((*id).into()),
             Self::AnonGroup(id) => Some((*id).into()),
             Self::None => None,
@@ -65,6 +73,11 @@ impl ActiveConversation {
     /// Check if this is an anonymous conversation (AnonDm or AnonGroup).
     pub fn is_anon(&self) -> bool {
         matches!(self, Self::AnonDm(_) | Self::AnonGroup(_))
+    }
+
+    /// Check if this is a DM-style conversation (1:1).
+    pub fn is_dm(&self) -> bool {
+        matches!(self, Self::ServerDm { .. } | Self::MailboxDm { .. } | Self::AnonDm(_))
     }
 }
 
