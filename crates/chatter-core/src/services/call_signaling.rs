@@ -17,8 +17,12 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::crypto::call_key_provider::EphemeralCallKey;
-use crate::domain::call::{CallSetupResult, CallType, PendingDmCall};
+use crate::domain::anon_dm::AnonDmId;
+use crate::domain::anon_group::AnonGroupId;
+use crate::domain::call::{AnonCallSetupResult, CallSetupResult, CallType, PendingDmCall};
 use crate::domain::ids::{CallId, ChannelId, UserId};
+use crate::services::anon_dm::AnonDmService;
+use crate::services::anon_group::AnonGroupService;
 use crate::services::call_verification::CallVerification;
 use crate::services::call_worker::CallWorkerHandle;
 use crate::services::channel::ChannelService;
@@ -48,6 +52,10 @@ pub enum CallSignalingError {
     KeyDerivationFailed(String),
     #[error("call worker error: {0}")]
     CallWorker(String),
+    #[error("anonymous call error: {0}")]
+    AnonCall(String),
+    #[error("no call room tokens available")]
+    NoTokens,
 }
 
 /// Handles call signaling (key exchange, hangup) over the Signal Protocol.
@@ -56,6 +64,8 @@ pub struct CallSignalingService {
     message_service: Arc<MessageService>,
     mailbox_manager: Arc<MailboxManager>,
     channel_service: Arc<ChannelService>,
+    anon_dm_service: Arc<AnonDmService>,
+    anon_group_service: Arc<AnonGroupService>,
     /// Pending outgoing DM call state (waiting for answer with peer's ephemeral key).
     pending_dm_call: Arc<Mutex<Option<PendingDmCall>>>,
 }
@@ -65,11 +75,15 @@ impl CallSignalingService {
         message_service: Arc<MessageService>,
         mailbox_manager: Arc<MailboxManager>,
         channel_service: Arc<ChannelService>,
+        anon_dm_service: Arc<AnonDmService>,
+        anon_group_service: Arc<AnonGroupService>,
     ) -> Self {
         Self {
             message_service,
             mailbox_manager,
             channel_service,
+            anon_dm_service,
+            anon_group_service,
             pending_dm_call: Arc::new(Mutex::new(None)),
         }
     }
@@ -395,5 +409,455 @@ impl CallSignalingService {
             verification_emojis: [e1, e2, e3, e4],
             is_video: false, // caller provides this info via the offer
         })
+    }
+
+    // =========================================================================
+    // Anonymous Call Orchestration
+    // =========================================================================
+
+    /// Acquire a call room token, requesting more from the server if none available.
+    ///
+    /// Tries both anon DM and anon group token managers (they share the same pool).
+    async fn acquire_call_room_token(
+        &self,
+    ) -> Result<crate::mailbox::CallRoomToken, CallSignalingError> {
+        // Try to get an existing token
+        if let Ok(Some(token)) = self.anon_dm_service.get_available_call_room_token() {
+            return Ok(token);
+        }
+
+        // Request more tokens from server
+        tracing::info!("No call room tokens available, requesting 5 more");
+        self.anon_dm_service
+            .request_call_room_tokens(5)
+            .await
+            .map_err(|e| CallSignalingError::AnonCall(format!("Failed to request tokens: {}", e)))?;
+
+        // Try again
+        self.anon_dm_service
+            .get_available_call_room_token()
+            .map_err(|e| CallSignalingError::AnonCall(e.to_string()))?
+            .ok_or(CallSignalingError::NoTokens)
+    }
+
+    /// Derive verification emojis from an anonymous call's encryption key and room name.
+    fn anon_verification_emojis(encryption_key: &[u8], room_name: &str) -> [String; 4] {
+        let mut key_arr = [0u8; 32];
+        if encryption_key.len() >= 32 {
+            key_arr.copy_from_slice(&encryption_key[..32]);
+        }
+        let verification = CallVerification::derive_verification_emojis(&key_arr, room_name);
+        let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
+        [e1, e2, e3, e4]
+    }
+
+    /// Start an anonymous DM call: acquire token, send offer, store pending state.
+    ///
+    /// Returns an `AnonCallSetupResult` with the room name for UI display.
+    /// The call is not yet connected -- that happens when the peer accepts
+    /// via `handle_anon_call_answer()`.
+    pub async fn start_anon_dm_call(
+        &self,
+        anon_dm_id: &AnonDmId,
+        is_video: bool,
+        display_name: &str,
+    ) -> Result<crate::services::anon_dm::AnonCallOfferResult, CallSignalingError> {
+        // Acquire token (request more if needed)
+        let token = self.acquire_call_room_token().await?;
+
+        // Send call offer via anon DM channel
+        let offer_result = self.anon_dm_service
+            .send_call_offer(anon_dm_id, &token, is_video, Some(display_name))
+            .await
+            .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send offer: {}", e)))?;
+
+        tracing::info!(
+            room_name = %offer_result.room_name,
+            "Sent anonymous DM call offer"
+        );
+
+        // Mark token as used
+        let _ = self.anon_dm_service.mark_call_room_token_used(&token.id);
+
+        // Store pending call state
+        self.anon_dm_service.store_pending_anon_call(
+            offer_result.room_name.clone(),
+            crate::services::anon_dm::PendingAnonCall {
+                call_room_id: offer_result.call_room_id,
+                room_name: offer_result.room_name.clone(),
+                conversation_id: *anon_dm_id,
+                token,
+                is_video_call: is_video,
+                is_outgoing: true,
+                display_name: display_name.to_string(),
+                encryption_key: offer_result.call_encryption_key.clone(),
+                sender_id: None,
+                started_at: None,
+            },
+        );
+
+        Ok(offer_result)
+    }
+
+    /// Start an anonymous group call: acquire token, send offer to all members, store pending state.
+    pub async fn start_anon_group_call(
+        &self,
+        group_id: &AnonGroupId,
+        is_video: bool,
+        display_name: &str,
+    ) -> Result<crate::services::anon_dm::AnonCallOfferResult, CallSignalingError> {
+        // Acquire token (request more if needed)
+        let token = self.acquire_call_room_token().await?;
+
+        // Send call offer to all group members
+        let offer_result = self.anon_group_service
+            .send_call_offer(group_id, &token, is_video, Some(display_name))
+            .await
+            .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send group offer: {}", e)))?;
+
+        tracing::info!(
+            room_name = %offer_result.room_name,
+            "Sent anonymous group call offer"
+        );
+
+        // Mark token as used
+        let _ = self.anon_group_service.mark_call_room_token_used(&token.id);
+
+        // Store pending call state (reuse anon DM pending call infrastructure)
+        let conversation_id = crate::domain::anon_dm::AnonDmId::try_from_slice(
+            group_id.as_bytes()
+        ).expect("AnonGroupId is 16 bytes like AnonDmId");
+
+        self.anon_dm_service.store_pending_anon_call(
+            offer_result.room_name.clone(),
+            crate::services::anon_dm::PendingAnonCall {
+                call_room_id: offer_result.call_room_id,
+                room_name: offer_result.room_name.clone(),
+                conversation_id,
+                token,
+                is_video_call: is_video,
+                is_outgoing: true,
+                display_name: display_name.to_string(),
+                encryption_key: offer_result.call_encryption_key.clone(),
+                sender_id: None,
+                started_at: None,
+            },
+        );
+
+        Ok(offer_result)
+    }
+
+    /// Accept an incoming anonymous call: acquire token, send accept, join room, connect LiveKit.
+    ///
+    /// Returns an `AnonCallSetupResult` with everything the UI needs.
+    pub async fn accept_anon_call(
+        &self,
+        room_name: &str,
+        call_worker: &CallWorkerHandle,
+    ) -> Result<AnonCallSetupResult, CallSignalingError> {
+        // Take pending call state
+        let pending = self.anon_dm_service.take_pending_anon_call(room_name)
+            .ok_or(CallSignalingError::NoPendingCall)?;
+
+        // Acquire a fresh token for joining
+        let token = self.acquire_call_room_token().await
+            .map_err(|e| {
+                // Put pending call back so user can retry
+                self.anon_dm_service.store_pending_anon_call(room_name.to_string(), pending.clone());
+                e
+            })?;
+        let _ = self.anon_dm_service.mark_call_room_token_used(&token.id);
+
+        // Use our own display name
+        let my_display_name = self.anon_dm_service
+            .get_my_display_name()
+            .unwrap_or_else(|| "Anonymous".to_string());
+
+        // Determine if this is a group call (no anon DM conversation for this ID)
+        let is_group_call = self.anon_dm_service
+            .get_conversation(&pending.conversation_id)
+            .ok().flatten().is_none();
+
+        // Send accept answer
+        if is_group_call {
+            let group_id = AnonGroupId::try_from_slice(
+                pending.conversation_id.as_bytes()
+            ).ok_or_else(|| CallSignalingError::AnonCall("Invalid group ID".into()))?;
+
+            self.anon_group_service
+                .send_call_answer(&group_id, &pending.call_room_id, true, Some(&token), Some(&my_display_name))
+                .await
+                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send group accept: {}", e)))?;
+        } else {
+            self.anon_dm_service
+                .send_call_answer(
+                    &pending.conversation_id,
+                    &pending.call_room_id,
+                    true,
+                    Some(&token),
+                    None,
+                    Some(&my_display_name),
+                )
+                .await
+                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send accept: {}", e)))?;
+        }
+
+        tracing::info!(room_name = %room_name, "Anonymous call accept sent, joining LiveKit room");
+
+        // Join the anonymous call room to get LiveKit credentials
+        let room_info = self.anon_dm_service
+            .join_anon_call_room(room_name, &token, &my_display_name, pending.is_video_call)
+            .await
+            .map_err(|e| CallSignalingError::AnonCall(format!("Failed to join room: {}", e)))?;
+
+        // Connect to LiveKit
+        let call_id = CallId::new();
+        let channel_id = ChannelId::new();
+
+        call_worker
+            .connect_with_token(
+                &room_info.livekit_token,
+                &room_info.livekit_url,
+                pending.encryption_key.clone(),
+                room_name,
+                call_id,
+                channel_id,
+            )
+            .await
+            .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
+
+        tracing::info!(room_name = %room_name, "Connected to LiveKit for anonymous call");
+
+        let verification_emojis = Self::anon_verification_emojis(&pending.encryption_key, room_name);
+
+        Ok(AnonCallSetupResult {
+            room_name: room_name.to_string(),
+            channel_id,
+            encryption_key: pending.encryption_key,
+            verification_emojis,
+            is_video: pending.is_video_call,
+            peer_display_name: pending.display_name,
+        })
+    }
+
+    /// Handle an anonymous call answer (caller side): acquire token, join room, connect LiveKit.
+    ///
+    /// If accepted, returns `Some(AnonCallSetupResult)`. If declined, stores call history and returns `None`.
+    pub async fn handle_anon_call_answer(
+        &self,
+        call_room_id: &[u8],
+        accepted: bool,
+        callee_display_name: &str,
+        call_worker: &CallWorkerHandle,
+    ) -> Result<Option<AnonCallSetupResult>, CallSignalingError> {
+        // Reconstruct room name from call_room_id
+        let room_name = format!(
+            "anon-{}",
+            uuid::Uuid::from_bytes(
+                call_room_id.try_into().unwrap_or_default()
+            )
+        );
+
+        let pending = self.anon_dm_service.take_pending_anon_call(&room_name)
+            .ok_or(CallSignalingError::NoPendingCall)?;
+
+        if !accepted {
+            tracing::info!(room_name = %room_name, "Anonymous call declined by peer");
+
+            // Store declined call history
+            let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
+            if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
+                let anonymous_user_id = UserId::new();
+                self.store_anon_call_history_failed(
+                    &channel_id,
+                    &pending.room_name,
+                    &anonymous_user_id,
+                    callee_display_name,
+                    pending.is_outgoing,
+                );
+            }
+
+            return Ok(None);
+        }
+
+        tracing::info!(room_name = %room_name, "Anonymous call accepted, connecting to LiveKit");
+
+        // Mark call as started for duration tracking
+        self.anon_dm_service.mark_anon_call_started(&pending.room_name);
+
+        // Acquire a fresh token for joining the call room
+        let join_token = self.acquire_call_room_token().await?;
+        let _ = self.anon_dm_service.mark_call_room_token_used(&join_token.id);
+
+        // Join the anonymous call room to get LiveKit credentials
+        let room_info = self.anon_dm_service
+            .join_anon_call_room(
+                &pending.room_name,
+                &join_token,
+                &pending.display_name,
+                pending.is_video_call,
+            )
+            .await
+            .map_err(|e| {
+                // Store failed call history
+                let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
+                if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
+                    let anonymous_user_id = UserId::new();
+                    self.store_anon_call_history_failed(
+                        &channel_id,
+                        &pending.room_name,
+                        &anonymous_user_id,
+                        &pending.display_name,
+                        pending.is_outgoing,
+                    );
+                }
+                CallSignalingError::AnonCall(format!("Failed to join room: {}", e))
+            })?;
+
+        // Connect to LiveKit
+        let call_id = CallId::new();
+        let channel_id = ChannelId::new();
+
+        call_worker
+            .connect_with_token(
+                &room_info.livekit_token,
+                &room_info.livekit_url,
+                pending.encryption_key.clone(),
+                &pending.room_name,
+                call_id,
+                channel_id,
+            )
+            .await
+            .map_err(|e| {
+                // Store failed call history
+                let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
+                if let Ok(ch_id) = channel_id_str.parse::<ChannelId>() {
+                    let anonymous_user_id = UserId::new();
+                    self.store_anon_call_history_failed(
+                        &ch_id,
+                        &pending.room_name,
+                        &anonymous_user_id,
+                        &pending.display_name,
+                        pending.is_outgoing,
+                    );
+                }
+                CallSignalingError::CallWorker(e.to_string())
+            })?;
+
+        tracing::info!(room_name = %room_name, "Connected to LiveKit for anonymous call (caller side)");
+
+        let verification_emojis = Self::anon_verification_emojis(&pending.encryption_key, &pending.room_name);
+
+        Ok(Some(AnonCallSetupResult {
+            room_name: pending.room_name,
+            channel_id,
+            encryption_key: pending.encryption_key,
+            verification_emojis,
+            is_video: pending.is_video_call,
+            peer_display_name: callee_display_name.to_string(),
+        }))
+    }
+
+    /// Decline an incoming anonymous call: send decline answer, store missed call history.
+    pub async fn decline_anon_call(
+        &self,
+        room_name: &str,
+    ) -> Result<(), CallSignalingError> {
+        let pending = self.anon_dm_service.take_pending_anon_call(room_name)
+            .ok_or(CallSignalingError::NoPendingCall)?;
+
+        // Determine if this is a group call
+        let is_group_call = self.anon_dm_service
+            .get_conversation(&pending.conversation_id)
+            .ok().flatten().is_none();
+
+        if is_group_call {
+            let group_id = AnonGroupId::try_from_slice(
+                pending.conversation_id.as_bytes()
+            ).ok_or_else(|| CallSignalingError::AnonCall("Invalid group ID".into()))?;
+
+            self.anon_group_service
+                .send_call_answer(&group_id, &pending.call_room_id, false, None, Some(&pending.display_name))
+                .await
+                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send group decline: {}", e)))?;
+        } else {
+            self.anon_dm_service
+                .send_call_answer(
+                    &pending.conversation_id,
+                    &pending.call_room_id,
+                    false,
+                    None,
+                    None,
+                    Some(&pending.display_name),
+                )
+                .await
+                .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send decline: {}", e)))?;
+        }
+
+        tracing::info!(room_name = %room_name, "Anonymous call declined");
+
+        // Store missed call history
+        let channel_id_str = format!("anon-dm-{}", pending.conversation_id);
+        if let Ok(channel_id) = channel_id_str.parse::<ChannelId>() {
+            let anonymous_user_id = UserId::new();
+            self.store_anon_call_history_failed(
+                &channel_id,
+                &pending.room_name,
+                &anonymous_user_id,
+                &pending.display_name,
+                pending.is_outgoing,
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Store a failed/missed/declined anonymous call history entry.
+    fn store_anon_call_history_failed(
+        &self,
+        channel_id: &ChannelId,
+        call_id: &str,
+        initiator_id: &UserId,
+        display_name: &str,
+        _is_outgoing: bool,
+    ) {
+        use crate::domain::message::*;
+
+        let call_msg = CallMessage {
+            call_id: call_id.to_string(),
+            call_type: CallMessageType::Missed,
+            initiator_id: *initiator_id,
+            initiator_name: display_name.to_string(),
+            started_at: None,
+            ended_at: Some(chrono::Utc::now()),
+            duration: None,
+            participant_count: 2,
+        };
+
+        let message = crate::domain::message::Message {
+            id: crate::domain::ids::MessageId::new(),
+            channel_id: *channel_id,
+            sender_id: Some(*initiator_id),
+            content: MessageContent::Call(call_msg),
+            thread_id: None,
+            reply_to: None,
+            attachments: vec![],
+            is_pinned: false,
+            is_edited: false,
+            is_deleted: false,
+            sent_at: crate::util::time::TimestampNanos::now().as_u64(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            edited_at: None,
+            reaction_counts: vec![],
+            current_user_reactions: vec![],
+            mentioned_integrations: vec![],
+            targets_ai_bot: false,
+            delivery_status: String::new(),
+        };
+
+        if let Err(e) = self.message_service.store_message_local(&message) {
+            tracing::error!(error = %e, "Failed to save anon call history");
+        }
     }
 }

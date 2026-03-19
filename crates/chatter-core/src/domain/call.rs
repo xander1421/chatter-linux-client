@@ -464,6 +464,25 @@ pub struct CallSetupResult {
     pub is_video: bool,
 }
 
+/// Result of completing an anonymous call setup (either side).
+///
+/// Contains everything the UI needs to display the active anonymous call.
+#[derive(Debug)]
+pub struct AnonCallSetupResult {
+    /// The room name (used as call_id for anonymous calls).
+    pub room_name: String,
+    /// The channel ID (synthetic for anon calls).
+    pub channel_id: ChannelId,
+    /// E2EE encryption key for LiveKit (32 bytes).
+    pub encryption_key: Vec<u8>,
+    /// Verification emojis for secure call verification (4 emojis).
+    pub verification_emojis: [String; 4],
+    /// Whether this is a video call.
+    pub is_video: bool,
+    /// Display name of the remote peer.
+    pub peer_display_name: String,
+}
+
 /// Pending DM call state during offer→answer exchange.
 ///
 /// Stored in core while waiting for the peer's ephemeral key answer.

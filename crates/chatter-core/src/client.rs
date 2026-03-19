@@ -182,6 +182,8 @@ impl ChatterClient {
                 self.messages().clone(),
                 self.mailbox_manager().clone(),
                 self.channels().clone(),
+                self.anon_dms().clone(),
+                self.anon_groups().clone(),
             )
         })
     }
@@ -254,6 +256,75 @@ impl ChatterClient {
                 &call_worker,
                 user_id,
             )
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    // ── Anonymous Call Orchestration ─────────────────────────────────
+
+    /// Start an anonymous DM call: acquire token, send offer, store pending state.
+    pub async fn start_anon_dm_call(
+        &self,
+        anon_dm_id: &crate::domain::anon_dm::AnonDmId,
+        is_video: bool,
+        display_name: &str,
+    ) -> Result<crate::services::anon_dm::AnonCallOfferResult, ClientError> {
+        self.call_signaling()
+            .start_anon_dm_call(anon_dm_id, is_video, display_name)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Start an anonymous group call: acquire token, send offer to all members, store pending state.
+    pub async fn start_anon_group_call(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        is_video: bool,
+        display_name: &str,
+    ) -> Result<crate::services::anon_dm::AnonCallOfferResult, ClientError> {
+        self.call_signaling()
+            .start_anon_group_call(group_id, is_video, display_name)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Accept an incoming anonymous call: acquire token, send accept, join room, connect LiveKit.
+    pub async fn accept_anon_call(
+        &self,
+        room_name: &str,
+    ) -> Result<crate::domain::call::AnonCallSetupResult, ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
+            .clone();
+        self.call_signaling()
+            .accept_anon_call(room_name, &call_worker)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Handle an anonymous call answer (caller side): connect to LiveKit if accepted.
+    pub async fn handle_anon_call_answer(
+        &self,
+        call_room_id: &[u8],
+        accepted: bool,
+        callee_display_name: &str,
+    ) -> Result<Option<crate::domain::call::AnonCallSetupResult>, ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
+            .clone();
+        self.call_signaling()
+            .handle_anon_call_answer(call_room_id, accepted, callee_display_name, &call_worker)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Decline an incoming anonymous call: send decline answer, store missed call history.
+    pub async fn decline_anon_call(
+        &self,
+        room_name: &str,
+    ) -> Result<(), ClientError> {
+        self.call_signaling()
+            .decline_anon_call(room_name)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
