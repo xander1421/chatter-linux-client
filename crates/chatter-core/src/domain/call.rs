@@ -442,3 +442,43 @@ mod tests {
         assert_eq!(ended.end_reason(), Some(CallEndReason::Missed));
     }
 }
+
+// ============================================================================
+// DM Call Orchestration Types
+// ============================================================================
+
+use crate::crypto::call_key_provider::EphemeralCallKey;
+
+/// Result of completing a DM call key exchange (caller or callee side).
+///
+/// Contains everything the UI needs to display the active call.
+#[derive(Debug)]
+pub struct CallSetupResult {
+    /// The call ID.
+    pub call_id: CallId,
+    /// The channel ID.
+    pub channel_id: ChannelId,
+    /// Verification emojis for secure call verification (4 emojis).
+    pub verification_emojis: [String; 4],
+    /// Whether this is a video call.
+    pub is_video: bool,
+}
+
+/// Pending DM call state during offer→answer exchange.
+///
+/// Stored in core while waiting for the peer's ephemeral key answer.
+/// The `EphemeralCallKey` is automatically zeroized on drop.
+pub struct PendingDmCall {
+    /// The call ID assigned by the server.
+    pub call_id: CallId,
+    /// The channel ID for the DM.
+    pub channel_id: ChannelId,
+    /// Our ephemeral X25519 keypair (zeroized on drop).
+    pub ephemeral_key: EphemeralCallKey,
+    /// Peer's user ID.
+    pub peer_id: UserId,
+    /// Call type label (e.g., "Voice Call", "Video Call").
+    pub call_type: String,
+    /// Whether this is a video call.
+    pub is_video: bool,
+}
