@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-03)
 
 **Core value:** True native experience with full Signal Protocol encryption — replacing Flutter/React with a first-class Linux citizen
-**Current focus:** Phase 81 — Jarvis UI Integration
+**Current focus:** Phase 92 — Call Orchestration to Core
 
 ## Current Position
 
-Phase: 81 of 90 (Jarvis UI Integration)
-Plan: 3 of 3 in current phase
+Phase: 92 (Call Orchestration to Core)
+Plan: 2 of 2 in current phase
 Status: Phase complete
-Last activity: 2026-03-07 — Completed 81-03-PLAN.md
+Last activity: 2026-03-19 — Completed 92-02-PLAN.md
 
 Progress: █████████████████████████████████████████████████████████████████████████░░░░░░ 90%
 
@@ -312,7 +312,7 @@ None.
 
 ## Session Continuity
 
-Last session: 2026-03-10
-Stopped at: Phase 91 planned (Multi-Device Support)
+Last session: 2026-03-19
+Stopped at: Phase 92 complete (Call Orchestration to Core)
 Resume file: None
-Next action: /gsd:execute-plan 91-01
+Next action: Next milestone phase or /gsd:verify-work 92

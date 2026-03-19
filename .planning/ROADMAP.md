@@ -1187,11 +1187,12 @@ Multi-device is critical for users with phones + desktops. Current implementatio
 **Goal**: Move call state machine, key exchange orchestration, and call history from UI to core call services
 **Depends on**: Phase 91
 **Research**: Unlikely (internal refactoring, crypto already in core)
-**Status**: Not started
-**Plans**: 0 plans
+**Status**: Done
+**Plans**: 2/2 complete
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 92 to break down)
+- [x] 92-01: DM call orchestration (key exchange, signaling, pending state → core)
+- [x] 92-02: Anon call orchestration (tokens, room joins, call history → core)
 
 **Scope (~8 files):**
 
@@ -1232,4 +1233,4 @@ Based on architecture review identifying call orchestration as the biggest proto
 | 89 | Communication Analytics | 2 | Not started | - |
 | 90 | Jarvis Automation | 3 | Not started | - |
 | 91 | Multi-Device Support | 0 | Not started | - |
-| 92 | Call Orchestration to Core | 0 | Not started | - |
+| 92 | Call Orchestration to Core | 2 | Done | 2026-03-19 |
