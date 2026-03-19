@@ -1,17 +1,18 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry } from "app.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
 
 export component MainWindow inherits Window {
     title: "Chatter";
     icon: @image-url("../assets/icon-256.png");
     min-width: 800px;
     min-height: 600px;
-    default-font-family: "Inter, Roboto, Noto Sans, Ubuntu, Cantarell, sans-serif";
+    default-font-family: "Fira Code, monospace";
+    default-font-size: 14px;
 
     // Expose App properties through MainWindow for Rust binding
     // ========== View routing ==========
@@ -32,6 +33,7 @@ export component MainWindow inherits Window {
     in-out property <string> register-password <=> app.register-password;
     in-out property <string> register-confirm-password <=> app.register-confirm-password;
     in-out property <string> register-pin <=> app.register-pin;
+    in-out property <string> register-server-url <=> app.register-server-url;
     in property <bool> register-loading <=> app.register-loading;
     in property <string> register-error <=> app.register-error;
     in property <image> register-avatar-source <=> app.register-avatar-source;
@@ -78,6 +80,7 @@ export component MainWindow inherits Window {
     // ========== Reply-to state (Signal-style: sender_id + timestamp) ==========
     in-out property <bool> composer-is-replying <=> app.composer-is-replying;
     in-out property <string> composer-reply-to-sender <=> app.composer-reply-to-sender;
+    in-out property <string> composer-reply-to-sender-name <=> app.composer-reply-to-sender-name;
     in-out property <string> composer-reply-to-timestamp <=> app.composer-reply-to-timestamp;
     in-out property <string> composer-reply-preview <=> app.composer-reply-preview;
 
@@ -175,6 +178,7 @@ export component MainWindow inherits Window {
     in-out property <length> context-menu-x <=> app.context-menu-x;
     in-out property <length> context-menu-y <=> app.context-menu-y;
     in property <bool> context-menu-is-own-message <=> app.context-menu-is-own-message;
+    in property <bool> context-menu-can-delete-for-everyone <=> app.context-menu-can-delete-for-everyone;
     in property <bool> context-menu-is-pinned <=> app.context-menu-is-pinned;
     in property <bool> context-menu-has-attachments <=> app.context-menu-has-attachments;
     callback reply-message <=> app.reply-message;
@@ -194,6 +198,7 @@ export component MainWindow inherits Window {
     callback pinned-prev-clicked <=> app.pinned-prev-clicked;
     callback pinned-next-clicked <=> app.pinned-next-clicked;
     callback pinned-dismiss-clicked <=> app.pinned-dismiss-clicked;
+    callback pinned-show-clicked <=> app.pinned-show-clicked;
     callback pinned-go-to-message <=> app.pinned-go-to-message;
 
     // ========== Thread panel state ==========
@@ -254,7 +259,8 @@ export component MainWindow inherits Window {
     in property <string> profile-user-id <=> app.profile-user-id;
     in property <string> profile-display-name <=> app.profile-display-name;
     in property <string> profile-username <=> app.profile-username;
-    in property <string> profile-avatar-url <=> app.profile-avatar-url;
+    in property <image> profile-avatar-source <=> app.profile-avatar-source;
+    in property <string> profile-initials <=> app.profile-initials;
     in property <string> profile-status-text <=> app.profile-status-text;
     in property <string> profile-presence <=> app.profile-presence;
     in property <string> profile-bio <=> app.profile-bio;
@@ -409,6 +415,7 @@ export component MainWindow inherits Window {
     // ========== Chat callbacks ==========
     callback search-clicked <=> app.search-clicked;
     callback chat-settings-clicked <=> app.chat-settings-clicked;
+    callback invite-member <=> app.invite-member;
     callback message-clicked <=> app.message-clicked;
     callback reply-clicked <=> app.reply-clicked;
     callback react-clicked <=> app.react-clicked;

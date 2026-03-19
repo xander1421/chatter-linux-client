@@ -2,6 +2,12 @@
 //
 // Shared structs used by message_list and message_item components.
 
+// Data struct for individual reaction entries (emoji + count pill)
+export struct ReactionEntry {
+    emoji: string,
+    count: int,
+}
+
 // Data struct for attachment items in messages
 export struct MessageAttachmentData {
     id: string,
@@ -50,9 +56,14 @@ export struct MessageItemData {
     attachments: [MessageAttachmentData],
     has-reactions: bool,
     reaction-summary: string,
+    reactions: [ReactionEntry],
     reply-count: int,
     reply-count-text: string,  // Pre-formatted "1 reply" or "N replies"
     is-thread-reply: bool,
+    // Quote / reply-to context
+    is-reply: bool,                  // Whether this message is a reply to another
+    reply-to-sender-name: string,    // Display name of quoted message author
+    reply-to-preview: string,        // Preview text of the quoted message
     show-sender: bool,
     delivery-status: string,  // "sent", "delivered", "read", or "" for non-own messages
     is-pinned: bool,          // Whether message is pinned

@@ -1,0 +1,12 @@
+target/
+.git/
+.planning/
+node_modules/
+dist/
+build/
+*.apk
+*.keystore
+.env
+.venv
+venv/
+__pycache__/

@@ -9,6 +9,7 @@ import { Input } from "../components/input.slint";
 export component LoginPage inherits Rectangle {
     in-out property <string> username: "";
     in-out property <string> password: "";
+    in-out property <string> server-url: "https://seeker-dance-ignored-clusters.trycloudflare.com";
     in property <bool> loading: false;
     in property <string> error: "";
 
@@ -16,9 +17,10 @@ export component LoginPage inherits Rectangle {
     property <bool> submitted: false;
     property <bool> username-empty: username == "";
     property <bool> password-empty: password == "";
-    property <bool> fields-valid: !username-empty && !password-empty;
+    property <bool> server-url-empty: server-url == "";
+    property <bool> fields-valid: !username-empty && !password-empty && !server-url-empty;
 
-    callback login(string, string);
+    callback login(string, string, string);
     callback register();
 
     background: Colors.background;
@@ -57,6 +59,65 @@ export component LoginPage inherits Rectangle {
 
                 // Spacer
                 Rectangle { height: Spacing.md; }
+
+                // Server URL field
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Server URL";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Input {
+                        placeholder: "https://...";
+                        text <=> root.server-url;
+                        disabled: root.loading;
+                        error: submitted && server-url-empty;
+                        error-message: submitted && server-url-empty ? "Server URL is required" : "";
+                    }
+
+                    // Quick select buttons
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        alignment: start;
+                        
+                        Rectangle {
+                            height: 24px;
+                            width: 80px;
+                            background: Colors.surface-hover;
+                            border-radius: Spacing.radius-sm;
+                            Text {
+                                text: "Localhost";
+                                font-size: Typography.xs;
+                                color: Colors.text-secondary;
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.server-url = "http://localhost:50051";
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 24px;
+                            width: 80px;
+                            background: Colors.surface-hover;
+                            border-radius: Spacing.radius-sm;
+                            Text {
+                                text: "Tunnel";
+                                font-size: Typography.xs;
+                                color: Colors.text-secondary;
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.server-url = "https://seeker-dance-ignored-clusters.trycloudflare.com";
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // Username field with label
                 VerticalLayout {
@@ -128,7 +189,7 @@ export component LoginPage inherits Rectangle {
                     clicked => {
                         submitted = true;
                         if fields-valid {
-                            root.login(root.username, root.password);
+                            root.login(root.username, root.password, root.server-url);
                         }
                     }
                 }

@@ -5,14 +5,14 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { ChatHeader, ChatHeaderData } from "chat_header.slint";
-import { MessageList, MessageItemData, MessageAttachmentData } from "message_list.slint";
+import { MessageList, MessageItemData, MessageAttachmentData, ReactionEntry } from "message_list.slint";
 import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
 import { PinnedBar } from "pinned_bar.slint";
 import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
 import { GifPicker, GifData } from "../components/gif_picker.slint";
 
 // Re-export types for parent components
-export { MessageItemData, MessageAttachmentData, PendingAttachmentData }
+export { MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry }
 
 export component ChatLayout inherits Rectangle {
     // Header properties
@@ -61,6 +61,7 @@ export component ChatLayout inherits Rectangle {
     // Reply properties
     in property <bool> composer-is-replying: false;
     in property <string> composer-reply-to-sender: "";
+    in property <string> composer-reply-to-sender-name: "";
     in property <string> composer-reply-to-timestamp: "";
     in property <string> composer-reply-preview: "";
 
@@ -73,6 +74,7 @@ export component ChatLayout inherits Rectangle {
     // Header callbacks
     callback search-clicked();
     callback settings-clicked();
+    callback invite-clicked();
     callback voice-call-clicked();
     callback video-call-clicked();
 
@@ -81,6 +83,7 @@ export component ChatLayout inherits Rectangle {
     callback pinned-next-clicked();
     callback pinned-go-to-message();
     callback pinned-dismiss-clicked();
+    callback pinned-show-clicked();  // Re-show dismissed pinned bar
 
     // Message list callbacks
     callback message-clicked(string);
@@ -130,12 +133,19 @@ export component ChatLayout inherits Rectangle {
             is-archived: root.is-archived;
             typing-indicator: root.typing-indicator;
             jarvis-thinking: root.jarvis-thinking;
+            has-any-pinned: root.pinned-total-count > 0;
 
             search-clicked => {
                 root.search-clicked();
             }
             settings-clicked => {
                 root.settings-clicked();
+            }
+            invite-clicked => {
+                root.invite-clicked();
+            }
+            pin-clicked => {
+                root.pinned-show-clicked();
             }
             voice-call-clicked => {
                 root.voice-call-clicked();
@@ -225,7 +235,7 @@ export component ChatLayout inherits Rectangle {
                 is-editing <=> root.composer-is-editing;
                 edit-message-id <=> root.composer-edit-message-id;
                 is-replying: root.composer-is-replying;
-                reply-to-sender: root.composer-reply-to-sender;
+                reply-to-sender: root.composer-reply-to-sender-name;
                 reply-to-preview: root.composer-reply-preview;
 
                 send(text) => {

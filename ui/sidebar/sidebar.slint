@@ -100,6 +100,115 @@ export component Sidebar inherits Rectangle {
             background: Colors.surface-hover;
         }
 
+        // Friends entry
+        friends-entry := Rectangle {
+            height: 44px;
+            border-radius: Spacing.radius-sm;
+            background: friends-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+            // Internal state for tracking if tooltip is currently shown
+            property <bool> tooltip-shown: false;
+
+            HorizontalLayout {
+                padding-left: root.collapsed ? 0px : Spacing.sm;
+                padding-right: root.collapsed ? 0px : Spacing.sm;
+                spacing: root.collapsed ? 0px : Spacing.sm;
+                alignment: root.collapsed ? center : start;
+
+                // Friends icon container (20px wide to match other icons)
+                Rectangle {
+                    width: 20px;
+                    height: parent.height;
+
+                    Image {
+                        source: Icons.users;
+                        width: 16px;
+                        height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: friends-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                    }
+
+                    // Badge for pending requests (collapsed mode)
+                    if root.collapsed && root.pending-friend-requests > 0: Rectangle {
+                        x: parent.width - 8px;
+                        y: 8px;
+                        width: root.pending-friend-requests > 9 ? 18px : 14px;
+                        height: 14px;
+                        border-radius: 7px;
+                        background: Colors.error;
+
+                        Text {
+                            text: root.pending-friend-requests > 9 ? "9+" : root.pending-friend-requests;
+                            color: Colors.text-primary;
+                            font-size: 10px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
+                    }
+                }
+
+                // Text with badge (hidden when collapsed)
+                if !root.collapsed: HorizontalLayout {
+                    spacing: Spacing.xs;
+                    alignment: start;
+
+                    Text {
+                        text: "Friends";
+                        color: Colors.text-secondary;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                    }
+
+                    // Badge showing count
+                    if root.pending-friend-requests > 0: Rectangle {
+                        width: root.pending-friend-requests > 9 ? 24px : 20px;
+                        height: 20px;
+                        border-radius: 10px;
+                        background: Colors.error;
+
+                        Text {
+                            text: root.pending-friend-requests > 9 ? "9+" : root.pending-friend-requests;
+                            color: Colors.text-primary;
+                            font-size: 12px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
+                    }
+                }
+            }
+
+            friends-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.friends-clicked(); }
+            }
+
+            // Show tooltip when hovering in collapsed mode
+            if root.collapsed && friends-touch.has-hover && !tooltip-shown: Rectangle {
+                width: 0;
+                height: 0;
+                init => {
+                    friends-entry.tooltip-shown = true;
+                    root.show-tooltip("Friends", root.width + 8px, friends-entry.y + friends-entry.height / 2 - 14px);
+                }
+            }
+
+            if tooltip-shown && !friends-touch.has-hover: Rectangle {
+                width: 0;
+                height: 0;
+                init => {
+                    friends-entry.tooltip-shown = false;
+                    root.hide-tooltip();
+                }
+            }
+        }
+
         // Saved messages entry
         saved-messages := Rectangle {
             height: 44px;

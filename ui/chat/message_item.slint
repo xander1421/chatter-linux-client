@@ -9,7 +9,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
-import { MessageAttachmentData } from "types.slint";
+import { MessageAttachmentData, ReactionEntry } from "types.slint";
 import { Icons } from "../theme/icons.slint";
 
 export component MessageItem inherits Rectangle {
@@ -35,6 +35,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> is-deleted: false;
     in property <bool> is-system: false;
     in property <bool> is-ai: false;
+    in property <bool> is-pinned: false;
     in property <bool> show-sender: true;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
     in property <string> delivery-status: "";  // "sent", "delivered", "read" for own messages
@@ -58,11 +59,17 @@ export component MessageItem inherits Rectangle {
     // Reactions
     in property <bool> has-reactions: false;
     in property <string> reaction-summary: "";
+    in property <[ReactionEntry]> reactions: [];
 
     // Thread
     in property <int> reply-count: 0;
     in property <string> reply-count-text: "";
     in property <bool> is-thread-reply: false;
+
+    // Quote / reply-to context
+    in property <bool> is-reply: false;
+    in property <string> reply-to-sender-name: "";
+    in property <string> reply-to-preview: "";
 
     // Internal hover state
     property <bool> is-hovered: touch.has-hover || action-buttons-touch.has-hover;
@@ -332,6 +339,11 @@ export component MessageItem inherits Rectangle {
                 // Limit bubble width to 70% of container
                 max-width: root.width * 0.7;
 
+                // Wrapper for bubble + absolutely positioned reactions
+                Rectangle {
+                    width: bubble.width;
+                    height: bubble.height + (root.has-reactions ? 11px : 0);
+
                 bubble := Rectangle {
                     property <bool> bubble-hovered: bubble-touch.has-hover;
 
@@ -361,6 +373,14 @@ export component MessageItem inherits Rectangle {
 
                     bubble-touch := TouchArea {
                         mouse-cursor: pointer;
+                        pointer-event(event) => {
+                            // Right-click opens context menu at cursor position
+                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                                root.more-clicked(root.sender-id, root.timestamp-ns,
+                                    self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y);
+                            }
+                        }
                     }
 
                     bubble-content := VerticalLayout {
@@ -393,6 +413,48 @@ export component MessageItem inherits Rectangle {
                                     font-size: 10px;
                                     font-weight: Typography.semibold;
                                     vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        // Quote / reply-to bubble
+                        if root.is-reply: Rectangle {
+                            background: root.is-own ? #00000015 : #00000010;
+                            border-radius: 6px;
+                            max-width: root.width * 0.7 - Spacing.sm * 2;
+                            height: quote-layout.preferred-height + Spacing.sm;
+
+                            HorizontalLayout {
+                                padding-left: 0px;
+                                spacing: 0px;
+
+                                // Accent bar
+                                Rectangle {
+                                    width: 3px;
+                                    background: Colors.primary;
+                                    border-radius: 1.5px;
+                                }
+
+                                quote-layout := VerticalLayout {
+                                    padding: Spacing.xs;
+                                    padding-left: Spacing.sm;
+                                    spacing: 2px;
+
+                                    Text {
+                                        text: root.reply-to-sender-name;
+                                        color: Colors.primary;
+                                        font-size: Typography.xs;
+                                        font-weight: Typography.semibold;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: root.reply-to-preview;
+                                        color: Colors.text-secondary;
+                                        font-size: Typography.xs;
+                                        overflow: elide;
+                                        max-width: root.width * 0.6;
+                                    }
                                 }
                             }
                         }
@@ -731,15 +793,22 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
-                        // Timestamp + reactions row
-                        // Own: [timestamp status] --- [reactions]
-                        // Others: [reactions] --- [edited timestamp]
+                        // Timestamp row
                         HorizontalLayout {
-                            spacing: Spacing.xs;
+                            spacing: 4px;
+                            alignment: root.is-own ? start : end;
 
-                            // Own messages: timestamp+status on LEFT
+                            // Own messages: timestamp+status
                             if root.is-own: HorizontalLayout {
                                 spacing: 4px;
+                                alignment: end;
+
+                                if root.is-pinned: Image {
+                                    source: Icons.pin;
+                                    width: 12px;
+                                    height: 12px;
+                                    colorize: Colors.primary;
+                                }
 
                                 Text {
                                     text: root.timestamp;
@@ -762,40 +831,16 @@ export component MessageItem inherits Rectangle {
                                 }
                             }
 
-                            // Others' messages: reactions on LEFT
-                            if !root.is-own && root.has-reactions: Text {
-                                text: root.reaction-summary;
-                                color: Colors.text-secondary;
-                                font-size: 11px;
-                                vertical-alignment: center;
-
-                                TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
-                                }
-                            }
-
-                            // Spacer
-                            Rectangle {
-                                horizontal-stretch: 1;
-                            }
-
-                            // Own messages: reactions on RIGHT
-                            if root.is-own && root.has-reactions: Text {
-                                text: root.reaction-summary;
-                                color: Colors.text-secondary;
-                                font-size: 11px;
-                                vertical-alignment: center;
-
-                                TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
-                                }
-                            }
-
-                            // Others' messages: timestamp on RIGHT
+                            // Others' messages: timestamp
                             if !root.is-own: HorizontalLayout {
                                 spacing: 4px;
+
+                                if root.is-pinned: Image {
+                                    source: Icons.pin;
+                                    width: 12px;
+                                    height: 12px;
+                                    colorize: Colors.primary;
+                                }
 
                                 if root.is-edited: Text {
                                     text: "edited";
@@ -811,8 +856,53 @@ export component MessageItem inherits Rectangle {
                                 }
                             }
                         }
+
                     }
                 }
+
+                // Reactions pill - straddling bubble's bottom corner
+                // Half inside / half outside on both X and Y
+                if root.has-reactions: Rectangle {
+                    height: 22px;
+                    width: reactions-row.preferred-width + 8px;
+                    background: Colors.surface-hover;
+                    border-radius: 11px;
+                    border-width: 1px;
+                    border-color: Colors.text-muted.with-alpha(0.15);
+                    x: root.is-own ? -self.width + 8px : bubble.width - 8px;
+                    y: bubble.height - 4px;
+
+                    reactions-row := HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        spacing: 6px;
+                        alignment: center;
+
+                        for reaction in root.reactions: HorizontalLayout {
+                            spacing: 2px;
+                            alignment: center;
+
+                            Text {
+                                text: reaction.emoji;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+
+                            if reaction.count > 1: Text {
+                                text: reaction.count;
+                                color: Colors.text-secondary;
+                                font-size: 10px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
+                    }
+                }
+                } // end wrapper
 
                 // Thread replies indicator (below bubble)
                 if root.reply-count > 0: HorizontalLayout {

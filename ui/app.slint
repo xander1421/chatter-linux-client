@@ -12,7 +12,7 @@ import { LoadingPage } from "pages/loading.slint";
 
 // Import main layout components
 import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData } from "sidebar/sidebar.slint";
-import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData } from "chat/chat_layout.slint";
+import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu } from "chat/message_context_menu.slint";
@@ -49,7 +49,7 @@ import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, Acti
 import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
 
 export component App inherits Rectangle {
     // ========== View routing ==========
@@ -71,6 +71,7 @@ export component App inherits Rectangle {
     in-out property <string> register-password: "";
     in-out property <string> register-confirm-password: "";
     in-out property <string> register-pin: "";
+    in-out property <string> register-server-url: "https://seeker-dance-ignored-clusters.trycloudflare.com";
     in property <bool> register-loading: false;
     in property <string> register-error: "";
     in property <image> register-avatar-source;
@@ -123,7 +124,8 @@ export component App inherits Rectangle {
 
     // ========== Reply-to state (Signal-style: sender_id + timestamp) ==========
     in-out property <bool> composer-is-replying: false;
-    in-out property <string> composer-reply-to-sender: "";
+    in-out property <string> composer-reply-to-sender: "";       // Sender UUID (for protocol)
+    in-out property <string> composer-reply-to-sender-name: ""; // Sender display name (for UI)
     in-out property <string> composer-reply-to-timestamp: "";
     in-out property <string> composer-reply-preview: "";
 
@@ -221,6 +223,7 @@ export component App inherits Rectangle {
     in-out property <length> context-menu-x: 0px;
     in-out property <length> context-menu-y: 0px;
     in property <bool> context-menu-is-own-message: false;
+    in property <bool> context-menu-can-delete-for-everyone: false;
     in property <bool> context-menu-is-pinned: false;
     in property <bool> context-menu-has-attachments: false;
     // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
@@ -241,6 +244,7 @@ export component App inherits Rectangle {
     callback pinned-prev-clicked();
     callback pinned-next-clicked();
     callback pinned-dismiss-clicked();
+    callback pinned-show-clicked();
     callback pinned-go-to-message();
 
     // ========== Thread panel state ==========
@@ -302,7 +306,8 @@ export component App inherits Rectangle {
     in property <string> profile-user-id: "";
     in property <string> profile-display-name: "";
     in property <string> profile-username: "";
-    in property <string> profile-avatar-url: "";
+    in property <image> profile-avatar-source;
+    in property <string> profile-initials: "";
     in property <string> profile-status-text: "";
     in property <string> profile-presence: "offline";
     in property <string> profile-bio: "";
@@ -436,8 +441,8 @@ export component App inherits Rectangle {
     in property <[JarvisMessageData]> jarvis-messages: [];
 
     // ========== Auth callbacks ==========
-    callback login(string, string);
-    callback register(string, string, string, string);  // username, password, display_name, pin
+    callback login(string, string, string);  // username, password, server_url
+    callback register(string, string, string, string, string);  // username, password, display_name, pin, server_url
     callback go-to-register();
     callback go-to-login();
 
@@ -459,6 +464,7 @@ export component App inherits Rectangle {
     // ========== Chat callbacks ==========
     callback search-clicked();
     callback chat-settings-clicked();
+    callback invite-member();
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string);  // (sender_id, timestamp_ns)
@@ -652,8 +658,8 @@ export component App inherits Rectangle {
             loading: root.login-loading;
             error: root.login-error;
 
-            login(u, p) => {
-                root.login(u, p);
+            login(u, p, s) => {
+                root.login(u, p, s);
             }
             register => {
                 root.go-to-register();
@@ -667,14 +673,15 @@ export component App inherits Rectangle {
             password <=> root.register-password;
             confirm-password <=> root.register-confirm-password;
             pin <=> root.register-pin;
+            server-url <=> root.register-server-url;
             loading: root.register-loading;
             error: root.register-error;
             avatar-source: root.register-avatar-source;
             has-avatar: root.register-has-avatar;
             selected-default-idx <=> root.register-selected-default-idx;
 
-            register(u, p, d, pin) => {
-                root.register(u, p, d, pin);
+            register(u, p, d, pin, s) => {
+                root.register(u, p, d, pin, s);
             }
             select-avatar => {
                 root.register-select-avatar();
@@ -793,6 +800,9 @@ export component App inherits Rectangle {
                     pending-attachments: root.pending-attachments;
                     composer-is-editing <=> root.composer-is-editing;
                     composer-edit-message-id <=> root.composer-edit-message-id;
+                    composer-is-replying: root.composer-is-replying;
+                    composer-reply-to-sender-name: root.composer-reply-to-sender-name;
+                    composer-reply-preview: root.composer-reply-preview;
 
                     // Picker state
                     emoji-picker-visible <=> root.composer-emoji-picker-visible;
@@ -808,6 +818,7 @@ export component App inherits Rectangle {
                     settings-clicked => { root.chat-settings-clicked(); }
                     voice-call-clicked => { root.start-voice-call(); }
                     video-call-clicked => { root.start-video-call(); }
+                    invite-clicked => { root.invite-member(); }
 
                     // Pinned bar (Telegram-style)
                     has-pinned-messages: root.has-pinned-messages;
@@ -818,6 +829,7 @@ export component App inherits Rectangle {
                     pinned-next-clicked => { root.pinned-next-clicked(); }
                     pinned-go-to-message => { root.pinned-go-to-message(); }
                     pinned-dismiss-clicked => { root.pinned-dismiss-clicked(); }
+                    pinned-show-clicked => { root.pinned-show-clicked(); }
                     message-clicked(id) => { root.message-clicked(id); }
                     reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
                     react-clicked(sender-id, timestamp-ns) => {
@@ -834,6 +846,7 @@ export component App inherits Rectangle {
                     send(text) => { root.send(text); }
                     send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
                     cancel-edit => { root.cancel-edit(); }
+                    cancel-reply => { root.cancel-reply(); }
                     attachment-clicked => { root.attachment-clicked(); }
                     emoji-clicked => { root.emoji-clicked(); }
                     gif-clicked => { root.gif-clicked(); }
@@ -1109,7 +1122,8 @@ export component App inherits Rectangle {
         user-id: root.profile-user-id;
         display-name: root.profile-display-name;
         username: root.profile-username;
-        avatar-url: root.profile-avatar-url;
+        avatar-source: root.profile-avatar-source;
+        initials: root.profile-initials;
         status-text: root.profile-status-text;
         presence: root.profile-presence;
         bio: root.profile-bio;
@@ -1747,6 +1761,7 @@ export component App inherits Rectangle {
         position-x: root.context-menu-x;
         position-y: root.context-menu-y;
         is-own-message: root.context-menu-is-own-message;
+        can-delete-for-everyone: root.context-menu-can-delete-for-everyone;
         is-pinned: root.context-menu-is-pinned;
         has-attachments: root.context-menu-has-attachments;
 
