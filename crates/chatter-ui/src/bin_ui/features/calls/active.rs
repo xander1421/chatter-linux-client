@@ -254,7 +254,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                         // Send hangup via CallSignalingService
                         {
-                            let signaling = ui_ctx.call_signaling();
+                            let signaling = ui_ctx.call_signaling().clone();
                             let call_id_str = call.id.to_string();
                             let ch_id = *channel_id;
                             tokio::spawn(async move {

@@ -584,7 +584,7 @@ async fn start_call_impl(
                 // =============================================================
                 let channel_id_clone = channel_id;
                 let call_id_str = call.id.to_string();
-                let signaling = ui_ctx.call_signaling();
+                let signaling = ui_ctx.call_signaling().clone();
 
                 // gRPC - run on tokio (fire-and-forget, no UI update needed)
                 tokio::spawn(async move {

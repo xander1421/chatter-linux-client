@@ -1,7 +1,7 @@
 //! SDK facade for chatter-core.
 //!
 //! [`ChatterClient`] is the main entry point for consumers of this library.
-//! It wraps the internal [`AppContext`] and [`UIContext`] with a clean,
+//! It wraps the internal [`AppContext`] and [`CoreServices`] with a clean,
 //! discoverable API.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::app::context::{AppContext, ContextError};
-use crate::app::ui_context::UIContext;
+use crate::app::core_services::CoreServices;
 use crate::domain::attachment::Attachment;
 use crate::domain::channel::{Channel, ChannelType};
 use crate::domain::message::Message;
@@ -79,13 +79,14 @@ impl ClientBuilder {
     /// or after `Runtime::new()`).
     pub fn build(self) -> Result<Arc<ChatterClient>, ClientError> {
         let ctx = AppContext::with_config(self.server_url)?;
-        let ui = ctx.ui_context();
+        let ui = ctx.core_services();
         Ok(Arc::new(ChatterClient {
             ctx,
             ui,
             tasks: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(0),
+            call_signaling: std::sync::OnceLock::new(),
         }))
     }
 }
@@ -105,6 +106,8 @@ pub enum ClientError {
     AlreadyStarted,
     #[error("auth error: {0}")]
     Auth(#[from] AuthError),
+    #[error("validation: {0}")]
+    Validation(String),
 }
 
 /// The main entry point for the chatter-core SDK.
@@ -135,11 +138,13 @@ pub enum ClientError {
 /// The `Drop` impl aborts background tasks but cannot await async cleanup.
 pub struct ChatterClient {
     ctx: AppContext,
-    ui: Arc<UIContext>,
+    ui: Arc<CoreServices>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
     started: AtomicBool,
     /// Epoch millis of last user activity (for idle detection).
     last_activity_ms: AtomicU64,
+    /// Cached call signaling service (persistent for pending state).
+    call_signaling: std::sync::OnceLock<crate::services::call_signaling::CallSignalingService>,
 }
 
 impl ChatterClient {
@@ -170,13 +175,87 @@ impl ChatterClient {
     pub fn dm_bootstrap(&self) -> &Arc<DmBootstrapService> { &self.ui.dm_bootstrap_service }
     pub fn channel_events(&self) -> &Arc<ChannelEventService> { &self.ui.channel_event_service }
 
-    /// Create a call signaling service for sending call key exchanges.
-    pub fn call_signaling(&self) -> crate::services::call_signaling::CallSignalingService {
-        crate::services::call_signaling::CallSignalingService::new(
-            self.messages().clone(),
-            self.mailbox_manager().clone(),
-            self.channels().clone(),
-        )
+    /// Get the call signaling service (persistent instance for pending state).
+    pub fn call_signaling(&self) -> &crate::services::call_signaling::CallSignalingService {
+        self.call_signaling.get_or_init(|| {
+            crate::services::call_signaling::CallSignalingService::new(
+                self.messages().clone(),
+                self.mailbox_manager().clone(),
+                self.channels().clone(),
+            )
+        })
+    }
+
+    // ── DM Call Orchestration ──────────────────────────────────────────
+
+    /// Start a DM call: generate ephemeral key, create call on server, send offer.
+    ///
+    /// Returns the call ID. The UI should show "Calling..." and wait for
+    /// `complete_dm_call()` when the peer answers.
+    pub async fn start_dm_call(
+        &self,
+        peer_id: &crate::domain::ids::UserId,
+        channel_id: crate::domain::ids::ChannelId,
+        call_type: crate::domain::call::CallType,
+        user_id: crate::domain::ids::UserId,
+    ) -> Result<crate::domain::ids::CallId, ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
+            .clone();
+        self.call_signaling()
+            .start_dm_call(peer_id, channel_id, call_type, &call_worker, user_id)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Complete an outgoing DM call after receiving the peer's ephemeral key answer.
+    ///
+    /// Returns verification data (emojis) for the UI.
+    pub async fn complete_dm_call(
+        &self,
+        peer_ephemeral_pk: [u8; 32],
+        call_id: &str,
+        peer_id: &crate::domain::ids::UserId,
+    ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
+            .clone();
+        self.call_signaling()
+            .complete_dm_call(
+                peer_ephemeral_pk,
+                call_id,
+                peer_id,
+                self.signal(),
+                &call_worker,
+            )
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Accept an incoming DM call: generate ephemeral key, derive shared secret, join call.
+    ///
+    /// Returns verification data (emojis) for the UI.
+    pub async fn accept_dm_call(
+        &self,
+        caller_ephemeral_pk: [u8; 32],
+        call_id: &str,
+        caller_id: &crate::domain::ids::UserId,
+        user_id: crate::domain::ids::UserId,
+    ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
+            .clone();
+        self.call_signaling()
+            .accept_dm_call(
+                caller_ephemeral_pk,
+                call_id,
+                caller_id,
+                self.signal(),
+                &call_worker,
+                user_id,
+            )
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
     // ── Events ──────────────────────────────────────────────────────────
@@ -221,7 +300,7 @@ impl ChatterClient {
         &self.ui.device_inbox_provider
     }
 
-    // ── Delegated UIContext methods ─────────────────────────────────────
+    // ── Delegated CoreServices methods ─────────────────────────────────────
 
     /// Initialize the call service if not already set. Safe to call multiple times.
     pub fn ensure_call_service(&self) {
@@ -433,6 +512,8 @@ impl ChatterClient {
     }
 
     /// Register a new account and start all background services.
+    ///
+    /// PIN must be exactly 6 ASCII digits if provided.
     pub async fn register(
         self: &Arc<Self>,
         username: &str,
@@ -442,6 +523,11 @@ impl ChatterClient {
         avatar: Option<&[u8]>,
         pin: Option<&str>,
     ) -> Result<LoginResult, ClientError> {
+        if let Some(p) = pin {
+            if p.len() != 6 || !p.chars().all(|c| c.is_ascii_digit()) {
+                return Err(ClientError::Validation("PIN must be exactly 6 digits".into()));
+            }
+        }
         let result = self.auth().do_register(
             username, password, display_name, device_name, avatar, pin,
         ).await?;
