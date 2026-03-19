@@ -1183,6 +1183,38 @@ Priority 4 (Bootstrap):
 **Details:**
 Multi-device is critical for users with phones + desktops. Current implementation only sends to primary device (device_id=1), causing messages to appear missing on secondary devices.
 
+### Phase 92: Call Orchestration to Core
+**Goal**: Move call state machine, key exchange orchestration, and call history from UI to core call services
+**Depends on**: Phase 91
+**Research**: Unlikely (internal refactoring, crypto already in core)
+**Status**: Not started
+**Plans**: 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 92 to break down)
+
+**Scope (~8 files):**
+
+Move from UI (`chatter-ui/src/bin_ui/features/calls/`) to core (`chatter-core/src/services/`):
+- `PendingOutgoingCall` state (key_exchange.rs thread_local) → CallWorkerHandle
+- Ephemeral key generation + offer sending (outgoing.rs) → `CallWorkerHandle::start_dm_call()`
+- Accept flow: ephemeral key gen + actor call + answer sending (incoming.rs) → `CallWorkerHandle::accept_dm_call()`
+- `PENDING_ANON_CALLS` HashMap + anon call state machine (anon_calls.rs) → CallWorkerHandle
+- Token acquisition for anon calls (outgoing.rs) → CallSignalingService
+- Call history storage for missed/declined (anon_calls.rs) → CallWorkerHandle
+- Group key generation + distribution trigger (outgoing.rs) → `CallWorkerHandle::start_group_call()`
+
+**Does NOT move (stays in UI):**
+- Slint property setting (ActiveCallData, verification emojis display)
+- Call timer start/stop
+- Video frame timer
+- Modal show/hide
+
+**Key insight:** All crypto (ECDH, HKDF, ephemeral keys, zeroization) is already in core (`crypto/call_key_provider.rs`, `signal/actor.rs`). Only the orchestration (pending state + actor calls + LiveKit updates) needs to move.
+
+**Details:**
+Based on architecture review identifying call orchestration as the biggest protocol/crypto leak from UI to core. The existing `CallWorkerHandle` and `CallSignalingService` are the right homes — no new service needed.
+
 ---
 
 ## Jarvis Progress
@@ -1200,3 +1232,4 @@ Multi-device is critical for users with phones + desktops. Current implementatio
 | 89 | Communication Analytics | 2 | Not started | - |
 | 90 | Jarvis Automation | 3 | Not started | - |
 | 91 | Multi-Device Support | 0 | Not started | - |
+| 92 | Call Orchestration to Core | 0 | Not started | - |

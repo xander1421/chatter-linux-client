@@ -308,6 +308,7 @@ None.
 - Phase 80 added: Local AI Integration (mistral.rs with actor pattern for GPU-accelerated local inference)
 - Phases 81-90 added: Jarvis AI Assistant milestone (UI integration, proactive intelligence, relationship intelligence, smart compose, semantic search, analytics, automation)
 - Phase 91 added: Multi-Device Support (encrypt to all linked devices, SentTranscript sync)
+- Phase 92 added: Call Orchestration to Core (move call state machine, key exchange, call history from UI to core call services)
 
 ## Session Continuity
 
