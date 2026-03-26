@@ -1216,6 +1216,44 @@ Move from UI (`chatter-ui/src/bin_ui/features/calls/`) to core (`chatter-core/sr
 **Details:**
 Based on architecture review identifying call orchestration as the biggest protocol/crypto leak from UI to core. The existing `CallWorkerHandle` and `CallSignalingService` are the right homes — no new service needed.
 
+### Phase 93: SVR Encrypted Key Backup
+**Goal**: Implement full Secure Value Recovery pipeline — encrypt identity/profile keys with PIN-derived SVR key, store on server, restore on new device
+**Depends on**: Phase 92
+**Research**: Likely (Signal SVR2/SVR3 design, rate-limiting enclave patterns)
+**Status**: Not started
+**Plans**: 0/5
+
+Plans:
+- [ ] 93-01: Server proto + migration + types (svr.proto, 000028 migration, Go domain types)
+- [ ] 93-02: Server SVR backup service + handler (repository, rate-limited service, ConnectRPC handler)
+- [ ] 93-03: Client backup crypto TDD (serialize/encrypt/decrypt round-trip with AES-256-GCM)
+- [ ] 93-04: Client SvrClient + SvrBackupService (gRPC client, service orchestration, ChatterClient facade)
+- [ ] 93-05: Client auth integration (backup after registration, restore on new device login)
+
+**Scope (server + client):**
+
+Server (Go):
+- New `svr.proto` with `StoreBackup` / `FetchBackup` / `DeleteBackup` RPCs
+- `svr_backups` Postgres table (user_id, encrypted_blob, version, created_at)
+- SVR service with PIN-attempt rate limiting (max 10 attempts, exponential backoff, lockout)
+- Backup versioning (overwrite on PIN change, single active backup per user)
+
+Client (Rust):
+- Backup creation: serialize identity keypair + profile key + signed prekey secrets → encrypt with AES-256-GCM using SVR secret
+- Backup upload via new `SvrClient` gRPC client
+- Restore flow: PIN entry → derive SVR secret → fetch encrypted blob → decrypt → hydrate local stores
+- Integration into auth_service login (detect "new device" → prompt for PIN restore)
+- `SvrKeypair::secret_bytes()` finally used for decrypt path
+
+**Key design decisions:**
+- AES-256-GCM encryption (not X25519 DH — SVR secret is symmetric, not a DH exchange)
+- Server stores opaque encrypted blob (zero-knowledge — cannot read keys)
+- Rate limiting replaces secure enclave (pragmatic alternative to SGX/nitro)
+- Backup re-encrypted on every PIN change (derive new SVR secret, re-encrypt, re-upload)
+
+**Details:**
+Completes the SVR feature started in Phase 77 (rename) and the crypto foundation in `crypto/svr.rs`. The SVR keypair generation and registration lock are fully wired but the actual backup/restore pipeline is missing. This phase adds the server storage, client encryption, and restore flow.
+
 ---
 
 ## Jarvis Progress
@@ -1234,3 +1272,4 @@ Based on architecture review identifying call orchestration as the biggest proto
 | 90 | Jarvis Automation | 3 | Not started | - |
 | 91 | Multi-Device Support | 0 | Not started | - |
 | 92 | Call Orchestration to Core | 2 | Done | 2026-03-19 |
+| 93 | SVR Encrypted Key Backup | 5 | Not started | - |
