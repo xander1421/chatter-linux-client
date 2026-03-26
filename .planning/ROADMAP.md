@@ -1220,11 +1220,11 @@ Based on architecture review identifying call orchestration as the biggest proto
 **Goal**: Implement full Secure Value Recovery pipeline — encrypt identity/profile keys with PIN-derived SVR key, store on server, restore on new device
 **Depends on**: Phase 92
 **Research**: Likely (Signal SVR2/SVR3 design, rate-limiting enclave patterns)
-**Status**: Not started
-**Plans**: 0/5
+**Status**: In progress
+**Plans**: 1/5
 
 Plans:
-- [ ] 93-01: Server proto + migration + types (svr.proto, 000028 migration, Go domain types)
+- [x] 93-01: Server proto + migration + types (svr.proto, 000028 migration, Go domain types)
 - [ ] 93-02: Server SVR backup service + handler (repository, rate-limited service, ConnectRPC handler)
 - [ ] 93-03: Client backup crypto TDD (serialize/encrypt/decrypt round-trip with AES-256-GCM)
 - [ ] 93-04: Client SvrClient + SvrBackupService (gRPC client, service orchestration, ChatterClient facade)
