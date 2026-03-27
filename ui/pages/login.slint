@@ -96,7 +96,7 @@ export component LoginPage inherits Rectangle {
                             colorize: Colors.text-muted;
                             y: (parent.height - self.height) / 2;
                             // Rotate down when expanded
-                            rotation-angle: root.show-advanced ? -90deg : 0deg;
+                            transform-rotation: root.show-advanced ? -90deg : 0deg;
                         }
 
                         Text {
