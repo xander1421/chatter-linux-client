@@ -66,6 +66,50 @@ impl SignalService {
         self.actor.derive_call_encryption_key(peer_id, device_id).await
     }
 
+    /// Generate a 60-digit safety number for a peer.
+    ///
+    /// Returns a numeric string that both parties should compare to verify
+    /// they share the same identity keys and are not subject to MITM.
+    pub async fn generate_safety_number(
+        &self,
+        local_user_id: &str,
+        peer_user_id: &str,
+    ) -> Result<String, ServiceError> {
+        self.actor
+            .generate_safety_number(local_user_id.to_string(), peer_user_id.to_string())
+            .await
+    }
+
+    /// Generate scannable fingerprint bytes for QR code verification.
+    pub async fn generate_scannable_fingerprint(
+        &self,
+        local_user_id: &str,
+        peer_user_id: &str,
+    ) -> Result<Vec<u8>, ServiceError> {
+        self.actor
+            .generate_scannable_fingerprint(local_user_id.to_string(), peer_user_id.to_string())
+            .await
+    }
+
+    /// Check if we have previously verified a peer's safety number.
+    pub fn is_peer_verified(&self, peer_user_id: &str) -> Result<bool, ServiceError> {
+        self.key_store
+            .is_peer_verified(peer_user_id)
+            .map_err(ServiceError::Storage)
+    }
+
+    /// Mark a peer as verified (or unverified) with their current safety number.
+    pub fn set_peer_verified(
+        &self,
+        peer_user_id: &str,
+        safety_number: &str,
+        verified: bool,
+    ) -> Result<(), ServiceError> {
+        self.key_store
+            .set_peer_verified(peer_user_id, safety_number, verified)
+            .map_err(ServiceError::Storage)
+    }
+
     /// Derive a call key for a specific call with a peer.
     pub async fn derive_call_key(
         &self,

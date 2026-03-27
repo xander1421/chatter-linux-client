@@ -299,6 +299,9 @@ export component MainWindow inherits Window {
     in property <bool> profile-is-blocked <=> app.profile-is-blocked;
     in property <bool> profile-is-self <=> app.profile-is-self;
     in property <bool> profile-loading <=> app.profile-loading;
+    in property <bool> profile-is-verified <=> app.profile-is-verified;
+    in property <string> profile-safety-number <=> app.profile-safety-number;
+    in-out property <bool> profile-show-safety-number <=> app.profile-show-safety-number;
 
     // Edit Profile data
     in-out property <string> edit-profile-display-name <=> app.edit-profile-display-name;
@@ -506,6 +509,8 @@ export component MainWindow inherits Window {
     callback profile-block-user <=> app.profile-block-user;
     callback profile-unblock-user <=> app.profile-unblock-user;
     callback profile-edit-profile <=> app.profile-edit-profile;
+    callback profile-view-safety-number <=> app.profile-view-safety-number;
+    callback profile-toggle-verified <=> app.profile-toggle-verified;
     callback edit-profile-save <=> app.edit-profile-save;
     callback edit-profile-change-avatar <=> app.edit-profile-change-avatar;
     callback friend-requests-switch-tab <=> app.friend-requests-switch-tab;

@@ -151,6 +151,7 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
 pub(crate) fn wire_profile_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let auth_state = ui_ctx.auth_state().clone();
     let user_state = ui_ctx.user_state().clone();
+    let ui_ctx_profile = ui_ctx.clone();
 
     let weak_window = window.as_weak();
 
@@ -158,12 +159,13 @@ pub(crate) fn wire_profile_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         let weak = weak_window.clone();
         let auth_state = auth_state.clone();
         let user_state = user_state.clone();
+        let ui_ctx = ui_ctx_profile.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 if let Some(user_id) = auth_state.get().current_user_id {
                     crate::bin_ui::features::modals::open_user_profile(
-                        &w, &user_id, &auth_state, &user_state,
+                        &w, &user_id, &auth_state, &user_state, Some(&ui_ctx),
                     );
                 }
             }

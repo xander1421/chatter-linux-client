@@ -341,6 +341,9 @@ export component App inherits Rectangle {
     in property <bool> profile-is-blocked: false;
     in property <bool> profile-is-self: false;
     in property <bool> profile-loading: false;
+    in property <bool> profile-is-verified: false;
+    in property <string> profile-safety-number: "";
+    in-out property <bool> profile-show-safety-number: false;
 
     // Edit Profile data
     in-out property <string> edit-profile-display-name: "";
@@ -558,6 +561,8 @@ export component App inherits Rectangle {
     callback profile-block-user();
     callback profile-unblock-user();
     callback profile-edit-profile();
+    callback profile-view-safety-number();
+    callback profile-toggle-verified();
     callback edit-profile-save(string, string);
     callback edit-profile-change-avatar();
 
@@ -1255,9 +1260,13 @@ export component App inherits Rectangle {
         is-blocked: root.profile-is-blocked;
         is-self: root.profile-is-self;
         loading: root.profile-loading;
+        is-verified: root.profile-is-verified;
+        safety-number: root.profile-safety-number;
+        show-safety-number <=> root.profile-show-safety-number;
 
         close => {
             root.active-modal = "none";
+            root.profile-show-safety-number = false;
         }
         send-message => {
             root.profile-send-message();
@@ -1276,6 +1285,12 @@ export component App inherits Rectangle {
         }
         edit-profile => {
             root.profile-edit-profile();
+        }
+        view-safety-number => {
+            root.profile-view-safety-number();
+        }
+        toggle-verified => {
+            root.profile-toggle-verified();
         }
     }
 

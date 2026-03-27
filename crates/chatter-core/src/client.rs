@@ -422,6 +422,66 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
+    // ── Safety number verification ────────────────────────────────────
+
+    /// Get the safety number for a peer (60-digit numeric fingerprint).
+    ///
+    /// Both users see the same number when their identity keys match.
+    /// Returns a formatted string with 12 groups of 5 digits.
+    pub async fn get_safety_number(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<String, ClientError> {
+        let local_user_id = self.ui.auth_state.get().current_user_id
+            .as_ref()
+            .ok_or_else(|| ClientError::Validation("Not logged in".into()))?
+            .to_string();
+
+        let safety_number = self.ui.signal_service
+            .generate_safety_number(&local_user_id, &peer_user_id.to_string())
+            .await
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+
+        Ok(safety_number)
+    }
+
+    /// Check if a peer has been marked as verified.
+    pub fn is_peer_verified(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<bool, ClientError> {
+        self.ui.signal_service
+            .is_peer_verified(&peer_user_id.to_string())
+            .map_err(|e| ClientError::Validation(e.to_string()))
+    }
+
+    /// Mark a peer as verified with their current safety number.
+    pub async fn mark_peer_verified(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), ClientError> {
+        let safety_number = self.get_safety_number(peer_user_id).await?;
+        self.ui.signal_service
+            .set_peer_verified(&peer_user_id.to_string(), &safety_number, true)
+            .map_err(|e| ClientError::Validation(e.to_string()))
+    }
+
+    /// Mark a peer as unverified.
+    pub fn mark_peer_unverified(
+        &self,
+        peer_user_id: &crate::domain::ids::UserId,
+    ) -> Result<(), ClientError> {
+        // Get existing safety number to preserve it
+        if let Ok(Some((safety_number, _))) = self.ui.signal_service.key_store
+            .get_peer_verification(&peer_user_id.to_string())
+        {
+            self.ui.signal_service
+                .set_peer_verified(&peer_user_id.to_string(), &safety_number, false)
+                .map_err(|e| ClientError::Validation(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     // ── Events ──────────────────────────────────────────────────────────
 
     pub fn event_bus(&self) -> &EventBus { &self.ui.event_bus }

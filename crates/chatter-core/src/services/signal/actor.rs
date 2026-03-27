@@ -87,6 +87,18 @@ pub enum SignalCommand {
     HasSession { address: ProtocolAddress, response: oneshot::Sender<Result<bool, ServiceError>> },
     ClearChannelSenderKeys { channel_id: ChannelId, response: oneshot::Sender<Result<(), ServiceError>> },
     MarkChannelForRotation { channel_id: ChannelId, response: oneshot::Sender<Result<(), ServiceError>> },
+    /// Generate a Signal safety number for a peer (60-digit fingerprint).
+    GenerateSafetyNumber {
+        local_user_id: String,
+        peer_user_id: String,
+        response: oneshot::Sender<Result<String, ServiceError>>,
+    },
+    /// Generate scannable fingerprint bytes for QR code.
+    GenerateScannableFingerprint {
+        local_user_id: String,
+        peer_user_id: String,
+        response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
+    },
 }
 
 /// Handle to the Signal Actor.
@@ -401,6 +413,52 @@ impl SignalActorHandle {
                                 .map(|s| s.is_some());
                             let _ = response.send(res);
                         }
+
+                        SignalCommand::GenerateSafetyNumber { local_user_id, peer_user_id, response } => {
+                            use libsignal_protocol::{IdentityKey, IdentityKeyStore};
+                            let res = (|| async {
+                                let local_pair = store.get_identity_key_pair().await
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                let local_key = local_pair.identity_key();
+
+                                let peer_bytes = store.key_store().get_identity_by_uuid(&peer_user_id)
+                                    .map_err(ServiceError::Storage)?
+                                    .ok_or_else(|| ServiceError::Crypto(CryptoError::SessionNotFound(
+                                        format!("No identity key for peer {}", peer_user_id),
+                                    )))?;
+                                let peer_key = IdentityKey::decode(&peer_bytes)
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+
+                                SessionManager::generate_fingerprint(
+                                    &local_user_id, local_key,
+                                    &peer_user_id, &peer_key,
+                                ).map_err(ServiceError::Crypto)
+                            })().await;
+                            let _ = response.send(res);
+                        }
+
+                        SignalCommand::GenerateScannableFingerprint { local_user_id, peer_user_id, response } => {
+                            use libsignal_protocol::{IdentityKey, IdentityKeyStore};
+                            let res = (|| async {
+                                let local_pair = store.get_identity_key_pair().await
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+                                let local_key = local_pair.identity_key();
+
+                                let peer_bytes = store.key_store().get_identity_by_uuid(&peer_user_id)
+                                    .map_err(ServiceError::Storage)?
+                                    .ok_or_else(|| ServiceError::Crypto(CryptoError::SessionNotFound(
+                                        format!("No identity key for peer {}", peer_user_id),
+                                    )))?;
+                                let peer_key = IdentityKey::decode(&peer_bytes)
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+
+                                SessionManager::generate_scannable_fingerprint(
+                                    &local_user_id, local_key,
+                                    &peer_user_id, &peer_key,
+                                ).map_err(ServiceError::Crypto)
+                            })().await;
+                            let _ = response.send(res);
+                        }
                     }
                 }
             });
@@ -514,5 +572,15 @@ impl SignalActorHandle {
 
     pub async fn has_session(&self, address: ProtocolAddress) -> Result<bool, ServiceError> {
         self.send(|tx| SignalCommand::HasSession { address, response: tx }).await?
+    }
+
+    /// Generate a 60-digit safety number for verifying a peer's identity.
+    pub async fn generate_safety_number(&self, local_user_id: String, peer_user_id: String) -> Result<String, ServiceError> {
+        self.send(|tx| SignalCommand::GenerateSafetyNumber { local_user_id, peer_user_id, response: tx }).await?
+    }
+
+    /// Generate scannable fingerprint bytes for QR code verification.
+    pub async fn generate_scannable_fingerprint(&self, local_user_id: String, peer_user_id: String) -> Result<Vec<u8>, ServiceError> {
+        self.send(|tx| SignalCommand::GenerateScannableFingerprint { local_user_id, peer_user_id, response: tx }).await?
     }
 }

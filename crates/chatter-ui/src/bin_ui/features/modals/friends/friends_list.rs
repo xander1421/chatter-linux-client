@@ -12,19 +12,21 @@ pub(crate) fn wire_view_profile(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     let weak_window = window.as_weak();
     let auth_state = ui_ctx.auth_state().clone();
     let user_state = ui_ctx.user_state().clone();
+    let ui_ctx_profile = ui_ctx.clone();
 
     window.on_friends_view_profile(move |user_id: SharedString| {
         let weak = weak_window.clone();
         let user_id_str = user_id.to_string();
         let auth_state = auth_state.clone();
         let user_state = user_state.clone();
+        let ui_ctx = ui_ctx_profile.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 match user_id_str.parse::<chatter_core::domain::ids::UserId>() {
                     Ok(uid) => {
                         crate::bin_ui::features::modals::open_user_profile(
-                            &w, &uid, &auth_state, &user_state,
+                            &w, &uid, &auth_state, &user_state, Some(&ui_ctx),
                         );
                     }
                     Err(e) => {

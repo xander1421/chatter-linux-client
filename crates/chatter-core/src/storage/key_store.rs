@@ -673,4 +673,67 @@ impl KeyStore {
             Err(e) => Err(StorageError::Database(e)),
         }
     }
+
+    // ── Peer verification ───────────────────────────────────────────────
+
+    /// Check if a peer's safety number has been marked as verified.
+    pub fn is_peer_verified(&self, peer_user_id: &str) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let result: Result<bool, _> = conn.query_row(
+            "SELECT is_verified FROM peer_verification WHERE peer_user_id = ?1",
+            params![peer_user_id],
+            |row| row.get::<_, bool>(0),
+        );
+        match result {
+            Ok(v) => Ok(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Save or update peer verification state.
+    ///
+    /// Stores the safety number that was verified so we can detect if the
+    /// identity key changes (safety number would differ → auto-unverify).
+    pub fn set_peer_verified(
+        &self,
+        peer_user_id: &str,
+        safety_number: &str,
+        verified: bool,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let now = Utc::now().to_rfc3339();
+        let verified_at = if verified { Some(&now) } else { None };
+
+        conn.execute(
+            "INSERT INTO peer_verification (peer_user_id, safety_number, is_verified, verified_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(peer_user_id) DO UPDATE SET
+                 safety_number = excluded.safety_number,
+                 is_verified = excluded.is_verified,
+                 verified_at = excluded.verified_at",
+            params![peer_user_id, safety_number, verified, verified_at],
+        )?;
+        Ok(())
+    }
+
+    /// Get the stored safety number for a peer (if any).
+    ///
+    /// Returns `None` if we have never generated a safety number for this peer.
+    pub fn get_peer_verification(
+        &self,
+        peer_user_id: &str,
+    ) -> Result<Option<(String, bool)>, StorageError> {
+        let conn = self.db.connection()?;
+        let result: Result<(String, bool), _> = conn.query_row(
+            "SELECT safety_number, is_verified FROM peer_verification WHERE peer_user_id = ?1",
+            params![peer_user_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
+        match result {
+            Ok(data) => Ok(Some(data)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
 }

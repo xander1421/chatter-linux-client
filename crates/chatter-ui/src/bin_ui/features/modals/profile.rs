@@ -28,10 +28,14 @@ pub fn open_user_profile(
     user_id: &UserId,
     auth_state: &chatter_core::state::AuthState,
     user_state: &chatter_core::state::UserState,
+    ui_ctx: Option<&Arc<ChatterClient>>,
 ) {
     let is_self = auth_state.get().current_user_id.as_ref() == Some(user_id);
 
     w.set_profile_user_id(user_id.to_string().into());
+    // Reset safety number state for fresh modal
+    w.set_profile_safety_number("".into());
+    w.set_profile_show_safety_number(false);
 
     if is_self {
         let state = auth_state.get();
@@ -62,6 +66,7 @@ pub fn open_user_profile(
         w.set_profile_is_self(true);
         w.set_profile_is_friend(false);
         w.set_profile_is_blocked(false);
+        w.set_profile_is_verified(false);
     } else {
         // Other-user path
         let profile = user_state.get_profile(user_id);
@@ -106,9 +111,15 @@ pub fn open_user_profile(
         w.set_profile_avatar_source(slint::Image::default());
         w.set_profile_presence(presence.into());
         w.set_profile_bio(bio.into());
+        // Check verification state
+        let is_verified = ui_ctx
+            .and_then(|ctx| ctx.is_peer_verified(user_id).ok())
+            .unwrap_or(false);
+
         w.set_profile_is_self(false);
         w.set_profile_is_friend(is_friend);
         w.set_profile_is_blocked(is_blocked);
+        w.set_profile_is_verified(is_verified);
     }
 
     w.set_active_modal("user-profile".into());
@@ -773,6 +784,109 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
         #[cfg(target_os = "android")]
         tracing::warn!("File picker not supported on Android");
+    });
+
+    // View safety number — generates and displays the 60-digit fingerprint
+    let weak_window = window.as_weak();
+    let ui_ctx_safety = ui_ctx.clone();
+    window.on_profile_view_safety_number(move || {
+        let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_safety.clone();
+
+        let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
+        let profile_user_id = match profile_user_id {
+            Some(id) if !id.is_empty() => id,
+            _ => {
+                tracing::error!("No profile user ID for safety number");
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+            let peer_id: UserId = match profile_user_id.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID for safety number: {}", e);
+                    return;
+                }
+            };
+
+            match ui_ctx.get_safety_number(&peer_id).await {
+                Ok(safety_number) => {
+                    // Format as 12 groups of 5 digits
+                    let formatted: String = safety_number
+                        .chars()
+                        .collect::<Vec<_>>()
+                        .chunks(5)
+                        .map(|chunk| chunk.iter().collect::<String>())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_safety_number(formatted.into());
+                            w.set_profile_show_safety_number(true);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to generate safety number: {}", e);
+                }
+            }
+        });
+    });
+
+    // Toggle verified state
+    let weak_window = window.as_weak();
+    let ui_ctx_verify = ui_ctx.clone();
+    window.on_profile_toggle_verified(move || {
+        let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_verify.clone();
+
+        let (profile_user_id, currently_verified) = match weak.upgrade() {
+            Some(w) => (w.get_profile_user_id().to_string(), w.get_profile_is_verified()),
+            None => return,
+        };
+
+        if profile_user_id.is_empty() {
+            return;
+        }
+
+        let peer_id: UserId = match profile_user_id.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!("Invalid user ID for verification toggle: {}", e);
+                return;
+            }
+        };
+
+        if currently_verified {
+            // Unverify — sync operation
+            match ui_ctx.mark_peer_unverified(&peer_id) {
+                Ok(()) => {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_profile_is_verified(false);
+                        }
+                    });
+                }
+                Err(e) => tracing::error!("Failed to unverify peer: {}", e),
+            }
+        } else {
+            // Verify — async (needs to generate safety number first)
+            tokio::spawn(async move {
+                match ui_ctx.mark_peer_verified(&peer_id).await {
+                    Ok(()) => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_profile_is_verified(true);
+                            }
+                        });
+                    }
+                    Err(e) => tracing::error!("Failed to verify peer: {}", e),
+                }
+            });
+        }
     });
 }
 

@@ -22,6 +22,9 @@ export component UserProfileModal inherits Rectangle {
     in property <bool> is-blocked: false;
     in property <bool> is-self: false;  // viewing own profile
     in property <bool> loading: false;
+    in property <bool> is-verified: false;
+    in property <string> safety-number: "";
+    in-out property <bool> show-safety-number: false;
 
     callback close();
     callback send-message();  // open DM
@@ -30,6 +33,8 @@ export component UserProfileModal inherits Rectangle {
     callback remove-friend();
     callback block-user();
     callback unblock-user();
+    callback view-safety-number();
+    callback toggle-verified();
 
     // Helper to get presence color from string
     pure function presence-color(p: string) -> color {
@@ -111,13 +116,35 @@ export component UserProfileModal inherits Rectangle {
                 padding-right: Spacing.lg;
                 padding-top: Spacing.sm;
 
-                // Display name
-                Text {
-                    text: root.display-name;
-                    color: Colors.text-primary;
-                    font-size: Typography.xl;
-                    font-weight: Typography.bold;
-                    horizontal-alignment: center;
+                // Display name with verification badge
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: root.display-name;
+                        color: Colors.text-primary;
+                        font-size: Typography.xl;
+                        font-weight: Typography.bold;
+                        vertical-alignment: center;
+                    }
+
+                    // Verified / Unverified badge (only for non-self users)
+                    if !root.is-self: Rectangle {
+                        width: 20px;
+                        height: 20px;
+                        border-radius: 10px;
+                        background: root.is-verified ? Colors.online.with-alpha(0.15) : Colors.text-muted.with-alpha(0.1);
+
+                        Text {
+                            text: root.is-verified ? "\u{2713}" : "?";
+                            color: root.is-verified ? Colors.online : Colors.text-muted;
+                            font-size: 11px;
+                            font-weight: Typography.bold;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
 
                 // Username
@@ -198,6 +225,121 @@ export component UserProfileModal inherits Rectangle {
                     wrap: word-wrap;
                     max-height: Typography.sm * 5;
                     overflow: elide;
+                }
+            }
+
+            // Safety number verification section (non-self users only)
+            if !root.is-self: VerticalLayout {
+                padding-left: Spacing.lg;
+                padding-right: Spacing.lg;
+                padding-top: Spacing.md;
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    height: 1px;
+                    background: Colors.text-muted.with-alpha(0.15);
+                }
+
+                // "View Safety Number" toggle button
+                safety-number-toggle := TouchArea {
+                    mouse-cursor: pointer;
+                    height: 32px;
+
+                    clicked => {
+                        if root.safety-number == "" {
+                            root.view-safety-number();
+                        } else {
+                            root.show-safety-number = !root.show-safety-number;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: space-between;
+                        padding-right: Spacing.xs;
+
+                        Text {
+                            text: "SAFETY NUMBER";
+                            color: Colors.text-muted;
+                            font-size: 11px;
+                            font-weight: Typography.bold;
+                            letter-spacing: 0.5px;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: root.show-safety-number ? "\u{25B2}" : "\u{25BC}";
+                            color: safety-number-toggle.has-hover ? Colors.text-primary : Colors.text-muted;
+                            font-size: 10px;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                // Expandable safety number panel
+                if root.show-safety-number && root.safety-number != "": VerticalLayout {
+                    spacing: Spacing.sm;
+                    padding-top: Spacing.xs;
+
+                    // Explanation text
+                    Text {
+                        text: "Compare this number with your contact to verify end-to-end encryption. If the numbers match, your conversation is secure.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        wrap: word-wrap;
+                    }
+
+                    // Safety number display (formatted in groups of 5)
+                    Rectangle {
+                        background: Colors.surface-hover;
+                        border-radius: Spacing.radius-md;
+                        height: safety-number-text.preferred-height + Spacing.md * 2;
+
+                        safety-number-text := Text {
+                            x: Spacing.md;
+                            y: Spacing.md;
+                            width: parent.width - Spacing.md * 2;
+                            text: root.safety-number;
+                            color: Colors.text-primary;
+                            font-size: 13px;
+                            font-weight: Typography.medium;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                            letter-spacing: 1px;
+                        }
+                    }
+
+                    // Verify / Unverify button
+                    HorizontalLayout {
+                        alignment: center;
+
+                        verify-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            width: verify-btn-rect.width;
+                            height: 32px;
+
+                            clicked => {
+                                root.toggle-verified();
+                            }
+
+                            verify-btn-rect := Rectangle {
+                                width: verify-btn-text.width + Spacing.lg * 2;
+                                height: 32px;
+                                border-radius: Spacing.radius-md;
+                                background: root.is-verified
+                                    ? (verify-touch.has-hover ? Colors.error.with-alpha(0.15) : Colors.text-muted.with-alpha(0.1))
+                                    : (verify-touch.has-hover ? Colors.online.with-alpha(0.2) : Colors.online.with-alpha(0.1));
+
+                                verify-btn-text := Text {
+                                    text: root.is-verified ? "Mark as Unverified" : "Mark as Verified";
+                                    color: root.is-verified ? Colors.error : Colors.online;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

@@ -299,16 +299,18 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     let weak_window = window.as_weak();
     let auth_state_edit = ui_ctx.auth_state().clone();
     let user_state_edit = ui_ctx.user_state().clone();
+    let ui_ctx_edit = ui_ctx.clone();
     window.on_settings_edit_profile(move || {
         let weak = weak_window.clone();
         let auth_state = auth_state_edit.clone();
         let user_state = user_state_edit.clone();
+        let ui_ctx = ui_ctx_edit.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 if let Some(user_id) = auth_state.get().current_user_id {
                     crate::bin_ui::features::modals::open_user_profile(
-                        &w, &user_id, &auth_state, &user_state,
+                        &w, &user_id, &auth_state, &user_state, Some(&ui_ctx),
                     );
                 }
             }
