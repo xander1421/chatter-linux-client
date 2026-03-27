@@ -190,21 +190,27 @@ fn extract_thumbnail_from_uri(uri: &str, seek_seconds: u64) -> Result<(Vec<u8>, 
 
                             if seek_pos > 0 {
                                 // Seek with FLUSH + KEY_UNIT for faster seeking
-                                let _ = pipeline.seek_simple(
+                                if let Err(e) = pipeline.seek_simple(
                                     gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
                                     gst::ClockTime::from_mseconds(seek_pos),
-                                );
+                                ) {
+                                    tracing::warn!("Pipeline seek failed: {}", e);
+                                }
                                 state = 1;
                             } else {
                                 // No seek needed, start playing immediately
-                                let _ = pipeline.set_state(gst::State::Playing);
+                                if let Err(e) = pipeline.set_state(gst::State::Playing) {
+                                    tracing::warn!("Pipeline set_state(Playing) failed: {:?}", e);
+                                }
                                 state = 2;
                             }
                         }
                         1 => {
                             // Second AsyncDone = seek completed, now play
                             tracing::debug!("Seek completed, starting playback");
-                            let _ = pipeline.set_state(gst::State::Playing);
+                            if let Err(e) = pipeline.set_state(gst::State::Playing) {
+                                tracing::warn!("Pipeline set_state(Playing) failed: {:?}", e);
+                            }
                             state = 2;
                         }
                         _ => {}

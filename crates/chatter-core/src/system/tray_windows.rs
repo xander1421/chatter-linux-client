@@ -96,9 +96,15 @@ impl SystemTray {
         let menu = Menu::new();
         let open_item = MenuItem::new(&format!("Open {}", APP_DISPLAY_NAME), true, None);
         let quit_item = MenuItem::new("Quit", true, None);
-        let _ = menu.append(&open_item);
-        let _ = menu.append(&PredefinedMenuItem::separator());
-        let _ = menu.append(&quit_item);
+        if let Err(e) = menu.append(&open_item) {
+            tracing::warn!("Failed to add Open menu item: {}", e);
+        }
+        if let Err(e) = menu.append(&PredefinedMenuItem::separator()) {
+            tracing::warn!("Failed to add menu separator: {}", e);
+        }
+        if let Err(e) = menu.append(&quit_item) {
+            tracing::warn!("Failed to add Quit menu item: {}", e);
+        }
 
         // Create a simple 16x16 RGBA icon (blue square as placeholder)
         let icon_data = create_default_icon();
@@ -128,9 +134,13 @@ impl SystemTray {
         loop {
             if let Ok(event) = menu_channel.recv() {
                 if event.id == open_id {
-                    let _ = event_tx.try_send(TrayMessage::OpenWindow);
+                    if let Err(e) = event_tx.try_send(TrayMessage::OpenWindow) {
+                        tracing::warn!("Failed to send OpenWindow tray message: {}", e);
+                    }
                 } else if event.id == quit_id {
-                    let _ = event_tx.try_send(TrayMessage::Quit);
+                    if let Err(e) = event_tx.try_send(TrayMessage::Quit) {
+                        tracing::warn!("Failed to send Quit tray message: {}", e);
+                    }
                     break;
                 }
             }
