@@ -133,9 +133,12 @@ impl InfrastructureContainer {
     /// # Errors
     ///
     /// Returns `ContextError` if any initialization step fails.
-    pub fn new() -> Result<Self, ContextError> {
+    pub fn new(data_dir: Option<String>) -> Result<Self, ContextError> {
         // 1. System initialization
-        let directories = Directories::new()?;
+        let directories = match data_dir {
+            Some(dir) => Directories::with_base_dir(std::path::PathBuf::from(dir))?,
+            None => Directories::new()?,
+        };
 
         // 2. Get database path first (needed for keyring uniqueness)
         let db_path = directories.database_path();
@@ -144,7 +147,7 @@ impl InfrastructureContainer {
         let keyring = Keyring::new(db_path.clone());
 
         // 4. Database passphrase (get from keyring or generate)
-        let mut passphrase = Self::passphrase_or_generate(&keyring)?;
+        let mut passphrase = Self::passphrase_or_generate(&keyring, &directories)?;
 
         // 5. Open database with passphrase
         let database = Database::open(&db_path, &passphrase)?;
@@ -250,11 +253,11 @@ impl InfrastructureContainer {
     /// On Android, the system keyring (secret-service/kwallet) is unavailable.
     /// Falls back to file-based storage in the app's private data directory,
     /// which is sandboxed by Android's per-app Linux UID.
-    fn passphrase_or_generate(keyring: &Keyring) -> Result<String, ContextError> {
+    fn passphrase_or_generate(keyring: &Keyring, directories: &Directories) -> Result<String, ContextError> {
         // On Android, use file-based passphrase storage (app sandbox protects it)
         #[cfg(target_os = "android")]
         {
-            let passphrase_file = std::path::Path::new("/data/data/com.chatter.client/files/data/.db_key");
+            let passphrase_file = directories.data_dir().join(".db_key");
             if let Ok(existing) = std::fs::read_to_string(passphrase_file) {
                 let trimmed = existing.trim().to_string();
                 if !trimmed.is_empty() {
@@ -288,6 +291,7 @@ impl InfrastructureContainer {
 
         #[cfg(not(target_os = "android"))]
         {
+            let _ = directories; // used only on Android
             const MAX_RETRIES: u32 = 6;
             const RETRY_DELAY_SECS: u64 = 5;
 

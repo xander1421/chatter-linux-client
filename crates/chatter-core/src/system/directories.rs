@@ -50,44 +50,48 @@ pub struct Directories {
 impl Directories {
     /// Creates a new Directories instance and ensures all directories exist.
     ///
+    /// On Android, use [`Directories::with_base_dir`] instead — XDG directories
+    /// are not available and the app must provide its files directory.
+    ///
     /// # Errors
     ///
     /// Returns `SystemError::DirectoryInit` if XDG directories cannot be determined.
     /// Returns `SystemError::DirectoryCreate` if directories cannot be created.
     pub fn new() -> Result<Self, SystemError> {
-        // On Android, XDG/HOME directories don't exist.
-        // Use the app's internal storage path instead.
-        #[cfg(target_os = "android")]
-        let (config_dir, data_dir, cache_dir, runtime_dir) = {
-            // Android apps write to /data/data/<package>/files/
-            let base = PathBuf::from("/data/data/com.chatter.client/files");
-            (
-                base.join("config"),
-                base.join("data"),
-                base.join("cache"),
-                None::<PathBuf>,
-            )
-        };
+        let project_dirs = ProjectDirs::from("com", "chatter", APP_ID)
+            .ok_or(SystemError::DirectoryInit)?;
 
-        #[cfg(not(target_os = "android"))]
-        let (config_dir, data_dir, cache_dir, runtime_dir) = {
-            let project_dirs = ProjectDirs::from("com", "chatter", APP_ID)
-                .ok_or(SystemError::DirectoryInit)?;
-            (
-                project_dirs.config_dir().to_path_buf(),
-                project_dirs.data_dir().to_path_buf(),
-                project_dirs.cache_dir().to_path_buf(),
-                project_dirs.runtime_dir().map(|p| p.to_path_buf()),
-            )
-        };
+        Self::init(
+            project_dirs.config_dir().to_path_buf(),
+            project_dirs.data_dir().to_path_buf(),
+            project_dirs.cache_dir().to_path_buf(),
+            project_dirs.runtime_dir().map(|p| p.to_path_buf()),
+        )
+    }
 
-        // Create directories with secure permissions (0700)
+    /// Creates a Directories instance rooted at `base_dir`.
+    ///
+    /// Used on Android where `base_dir` is `context.filesDir`. Subdirectories
+    /// `config/`, `data/`, and `cache/` are created under it.
+    pub fn with_base_dir(base_dir: PathBuf) -> Result<Self, SystemError> {
+        Self::init(
+            base_dir.join("config"),
+            base_dir.join("data"),
+            base_dir.join("cache"),
+            None,
+        )
+    }
+
+    fn init(
+        config_dir: PathBuf,
+        data_dir: PathBuf,
+        cache_dir: PathBuf,
+        runtime_dir: Option<PathBuf>,
+    ) -> Result<Self, SystemError> {
         create_secure_dir(&config_dir)?;
         create_secure_dir(&data_dir)?;
         create_secure_dir(&cache_dir)?;
 
-        // Runtime directory is optional (may not exist on all systems)
-        // Runtime dirs typically already have correct permissions from systemd
         if let Some(ref runtime) = runtime_dir {
             let _ = create_secure_dir(runtime);
         }

@@ -60,11 +60,12 @@ use crate::system::Directories;
 #[derive(Default)]
 pub struct ClientBuilder {
     server_url: Option<String>,
+    data_dir: Option<String>,
 }
 
 impl ClientBuilder {
     pub fn new() -> Self {
-        Self { server_url: None }
+        Self { server_url: None, data_dir: None }
     }
 
     /// Set the server URL. Falls back to `CHATTER_SERVER_URL` env var, then built-in default.
@@ -73,12 +74,19 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the base data directory. Required on Android (`context.filesDir`).
+    /// On desktop, XDG directories are used by default.
+    pub fn data_dir(mut self, dir: impl Into<String>) -> Self {
+        self.data_dir = Some(dir.into());
+        self
+    }
+
     /// Build the client. Initializes database, crypto, and network pool.
     ///
     /// Must be called within a tokio runtime (e.g. inside `#[tokio::main]`
     /// or after `Runtime::new()`).
     pub fn build(self) -> Result<Arc<ChatterClient>, ClientError> {
-        let ctx = AppContext::with_config(self.server_url)?;
+        let ctx = AppContext::with_config(self.server_url, self.data_dir)?;
         let ui = ctx.core_services();
         Ok(Arc::new(ChatterClient {
             ctx,

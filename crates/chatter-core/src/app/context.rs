@@ -53,8 +53,8 @@ pub struct AppContext {
 
 impl AppContext {
     /// Create a new AppContext, initializing all subsystems.
-    pub fn new() -> Result<Self, ContextError> {
-        let infrastructure = Arc::new(InfrastructureContainer::new()?);
+    pub fn new(data_dir: Option<String>) -> Result<Self, ContextError> {
+        let infrastructure = Arc::new(InfrastructureContainer::new(data_dir)?);
         
         // Create shared OnceLocks for post-boot services (shared with CoreServices)
         let device_inbox_provider = Arc::new(std::sync::OnceLock::new());
@@ -81,16 +81,18 @@ impl AppContext {
         })
     }
 
-    /// Create a new AppContext with an optional server URL override.
+    /// Create a new AppContext with optional overrides.
     ///
     /// If `server_url` is `Some(url)`, that URL is used instead of the
     /// `CHATTER_SERVER_URL` environment variable or the built-in default.
-    pub fn with_config(server_url: Option<String>) -> Result<Self, ContextError> {
+    /// If `data_dir` is `Some(path)`, that path is used as the base directory
+    /// for config, data, and cache (required on Android).
+    pub fn with_config(server_url: Option<String>, data_dir: Option<String>) -> Result<Self, ContextError> {
         if let Some(url) = server_url {
             // SAFETY: Called before any threads are spawned (single-threaded init).
             unsafe { std::env::set_var(super::infrastructure::SERVER_URL_ENV, &url); }
         }
-        Self::new()
+        Self::new(data_dir)
     }
 
     /// Get the UI context - the primary API for UI code.
