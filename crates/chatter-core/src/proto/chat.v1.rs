@@ -5333,6 +5333,30 @@ pub struct DeleteBackupRequest {
     #[prost(bytes = "vec", tag = "1")]
     pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
 }
+// ==================== SVR Change PIN ====================
+/// ChangePinBackupRequest - atomically re-encrypt backup with new PIN-derived key
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChangePinBackupRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub encrypted_backup: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub new_backup_id_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "3")]
+    pub old_backup_id_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag = "4")]
+    pub version: u32,
+    #[prost(bytes = "vec", tag = "5")]
+    pub new_registration_lock: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "6")]
+    pub new_svr_public_key: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChangePinBackupResponse {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+}
 /// Encoded file descriptor set for the `chat.v1` package
 pub const FILE_DESCRIPTOR_SET: &[u8] = &[
     0x0a, 0x92, 0x6f, 0x0a, 0x25, 0x70, 0x6b, 0x67, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x63,

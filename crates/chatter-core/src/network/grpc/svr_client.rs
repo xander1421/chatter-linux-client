@@ -8,8 +8,8 @@ use tonic::transport::Channel;
 use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
-    svr_service_client::SvrServiceClient, DeleteBackupRequest, FetchBackupRequest,
-    StoreBackupRequest,
+    svr_service_client::SvrServiceClient, ChangePinBackupRequest, DeleteBackupRequest,
+    FetchBackupRequest, StoreBackupRequest,
 };
 
 /// Result of a successful backup fetch.
@@ -119,6 +119,50 @@ impl SvrClient {
             .delete_backup(request)
             .await
             .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Atomically re-encrypt a backup with a new PIN-derived key.
+    ///
+    /// The server verifies that the `old_backup_id_hash` matches the current
+    /// backup before accepting the change. On success, the server replaces the
+    /// backup with the new ciphertext and updates the registration lock and
+    /// SVR public key.
+    ///
+    /// # Arguments
+    ///
+    /// * `encrypted_backup` - New AES-256-GCM ciphertext (nonce || ciphertext || tag)
+    /// * `new_backup_id_hash` - HMAC-SHA256(new_svr_secret, "BackupId")
+    /// * `old_backup_id_hash` - HMAC-SHA256(old_svr_secret, "BackupId")
+    /// * `version` - Monotonic version counter (must be > current)
+    /// * `new_registration_lock` - Registration lock derived from new PIN
+    /// * `new_svr_public_key` - SVR public key derived from new PIN
+    ///
+    /// # Returns
+    ///
+    /// The version confirmed by the server.
+    pub async fn change_pin_backup(
+        &mut self,
+        encrypted_backup: Vec<u8>,
+        new_backup_id_hash: Vec<u8>,
+        old_backup_id_hash: Vec<u8>,
+        version: u32,
+        new_registration_lock: Vec<u8>,
+        new_svr_public_key: Vec<u8>,
+    ) -> Result<u32, NetworkError> {
+        let request = ChangePinBackupRequest {
+            encrypted_backup,
+            new_backup_id_hash,
+            old_backup_id_hash,
+            version,
+            new_registration_lock,
+            new_svr_public_key,
+        };
+
+        self.inner
+            .change_pin_backup(request)
+            .await
+            .map(|r| r.into_inner().version)
             .map_err(|s| NetworkError::from_status(&s))
     }
 }
