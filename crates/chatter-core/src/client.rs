@@ -1053,6 +1053,7 @@ impl ChatterClient {
         // svr_keypair is dropped here (zeroizes secret via Drop impl)
 
         // 7. Call service to re-encrypt and upload
+        //    If no backup exists yet, fall back to creating a new one with the new PIN.
         let result = self
             .svr_backup()
             .change_pin_backup(
@@ -1065,6 +1066,21 @@ impl ChatterClient {
             )
             .await;
 
+        let final_result = match &result {
+            Err(crate::services::svr_backup_service::SvrBackupError::BackupNotFound)
+            | Err(crate::services::svr_backup_service::SvrBackupError::Network(
+                crate::error::NetworkError::NotFound(_),
+            )) => {
+                // No existing backup — create one with the new PIN instead
+                tracing::info!("No existing SVR backup found, creating new backup with new PIN");
+                self.svr_backup()
+                    .create_and_upload_backup(&new_svr_secret, &identity_keypair, &profile_key)
+                    .await
+                    .map(|_| ())
+            }
+            _ => result.map(|_| ()),
+        };
+
         // 8. Zeroize ALL sensitive intermediates (both success and error paths)
         old_svr_secret.zeroize();
         new_svr_secret.zeroize();
@@ -1072,7 +1088,7 @@ impl ChatterClient {
         profile_key.zeroize();
         new_reg_lock.zeroize();
 
-        result.map_err(|e| ClientError::Validation(format!("PIN change failed: {}", e)))?;
+        final_result.map_err(|e| ClientError::Validation(format!("PIN change failed: {}", e)))?;
         tracing::info!("PIN changed successfully");
         Ok(())
     }
