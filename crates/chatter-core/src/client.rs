@@ -87,6 +87,7 @@ impl ClientBuilder {
             started: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(0),
             call_signaling: std::sync::OnceLock::new(),
+            svr_backup_service: std::sync::OnceLock::new(),
         }))
     }
 }
@@ -145,6 +146,8 @@ pub struct ChatterClient {
     last_activity_ms: AtomicU64,
     /// Cached call signaling service (persistent for pending state).
     call_signaling: std::sync::OnceLock<crate::services::call_signaling::CallSignalingService>,
+    /// Cached SVR backup service.
+    svr_backup_service: std::sync::OnceLock<crate::services::svr_backup_service::SvrBackupService>,
 }
 
 impl ChatterClient {
@@ -174,6 +177,22 @@ impl ChatterClient {
     pub fn local_ai(&self) -> &Arc<LocalAIService> { &self.ui.local_ai_service }
     pub fn dm_bootstrap(&self) -> &Arc<DmBootstrapService> { &self.ui.dm_bootstrap_service }
     pub fn channel_events(&self) -> &Arc<ChannelEventService> { &self.ui.channel_event_service }
+    pub fn notifications(&self) -> &Arc<crate::services::notification_service::NotificationService> { &self.ui.notification_service }
+
+    /// Get the SVR backup service (lazy-initialized, persistent instance).
+    pub fn svr_backup(&self) -> &crate::services::svr_backup_service::SvrBackupService {
+        self.svr_backup_service.get_or_init(|| {
+            let settings = Arc::new(
+                crate::storage::repositories::settings_repo::SettingsRepository::new(
+                    self.ui.database.clone(),
+                ),
+            );
+            crate::services::svr_backup_service::SvrBackupService::new(
+                self.ui.grpc_pool.clone(),
+                settings,
+            )
+        })
+    }
 
     /// Get the call signaling service (persistent instance for pending state).
     pub fn call_signaling(&self) -> &crate::services::call_signaling::CallSignalingService {
@@ -208,6 +227,62 @@ impl ChatterClient {
             .start_dm_call(peer_id, channel_id, call_type, &call_worker, user_id)
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Start a group call in a channel: generate key, initiate on server, distribute key.
+    ///
+    /// Returns a `CallSetupResult` with call_id and verification emojis for the UI.
+    pub async fn start_group_call(
+        &self,
+        channel_id: crate::domain::ids::ChannelId,
+        call_type: crate::domain::call::CallType,
+        user_id: crate::domain::ids::UserId,
+    ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
+        use crate::crypto::generate_group_call_key;
+        use crate::services::call_verification::CallVerification;
+
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
+            .clone();
+
+        let group_key = generate_group_call_key();
+
+        let call_type_str = match call_type {
+            crate::domain::call::CallType::Voice => "Voice Call",
+            crate::domain::call::CallType::Video => "Video Call",
+            crate::domain::call::CallType::Group => "Group Call",
+        };
+
+        let call = call_worker
+            .initiate_call(channel_id, call_type_str, call_type, &group_key, user_id)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+
+        // Publish microphone immediately
+        if let Err(e) = call_worker.publish_microphone(None).await {
+            tracing::error!("Failed to publish microphone: {}", e);
+        }
+
+        // Distribute key to all channel members (fire-and-forget)
+        let call_id_str = call.id.to_string();
+        let signaling = self.call_signaling().clone();
+        let ch_id = channel_id;
+        tokio::spawn(async move {
+            match signaling.distribute_group_call_key(&ch_id, &call_id_str, group_key, 0).await {
+                Ok(count) => tracing::info!(call_id = %call_id_str, sent = count, "Group call key distributed"),
+                Err(e) => tracing::error!(call_id = %call_id_str, error = %e, "Failed to distribute group call key"),
+            }
+        });
+
+        let verification = CallVerification::derive_verification_emojis(&group_key, &call.id.to_string());
+        let emojis = CallVerification::to_slint_tuple(&verification);
+
+        Ok(crate::domain::call::CallSetupResult {
+            call_id: call.id,
+            channel_id,
+            verification_emojis: [emojis.0, emojis.1, emojis.2, emojis.3],
+            is_video: matches!(call_type, crate::domain::call::CallType::Video),
+        })
     }
 
     /// Complete an outgoing DM call after receiving the peer's ephemeral key answer.
@@ -1038,6 +1113,153 @@ impl ChatterClient {
         ) {
             tracing::error!(error = %e, "Failed to store anon call history");
         }
+    }
+
+    // ── Call lifecycle ─────────────────────────────────────────────
+
+    /// End an active DM/channel call: send hangup, store history, leave.
+    ///
+    /// `duration_secs` is the call duration from the UI timer.
+    pub async fn end_dm_call(&self, duration_secs: i64) -> Result<(), ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
+        self.call_signaling()
+            .end_dm_call(call_worker, duration_secs)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// End an active anonymous call: send hangup, store history, leave.
+    ///
+    /// Returns the conversation_id for UI bubble insertion.
+    pub async fn end_anon_call(&self, duration_secs: i64) -> Result<Option<crate::domain::anon_dm::AnonDmId>, ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
+        self.call_signaling()
+            .end_anon_call(call_worker, duration_secs)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Handle a participant departing from a group call.
+    ///
+    /// If we are the initiator of a channel-based group call, generates a new
+    /// random encryption key, rotates it locally, and redistributes to remaining
+    /// members so the departed participant can't decrypt future frames.
+    ///
+    /// Only the initiator rotates to avoid race conditions.
+    pub async fn handle_participant_departed(&self) -> Result<(), ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
+
+        let call = match call_worker.active_call().await {
+            Some(c) => c,
+            None => return Ok(()), // No active call
+        };
+
+        // Only rotate for channel-based group calls (not anon, not DM).
+        // Anonymous calls have a random channel_id that won't resolve.
+        let channel = match self.channels().get_channel_local(&call.channel_id) {
+            Ok(Some(c)) => c,
+            _ => return Ok(()),
+        };
+
+        use crate::domain::channel::ChannelType;
+        if matches!(channel.channel_type, ChannelType::DirectMessage | ChannelType::SavedMessages) {
+            return Ok(());
+        }
+
+        // Only the initiator rotates to prevent race conditions
+        let my_id = self.sessions().current_user_id()
+            .ok_or_else(|| ClientError::Inbox("not logged in".into()))?;
+        if my_id != call.initiator_id {
+            return Ok(());
+        }
+
+        // Generate new random key and rotate locally
+        let new_key = crate::crypto::generate_group_call_key();
+        let epoch = call_worker.rotate_key(new_key).await
+            .map_err(|e| ClientError::Inbox(format!("key rotation failed: {e}")))?;
+
+        // Brief delay for LiveKit key propagation before peers receive new-key frames
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        // Redistribute the new key to remaining channel members
+        let call_id = call.id.to_string();
+        match self.call_signaling()
+            .distribute_group_call_key(&call.channel_id, &call_id, new_key, epoch)
+            .await
+        {
+            Ok(count) => {
+                tracing::info!(epoch, sent = count, "Rotated group call key after participant departure");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to redistribute rotated group call key");
+            }
+        }
+
+        Ok(())
+    }
+
+    // ── AI Integration ─────────────────────────────────────────────
+
+    /// Map a provider string to the proto IntegrationType.
+    fn ai_provider_type(provider: &str) -> crate::proto::chat_v1::IntegrationType {
+        use crate::proto::chat_v1::IntegrationType;
+        match provider {
+            "claude" => IntegrationType::Claude,
+            "openai" => IntegrationType::Openai,
+            _ => IntegrationType::Custom,
+        }
+    }
+
+    /// List available AI models for a provider.
+    ///
+    /// Returns `(id, display_name)` pairs so the UI doesn't need proto types.
+    pub async fn list_ai_models(
+        &self,
+        provider: &str,
+    ) -> Result<Vec<(String, String)>, ClientError> {
+        let models = self.ai().list_models(Self::ai_provider_type(provider))
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+        Ok(models.into_iter().map(|m| (m.id, m.display_name)).collect())
+    }
+
+    /// Create an AI integration and attach it to a channel.
+    pub async fn create_ai_integration(
+        &self,
+        name: &str,
+        provider: &str,
+        model: &str,
+        channel_id: &str,
+    ) -> Result<(), ClientError> {
+        use crate::proto::chat_v1::IntegrationConfig;
+
+        let config = IntegrationConfig {
+            model: model.to_string(),
+            ..Default::default()
+        };
+
+        let integration = self.ai().create(name, Self::ai_provider_type(provider), Some(config))
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+
+        self.ai().attach_to_channel(&integration.id, channel_id)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Handle remote hangup: store history, disconnect locally.
+    pub async fn handle_remote_hangup(&self, duration_secs: i64) -> Result<(), ClientError> {
+        let call_worker = self.call_service().get()
+            .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
+        self.call_signaling()
+            .handle_remote_hangup(call_worker, duration_secs)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
     // ── Data sync ───────────────────────────────────────────────────

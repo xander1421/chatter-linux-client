@@ -41,7 +41,6 @@ pub mod read_receipt_service;
 pub mod presence_service;
 pub mod ephemeral_message;
 pub mod ephemeral_service;
-pub mod saved_message_service;
 pub mod forward_service;
 pub mod mention_service;
 pub mod embed_service;
@@ -54,6 +53,7 @@ pub mod sealed_sender;
 pub mod fanout;
 pub mod anon_group;
 pub mod anon_dm;
+pub mod svr_backup_service;
 pub mod jarvis;
 
 // Re-exports for DM bootstrap service
@@ -95,11 +95,6 @@ pub use ai_service::{AIError, AIService};
 // Re-exports for AI summarization service
 pub use ai_summarize::{AISummarizeService, SummarizeError};
 
-// Re-exports for saved message service
-pub use saved_message_service::{DecryptedSavedMessage, SavedMessageError, SavedMessageService};
-
-// Re-export SavedMessageSource from crypto for convenience
-pub use crate::crypto::SavedMessageSource;
 pub mod signal_service;
 pub mod mailbox_manager;
 pub mod inbox_processor;
@@ -126,6 +121,7 @@ pub use message_gateway::{
     build_pin_content, build_pin_content_with_channel,
     build_edit_content, build_edit_content_with_channel,
     build_delete_for_me_content,
+    build_saved_message_sync_content,
     build_delete_for_everyone_content, build_delete_for_everyone_content_with_channel,
     // DM call key exchange (ephemeral keys for PFS)
     build_call_key_offer, build_call_key_answer,
@@ -156,3 +152,6 @@ pub use anon_dm::{AnonDmError, AnonDmService};
 
 // Re-exports for Jarvis AI assistant
 pub use jarvis::{JarvisError, JarvisService, JarvisBackground, JarvisBackgroundBuilder};
+
+// Re-exports for SVR backup service
+pub use svr_backup_service::{SvrBackupError, SvrBackupService, RestoreResult};
