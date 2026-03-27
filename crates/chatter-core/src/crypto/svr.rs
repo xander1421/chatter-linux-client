@@ -55,21 +55,38 @@ pub fn derive_svr_secret(pin: &str, salt: &str) -> Result<[u8; 32], CryptoError>
 /// Signal: HMAC-SHA256(svr_secret, "Registration Lock")
 /// Server stores the hash; future re-registrations must present matching token.
 pub fn derive_registration_lock(pin: &str, username: &str) -> Result<[u8; 32], CryptoError> {
-    let svr_secret = derive_svr_secret(pin, username)?;
+    let mut svr_secret = derive_svr_secret(pin, username)?;
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_from_slice(&svr_secret)
         .expect("HMAC can take key of any size");
     mac.update(b"Registration Lock");
     let result = mac.finalize();
+
+    // SECURITY: Zeroize intermediate secret immediately after HMAC computation
+    svr_secret.zeroize();
+
     let mut lock = [0u8; 32];
     lock.copy_from_slice(&result.into_bytes());
     Ok(lock)
 }
 
 /// SVR Keypair for Secure Value Recovery.
+///
+/// # Security: Zeroize on Drop
+///
+/// The `secret` field (`StaticSecret` from x25519-dalek) implements `Zeroize` but does NOT
+/// implement `ZeroizeOnDrop`. We explicitly implement `Drop` to ensure the private key material
+/// is zeroized when the keypair goes out of scope, preventing key leakage through memory.
+/// The `zeroize` feature is enabled on `x25519-dalek` in Cargo.toml to support this.
 pub struct SvrKeypair {
     secret: StaticSecret,
     public: PublicKey,
+}
+
+impl Drop for SvrKeypair {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+    }
 }
 
 impl SvrKeypair {

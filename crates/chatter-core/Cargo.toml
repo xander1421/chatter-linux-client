@@ -50,7 +50,7 @@ block-padding = "0.3"
 openssl = "0.10"
 chacha20poly1305 = "0.10"
 hpke = "0.12"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "pem"] }
 xeddsa = "1.0"
 curve25519-dalek = { version = "4", features = ["digest"] }

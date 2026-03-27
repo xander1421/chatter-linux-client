@@ -15,6 +15,7 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use zeroize::Zeroize;
 
 use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
@@ -488,7 +489,7 @@ impl AuthService {
         let username_hash = hash_username_with_profile_key(username, &profile_key);
 
         // Derive SVR public key and registration lock - required for registration
-        let (svr_public_key, registration_lock) = if let Some(p) = pin {
+        let (svr_public_key, mut registration_lock) = if let Some(p) = pin {
             // Validate PIN is exactly 6 digits
             if p.len() != 6 || !p.chars().all(|c| c.is_ascii_digit()) {
                 return Err(AuthError::RegistrationFailed("PIN must be exactly 6 digits".to_string()));
@@ -653,8 +654,12 @@ impl AuthService {
                 &challenge_response,
                 &registration_lock, // SECURITY: Prevents account takeover without PIN
             )
-            .await
-            .map_err(|e| AuthError::RegistrationFailed(e.to_string()))?;
+            .await;
+
+        // SECURITY: Zeroize registration lock immediately after use (both success and error paths)
+        registration_lock.zeroize();
+
+        let result = result.map_err(|e| AuthError::RegistrationFailed(e.to_string()))?;
 
         // Extract user_id from registration result (server-assigned)
         let user_id: UserId = result.user_id.parse().map_err(|_| {
