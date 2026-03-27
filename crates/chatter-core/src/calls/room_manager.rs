@@ -1,9 +1,7 @@
 //! LiveKit room connection management.
 
-// LiveKit types don't implement Send+Sync, and MutexGuard across await is intentional
-// since we need to hold state during room operations
+// LiveKit types don't implement Send+Sync
 #![allow(clippy::arc_with_non_send_sync)]
-#![allow(clippy::await_holding_lock)]
 
 use livekit::prelude::*;
 use livekit::e2ee::{E2eeOptions, EncryptionType, key_provider::{KeyProvider, KeyProviderOptions}};
@@ -70,6 +68,12 @@ pub enum RoomEvent {
     },
 }
 
+/// E2EE key state (key provider + epoch under one lock).
+struct E2eeState {
+    provider: Option<KeyProvider>,
+    epoch: u32,
+}
+
 /// Manages LiveKit room connections with E2EE.
 pub struct RoomManager {
     /// Current room (if connected).
@@ -89,10 +93,8 @@ pub struct RoomManager {
     /// Screen capture manager.
     #[cfg(not(target_os = "android"))]
     screen_capture: Arc<RwLock<ScreenCapture>>,
-    /// Key provider for E2EE key updates (stored for ratcheting).
-    key_provider: Arc<RwLock<Option<KeyProvider>>>,
-    /// Current encryption key epoch (for coordinated ratcheting).
-    key_epoch: Arc<RwLock<u32>>,
+    /// E2EE key state (provider + epoch).
+    e2ee: Arc<RwLock<E2eeState>>,
 }
 
 impl RoomManager {
@@ -130,8 +132,7 @@ impl RoomManager {
             video_playback: Arc::new(RwLock::new(video_playback)),
             #[cfg(not(target_os = "android"))]
             screen_capture: Arc::new(RwLock::new(ScreenCapture::new())),
-            key_provider: Arc::new(RwLock::new(None)),
-            key_epoch: Arc::new(RwLock::new(0)),
+            e2ee: Arc::new(RwLock::new(E2eeState { provider: None, epoch: 0 })),
         };
         (manager, event_rx)
     }
@@ -165,8 +166,10 @@ impl RoomManager {
     /// # Arguments
     /// * `device_id` - Optional device ID (uses default if None)
     pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
-        let room = self.room.read();
-        let room = room.as_ref().ok_or(CallError::NotInCall)?;
+        let local_participant = {
+            let room = self.room.read();
+            room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
+        };
 
         // Start audio capture
         let audio_source = {
@@ -185,7 +188,7 @@ impl RoomManager {
             ..Default::default()
         };
 
-        room.local_participant()
+        local_participant
             .publish_track(LocalTrack::Audio(audio_track), publish_options)
             .await
             .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
@@ -204,8 +207,10 @@ impl RoomManager {
         device_path: Option<&str>,
         config: Option<VideoCaptureConfig>,
     ) -> Result<(), CallError> {
-        let room = self.room.read();
-        let room = room.as_ref().ok_or(CallError::NotInCall)?;
+        let local_participant = {
+            let room = self.room.read();
+            room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
+        };
 
         // Start video capture
         let video_source = {
@@ -224,7 +229,7 @@ impl RoomManager {
             ..Default::default()
         };
 
-        room.local_participant()
+        local_participant
             .publish_track(LocalTrack::Video(video_track), publish_options)
             .await
             .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
@@ -244,8 +249,10 @@ impl RoomManager {
         source: ScreenSource,
         config: Option<ScreenCaptureConfig>,
     ) -> Result<(), CallError> {
-        let room = self.room.read();
-        let room = room.as_ref().ok_or(CallError::NotInCall)?;
+        let local_participant = {
+            let room = self.room.read();
+            room.as_ref().ok_or(CallError::NotInCall)?.local_participant()
+        };
 
         // Start screen capture
         let video_source = {
@@ -264,7 +271,7 @@ impl RoomManager {
             ..Default::default()
         };
 
-        room.local_participant()
+        local_participant
             .publish_track(LocalTrack::Video(video_track), publish_options)
             .await
             .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
@@ -384,10 +391,10 @@ impl RoomManager {
 
         // Store key provider for later ratcheting
         {
-            let mut kp = self.key_provider.write();
-            *kp = Some(key_provider.clone());
+            let mut e2ee = self.e2ee.write();
+            e2ee.provider = Some(key_provider.clone());
+            e2ee.epoch = 0;
         }
-        *self.key_epoch.write() = 0;
 
         // Configure room with E2EE
         let mut room_options = RoomOptions::default();
@@ -595,18 +602,12 @@ impl RoomManager {
     ///
     /// Returns the new key epoch, or None if not connected.
     pub fn ratchet_key(&self) -> Option<u32> {
-        let kp = self.key_provider.read();
-        if let Some(ref key_provider) = *kp {
-            // LiveKit's ratchet_shared_key derives the next key from the current one
-            // key_index 0 is the shared key slot - always ratchet at index 0
+        let mut e2ee = self.e2ee.write();
+        if let Some(ref key_provider) = e2ee.provider {
             if let Some(_new_key) = key_provider.ratchet_shared_key(0) {
-                // Track our epoch
-                let mut epoch = self.key_epoch.write();
-                *epoch += 1;
-                let new_epoch = *epoch;
-
-                tracing::info!(epoch = new_epoch, "E2EE key ratcheted");
-                Some(new_epoch)
+                e2ee.epoch += 1;
+                tracing::info!(epoch = e2ee.epoch, "E2EE key ratcheted");
+                Some(e2ee.epoch)
             } else {
                 tracing::warn!("Key ratchet failed");
                 None
@@ -619,7 +620,7 @@ impl RoomManager {
 
     /// Get the current key epoch.
     pub fn key_epoch(&self) -> u32 {
-        *self.key_epoch.read()
+        self.e2ee.read().epoch
     }
 
     /// Set a new encryption key (for external key management).
@@ -631,29 +632,33 @@ impl RoomManager {
     /// LiveKit's internal key derivation. Use this only when you need
     /// to sync keys from an external source (e.g., CallKeyState).
     pub fn set_encryption_key(&self, key: Vec<u8>) -> bool {
-        let kp = self.key_provider.read();
-        let room = self.room.read();
-
-        if let (Some(key_provider), Some(room)) = (&*kp, &*room) {
-            // Increment epoch first
-            let mut epoch = self.key_epoch.write();
-            *epoch += 1;
-            let new_epoch = *epoch;
-
-            // Set key using local participant's identity at the new epoch index
-            let local_identity = room.local_participant().identity();
-            let success = key_provider.set_key(&local_identity, new_epoch as i32, key);
-
-            if success {
-                tracing::info!(epoch = new_epoch, "E2EE key updated externally");
-            } else {
-                tracing::warn!(epoch = new_epoch, "Failed to set E2EE key");
+        let room_guard = self.room.read();
+        let room = match room_guard.as_ref() {
+            Some(r) => r,
+            None => {
+                tracing::warn!("Cannot set key: not connected");
+                return false;
             }
-            success
-        } else {
-            tracing::warn!("Cannot set key: not connected");
-            false
+        };
+        let local_identity = room.local_participant().identity();
+
+        let mut e2ee = self.e2ee.write();
+        if e2ee.provider.is_none() {
+            tracing::warn!("Cannot set key: no key provider");
+            return false;
         }
+
+        e2ee.epoch += 1;
+        let new_epoch = e2ee.epoch;
+        let success = e2ee.provider.as_ref().unwrap()
+            .set_key(&local_identity, new_epoch as i32, key);
+
+        if success {
+            tracing::info!(epoch = new_epoch, "E2EE key updated externally");
+        } else {
+            tracing::warn!(epoch = new_epoch, "Failed to set E2EE key");
+        }
+        success
     }
 
     fn set_state(&self, state: RoomState) {
