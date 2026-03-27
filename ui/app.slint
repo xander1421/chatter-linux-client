@@ -1554,10 +1554,10 @@ export component App inherits Rectangle {
         }
 
         Rectangle {
-            width: 420px;
+            width: min(420px, parent.width - 32px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            height: shortcuts-layout.preferred-height;
+            height: min(shortcuts-layout.preferred-height, parent.height - 48px);
             background: Colors.surface;
             border-radius: Spacing.radius-lg;
             accessible-role: none;

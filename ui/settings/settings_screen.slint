@@ -87,9 +87,9 @@ export component SettingsScreen inherits Rectangle {
     background: Colors.background;
 
     HorizontalLayout {
-        // Sidebar navigation (240px)
+        // Sidebar navigation (responsive: 200px on phones, 240px on desktop)
         Rectangle {
-            width: 240px;
+            width: min(240px, root.width * 0.35);
             background: Colors.surface;
 
             VerticalLayout {

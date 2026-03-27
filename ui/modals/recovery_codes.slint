@@ -29,11 +29,11 @@ export component RecoveryCodesModal inherits Rectangle {
         height: 100%;
     }
 
-    // Modal container
+    // Modal container (responsive for mobile)
     Rectangle {
-        width: 480px;
+        width: min(480px, parent.width - 32px);
         min-height: 200px;
-        max-height: parent.height * 80%;
+        max-height: parent.height - 48px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Colors.surface;
