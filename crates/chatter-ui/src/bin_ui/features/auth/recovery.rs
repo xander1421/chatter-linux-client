@@ -48,18 +48,26 @@ pub fn wire_recovery(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     });
 
-                    // After a short delay, switch to login view
+                    // After a short delay, switch to login view.
+                    // NOTE: Recovery is unauthenticated (no active session to invalidate).
+                    // Server-side session invalidation is handled in UseRecoveryCode.
+                    // We clear all form fields to ensure no sensitive data lingers in UI state.
                     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_current_view("login".into());
-                            // Clear recovery form
+                            // Clear recovery form fields and any cached auth state
                             w.set_recovery_username("".into());
                             w.set_recovery_code("".into());
                             w.set_recovery_new_password("".into());
                             w.set_recovery_confirm_password("".into());
                             w.set_recovery_new_pin("".into());
                             w.set_recovery_success("".into());
+                            // Also clear login fields so user starts fresh
+                            w.set_login_username("".into());
+                            w.set_login_password("".into());
+                            w.set_login_pin("".into());
+                            w.set_login_error("".into());
                         }
                     });
                 }

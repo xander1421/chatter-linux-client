@@ -65,6 +65,7 @@ export component App inherits Rectangle {
     // ========== Auth page properties ==========
     in-out property <string> login-username: "";
     in-out property <string> login-password: "";
+    in-out property <string> login-pin: "";
     in property <bool> login-loading: false;
     in property <string> login-error: "";
 
@@ -475,7 +476,7 @@ export component App inherits Rectangle {
     in property <[JarvisMessageData]> jarvis-messages: [];
 
     // ========== Auth callbacks ==========
-    callback login(string, string, string);  // username, password, server_url
+    callback login(string, string, string, string);  // username, password, server_url, pin
     callback register(string, string, string, string, string);  // username, password, display_name, pin, server_url
     callback go-to-register();
     callback go-to-login();
@@ -694,11 +695,12 @@ export component App inherits Rectangle {
         if current-view == "login": LoginPage {
             username <=> root.login-username;
             password <=> root.login-password;
+            pin <=> root.login-pin;
             loading: root.login-loading;
             error: root.login-error;
 
-            login(u, p, s) => {
-                root.login(u, p, s);
+            login(u, p, s, pin) => {
+                root.login(u, p, s, pin);
             }
             register => {
                 root.go-to-register();

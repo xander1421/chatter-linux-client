@@ -13,12 +13,13 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_login(move |username: slint::SharedString, password: slint::SharedString, server_url: slint::SharedString| {
+    window.on_login(move |username: slint::SharedString, password: slint::SharedString, server_url: slint::SharedString, pin: slint::SharedString| {
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
         let username = username.to_string();
         let password = password.to_string();
         let server_url = server_url.to_string();
+        let pin = pin.to_string();
 
         tokio::spawn(async move {
             // Set loading state
@@ -59,7 +60,8 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             // Login via SDK (handles auth + state + inbox + presence)
-            match ui_ctx.login(&username, &password, "linux-client", None).await {
+            let pin_opt = if pin.is_empty() { None } else { Some(pin.as_str()) };
+            match ui_ctx.login(&username, &password, "linux-client", pin_opt).await {
                 Ok(_result) => {
                     // Spawn UI-only event handlers (need slint::Weak<MainWindow>)
                     crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);

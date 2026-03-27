@@ -289,6 +289,31 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "UseRecoveryCode"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn regenerate_recovery_codes(
+            &mut self,
+            request: impl tonic::IntoRequest<super::RegenerateRecoveryCodesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RegenerateRecoveryCodesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.AuthService/RegenerateRecoveryCodes",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.AuthService", "RegenerateRecoveryCodes"));
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn delete_account(
             &mut self,
             request: impl tonic::IntoRequest<super::DeleteAccountRequest>,

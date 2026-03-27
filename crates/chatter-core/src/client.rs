@@ -803,6 +803,34 @@ impl ChatterClient {
         Ok(RecoveryResult { remaining_codes })
     }
 
+    /// Regenerate recovery codes for the authenticated user.
+    ///
+    /// Deletes all existing codes and generates 8 new ones.
+    /// Requires password confirmation for security.
+    ///
+    /// # Arguments
+    ///
+    /// * `password` - The user's current password (will be hashed before sending)
+    pub async fn regenerate_recovery_codes(&self, password: &str) -> Result<Vec<String>, ClientError> {
+        use sha2::{Digest, Sha256};
+        use zeroize::Zeroize;
+
+        let mut password_hash = Sha256::digest(password.as_bytes()).to_vec();
+
+        let mut auth_client = self.auth().try_auth_client()
+            .ok_or_else(|| ClientError::NotConnected)?;
+
+        let result = auth_client
+            .regenerate_recovery_codes(&password_hash)
+            .await;
+
+        // SECURITY: Zeroize password hash immediately
+        password_hash.zeroize();
+
+        let codes = result.map_err(|e| ClientError::Connection(e))?;
+        Ok(codes)
+    }
+
     /// Create an SVR encrypted backup of identity keys and profile key.
     ///
     /// Called after registration to back up key material for future device recovery.
@@ -983,12 +1011,15 @@ impl ChatterClient {
         use crate::storage::repositories::settings_repo::keys;
         use zeroize::Zeroize;
 
-        // 1. Validate both PINs (6 digits)
+        // 1. Validate both PINs (6 digits) and ensure they differ
         if old_pin.len() != 6 || !old_pin.chars().all(|c| c.is_ascii_digit()) {
             return Err(ClientError::Validation("Old PIN must be exactly 6 digits".into()));
         }
         if new_pin.len() != 6 || !new_pin.chars().all(|c| c.is_ascii_digit()) {
             return Err(ClientError::Validation("New PIN must be exactly 6 digits".into()));
+        }
+        if old_pin == new_pin {
+            return Err(ClientError::Validation("New PIN must be different from current PIN".into()));
         }
 
         // 2. Get identity keypair from signal store (private 32 bytes + public 33 bytes)

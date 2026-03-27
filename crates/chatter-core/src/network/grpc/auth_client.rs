@@ -24,8 +24,8 @@ use crate::proto::chat_v1::{
     GetPreKeyBundleResponse, GetPreKeyStatsRequest, GetPreKeyStatsResponse,
     GetSenderCertificateRequest, GetSenderCertificateResponse, InvalidateAllSessionsRequest,
     InvalidateSessionRequest, ListDevicesRequest, ListDevicesResponse, LoginRequest, LogoutRequest,
-    RefreshPreKeysRequest, RegisterRequest, RegistrationResult, RenameDeviceRequest,
-    RequestSenderCertificateRequest, RequestSenderCertificateResponse,
+    RefreshPreKeysRequest, RegenerateRecoveryCodesRequest, RegisterRequest, RegistrationResult,
+    RenameDeviceRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
     ResendVerificationEmailRequest, RevokeDeviceRequest, SignalPreKeyBundle,
     UploadPreKeyBundleRequest, UseRecoveryCodeRequest, VerifyEmailRequest,
 };
@@ -739,6 +739,27 @@ impl AuthClient {
             .map_err(|s| NetworkError::from_status(&s))?;
 
         Ok(response.remaining_codes)
+    }
+
+    /// Regenerate recovery codes for the authenticated user.
+    ///
+    /// Requires password confirmation. Returns newly generated plaintext codes.
+    pub async fn regenerate_recovery_codes(
+        &mut self,
+        password_hash: &[u8],
+    ) -> Result<Vec<String>, NetworkError> {
+        let request = RegenerateRecoveryCodesRequest {
+            password_hash: password_hash.to_vec(),
+        };
+
+        let response = self
+            .inner
+            .regenerate_recovery_codes(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response.recovery_codes)
     }
 }
 

@@ -892,6 +892,21 @@ pub struct UseRecoveryCodeResponse {
     #[prost(int32, tag = "1")]
     pub remaining_codes: i32,
 }
+/// Request to regenerate recovery codes (requires password confirmation).
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RegenerateRecoveryCodesRequest {
+    /// Password hash for confirmation
+    #[prost(bytes = "vec", tag = "1")]
+    pub password_hash: ::prost::alloc::vec::Vec<u8>,
+}
+/// Response containing newly generated recovery codes.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RegenerateRecoveryCodesResponse {
+    #[prost(string, repeated, tag = "1")]
+    pub recovery_codes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
 /// RefreshTokenRequest is deprecated - Signal auth uses long-lived device sessions
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -151,6 +151,17 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let new_pin = new_pin.to_string();
 
         tokio::spawn(async move {
+            // SECURITY: Early check - new PIN must differ from current PIN
+            if current_pin == new_pin {
+                let weak_err = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_err.upgrade() {
+                        w.set_settings_change_pin_error("New PIN must be different from current PIN".into());
+                    }
+                });
+                return;
+            }
+
             let weak_loading = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_loading.upgrade() {
@@ -256,7 +267,20 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                                 if let Err(e) = clipboard.set_text(&all_codes) {
                                     tracing::error!("Failed to copy recovery codes to clipboard: {}", e);
                                 } else {
-                                    tracing::info!("Recovery codes copied to clipboard");
+                                    tracing::info!("Recovery codes copied to clipboard (auto-clears in 60s)");
+                                    // SECURITY: Auto-clear clipboard after 60 seconds
+                                    std::thread::spawn(move || {
+                                        std::thread::sleep(std::time::Duration::from_secs(60));
+                                        let _ = slint::invoke_from_event_loop(move || {
+                                            if let Ok(mut cb) = Clipboard::new() {
+                                                if let Err(e) = cb.clear() {
+                                                    tracing::warn!("Failed to auto-clear clipboard: {}", e);
+                                                } else {
+                                                    tracing::info!("Clipboard auto-cleared after 60s");
+                                                }
+                                            }
+                                        });
+                                    });
                                 }
                             }
                             Err(e) => {
