@@ -417,60 +417,6 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
     });
 }
 
-/// Load all private groups into the sidebar.
-/// Call this after login to populate the private groups list.
-///
-/// Note: `initial_data.rs` already loads private groups with last message preview.
-/// This function is kept for potential refresh use cases.
-#[allow(dead_code)]
-pub fn load_private_groups(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let anon_group_service = ui_ctx.anon_groups().clone();
-    let weak_window = window.as_weak();
-
-    tokio::spawn(async move {
-        // Get all local private groups
-        let groups = match anon_group_service.list_groups() {
-            Ok(g) => g,
-            Err(e) => {
-                tracing::error!("Failed to load private groups: {}", e);
-                return;
-            }
-        };
-
-        if groups.is_empty() {
-            return;
-        }
-
-        // Convert to UI data
-        let group_data: Vec<PrivateGroupListItemData> = groups
-            .into_iter()
-            .map(|g| {
-                let member_count = anon_group_service
-                    .get_members(&g.id)
-                    .map(|m| m.len())
-                    .unwrap_or(0) as i32;
-
-                PrivateGroupListItemData {
-                    group_id: g.id.to_string().into(),
-                    name: g.name.into(),
-                    member_count,
-                    unread_count: 0, // TODO: track unread count
-                    last_message: SharedString::default(),
-                    timestamp: SharedString::default(),
-                    is_typing: false,
-                }
-            })
-            .collect();
-
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak_window.upgrade() {
-                w.set_private_groups(ModelRc::new(VecModel::from(group_data)));
-                tracing::info!("Loaded {} private groups into sidebar", w.get_private_groups().row_count());
-            }
-        });
-    });
-}
-
 /// Add a single private group to the sidebar.
 /// Call this after creating a new group.
 pub fn add_private_group_to_sidebar(window: &MainWindow, group_id: &str, name: &str, member_count: i32) {
