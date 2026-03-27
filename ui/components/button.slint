@@ -11,6 +11,10 @@ export component Button inherits Rectangle {
     in property <bool> loading: false;
     in property <image> icon;
 
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: !root.disabled && !root.loading;
+
     callback clicked();
 
     // Internal state

@@ -5,6 +5,13 @@ import { Colors } from "../theme/colors.slint";
 export component Toggle inherits Rectangle {
     in-out property <bool> checked: false;
     in property <bool> disabled: false;
+    in property <string> accessible-text: "";
+
+    accessible-role: switch;
+    accessible-label: root.accessible-text;
+    accessible-enabled: !root.disabled;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
 
     callback toggled(bool);
 

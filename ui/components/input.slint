@@ -12,6 +12,10 @@ export component Input inherits Rectangle {
     in property <bool> error: false;
     in property <string> error-message: "";
 
+    accessible-role: text-input;
+    accessible-label: root.placeholder;
+    accessible-enabled: !root.disabled;
+
     callback accepted(string);
     callback edited(string);
 

@@ -125,6 +125,8 @@ export component MessageItem inherits Rectangle {
                     width: 24px;
                     background: reply-touch.has-hover ? Colors.surface-hover : transparent;
                     border-radius: Spacing.radius-sm;
+                    accessible-role: button;
+                    accessible-label: "Reply to message";
 
                     Image {
                         width: 14px;
@@ -149,6 +151,8 @@ export component MessageItem inherits Rectangle {
                     width: 24px;
                     background: react-touch.has-hover ? Colors.surface-hover : transparent;
                     border-radius: Spacing.radius-sm;
+                    accessible-role: button;
+                    accessible-label: "Add reaction";
 
                     Image {
                         width: 14px;
@@ -173,6 +177,8 @@ export component MessageItem inherits Rectangle {
                     width: 24px;
                     background: more-touch.has-hover ? Colors.surface-hover : transparent;
                     border-radius: Spacing.radius-sm;
+                    accessible-role: button;
+                    accessible-label: "More message actions";
 
                     Image {
                         width: 14px;

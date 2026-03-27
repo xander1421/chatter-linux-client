@@ -11,6 +11,9 @@ export component Avatar inherits Rectangle {
     in property <bool> show-presence: false;
     in property <color> presence-color: Colors.offline;
 
+    accessible-role: image;
+    accessible-label: root.fallback-text != "" ? "Avatar for " + root.fallback-text : "Avatar";
+
     width: size;
     height: size;
     border-radius: size / 2;

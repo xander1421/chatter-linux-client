@@ -29,6 +29,8 @@ export component Modal inherits Rectangle {
 
     // Modal container - centered, sized to content
     modal-container := Rectangle {
+        accessible-role: dialog;
+        accessible-label: root.title;
         width: root.modal-width;
         // Use min/max constraints instead of explicit height to allow sizing to content
         min-height: 200px;
@@ -69,6 +71,8 @@ export component Modal inherits Rectangle {
                     height: 24px;
                     border-radius: Spacing.radius-sm;
                     background: close-area.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Close dialog";
 
                     // X icon using Unicode character
                     Text {
