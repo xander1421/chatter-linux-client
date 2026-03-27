@@ -681,6 +681,28 @@ export component App inherits Rectangle {
                 root.jarvis-panel-visible = !root.jarvis-panel-visible;
                 return accept;
             }
+            // Ctrl+F: Open search
+            if (event.modifiers.control && event.text == "f") {
+                root.active-modal = "search";
+                return accept;
+            }
+            // Ctrl+,: Open settings
+            if (event.modifiers.control && event.text == ",") {
+                root.active-modal = "settings";
+                return accept;
+            }
+            // Ctrl+/: Toggle keyboard shortcuts help
+            if (event.modifiers.control && event.text == "/") {
+                root.active-modal = root.active-modal == "keyboard-shortcuts" ? "none" : "keyboard-shortcuts";
+                return accept;
+            }
+            // Escape: Close active modal or overlay
+            if (event.text == Key.Escape) {
+                if (root.active-modal != "none") {
+                    root.active-modal = "none";
+                    return accept;
+                }
+            }
             reject
         }
     }
@@ -1511,6 +1533,117 @@ export component App inherits Rectangle {
         }
         delete-channel => {
             root.channel-settings-delete();
+        }
+    }
+
+    // Keyboard shortcuts help dialog
+    if active-modal == "keyboard-shortcuts": Rectangle {
+        width: root.width;
+        height: root.height;
+        background: #00000080;
+
+        TouchArea {
+            clicked => { root.active-modal = "none"; }
+        }
+
+        Rectangle {
+            width: 420px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            height: shortcuts-layout.preferred-height;
+            background: Colors.surface;
+            border-radius: Spacing.radius-lg;
+            accessible-role: dialog;
+            accessible-label: "Keyboard shortcuts";
+
+            TouchArea {} // block click-through
+
+            shortcuts-layout := VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.md;
+
+                // Header
+                HorizontalLayout {
+                    Text {
+                        text: "Keyboard Shortcuts";
+                        color: Colors.text-primary;
+                        font-size: Typography.lg;
+                        font-weight: Typography.semibold;
+                        horizontal-stretch: 1;
+                    }
+
+                    Rectangle {
+                        width: 24px;
+                        height: 24px;
+                        border-radius: Spacing.radius-sm;
+                        background: shortcut-close.has-hover ? Colors.surface-hover : transparent;
+                        accessible-role: button;
+                        accessible-label: "Close";
+
+                        Text {
+                            text: "\u{2715}";
+                            color: Colors.text-secondary;
+                            font-size: Typography.base;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%; height: 100%;
+                        }
+
+                        shortcut-close := TouchArea {
+                            clicked => { root.active-modal = "none"; }
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Colors.surface-hover; }
+
+                // Navigation section
+                Text {
+                    text: "Navigation";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    font-weight: Typography.semibold;
+                }
+
+                for shortcut in [
+                    { key: "Ctrl + F", action: "Search messages" },
+                    { key: "Ctrl + ,", action: "Open settings" },
+                    { key: "Ctrl + J", action: "Toggle AI assistant" },
+                    { key: "Ctrl + /", action: "Show this dialog" },
+                    { key: "Escape", action: "Close modal or panel" },
+                ]: HorizontalLayout {
+                    height: 28px;
+                    spacing: Spacing.md;
+
+                    Text {
+                        text: shortcut.action;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: key-text.preferred-width + Spacing.md;
+                        height: 24px;
+                        border-radius: Spacing.radius-sm;
+                        background: Colors.surface-hover;
+                        border-width: 1px;
+                        border-color: Colors.text-muted.with-alpha(0.2);
+
+                        key-text := Text {
+                            text: shortcut.key;
+                            color: Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.medium;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Rectangle { height: Spacing.xs; }
+            }
         }
     }
 
