@@ -5,6 +5,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { ChatHeader, ChatHeaderData } from "chat_header.slint";
 import { MessageList, MessageItemData, MessageAttachmentData, ReactionEntry } from "message_list.slint";
 import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
@@ -207,7 +208,7 @@ export component ChatLayout inherits Rectangle {
 
                         // Search icon
                         Image {
-                            source: @image-url("../assets/icons/search.svg");
+                            source: Icons.search;
                             width: 14px;
                             height: 14px;
                             colorize: Colors.text-muted;
@@ -258,13 +259,12 @@ export component ChatLayout inherits Rectangle {
                     border-radius: Spacing.radius-sm;
                     background: prev-match-touch.has-hover ? Colors.surface-hover : transparent;
 
-                    Image {
-                        source: @image-url("../assets/icons/chevron-up.svg");
-                        width: 14px;
-                        height: 14px;
-                        colorize: Colors.text-secondary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                    Text {
+                        text: "\u{25B2}";  // Up triangle
+                        color: Colors.text-secondary;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
 
                     prev-match-touch := TouchArea {
@@ -280,13 +280,12 @@ export component ChatLayout inherits Rectangle {
                     border-radius: Spacing.radius-sm;
                     background: next-match-touch.has-hover ? Colors.surface-hover : transparent;
 
-                    Image {
-                        source: @image-url("../assets/icons/chevron-down.svg");
-                        width: 14px;
-                        height: 14px;
-                        colorize: Colors.text-secondary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
+                    Text {
+                        text: "\u{25BC}";  // Down triangle
+                        color: Colors.text-secondary;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
 
                     next-match-touch := TouchArea {
