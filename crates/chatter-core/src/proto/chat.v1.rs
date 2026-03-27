@@ -901,6 +901,35 @@ pub struct RegistrationResult {
     /// Display name, avatar, etc.
     #[prost(message, optional, tag="3")]
     pub user_profile: ::core::option::Option<UserProfile>,
+    /// One-time recovery codes (plaintext, shown once)
+    #[prost(string, repeated, tag="4")]
+    pub recovery_codes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+/// Account recovery via one-time recovery code.
+/// Resets password and SVR credentials without requiring old password.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UseRecoveryCodeRequest {
+    #[prost(string, tag = "1")]
+    pub username: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub recovery_code: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "3")]
+    pub new_password_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "4")]
+    pub new_svr_public_key: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "5")]
+    pub new_registration_lock: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "6")]
+    pub request_id: ::prost::alloc::string::String,
+}
+/// Response from using a recovery code.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UseRecoveryCodeResponse {
+    /// Number of unused recovery codes remaining
+    #[prost(int32, tag = "1")]
+    pub remaining_codes: i32,
 }
 /// RefreshTokenRequest is deprecated - Signal auth uses long-lived device sessions
 #[allow(clippy::derive_partial_eq_without_eq)]

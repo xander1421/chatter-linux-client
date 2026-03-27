@@ -77,6 +77,8 @@ pub struct LoginResult {
     pub keys_restored: bool,
     /// Whether identity keys are missing locally (no backup available or restore failed).
     pub keys_missing: bool,
+    /// One-time recovery codes returned during registration (shown once to user).
+    pub recovery_codes: Option<Vec<String>>,
 }
 
 // ============================================================================
@@ -446,6 +448,7 @@ impl AuthService {
             needs_prekey_upload: stored_device_id.is_none(), // New device needs prekey upload
             keys_restored: false, // Set by caller after SVR restore attempt
             keys_missing: false,  // Set by caller after SVR restore attempt
+            recovery_codes: None, // Login never returns recovery codes
         })
     }
 
@@ -716,6 +719,13 @@ impl AuthService {
         };
         self.user_repo.upsert_profile(&profile)?;
 
+        // Capture recovery codes from server (shown once to user, never stored)
+        let recovery_codes = if result.recovery_codes.is_empty() {
+            None
+        } else {
+            Some(result.recovery_codes.clone())
+        };
+
         Ok(LoginResult {
             user_id,
             device_id: result.device_id,
@@ -723,6 +733,7 @@ impl AuthService {
             needs_prekey_upload: false, // Prekeys already generated (upload them next)
             keys_restored: false, // Not applicable for registration (keys are freshly generated)
             keys_missing: false,
+            recovery_codes,
         })
     }
 
