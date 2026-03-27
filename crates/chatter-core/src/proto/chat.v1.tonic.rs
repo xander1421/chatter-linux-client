@@ -264,50 +264,6 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ChangePassword"));
             self.inner.unary(req, path, codec).await
         }
-        pub async fn initiate_password_reset(
-            &mut self,
-            request: impl tonic::IntoRequest<super::RequestPasswordResetRequest>,
-        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.AuthService/InitiatePasswordReset",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.AuthService", "InitiatePasswordReset"));
-            self.inner.unary(req, path, codec).await
-        }
-        pub async fn complete_password_reset(
-            &mut self,
-            request: impl tonic::IntoRequest<super::CompletePasswordResetRequest>,
-        ) -> std::result::Result<tonic::Response<super::AuthResponse>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.AuthService/CompletePasswordReset",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.AuthService", "CompletePasswordReset"));
-            self.inner.unary(req, path, codec).await
-        }
         pub async fn use_recovery_code(
             &mut self,
             request: impl tonic::IntoRequest<super::UseRecoveryCodeRequest>,

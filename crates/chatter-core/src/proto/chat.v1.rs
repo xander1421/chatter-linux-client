@@ -637,45 +637,6 @@ pub struct LogoutRequest {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct InitiatePasswordResetRequest {
-    #[prost(string, tag="1")]
-    pub username: ::prost::alloc::string::String,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct InitiatePasswordResetResponse {
-    #[prost(string, tag="1")]
-    pub reset_token: ::prost::alloc::string::String,
-    /// Unix timestamp in nanoseconds (within 1 hour)
-    #[prost(fixed64, tag="2")]
-    pub expires_at: u64,
-}
-/// Renamed from InitiatePasswordResetRequest for clarity in RPC
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct RequestPasswordResetRequest {
-    #[prost(string, tag="1")]
-    pub username_or_email: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub request_id: ::prost::alloc::string::String,
-}
-/// This is the message we need for CompletePasswordReset RPC
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CompletePasswordResetRequest {
-    #[prost(string, tag="1")]
-    pub reset_token: ::prost::alloc::string::String,
-    /// Raw new password (will be hashed by the server)
-    #[prost(bytes="vec", tag="2")]
-    pub new_password_hash: ::prost::alloc::vec::Vec<u8>,
-    /// Optional SVR key rotation
-    #[prost(bytes="vec", tag="3")]
-    pub new_svr_public_key: ::prost::alloc::vec::Vec<u8>,
-    #[prost(string, tag="4")]
-    pub request_id: ::prost::alloc::string::String,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteAccountRequest {
     /// Raw password for confirmation (will be verified against stored hash)
     #[prost(bytes="vec", tag="1")]
