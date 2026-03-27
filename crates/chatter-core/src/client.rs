@@ -111,6 +111,16 @@ pub enum ClientError {
     Validation(String),
 }
 
+/// Result of a successful recovery code usage.
+///
+/// After this, the user can login with their new password + new PIN.
+/// SVR backup is created automatically during the subsequent login flow.
+#[derive(Debug, Clone)]
+pub struct RecoveryResult {
+    /// Number of unused recovery codes remaining on the account.
+    pub remaining_codes: i32,
+}
+
 /// The main entry point for the chatter-core SDK.
 ///
 /// # Example
@@ -701,6 +711,96 @@ impl ChatterClient {
 
         self.start().await?;
         Ok(result)
+    }
+
+    /// Use a one-time recovery code to reset password and SVR credentials.
+    ///
+    /// This is called when the user has lost their password but has a recovery code
+    /// from registration. It resets the password and SVR key material on the server.
+    ///
+    /// After this succeeds, the user should login with `new_password` + `new_pin`.
+    /// The SVR backup will be created automatically during that login flow.
+    ///
+    /// # Arguments
+    ///
+    /// * `username` - The plaintext username (will be hashed before sending)
+    /// * `recovery_code` - 8-character alphanumeric recovery code (A-Z, 2-9)
+    /// * `new_password` - The new password to set
+    /// * `new_pin` - The new 6-digit PIN for SVR key derivation
+    pub async fn use_recovery_code(
+        &self,
+        username: &str,
+        recovery_code: &str,
+        new_password: &str,
+        new_pin: &str,
+    ) -> Result<RecoveryResult, ClientError> {
+        use sha2::{Digest, Sha256};
+        use zeroize::Zeroize;
+
+        // Validate new_pin is exactly 6 digits
+        if new_pin.len() != 6 || !new_pin.chars().all(|c| c.is_ascii_digit()) {
+            return Err(ClientError::Validation("PIN must be exactly 6 digits".into()));
+        }
+
+        // Validate recovery_code is 8 characters (A-Z, 2-9 per proto pattern)
+        if recovery_code.len() != 8 || !recovery_code.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err(ClientError::Validation(
+                "Recovery code must be exactly 8 alphanumeric characters".into(),
+            ));
+        }
+
+        // Hash new password with SHA256 (matching existing auth pattern)
+        let mut password_hash = Sha256::digest(new_password.as_bytes()).to_vec();
+
+        // Derive new SVR keypair from new_pin + username
+        let keypair = crate::crypto::svr::SvrKeypair::new_from_pin(new_pin, username)
+            .map_err(|e| ClientError::Auth(AuthError::Crypto(e)))?;
+        let svr_public_key = keypair.public_key_bytes();
+
+        // Derive new registration lock from new_pin + username
+        let mut registration_lock = crate::crypto::svr::derive_registration_lock(new_pin, username)
+            .map_err(|e| ClientError::Auth(AuthError::Crypto(e)))?;
+
+        // Hash username for privacy (need profile key derived from NEW password)
+        // Use the same derivation as auth_service: HKDF(password_hash, username) -> profile_key
+        // Then HMAC-SHA256(profile_key, normalized_username) -> username_hash
+        let username_hash = {
+            use crate::network::grpc::auth_client::hash_username;
+            use hkdf::Hkdf;
+
+            let hk = Hkdf::<Sha256>::new(None, &password_hash);
+            let info = format!("chatter_profile_key_{}", username.trim().to_lowercase());
+            let mut profile_key = [0u8; 32];
+            hk.expand(info.as_bytes(), &mut profile_key)
+                .expect("32 bytes is valid output length for HKDF-SHA256");
+
+            let hash = hash_username(username, &profile_key);
+            profile_key.zeroize();
+            hash
+        };
+
+        // Get auth client from gRPC pool
+        let mut auth_client = self.auth().try_auth_client()
+            .ok_or_else(|| ClientError::NotConnected)?;
+
+        // Call server RPC
+        let result = auth_client
+            .use_recovery_code(
+                &username_hash,
+                recovery_code,
+                &password_hash,
+                &svr_public_key,
+                &registration_lock,
+            )
+            .await;
+
+        // SECURITY: Zeroize sensitive intermediates immediately (both success and error paths)
+        password_hash.zeroize();
+        registration_lock.zeroize();
+
+        let remaining_codes = result.map_err(|e| ClientError::Connection(e))?;
+
+        Ok(RecoveryResult { remaining_codes })
     }
 
     /// Create an SVR encrypted backup of identity keys and profile key.

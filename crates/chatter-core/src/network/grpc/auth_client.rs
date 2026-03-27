@@ -27,7 +27,7 @@ use crate::proto::chat_v1::{
     RefreshPreKeysRequest, RegisterRequest, RegistrationResult, RenameDeviceRequest,
     RequestPasswordResetRequest, RequestSenderCertificateRequest, RequestSenderCertificateResponse,
     ResendVerificationEmailRequest, RevokeDeviceRequest, SignalPreKeyBundle,
-    UploadPreKeyBundleRequest, VerifyEmailRequest,
+    UploadPreKeyBundleRequest, UseRecoveryCodeRequest, VerifyEmailRequest,
 };
 // NOTE: ServerTrustRootResponse removed - trust root is hardcoded in config.rs per Signal's security model
 
@@ -746,6 +746,48 @@ impl AuthClient {
 
     // NOTE: get_server_trust_root() removed - trust root is hardcoded in config.rs
     // per Signal's security model. See crate::config::TRUST_ROOT_PUBLIC_KEY
+
+    // ==================== Account Recovery RPCs ====================
+
+    /// Use a recovery code to reset password and SVR credentials.
+    ///
+    /// This is an unauthenticated RPC -- the recovery code itself is the credential.
+    /// Returns the number of remaining unused recovery codes on success.
+    /// After this succeeds, the user can login with the new password + new PIN.
+    ///
+    /// # Arguments
+    ///
+    /// * `username` - Hashed username
+    /// * `recovery_code` - 8-character one-time recovery code
+    /// * `new_password_hash` - SHA256 hash of the new password
+    /// * `new_svr_public_key` - New SVR public key derived from new PIN
+    /// * `new_registration_lock` - New registration lock derived from new PIN
+    pub async fn use_recovery_code(
+        &mut self,
+        username: &str,
+        recovery_code: &str,
+        new_password_hash: &[u8],
+        new_svr_public_key: &[u8],
+        new_registration_lock: &[u8],
+    ) -> Result<i32, NetworkError> {
+        let request = UseRecoveryCodeRequest {
+            username: username.to_string(),
+            recovery_code: recovery_code.to_string(),
+            new_password_hash: new_password_hash.to_vec(),
+            new_svr_public_key: new_svr_public_key.to_vec(),
+            new_registration_lock: new_registration_lock.to_vec(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+        };
+
+        let response = self
+            .inner
+            .use_recovery_code(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))?;
+
+        Ok(response.remaining_codes)
+    }
 }
 
 #[cfg(test)]
