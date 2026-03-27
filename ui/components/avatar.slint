@@ -10,6 +10,9 @@ export component Avatar inherits Rectangle {
     in property <length> size: Spacing.avatar-md;
     in property <bool> show-presence: false;
     in property <color> presence-color: Colors.offline;
+    // Colored background for letter-based fallback avatars.
+    // When set (non-transparent), overrides default surface color for the fallback circle.
+    in property <color> fallback-bg: transparent;
 
     accessible-role: image;
     accessible-label: root.fallback-text != "" ? "Avatar for " + root.fallback-text : "Avatar";
@@ -17,7 +20,7 @@ export component Avatar inherits Rectangle {
     width: size;
     height: size;
     border-radius: size / 2;
-    background: Colors.surface;
+    background: root.source.width > 0 ? Colors.surface : (root.fallback-bg.transparentize(1.0) == root.fallback-bg ? Colors.primary.transparentize(0.7) : root.fallback-bg);
     clip: true;
 
     // Avatar image (shown when source has content)
@@ -35,6 +38,7 @@ export component Avatar inherits Rectangle {
         text: fallback-text;
         color: Colors.text-primary;
         font-size: size * 0.4;
+        font-weight: Typography.semibold;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
