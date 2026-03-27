@@ -64,6 +64,22 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             chat_state.set_active_channel(channel_id);
             chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
 
+            // Ensure the saved messages channel exists locally before loading.
+            // The server may not include it in list_channels, so fetch it on demand.
+            if let Ok(None) | Err(_) = channel_service.get_channel_local(&channel_id) {
+                tracing::info!("SavedMessages channel not in local repo, fetching from server");
+                if let Err(e) = channel_service.get_channel(&channel_id).await {
+                    tracing::error!("Failed to fetch saved messages channel from server: {}", e);
+                    let weak_err = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_err.upgrade() {
+                            w.set_loading_messages(false);
+                        }
+                    });
+                    return;
+                }
+            }
+
             // Load the saved messages channel and its messages
             let current_user_id = Some(user_id.to_string());
             load_channel_into_ui(
