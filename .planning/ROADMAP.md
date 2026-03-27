@@ -1283,13 +1283,12 @@ Plans:
 **Goal**: Generate one-time recovery codes at registration that allow account access when both password and PIN are forgotten
 **Depends on**: Phase 94
 **Research**: Likely (recovery code UX patterns, secure storage of hashed codes)
-**Status**: Not started
-**Plans**: 0/3
+**Status**: Complete
+**Plans**: 2/2 complete
 
 Plans:
-- [ ] 95-01: Server proto + migration (recovery_codes table, UseRecoveryCode RPC)
-- [ ] 95-02: Server service (hash codes with Argon2id, verify + invalidate on use, generate during registration)
-- [ ] 95-03: Client integration (display codes at registration, use code to reset password + PIN)
+- [x] 95-01: Server proto + migration + service + handler (UseRecoveryCode RPC, migration 000029, Argon2id hashing, registration integration)
+- [x] 95-02: Client integration (proto types, LoginResult recovery_codes, ChatterClient::use_recovery_code)
 
 **Scope:**
 - Generate 8 recovery codes (8 alphanumeric chars each) during registration

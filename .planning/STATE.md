@@ -9,19 +9,19 @@ See: .planning/PROJECT.md (updated 2026-02-03)
 
 ## Current Position
 
-Phase: 94 (PIN Change Flow)
+Phase: 95 (Account Recovery Codes)
 Plan: 2 of 2 in current phase
 Status: Phase complete
-Last activity: 2026-03-27 — Completed 94-02-PLAN.md
+Last activity: 2026-03-27 — Completed 95-02-PLAN.md
 
 Progress: █████████████████████████████████████████████████████████████████████████░░░░░░ 90%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 91
+- Total plans completed: 93
 - Average duration: ~5.3 min
-- Total execution time: ~484 min
+- Total execution time: ~502 min
 
 **By Phase:**
 
@@ -101,8 +101,8 @@ Progress: ███████████████████████�
 | 81 | 3 | ~27m | ~9m |
 
 **Recent Trend:**
-- Last 5 plans: 93-03 (~11m), 93-04 (~15m), 93-05 (~10m), 94-01 (~7m), 94-02 (~8m)
-- Trend: Phase 94 (PIN Change Flow) COMPLETE
+- Last 5 plans: 93-05 (~10m), 94-01 (~7m), 94-02 (~8m), 95-01 (~9m), 95-02 (~5m)
+- Trend: Phase 95 (Account Recovery Codes) COMPLETE — all recovery gaps addressed
 
 ## Accumulated Context
 
@@ -314,6 +314,6 @@ None.
 ## Session Continuity
 
 Last session: 2026-03-27
-Stopped at: Phase 94 complete (PIN Change Flow)
+Stopped at: Phase 95 complete (Account Recovery Codes)
 Resume file: None
-Next action: /gsd:execute-plan for Phase 95 (Account Recovery Codes) or next milestone
+Next action: Next milestone planning — all recovery gaps addressed
