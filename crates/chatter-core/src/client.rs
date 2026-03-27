@@ -26,6 +26,7 @@ use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
+#[cfg(feature = "desktop-media")]
 use crate::services::call_worker::CallWorkerHandle;
 use crate::services::channel::ChannelService;
 use crate::services::channel_event_service::ChannelEventService;
@@ -231,6 +232,7 @@ impl ChatterClient {
     ///
     /// Returns the call ID. The UI should show "Calling..." and wait for
     /// `complete_dm_call()` when the peer answers.
+    #[cfg(feature = "desktop-media")]
     pub async fn start_dm_call(
         &self,
         peer_id: &crate::domain::ids::UserId,
@@ -250,6 +252,7 @@ impl ChatterClient {
     /// Start a group call in a channel: generate key, initiate on server, distribute key.
     ///
     /// Returns a `CallSetupResult` with call_id and verification emojis for the UI.
+    #[cfg(feature = "desktop-media")]
     pub async fn start_group_call(
         &self,
         channel_id: crate::domain::ids::ChannelId,
@@ -306,6 +309,7 @@ impl ChatterClient {
     /// Complete an outgoing DM call after receiving the peer's ephemeral key answer.
     ///
     /// Returns verification data (emojis) for the UI.
+    #[cfg(feature = "desktop-media")]
     pub async fn complete_dm_call(
         &self,
         peer_ephemeral_pk: [u8; 32],
@@ -330,6 +334,7 @@ impl ChatterClient {
     /// Accept an incoming DM call: generate ephemeral key, derive shared secret, join call.
     ///
     /// Returns verification data (emojis) for the UI.
+    #[cfg(feature = "desktop-media")]
     pub async fn accept_dm_call(
         &self,
         caller_ephemeral_pk: [u8; 32],
@@ -382,6 +387,7 @@ impl ChatterClient {
     }
 
     /// Accept an incoming anonymous call: acquire token, send accept, join room, connect LiveKit.
+    #[cfg(feature = "desktop-media")]
     pub async fn accept_anon_call(
         &self,
         room_name: &str,
@@ -396,6 +402,7 @@ impl ChatterClient {
     }
 
     /// Handle an anonymous call answer (caller side): connect to LiveKit if accepted.
+    #[cfg(feature = "desktop-media")]
     pub async fn handle_anon_call_answer(
         &self,
         call_room_id: &[u8],
@@ -510,6 +517,7 @@ impl ChatterClient {
     pub fn directories(&self) -> &Directories { &self.ui.directories }
 
     /// Post-boot call service handle (OnceLock).
+    #[cfg(feature = "desktop-media")]
     pub fn call_service(&self) -> &Arc<std::sync::OnceLock<CallWorkerHandle>> {
         &self.ui.call_service
     }
@@ -527,6 +535,7 @@ impl ChatterClient {
     // ── Delegated CoreServices methods ─────────────────────────────────────
 
     /// Initialize the call service if not already set. Safe to call multiple times.
+    #[cfg(feature = "desktop-media")]
     pub fn ensure_call_service(&self) {
         self.ui.ensure_call_service()
     }
@@ -607,6 +616,7 @@ impl ChatterClient {
         // ── Infrastructure init ─────────────────────────────────────
         self.ctx.init_device_inbox_provider();
         self.ctx.init_group_fanout();
+        #[cfg(feature = "desktop-media")]
         self.ctx.init_call_service();
 
         // ── Event handling ──────────────────────────────────────────
@@ -1764,6 +1774,7 @@ impl ChatterClient {
     /// End an active DM/channel call: send hangup, store history, leave.
     ///
     /// `duration_secs` is the call duration from the UI timer.
+    #[cfg(feature = "desktop-media")]
     pub async fn end_dm_call(&self, duration_secs: i64) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
@@ -1776,6 +1787,7 @@ impl ChatterClient {
     /// End an active anonymous call: send hangup, store history, leave.
     ///
     /// Returns the conversation_id for UI bubble insertion.
+    #[cfg(feature = "desktop-media")]
     pub async fn end_anon_call(&self, duration_secs: i64) -> Result<Option<crate::domain::anon_dm::AnonDmId>, ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
@@ -1792,6 +1804,7 @@ impl ChatterClient {
     /// members so the departed participant can't decrypt future frames.
     ///
     /// Only the initiator rotates to avoid race conditions.
+    #[cfg(feature = "desktop-media")]
     pub async fn handle_participant_departed(&self) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
@@ -1897,6 +1910,7 @@ impl ChatterClient {
     }
 
     /// Handle remote hangup: store history, disconnect locally.
+    #[cfg(feature = "desktop-media")]
     pub async fn handle_remote_hangup(&self, duration_secs: i64) -> Result<(), ClientError> {
         let call_worker = self.call_service().get()
             .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;

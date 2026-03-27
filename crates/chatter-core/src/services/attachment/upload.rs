@@ -794,23 +794,26 @@ impl AttachmentService {
 
         // Extract waveform and duration for audio files
         if mime_type.starts_with("audio/") {
-            let path_for_waveform = file_path.to_path_buf();
-            meta.waveform = match tokio::task::spawn_blocking(move || {
-                crate::media::extract_waveform(&path_for_waveform)
-            }).await {
-                Ok(Ok(samples)) => {
-                    tracing::debug!("Extracted waveform: {} samples", samples.len());
-                    Some(samples)
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!("Failed to extract waveform: {}", e);
-                    None
-                }
-                Err(e) => {
-                    tracing::warn!("Waveform extraction task panicked: {}", e);
-                    None
-                }
-            };
+            #[cfg(feature = "desktop-media")]
+            {
+                let path_for_waveform = file_path.to_path_buf();
+                meta.waveform = match tokio::task::spawn_blocking(move || {
+                    crate::media::extract_waveform(&path_for_waveform)
+                }).await {
+                    Ok(Ok(samples)) => {
+                        tracing::debug!("Extracted waveform: {} samples", samples.len());
+                        Some(samples)
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!("Failed to extract waveform: {}", e);
+                        None
+                    }
+                    Err(e) => {
+                        tracing::warn!("Waveform extraction task panicked: {}", e);
+                        None
+                    }
+                };
+            }
 
             let path_for_duration = file_path.to_path_buf();
             meta.duration_ms = tokio::task::spawn_blocking(move || {
@@ -850,46 +853,49 @@ impl AttachmentService {
                 }
             }
         } else if mime_type.starts_with("video/") {
-            // Video processing uses FFmpeg - must use spawn_blocking
-            let path_for_thumb = file_path.to_path_buf();
-            match tokio::task::spawn_blocking(move || {
-                crate::media::extract_video_thumbnail(&path_for_thumb)
-            }).await {
-                Ok(Ok((bytes, thumb_w, thumb_h, vid_duration_ms))) => {
-                    let path_for_dims = file_path.to_path_buf();
-                    let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
-                        crate::media::get_video_dimensions(&path_for_dims)
-                            .unwrap_or((thumb_w, thumb_h))
-                    }).await.unwrap_or((thumb_w, thumb_h));
+            // Video processing uses GStreamer — only available with desktop-media feature
+            #[cfg(feature = "desktop-media")]
+            {
+                let path_for_thumb = file_path.to_path_buf();
+                match tokio::task::spawn_blocking(move || {
+                    crate::media::extract_video_thumbnail(&path_for_thumb)
+                }).await {
+                    Ok(Ok((bytes, thumb_w, thumb_h, vid_duration_ms))) => {
+                        let path_for_dims = file_path.to_path_buf();
+                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_dimensions(&path_for_dims)
+                                .unwrap_or((thumb_w, thumb_h))
+                        }).await.unwrap_or((thumb_w, thumb_h));
 
-                    tracing::debug!(
-                        "Generated thumbnail for video: {}x{} -> {}x{}, {} bytes, {}ms",
-                        orig_w, orig_h, thumb_w, thumb_h, bytes.len(), vid_duration_ms
-                    );
+                        tracing::debug!(
+                            "Generated thumbnail for video: {}x{} -> {}x{}, {} bytes, {}ms",
+                            orig_w, orig_h, thumb_w, thumb_h, bytes.len(), vid_duration_ms
+                        );
 
-                    meta.thumbnail = Some(bytes);
-                    meta.thumbnail_width = Some(thumb_w);
-                    meta.thumbnail_height = Some(thumb_h);
-                    meta.width = Some(orig_w);
-                    meta.height = Some(orig_h);
-                    meta.duration_ms = vid_duration_ms;
+                        meta.thumbnail = Some(bytes);
+                        meta.thumbnail_width = Some(thumb_w);
+                        meta.thumbnail_height = Some(thumb_h);
+                        meta.width = Some(orig_w);
+                        meta.height = Some(orig_h);
+                        meta.duration_ms = vid_duration_ms;
+                    }
+                    Ok(Err(e)) => {
+                        tracing::warn!("Failed to generate video thumbnail: {}", e);
+                        let path_for_dims = file_path.to_path_buf();
+                        let path_for_dur = file_path.to_path_buf();
+                        let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_dimensions(&path_for_dims).unwrap_or((0, 0))
+                        }).await.unwrap_or((0, 0));
+                        let vid_duration = tokio::task::spawn_blocking(move || {
+                            crate::media::get_video_duration(&path_for_dur).unwrap_or(0)
+                        }).await.unwrap_or(0);
+                        meta.width = if orig_w > 0 { Some(orig_w) } else { None };
+                        meta.height = if orig_h > 0 { Some(orig_h) } else { None };
+                        meta.duration_ms = vid_duration;
                 }
-                Ok(Err(e)) => {
-                    tracing::warn!("Failed to generate video thumbnail: {}", e);
-                    let path_for_dims = file_path.to_path_buf();
-                    let path_for_dur = file_path.to_path_buf();
-                    let (orig_w, orig_h) = tokio::task::spawn_blocking(move || {
-                        crate::media::get_video_dimensions(&path_for_dims).unwrap_or((0, 0))
-                    }).await.unwrap_or((0, 0));
-                    let vid_duration = tokio::task::spawn_blocking(move || {
-                        crate::media::get_video_duration(&path_for_dur).unwrap_or(0)
-                    }).await.unwrap_or(0);
-                    meta.width = if orig_w > 0 { Some(orig_w) } else { None };
-                    meta.height = if orig_h > 0 { Some(orig_h) } else { None };
-                    meta.duration_ms = vid_duration;
-                }
-                Err(e) => {
-                    tracing::warn!("Video thumbnail task panicked: {}", e);
+                    Err(e) => {
+                        tracing::warn!("Video thumbnail task panicked: {}", e);
+                    }
                 }
             }
         }

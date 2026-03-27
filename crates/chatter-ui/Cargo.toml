@@ -80,7 +80,7 @@ slint-build = "1.15.1"
 
 [features]
 default = ["desktop"]
-desktop = ["dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", "slint/renderer-femtovg", "chatter-core/desktop-system"]
+desktop = ["dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", "slint/renderer-femtovg", "chatter-core/desktop-system", "chatter-core/desktop-media"]
 local-ai = ["chatter-core/local-ai"]
 mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "slint/backend-android-activity-06"]
 

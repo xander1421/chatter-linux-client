@@ -106,15 +106,15 @@ ringbuf = "0.4"
 # smol removed — was unused
 
 # ============================================================================
-# Video Decoding - GStreamer (cross-platform)
+# Video Decoding - GStreamer (desktop only, gated behind `desktop-media`)
 # ============================================================================
-gstreamer = "0.23"
-gstreamer-app = "0.23"
-gstreamer-video = "0.23"
-gstreamer-audio = "0.23"
-gstreamer-pbutils = "0.23"
-gstreamer-gl = "0.23"
-gstreamer-play = "0.23"
+gstreamer = { version = "0.23", optional = true }
+gstreamer-app = { version = "0.23", optional = true }
+gstreamer-video = { version = "0.23", optional = true }
+gstreamer-audio = { version = "0.23", optional = true }
+gstreamer-pbutils = { version = "0.23", optional = true }
+gstreamer-gl = { version = "0.23", optional = true }
+gstreamer-play = { version = "0.23", optional = true }
 
 # ============================================================================
 # Media Utilities
@@ -126,10 +126,10 @@ zeroize = { version = "1.8", features = ["derive"] }
 libc = "0.2"
 
 # ============================================================================
-# WebRTC / LiveKit
+# WebRTC / LiveKit (desktop only, gated behind `desktop-media`)
 # ============================================================================
-livekit = { version = "0.7.32", features = ["native-tls"] }
-livekit-api = "0.4.14"
+livekit = { version = "0.7.32", features = ["native-tls"], optional = true }
+livekit-api = { version = "0.4.14", optional = true }
 # lazy_static removed — migrated to std::sync::LazyLock
 async-stream = "0.3.6"
 
@@ -157,8 +157,8 @@ open = "5.3.3"
 zbus = "5"
 ksni = "0.2"
 v4l = "0.14"
-gstreamer-gl-egl = "0.23"
-glutin_egl_sys = "0.7"
+gstreamer-gl-egl = { version = "0.23", optional = true }
+glutin_egl_sys = { version = "0.7", optional = true }
 
 # ============================================================================
 # Platform-specific: Windows
@@ -179,8 +179,8 @@ muda = "0.17"
 # Platform-specific: Android
 # ============================================================================
 [target.'cfg(target_os = "android")'.dependencies]
-gstreamer-gl-egl = "0.23"
-glutin_egl_sys = "0.7"
+gstreamer-gl-egl = { version = "0.23", optional = true }
+glutin_egl_sys = { version = "0.7", optional = true }
 jni = "0.21"           # JNI bindings for Android system APIs (notifications, etc.)
 ndk-context = "0.1"    # Access to Android app context (JNI VM + activity)
 
@@ -197,6 +197,12 @@ name = "attachment_decrypt"
 harness = false
 
 [features]
-default = ["desktop-system"]
+default = ["desktop-system", "desktop-media"]
 desktop-system = ["keyring/sync-secret-service", "keyring/windows-native"]
+desktop-media = [
+    "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video",
+    "dep:gstreamer-audio", "dep:gstreamer-pbutils", "dep:gstreamer-gl",
+    "dep:gstreamer-play", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys",
+    "dep:livekit", "dep:livekit-api",
+]
 local-ai = ["dep:mistralrs"]

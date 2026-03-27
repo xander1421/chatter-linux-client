@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use crate::inbox::DeviceInboxProvider;
+#[cfg(feature = "desktop-media")]
 use crate::services::CallWorkerHandle;
 use crate::events::EventBus;
 use crate::mailbox::group::GroupFanout;
@@ -103,6 +104,7 @@ pub struct CoreServices {
 
     // Post-boot services (initialized via AppContext after grpc connect)
     pub group_fanout: Arc<std::sync::OnceLock<Arc<GroupFanout>>>,
+    #[cfg(feature = "desktop-media")]
     pub call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
     pub device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
 }
@@ -113,6 +115,7 @@ impl CoreServices {
         infra: &InfrastructureContainer,
         services: &ServiceContainer,
         group_fanout: Arc<std::sync::OnceLock<Arc<GroupFanout>>>,
+        #[cfg(feature = "desktop-media")]
         call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
         device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
     ) -> Self {
@@ -179,6 +182,7 @@ impl CoreServices {
 
             // Post-boot services (shared OnceLock with AppContext)
             group_fanout,
+            #[cfg(feature = "desktop-media")]
             call_service,
             device_inbox_provider,
         }
@@ -344,6 +348,7 @@ impl CoreServices {
     /// Initialize the call service if not already set.
     ///
     /// Safe to call multiple times — uses `get_or_init` internally.
+    #[cfg(feature = "desktop-media")]
     pub fn ensure_call_service(&self) {
         use crate::services::call_worker::CallWorkerHandle;
 

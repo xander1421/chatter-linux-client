@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use crate::error::{NetworkError, StorageError, SystemError};
+#[cfg(feature = "desktop-media")]
 use crate::services::CallWorkerHandle;
 use crate::mailbox::group::GroupFanout;
 use crate::mailbox::anon_dm::AnonDmPoller;
@@ -48,6 +49,7 @@ pub struct AppContext {
 
     // Post-boot initialization (OnceLock) - shared with CoreServices
     device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
+    #[cfg(feature = "desktop-media")]
     call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
 }
 
@@ -58,14 +60,16 @@ impl AppContext {
         
         // Create shared OnceLocks for post-boot services (shared with CoreServices)
         let device_inbox_provider = Arc::new(std::sync::OnceLock::new());
+        #[cfg(feature = "desktop-media")]
         let call_service = Arc::new(std::sync::OnceLock::new());
-        
+
         let services = Arc::new(ServiceContainer::new(&infrastructure)?);
 
         let core_services = Arc::new(CoreServices::new(
             &infrastructure,
             &services,
             infrastructure.group_fanout.clone(),
+            #[cfg(feature = "desktop-media")]
             call_service.clone(),
             device_inbox_provider.clone(),
         ));
@@ -77,6 +81,7 @@ impl AppContext {
             services,
             core_services,
             device_inbox_provider,
+            #[cfg(feature = "desktop-media")]
             call_service,
         })
     }
@@ -151,6 +156,7 @@ impl AppContext {
     }
 
     /// Initialize the call worker (call after grpc connect).
+    #[cfg(feature = "desktop-media")]
     pub fn init_call_service(&self) {
         self.call_service.get_or_init(|| {
             CallWorkerHandle::spawn(self.infrastructure.grpc_pool.call_client())
@@ -158,6 +164,7 @@ impl AppContext {
     }
 
     /// Get the call worker handle.
+    #[cfg(feature = "desktop-media")]
     pub fn get_call_service(&self) -> Option<CallWorkerHandle> {
         self.call_service.get().cloned()
     }
