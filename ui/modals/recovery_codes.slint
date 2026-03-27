@@ -1,0 +1,288 @@
+// RecoveryCodesModal - Displays one-time recovery codes after registration
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+
+export component RecoveryCodesModal inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <[string]> codes: [];
+    in property <bool> loading: false;
+
+    property <bool> saved-confirmed: false;
+
+    callback confirmed();
+    callback copy-all();
+
+    // Custom modal (no close button - must confirm)
+    opacity: root.show-modal ? 1 : 0;
+    visible: root.show-modal;
+
+    // Backdrop
+    background: #00000080;
+
+    // Block backdrop clicks (no dismiss allowed)
+    TouchArea {
+        width: 100%;
+        height: 100%;
+    }
+
+    // Modal container
+    Rectangle {
+        width: 480px;
+        min-height: 200px;
+        max-height: parent.height * 80%;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+
+        // Block clicks from passing through
+        TouchArea {
+            width: 100%;
+            height: 100%;
+        }
+
+        VerticalLayout {
+            padding: Spacing.lg;
+            spacing: Spacing.md;
+
+            // Title
+            Text {
+                text: "Save Your Recovery Codes";
+                color: Colors.text-primary;
+                font-size: Typography.xl;
+                font-weight: Typography.semibold;
+                horizontal-alignment: center;
+            }
+
+            // Subtitle
+            Text {
+                text: "These codes can recover your account if you forget your password and PIN. Save them somewhere safe. They will not be shown again.";
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Rectangle { height: Spacing.sm; }
+
+            // 2x4 grid of recovery codes
+            Rectangle {
+                background: Colors.background;
+                border-radius: Spacing.radius-md;
+
+                VerticalLayout {
+                    padding: Spacing.lg;
+                    spacing: Spacing.sm;
+
+                    // Row 1 (codes 0-1)
+                    HorizontalLayout {
+                        spacing: Spacing.lg;
+                        alignment: center;
+
+                        for code[i] in root.codes: Rectangle {
+                            visible: i < 2;
+                            width: 0px;
+                            horizontal-stretch: i < 2 ? 1 : 0;
+                            height: i < 2 ? 36px : 0px;
+                            background: Colors.surface;
+                            border-radius: Spacing.radius-sm;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.md;
+                                padding-right: Spacing.md;
+                                alignment: center;
+
+                                Text {
+                                    text: (i + 1) + ". ";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.sm;
+                                }
+                                Text {
+                                    text: code;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.base;
+                                    font-weight: Typography.medium;
+                                    letter-spacing: 2px;
+                                }
+                            }
+                        }
+                    }
+
+                    // Row 2 (codes 2-3)
+                    HorizontalLayout {
+                        spacing: Spacing.lg;
+                        alignment: center;
+
+                        for code[i] in root.codes: Rectangle {
+                            visible: i >= 2 && i < 4;
+                            width: 0px;
+                            horizontal-stretch: (i >= 2 && i < 4) ? 1 : 0;
+                            height: (i >= 2 && i < 4) ? 36px : 0px;
+                            background: Colors.surface;
+                            border-radius: Spacing.radius-sm;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.md;
+                                padding-right: Spacing.md;
+                                alignment: center;
+
+                                Text {
+                                    text: (i + 1) + ". ";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.sm;
+                                }
+                                Text {
+                                    text: code;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.base;
+                                    font-weight: Typography.medium;
+                                    letter-spacing: 2px;
+                                }
+                            }
+                        }
+                    }
+
+                    // Row 3 (codes 4-5)
+                    HorizontalLayout {
+                        spacing: Spacing.lg;
+                        alignment: center;
+
+                        for code[i] in root.codes: Rectangle {
+                            visible: i >= 4 && i < 6;
+                            width: 0px;
+                            horizontal-stretch: (i >= 4 && i < 6) ? 1 : 0;
+                            height: (i >= 4 && i < 6) ? 36px : 0px;
+                            background: Colors.surface;
+                            border-radius: Spacing.radius-sm;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.md;
+                                padding-right: Spacing.md;
+                                alignment: center;
+
+                                Text {
+                                    text: (i + 1) + ". ";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.sm;
+                                }
+                                Text {
+                                    text: code;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.base;
+                                    font-weight: Typography.medium;
+                                    letter-spacing: 2px;
+                                }
+                            }
+                        }
+                    }
+
+                    // Row 4 (codes 6-7)
+                    HorizontalLayout {
+                        spacing: Spacing.lg;
+                        alignment: center;
+
+                        for code[i] in root.codes: Rectangle {
+                            visible: i >= 6 && i < 8;
+                            width: 0px;
+                            horizontal-stretch: (i >= 6 && i < 8) ? 1 : 0;
+                            height: (i >= 6 && i < 8) ? 36px : 0px;
+                            background: Colors.surface;
+                            border-radius: Spacing.radius-sm;
+
+                            HorizontalLayout {
+                                padding-left: Spacing.md;
+                                padding-right: Spacing.md;
+                                alignment: center;
+
+                                Text {
+                                    text: (i + 1) + ". ";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.sm;
+                                }
+                                Text {
+                                    text: code;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.base;
+                                    font-weight: Typography.medium;
+                                    letter-spacing: 2px;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Copy All button
+            HorizontalLayout {
+                alignment: center;
+
+                Button {
+                    text: "Copy All";
+                    variant: "secondary";
+                    clicked => { root.copy-all(); }
+                }
+            }
+
+            Rectangle { height: Spacing.xs; }
+
+            // Checkbox: I have saved my recovery codes
+            HorizontalLayout {
+                alignment: center;
+                spacing: Spacing.sm;
+
+                Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: Spacing.radius-sm;
+                    border-width: 2px;
+                    border-color: root.saved-confirmed ? Colors.primary : Colors.text-muted;
+                    background: root.saved-confirmed ? Colors.primary : transparent;
+
+                    if root.saved-confirmed: Text {
+                        text: "\u{2713}";
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.saved-confirmed = !root.saved-confirmed;
+                        }
+                    }
+                }
+
+                Text {
+                    text: "I have saved my recovery codes";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                }
+
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.saved-confirmed = !root.saved-confirmed;
+                    }
+                }
+            }
+
+            Rectangle { height: Spacing.sm; }
+
+            // Continue button (disabled until checkbox checked)
+            Button {
+                text: "Continue";
+                variant: "primary";
+                disabled: !root.saved-confirmed;
+                clicked => { root.confirmed(); }
+            }
+        }
+    }
+}

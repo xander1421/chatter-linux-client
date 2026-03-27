@@ -8,12 +8,14 @@ import { Icons } from "theme/icons.slint";
 // Import auth screens
 import { LoginPage } from "pages/login.slint";
 import { RegisterPage } from "pages/register.slint";
+import { AccountRecoveryPage } from "pages/account_recovery.slint";
 import { LoadingPage } from "pages/loading.slint";
 
 // Import main layout components
 import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
+import { MembersPanel } from "chat/members_panel.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu } from "chat/message_context_menu.slint";
 import { EmojiPicker, EmojiData } from "components/emoji_picker.slint";
@@ -22,7 +24,7 @@ import { MentionAutocomplete, MentionSuggestion } from "components/mention_autoc
 
 // Import modals
 import { CreateChannelModal, AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
-import { UserProfileModal, EditProfileModal } from "modals/mod.slint";
+import { UserProfileModal, EditProfileModal, RecoveryCodesModal } from "modals/mod.slint";
 import { FriendRequestsModal, FriendRequest } from "modals/friend_requests.slint";
 import { FriendsModal, FriendData, UserSearchResult, FriendRequestData, BlockedUserData } from "modals/friends.slint";
 import { ForwardMessageModal, ForwardTarget } from "modals/forward_message.slint";
@@ -53,7 +55,7 @@ export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageI
 
 export component App inherits Rectangle {
     // ========== View routing ==========
-    // Views: "loading", "login", "register", "main"
+    // Views: "loading", "login", "register", "recovery", "main"
     in-out property <string> current-view: "loading";
 
     // ========== Loading page properties ==========
@@ -79,6 +81,22 @@ export component App inherits Rectangle {
     in-out property <int> register-selected-default-idx: -1;
     callback register-select-avatar();
     callback register-select-default-avatar(int);
+
+    // ========== Recovery codes modal properties ==========
+    in property <[string]> recovery-codes: [];
+    callback recovery-codes-confirmed();
+    callback recovery-codes-copy-all();
+
+    // ========== Account recovery page properties ==========
+    in-out property <string> recovery-username: "";
+    in-out property <string> recovery-code: "";
+    in-out property <string> recovery-new-password: "";
+    in-out property <string> recovery-confirm-password: "";
+    in-out property <string> recovery-new-pin: "";
+    in property <bool> recovery-loading: false;
+    in property <string> recovery-error: "";
+    in property <string> recovery-success: "";
+    callback recover-account(string, string, string, string);  // username, recovery_code, new_password, new_pin
 
     // ========== Sidebar properties ==========
     in property <[ChannelListItemData]> channels: [];
@@ -247,6 +265,10 @@ export component App inherits Rectangle {
     callback pinned-show-clicked();
     callback pinned-go-to-message();
 
+    // ========== Members panel state ==========
+    in-out property <bool> members-panel-visible: false;
+    in property <[ChannelMemberData]> members-panel-members: [];
+
     // ========== Thread panel state ==========
     in property <bool> thread-panel-visible: false;
     in property <string> thread-root-message-id: "";
@@ -406,6 +428,18 @@ export component App inherits Rectangle {
     in-out property <bool> settings-sealed-sender-unrestricted: false;
     in property <int> settings-prekey-count: 0;
 
+    // Settings security (Change PIN / Key Backup)
+    in-out property <string> settings-change-pin-current: "";
+    in-out property <string> settings-change-pin-new: "";
+    in-out property <string> settings-change-pin-confirm: "";
+    in property <bool> settings-change-pin-loading: false;
+    in property <string> settings-change-pin-error: "";
+    in property <string> settings-change-pin-success: "";
+    in property <string> settings-backup-status: "unknown";
+    in-out property <string> settings-backup-retry-pin: "";
+    in property <bool> settings-backup-retry-loading: false;
+    in property <string> settings-backup-retry-error: "";
+
     // AI settings properties
     in-out property <bool> settings-local-ai-enabled: false;
     in-out property <string> settings-local-ai-model-id: "";
@@ -445,6 +479,7 @@ export component App inherits Rectangle {
     callback register(string, string, string, string, string);  // username, password, display_name, pin, server_url
     callback go-to-register();
     callback go-to-login();
+    callback go-to-recovery();
 
     // ========== Sidebar callbacks ==========
     callback channel-selected(string);
@@ -465,6 +500,8 @@ export component App inherits Rectangle {
     callback search-clicked();
     callback chat-settings-clicked();
     callback invite-member();
+    callback members-panel-toggle();
+    callback member-clicked(string);  // user-id
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string);  // (sender_id, timestamp_ns)
@@ -569,6 +606,8 @@ export component App inherits Rectangle {
     callback settings-copy-fingerprint();
     callback settings-sealed-sender-changed(bool);
     callback settings-refresh-keys();
+    callback settings-change-pin(string, string);  // current_pin, new_pin
+    callback settings-retry-backup(string);  // pin
 
     // AI settings callbacks
     callback settings-local-ai-enabled-changed(bool);
@@ -664,6 +703,9 @@ export component App inherits Rectangle {
             register => {
                 root.go-to-register();
             }
+            go-to-recovery => {
+                root.go-to-recovery();
+            }
         }
 
         // Register page
@@ -688,6 +730,25 @@ export component App inherits Rectangle {
             }
             select-default-avatar(idx) => {
                 root.register-select-default-avatar(idx);
+            }
+            go-to-login => {
+                root.go-to-login();
+            }
+        }
+
+        // Account recovery page
+        if current-view == "recovery": AccountRecoveryPage {
+            username <=> root.recovery-username;
+            recovery-code <=> root.recovery-code;
+            new-password <=> root.recovery-new-password;
+            confirm-password <=> root.recovery-confirm-password;
+            new-pin <=> root.recovery-new-pin;
+            loading: root.recovery-loading;
+            error: root.recovery-error;
+            success: root.recovery-success;
+
+            recover(u, code, pw, pin) => {
+                root.recover-account(u, code, pw, pin);
             }
             go-to-login => {
                 root.go-to-login();
@@ -819,6 +880,12 @@ export component App inherits Rectangle {
                     voice-call-clicked => { root.start-voice-call(); }
                     video-call-clicked => { root.start-video-call(); }
                     invite-clicked => { root.invite-member(); }
+                    members-clicked => {
+                        root.members-panel-visible = !root.members-panel-visible;
+                        if root.members-panel-visible {
+                            root.members-panel-toggle();
+                        }
+                    }
 
                     // Pinned bar (Telegram-style)
                     has-pinned-messages: root.has-pinned-messages;
@@ -872,6 +939,21 @@ export component App inherits Rectangle {
                     typing-changed(is-typing) => { root.typing-changed(is-typing); }
                     process-text(text) => { return root.process-text(text); }
                     scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
+                }
+
+                // Members panel (appears to the right of chat when visible)
+                if root.members-panel-visible: MembersPanel {
+                    width: 280px;
+                    height: 100%;
+                    members: root.members-panel-members;
+                    channel-name: root.channel-name;
+
+                    close-clicked => {
+                        root.members-panel-visible = false;
+                    }
+                    member-clicked(uid) => {
+                        root.member-clicked(uid);
+                    }
                 }
 
                 // Thread panel (appears to the right of chat when visible)
@@ -1175,6 +1257,20 @@ export component App inherits Rectangle {
         }
     }
 
+    // Recovery Codes Modal
+    RecoveryCodesModal {
+        show-modal: root.active-modal == "recovery-codes";
+        codes: root.recovery-codes;
+
+        confirmed => {
+            root.active-modal = "none";
+            root.recovery-codes-confirmed();
+        }
+        copy-all => {
+            root.recovery-codes-copy-all();
+        }
+    }
+
     // Friend Requests Modal (legacy)
     FriendRequestsModal {
         show-modal: root.active-modal == "friend-requests";
@@ -1418,6 +1514,17 @@ export component App inherits Rectangle {
         identity-fingerprint: root.settings-identity-fingerprint;
         sealed-sender-unrestricted <=> root.settings-sealed-sender-unrestricted;
         prekey-count: root.settings-prekey-count;
+        // Security (PIN / Backup)
+        change-pin-current <=> root.settings-change-pin-current;
+        change-pin-new <=> root.settings-change-pin-new;
+        change-pin-confirm <=> root.settings-change-pin-confirm;
+        change-pin-loading: root.settings-change-pin-loading;
+        change-pin-error: root.settings-change-pin-error;
+        change-pin-success: root.settings-change-pin-success;
+        backup-status: root.settings-backup-status;
+        backup-retry-pin <=> root.settings-backup-retry-pin;
+        backup-retry-loading: root.settings-backup-retry-loading;
+        backup-retry-error: root.settings-backup-retry-error;
         // AI settings
         local-ai-enabled <=> root.settings-local-ai-enabled;
         local-ai-model-id <=> root.settings-local-ai-model-id;
@@ -1458,6 +1565,12 @@ export component App inherits Rectangle {
         }
         refresh-keys-clicked => {
             root.settings-refresh-keys();
+        }
+        change-pin(current, new) => {
+            root.settings-change-pin(current, new);
+        }
+        retry-backup(pin) => {
+            root.settings-retry-backup(pin);
         }
         // AI callbacks
         local-ai-enabled-changed(value) => {

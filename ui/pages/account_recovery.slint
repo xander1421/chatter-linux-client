@@ -1,0 +1,281 @@
+// Account Recovery page for entering recovery code and new credentials
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+
+export component AccountRecoveryPage inherits Rectangle {
+    in-out property <string> username: "";
+    in-out property <string> recovery-code: "";
+    in-out property <string> new-password: "";
+    in-out property <string> confirm-password: "";
+    in-out property <string> new-pin: "";
+    in property <bool> loading: false;
+    in property <string> error: "";
+    in property <string> success: "";
+
+    // Internal validation state
+    property <bool> submitted: false;
+    property <bool> username-empty: username == "";
+    property <bool> recovery-code-empty: recovery-code == "";
+    property <bool> new-password-empty: new-password == "";
+    property <bool> confirm-password-empty: confirm-password == "";
+    property <bool> new-pin-empty: new-pin == "";
+    property <bool> passwords-match: new-password == confirm-password;
+    property <bool> fields-valid: !username-empty && !recovery-code-empty && !new-password-empty && !confirm-password-empty && !new-pin-empty && passwords-match;
+
+    callback recover(string, string, string, string);  // username, recovery_code, new_password, new_pin
+    callback go-to-login();
+
+    background: Colors.background;
+
+    // Centered form container
+    VerticalLayout {
+        alignment: center;
+
+        Rectangle {
+            max-width: 400px;
+            horizontal-stretch: 0;
+            background: Colors.surface;
+            border-radius: Spacing.radius-lg;
+
+            VerticalLayout {
+                alignment: center;
+                spacing: Spacing.lg;
+                padding: Spacing.xl;
+
+                // App logo/title
+                Text {
+                    text: "Chatter";
+                    color: Colors.primary;
+                    font-size: Typography.xxxl;
+                    font-weight: Typography.bold;
+                    horizontal-alignment: center;
+                }
+
+                // Subtitle
+                Text {
+                    text: "Account Recovery";
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Enter a recovery code to reset your password and PIN";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                // Spacer
+                Rectangle { height: Spacing.sm; }
+
+                // Username field
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Username";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Input {
+                        placeholder: "Enter your username";
+                        text <=> root.username;
+                        disabled: root.loading;
+                        error: submitted && username-empty;
+                        error-message: submitted && username-empty ? "Username is required" : "";
+                    }
+                }
+
+                // Recovery code field
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "Recovery Code";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Text {
+                        text: "8 characters, uppercase letters and digits";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+
+                    Input {
+                        placeholder: "e.g., ABCD1234";
+                        text <=> root.recovery-code;
+                        disabled: root.loading;
+                        error: submitted && recovery-code-empty;
+                        error-message: submitted && recovery-code-empty ? "Recovery code is required" : "";
+                    }
+                }
+
+                // Password fields
+                HorizontalLayout {
+                    spacing: Spacing.md;
+                    width: 100%;
+
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: "New Password";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                        }
+
+                        Input {
+                            placeholder: "New password";
+                            password: true;
+                            text <=> root.new-password;
+                            disabled: root.loading;
+                            error: submitted && new-password-empty;
+                            error-message: submitted && new-password-empty ? "Password is required" : "";
+                        }
+                    }
+
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: "Confirm Password";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                        }
+
+                        Input {
+                            placeholder: "Confirm password";
+                            password: true;
+                            text <=> root.confirm-password;
+                            disabled: root.loading;
+                            error: submitted && (confirm-password-empty || (!confirm-password-empty && !passwords-match));
+                            error-message: {
+                                if submitted && confirm-password-empty {
+                                    "Please confirm your password"
+                                } else if submitted && !passwords-match {
+                                    "Passwords do not match"
+                                } else {
+                                    ""
+                                }
+                            };
+                        }
+                    }
+                }
+
+                // PIN field
+                VerticalLayout {
+                    spacing: Spacing.xs;
+
+                    Text {
+                        text: "New 6-Digit PIN";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                    }
+
+                    Text {
+                        text: "For future account recovery (remember this!)";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                    }
+
+                    Input {
+                        placeholder: "6-digit PIN (e.g., 123456)";
+                        text <=> root.new-pin;
+                        disabled: root.loading;
+                        error: submitted && new-pin-empty;
+                        error-message: submitted && new-pin-empty ? "PIN is required (6 digits)" : "";
+                    }
+                }
+
+                // Success message display
+                if success != "": Rectangle {
+                    background: Colors.success.with-alpha(0.1);
+                    border-radius: Spacing.radius-md;
+
+                    HorizontalLayout {
+                        padding: Spacing.md;
+
+                        Text {
+                            text: root.success;
+                            color: Colors.success;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // Error message display
+                if error != "": Rectangle {
+                    background: Colors.error.with-alpha(0.1);
+                    border-radius: Spacing.radius-md;
+
+                    HorizontalLayout {
+                        padding: Spacing.md;
+
+                        Text {
+                            text: root.error;
+                            color: Colors.error;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // Spacer
+                Rectangle { height: Spacing.sm; }
+
+                // Recover Account button
+                Button {
+                    text: loading ? "" : "Recover Account";
+                    variant: "primary";
+                    loading: root.loading;
+                    disabled: root.loading || (submitted && !fields-valid);
+
+                    clicked => {
+                        submitted = true;
+                        if fields-valid {
+                            root.recover(root.username, root.recovery-code, root.new-password, root.new-pin);
+                        }
+                    }
+                }
+
+                // Back to login link
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.xs;
+
+                    Rectangle {
+                        height: 20px;
+
+                        Text {
+                            text: "Back to Login";
+                            color: Colors.primary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.medium;
+                        }
+
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.go-to-login();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

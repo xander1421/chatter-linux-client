@@ -41,6 +41,23 @@ export component MainWindow inherits Window {
     in-out property <int> register-selected-default-idx <=> app.register-selected-default-idx;
     callback register-select-avatar <=> app.register-select-avatar;
     callback register-select-default-avatar <=> app.register-select-default-avatar;
+
+    // ========== Recovery codes modal properties ==========
+    in property <[string]> recovery-codes <=> app.recovery-codes;
+    callback recovery-codes-confirmed <=> app.recovery-codes-confirmed;
+    callback recovery-codes-copy-all <=> app.recovery-codes-copy-all;
+
+    // ========== Account recovery page properties ==========
+    in-out property <string> recovery-username <=> app.recovery-username;
+    in-out property <string> recovery-code <=> app.recovery-code;
+    in-out property <string> recovery-new-password <=> app.recovery-new-password;
+    in-out property <string> recovery-confirm-password <=> app.recovery-confirm-password;
+    in-out property <string> recovery-new-pin <=> app.recovery-new-pin;
+    in property <bool> recovery-loading <=> app.recovery-loading;
+    in property <string> recovery-error <=> app.recovery-error;
+    in property <string> recovery-success <=> app.recovery-success;
+    callback recover-account <=> app.recover-account;
+
     // ========== Sidebar properties ==========
     in property <[ChannelListItemData]> channels <=> app.channels;
     in property <string> selected-channel-id <=> app.selected-channel-id;
@@ -201,6 +218,12 @@ export component MainWindow inherits Window {
     callback pinned-show-clicked <=> app.pinned-show-clicked;
     callback pinned-go-to-message <=> app.pinned-go-to-message;
 
+    // ========== Members panel state ==========
+    in-out property <bool> members-panel-visible <=> app.members-panel-visible;
+    in property <[ChannelMemberData]> members-panel-members <=> app.members-panel-members;
+    callback members-panel-toggle <=> app.members-panel-toggle;
+    callback member-clicked <=> app.member-clicked;
+
     // ========== Thread panel state ==========
     in property <bool> thread-panel-visible <=> app.thread-panel-visible;
     in property <string> thread-root-message-id <=> app.thread-root-message-id;
@@ -337,6 +360,18 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-sealed-sender-unrestricted <=> app.settings-sealed-sender-unrestricted;
     in property <int> settings-prekey-count <=> app.settings-prekey-count;
 
+    // Settings security (Change PIN / Key Backup)
+    in-out property <string> settings-change-pin-current <=> app.settings-change-pin-current;
+    in-out property <string> settings-change-pin-new <=> app.settings-change-pin-new;
+    in-out property <string> settings-change-pin-confirm <=> app.settings-change-pin-confirm;
+    in property <bool> settings-change-pin-loading <=> app.settings-change-pin-loading;
+    in property <string> settings-change-pin-error <=> app.settings-change-pin-error;
+    in property <string> settings-change-pin-success <=> app.settings-change-pin-success;
+    in property <string> settings-backup-status <=> app.settings-backup-status;
+    in-out property <string> settings-backup-retry-pin <=> app.settings-backup-retry-pin;
+    in property <bool> settings-backup-retry-loading <=> app.settings-backup-retry-loading;
+    in property <string> settings-backup-retry-error <=> app.settings-backup-retry-error;
+
     // AI settings properties
     in-out property <bool> settings-local-ai-enabled <=> app.settings-local-ai-enabled;
     in-out property <string> settings-local-ai-model-id <=> app.settings-local-ai-model-id;
@@ -398,6 +433,7 @@ export component MainWindow inherits Window {
     callback register <=> app.register;
     callback go-to-register <=> app.go-to-register;
     callback go-to-login <=> app.go-to-login;
+    callback go-to-recovery <=> app.go-to-recovery;
 
     // ========== Sidebar callbacks ==========
     callback channel-selected <=> app.channel-selected;
@@ -504,6 +540,8 @@ export component MainWindow inherits Window {
     callback settings-copy-fingerprint <=> app.settings-copy-fingerprint;
     callback settings-sealed-sender-changed <=> app.settings-sealed-sender-changed;
     callback settings-refresh-keys <=> app.settings-refresh-keys;
+    callback settings-change-pin <=> app.settings-change-pin;
+    callback settings-retry-backup <=> app.settings-retry-backup;
 
     // AI settings callbacks
     callback settings-local-ai-enabled-changed <=> app.settings-local-ai-enabled-changed;

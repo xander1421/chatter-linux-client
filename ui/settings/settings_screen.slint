@@ -22,6 +22,20 @@ export component SettingsScreen inherits Rectangle {
     in property <bool> password-changing: false;
     in property <string> password-error: "";
 
+    // Change PIN form state
+    in-out property <string> change-pin-current: "";
+    in-out property <string> change-pin-new: "";
+    in-out property <string> change-pin-confirm: "";
+    in property <bool> change-pin-loading: false;
+    in property <string> change-pin-error: "";
+    in property <string> change-pin-success: "";
+
+    // Key backup state
+    in property <string> backup-status: "unknown";  // "backed_up", "not_backed_up", "unknown"
+    in-out property <string> backup-retry-pin: "";
+    in property <bool> backup-retry-loading: false;
+    in property <string> backup-retry-error: "";
+
     // Privacy settings
     in-out property <bool> read-receipts-enabled: true;
     in-out property <bool> typing-indicators-enabled: true;
@@ -41,6 +55,8 @@ export component SettingsScreen inherits Rectangle {
     // Navigation state
     property <string> active-section: "account";  // "account", "privacy", "encryption", "appearance"
     property <bool> show-password-form: false;
+    property <bool> show-pin-form: false;
+    property <bool> show-backup-retry: false;
 
     // Callbacks
     callback edit-profile-clicked();
@@ -58,6 +74,10 @@ export component SettingsScreen inherits Rectangle {
     callback copy-fingerprint-clicked();
     callback sealed-sender-changed(bool);
     callback refresh-keys-clicked();
+
+    // Security callbacks
+    callback change-pin(string, string);  // current_pin, new_pin
+    callback retry-backup(string);  // pin
 
     // AI callbacks
     callback local-ai-enabled-changed(bool);
@@ -381,6 +401,211 @@ export component SettingsScreen inherits Rectangle {
                                         text: "View All Sessions";
                                         variant: "secondary";
                                         clicked => { root.view-sessions-clicked(); }
+                                    }
+                                }
+                            }
+
+                            // Change PIN group
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xs;
+
+                                            Text {
+                                                text: "Change PIN";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                            }
+
+                                            Text {
+                                                text: "Your 6-digit PIN secures your encrypted key backup.";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+
+                                        if !show-pin-form: Button {
+                                            text: "Change PIN";
+                                            variant: "secondary";
+                                            clicked => { show-pin-form = true; }
+                                        }
+                                    }
+
+                                    // Inline PIN form
+                                    if show-pin-form: VerticalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Rectangle {
+                                            height: 1px;
+                                            background: Colors.text-muted.with-alpha(0.2);
+                                        }
+
+                                        Input {
+                                            placeholder: "Current PIN (6 digits)";
+                                            text <=> root.change-pin-current;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.md;
+
+                                            Input {
+                                                placeholder: "New PIN (6 digits)";
+                                                text <=> root.change-pin-new;
+                                                horizontal-stretch: 1;
+                                            }
+
+                                            Input {
+                                                placeholder: "Confirm new PIN";
+                                                text <=> root.change-pin-confirm;
+                                                error: root.change-pin-error != "";
+                                                error-message: root.change-pin-error;
+                                                horizontal-stretch: 1;
+                                            }
+                                        }
+
+                                        if root.change-pin-success != "": Text {
+                                            text: root.change-pin-success;
+                                            color: Colors.success;
+                                            font-size: Typography.xs;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+                                            alignment: end;
+
+                                            Button {
+                                                text: "Cancel";
+                                                variant: "ghost";
+                                                clicked => {
+                                                    show-pin-form = false;
+                                                    root.change-pin-current = "";
+                                                    root.change-pin-new = "";
+                                                    root.change-pin-confirm = "";
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Save";
+                                                variant: "primary";
+                                                loading: root.change-pin-loading;
+                                                disabled: root.change-pin-current == "" ||
+                                                         root.change-pin-new == "" ||
+                                                         root.change-pin-confirm == "";
+                                                clicked => {
+                                                    root.change-pin(root.change-pin-current, root.change-pin-new);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Key Backup group
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.md;
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xs;
+
+                                            Text {
+                                                text: "Key Backup";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                            }
+
+                                            HorizontalLayout {
+                                                spacing: Spacing.sm;
+
+                                                Text {
+                                                    text: "Status:";
+                                                    color: Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                }
+
+                                                Text {
+                                                    text: root.backup-status == "backed_up" ? "Backed up" :
+                                                          root.backup-status == "not_backed_up" ? "Not backed up" : "Unknown";
+                                                    color: root.backup-status == "backed_up" ? Colors.success :
+                                                           root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-muted;
+                                                    font-size: Typography.xs;
+                                                    font-weight: Typography.medium;
+                                                }
+                                            }
+                                        }
+
+                                        if !show-backup-retry: Button {
+                                            text: "Retry Backup";
+                                            variant: "secondary";
+                                            clicked => { show-backup-retry = true; }
+                                        }
+                                    }
+
+                                    // Inline retry form
+                                    if show-backup-retry: VerticalLayout {
+                                        spacing: Spacing.sm;
+
+                                        Rectangle {
+                                            height: 1px;
+                                            background: Colors.text-muted.with-alpha(0.2);
+                                        }
+
+                                        Input {
+                                            placeholder: "Enter your PIN to retry backup";
+                                            text <=> root.backup-retry-pin;
+                                        }
+
+                                        if root.backup-retry-error != "": Text {
+                                            text: root.backup-retry-error;
+                                            color: Colors.error;
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+                                            alignment: end;
+
+                                            Button {
+                                                text: "Cancel";
+                                                variant: "ghost";
+                                                clicked => {
+                                                    show-backup-retry = false;
+                                                    root.backup-retry-pin = "";
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Retry";
+                                                variant: "primary";
+                                                loading: root.backup-retry-loading;
+                                                disabled: root.backup-retry-pin == "";
+                                                clicked => {
+                                                    root.retry-backup(root.backup-retry-pin);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
