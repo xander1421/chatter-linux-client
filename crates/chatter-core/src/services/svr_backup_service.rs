@@ -15,6 +15,8 @@
 
 use std::sync::Arc;
 
+use zeroize::Zeroize;
+
 use crate::crypto::svr_backup::{
     decrypt_backup, derive_backup_id, encrypt_backup, KeyBackupPayload,
 };
@@ -216,6 +218,77 @@ impl SvrBackupService {
             profile_key: payload.profile_key,
             remaining_attempts: result.remaining_attempts,
         })
+    }
+
+    /// Re-encrypt a backup with a new PIN-derived key (PIN change).
+    ///
+    /// Derives backup IDs for both old and new secrets, encrypts the payload
+    /// with the new secret, increments the version, and calls the server's
+    /// atomic ChangePinBackup RPC. On success, stores the confirmed version.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_svr_secret` - 32-byte secret derived from current PIN
+    /// * `new_svr_secret` - 32-byte secret derived from new PIN
+    /// * `identity_keypair` - 64-byte Signal identity keypair (private || public)
+    /// * `profile_key` - 32-byte profile encryption key
+    /// * `new_registration_lock` - 32-byte registration lock from new PIN
+    /// * `new_svr_public_key` - 32-byte SVR public key from new PIN
+    pub async fn change_pin_backup(
+        &self,
+        old_svr_secret: &[u8; 32],
+        new_svr_secret: &[u8; 32],
+        identity_keypair: &[u8; 64],
+        profile_key: &[u8; 32],
+        new_registration_lock: &[u8; 32],
+        new_svr_public_key: &[u8; 32],
+    ) -> Result<(), SvrBackupError> {
+        // 1. Derive old backup ID (proves ownership of current backup)
+        let old_backup_id_hash = derive_backup_id(old_svr_secret);
+
+        // 2. Build and encrypt the payload with the NEW secret
+        let mut payload = KeyBackupPayload {
+            identity_keypair: *identity_keypair,
+            profile_key: *profile_key,
+        };
+        let encrypted = encrypt_backup(&payload, new_svr_secret)?;
+
+        // Zeroize payload immediately after encryption
+        payload.zeroize();
+
+        // 3. Derive new backup ID
+        let new_backup_id_hash = derive_backup_id(new_svr_secret);
+
+        // 4. Read current version and increment
+        let current_version: u32 = self
+            .settings
+            .get::<u32>(SVR_BACKUP_VERSION_KEY)?
+            .unwrap_or(0);
+        let next_version = current_version + 1;
+
+        // 5. Call server's atomic change-pin RPC
+        let mut client = self.grpc_pool.svr_client();
+        let confirmed_version = client
+            .change_pin_backup(
+                encrypted,
+                new_backup_id_hash.to_vec(),
+                old_backup_id_hash.to_vec(),
+                next_version,
+                new_registration_lock.to_vec(),
+                new_svr_public_key.to_vec(),
+            )
+            .await?;
+
+        // 6. Persist confirmed version locally
+        self.settings
+            .set(SVR_BACKUP_VERSION_KEY, &confirmed_version)?;
+
+        tracing::info!(
+            version = confirmed_version,
+            "SVR backup re-encrypted with new PIN successfully"
+        );
+
+        Ok(())
     }
 
     /// Delete a backup from the server.

@@ -860,6 +860,123 @@ impl ChatterClient {
         Ok(())
     }
 
+    /// Change the user's SVR PIN.
+    ///
+    /// Re-encrypts the identity key backup with a new PIN-derived secret and
+    /// atomically updates the server-side backup, registration lock, and SVR
+    /// public key. Both old and new PINs must be exactly 6 ASCII digits.
+    ///
+    /// All sensitive intermediates (secrets, keys) are zeroized on every path.
+    ///
+    /// # Arguments
+    ///
+    /// * `old_pin` - Current 6-digit PIN.
+    /// * `new_pin` - New 6-digit PIN.
+    /// * `username` - Plaintext username (salt for Argon2id derivation).
+    pub async fn change_pin(
+        &self,
+        old_pin: &str,
+        new_pin: &str,
+        username: &str,
+    ) -> Result<(), ClientError> {
+        use crate::crypto::svr::{derive_registration_lock, derive_svr_secret, SvrKeypair};
+        use crate::storage::repositories::settings_repo::keys;
+        use zeroize::Zeroize;
+
+        // 1. Validate both PINs (6 digits)
+        if old_pin.len() != 6 || !old_pin.chars().all(|c| c.is_ascii_digit()) {
+            return Err(ClientError::Validation("Old PIN must be exactly 6 digits".into()));
+        }
+        if new_pin.len() != 6 || !new_pin.chars().all(|c| c.is_ascii_digit()) {
+            return Err(ClientError::Validation("New PIN must be exactly 6 digits".into()));
+        }
+
+        // 2. Get identity keypair from signal store (private 32 bytes + public 33 bytes)
+        let private_bytes = self.signal().actor.get_identity_private_key().await
+            .map_err(|e| ClientError::Validation(format!("failed to get identity private key: {}", e)))?;
+        let public_bytes_33 = self.signal().actor.get_identity_public_key().await
+            .map_err(|e| ClientError::Validation(format!("failed to get identity public key: {}", e)))?;
+        // Strip the 0x05 type prefix to get raw 32-byte Curve25519 public key
+        let mut identity_keypair = [0u8; 64];
+        identity_keypair[..32].copy_from_slice(&private_bytes);
+        identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
+
+        // 3. Get profile key from settings
+        let mut profile_key = match self.signal().settings_repo.get_bytes(keys::PROFILE_KEY) {
+            Ok(Some(bytes)) if bytes.len() == 32 => {
+                let mut pk = [0u8; 32];
+                pk.copy_from_slice(&bytes);
+                pk
+            }
+            Ok(_) => {
+                identity_keypair.zeroize();
+                return Err(ClientError::Validation("profile key not found or invalid length".into()));
+            }
+            Err(e) => {
+                identity_keypair.zeroize();
+                return Err(ClientError::Validation(format!("failed to read profile key: {}", e)));
+            }
+        };
+
+        // 4. Derive old and new SVR secrets
+        let mut old_svr_secret = derive_svr_secret(old_pin, username).map_err(|e| {
+            identity_keypair.zeroize();
+            profile_key.zeroize();
+            ClientError::Validation(format!("failed to derive old svr_secret: {}", e))
+        })?;
+        let mut new_svr_secret = derive_svr_secret(new_pin, username).map_err(|e| {
+            old_svr_secret.zeroize();
+            identity_keypair.zeroize();
+            profile_key.zeroize();
+            ClientError::Validation(format!("failed to derive new svr_secret: {}", e))
+        })?;
+
+        // 5. Derive new registration lock
+        let mut new_reg_lock = derive_registration_lock(new_pin, username).map_err(|e| {
+            old_svr_secret.zeroize();
+            new_svr_secret.zeroize();
+            identity_keypair.zeroize();
+            profile_key.zeroize();
+            ClientError::Validation(format!("failed to derive registration lock: {}", e))
+        })?;
+
+        // 6. Derive new SVR public key
+        let svr_keypair = SvrKeypair::new_from_pin(new_pin, username).map_err(|e| {
+            old_svr_secret.zeroize();
+            new_svr_secret.zeroize();
+            new_reg_lock.zeroize();
+            identity_keypair.zeroize();
+            profile_key.zeroize();
+            ClientError::Validation(format!("failed to derive SVR keypair: {}", e))
+        })?;
+        let new_svr_public_key = svr_keypair.public_key_bytes();
+        // svr_keypair is dropped here (zeroizes secret via Drop impl)
+
+        // 7. Call service to re-encrypt and upload
+        let result = self
+            .svr_backup()
+            .change_pin_backup(
+                &old_svr_secret,
+                &new_svr_secret,
+                &identity_keypair,
+                &profile_key,
+                &new_reg_lock,
+                &new_svr_public_key,
+            )
+            .await;
+
+        // 8. Zeroize ALL sensitive intermediates (both success and error paths)
+        old_svr_secret.zeroize();
+        new_svr_secret.zeroize();
+        identity_keypair.zeroize();
+        profile_key.zeroize();
+        new_reg_lock.zeroize();
+
+        result.map_err(|e| ClientError::Validation(format!("PIN change failed: {}", e)))?;
+        tracing::info!("PIN changed successfully");
+        Ok(())
+    }
+
     /// Attempt to restore identity keys from SVR backup on a new device.
     ///
     /// Checks whether local identity keys exist. If they do, this is an
