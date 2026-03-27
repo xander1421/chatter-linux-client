@@ -22,6 +22,7 @@ export component LoginPage inherits Rectangle {
 
     callback login(string, string, string);
     callback register();
+    callback go-to-recovery();
 
     background: Colors.background;
 
@@ -155,6 +156,29 @@ export component LoginPage inherits Rectangle {
                         disabled: root.loading;
                         error: submitted && password-empty;
                         error-message: submitted && password-empty ? "Password is required" : "";
+                    }
+                }
+
+                // Forgot password link
+                HorizontalLayout {
+                    alignment: end;
+
+                    Rectangle {
+                        height: 20px;
+
+                        Text {
+                            text: "Forgot password?";
+                            color: Colors.primary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.medium;
+                        }
+
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.go-to-recovery();
+                            }
+                        }
                     }
                 }
 
