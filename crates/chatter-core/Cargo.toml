@@ -33,8 +33,8 @@ tower = "0.5"
 # ============================================================================
 # Crypto - Signal Protocol (Official libsignal)
 # ============================================================================
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", branch = "main" }
-libsignal-core = { git = "https://github.com/signalapp/libsignal", branch = "main" }
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
+libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3" }
 rand = "0.9"
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 blind-rsa-signatures = "0.14"
