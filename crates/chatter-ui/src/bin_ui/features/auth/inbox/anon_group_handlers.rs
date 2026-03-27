@@ -96,6 +96,9 @@ pub(crate) fn handle_anon_group_member_joined(
                 is_call: false,
                 call_type: "".into(),
                 call_duration: "".into(),
+                date_separator_text: Default::default(),
+                is_continuation: false,
+                show_date_separator: false,
             };
 
             model.push(system_msg);
@@ -175,6 +178,9 @@ pub(crate) fn handle_anon_group_member_left(
                 is_call: false,
                 call_type: "".into(),
                 call_duration: "".into(),
+                date_separator_text: Default::default(),
+                is_continuation: false,
+                show_date_separator: false,
             };
 
             model.push(system_msg);
@@ -258,6 +264,9 @@ pub(crate) fn handle_anon_group_member_kicked(
                 is_call: false,
                 call_type: "".into(),
                 call_duration: "".into(),
+                date_separator_text: Default::default(),
+                is_continuation: false,
+                show_date_separator: false,
             };
 
             model.push(system_msg);

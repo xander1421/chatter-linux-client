@@ -3,6 +3,7 @@
 
 import { Colors } from "theme/colors.slint";
 import { Spacing } from "theme/spacing.slint";
+import { Typography } from "theme/typography.slint";
 import { Icons } from "theme/icons.slint";
 
 // Import auth screens
@@ -1553,8 +1554,8 @@ export component App inherits Rectangle {
             height: shortcuts-layout.preferred-height;
             background: Colors.surface;
             border-radius: Spacing.radius-lg;
-            accessible-role: dialog;
-            accessible-label: "Keyboard shortcuts";
+            accessible-role: none;
+            accessible-description: "Keyboard shortcuts";
 
             TouchArea {} // block click-through
 

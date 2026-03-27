@@ -147,6 +147,9 @@ pub fn build_own_message_item(
         is_call: false,
         call_type: "".into(),
         call_duration: "".into(),
+        date_separator_text: Default::default(),
+        is_continuation: false,
+        show_date_separator: false,
     }
 }
 

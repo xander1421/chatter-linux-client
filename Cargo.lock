@@ -1725,7 +1725,6 @@ dependencies = [
  "jni 0.21.1",
  "keyring",
  "ksni",
- "lazy_static",
  "libc",
  "libsignal-core",
  "libsignal-protocol",
@@ -1738,7 +1737,6 @@ dependencies = [
  "muda",
  "ndk-context",
  "notify-rust",
- "once_cell",
  "open",
  "openssl",
  "parking_lot",
@@ -1758,7 +1756,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "smol",
  "subtle",
  "tempfile",
  "thiserror 2.0.18",
@@ -1801,9 +1798,7 @@ dependencies = [
  "i-slint-backend-android-activity",
  "i-slint-backend-winit",
  "image",
- "lazy_static",
  "mime_guess",
- "once_cell",
  "prost 0.13.5",
  "rand 0.9.2",
  "reqwest 0.12.28",
@@ -6755,7 +6750,7 @@ dependencies = [
 [[package]]
 name = "libsignal-core"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?branch=main#c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3"
+source = "git+https://github.com/signalapp/libsignal?rev=c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3#c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3"
 dependencies = [
  "curve25519-dalek",
  "derive_more 2.1.1",
@@ -6773,7 +6768,7 @@ dependencies = [
 [[package]]
 name = "libsignal-protocol"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?branch=main#c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3"
+source = "git+https://github.com/signalapp/libsignal?rev=c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3#c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3"
 dependencies = [
  "aes",
  "aes-gcm-siv",
@@ -10953,7 +10948,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "signal-crypto"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?branch=main#c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3"
+source = "git+https://github.com/signalapp/libsignal?rev=c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3#c5edd3fa38bf5f13bc70a88c146cfbdd61865fe3"
 dependencies = [
  "aes",
  "cbc",
@@ -11281,23 +11276,6 @@ dependencies = [
  "libc",
  "smithay-client-toolkit 0.20.0",
  "wayland-backend",
-]
-
-[[package]]
-name = "smol"
-version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a33bd3e260892199c3ccfc487c88b2da2265080acb316cd920da72fdfd7c599f"
-dependencies = [
- "async-channel 2.5.0",
- "async-executor",
- "async-fs",
- "async-io",
- "async-lock",
- "async-net",
- "async-process",
- "blocking",
- "futures-lite",
 ]
 
 [[package]]
@@ -12360,12 +12338,8 @@ checksum = "9ae9cec805b01e8fc3fd2fe289f89149a9b66dd16786abd8b19cfa7b48cb0098"
 dependencies = [
  "bytes",
  "futures-core",
- "futures-io",
  "futures-sink",
- "futures-util",
- "hashbrown 0.15.5",
  "pin-project-lite",
- "slab",
  "tokio",
 ]
 

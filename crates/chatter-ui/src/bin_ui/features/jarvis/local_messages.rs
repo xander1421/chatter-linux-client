@@ -50,6 +50,9 @@ pub fn add_jarvis_thinking_placeholder(window: &MainWindow) -> String {
         is_call: false,
         call_type: "".into(),
         call_duration: "".into(),
+        date_separator_text: Default::default(),
+        is_continuation: false,
+        show_date_separator: false,
     };
 
     let model = window.get_messages();
@@ -114,6 +117,9 @@ pub fn replace_thinking_with_response(
         is_call: false,
         call_type: "".into(),
         call_duration: "".into(),
+        date_separator_text: Default::default(),
+        is_continuation: false,
+        show_date_separator: false,
     };
 
     messages.push(msg_item);

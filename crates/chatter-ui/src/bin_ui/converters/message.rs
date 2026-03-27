@@ -170,6 +170,9 @@ impl MessageDisplayData {
         is_call: self.is_call,
         call_type: call_type.into(),
         call_duration: self.call_duration.clone().into(),
+        date_separator_text: Default::default(),
+        is_continuation: false,
+        show_date_separator: false,
     }
 }
 }

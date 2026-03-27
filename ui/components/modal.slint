@@ -29,8 +29,8 @@ export component Modal inherits Rectangle {
 
     // Modal container - centered, sized to content
     modal-container := Rectangle {
-        accessible-role: dialog;
-        accessible-label: root.title;
+        accessible-role: none;
+        accessible-description: root.title;
         width: root.modal-width;
         // Use min/max constraints instead of explicit height to allow sizing to content
         min-height: 200px;
