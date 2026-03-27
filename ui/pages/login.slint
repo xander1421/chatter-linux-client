@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 
@@ -15,6 +16,7 @@ export component LoginPage inherits Rectangle {
     in property <string> error: "";
 
     property <bool> submitted: false;
+    property <bool> show-advanced: false;
 
     callback login(string, string, string, string);
     callback register();
@@ -59,14 +61,65 @@ export component LoginPage inherits Rectangle {
                         horizontal-alignment: center;
                     }
 
-                    // Server URL
+                    // Username
                     Input {
+                        placeholder: "Username";
+                        text <=> root.username;
+                        disabled: root.loading;
+                    }
+
+                    // Password
+                    Input {
+                        placeholder: "Password";
+                        password: true;
+                        text <=> root.password;
+                        disabled: root.loading;
+                    }
+
+                    // PIN (optional)
+                    Input {
+                        placeholder: "PIN (optional, for key recovery)";
+                        password: true;
+                        text <=> root.pin;
+                        disabled: root.loading;
+                    }
+
+                    // Advanced settings toggle
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 4px;
+
+                        Image {
+                            source: root.show-advanced ? Icons.chevron-left : Icons.chevron-right;
+                            width: 12px;
+                            height: 12px;
+                            colorize: Colors.text-muted;
+                            y: (parent.height - self.height) / 2;
+                            // Rotate down when expanded
+                            rotation-angle: root.show-advanced ? -90deg : 0deg;
+                        }
+
+                        Text {
+                            text: "Advanced";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.show-advanced = !root.show-advanced; }
+                            }
+                        }
+                    }
+
+                    // Server URL (hidden behind Advanced)
+                    if root.show-advanced: Input {
                         placeholder: "Server URL";
                         text <=> root.server-url;
                         disabled: root.loading;
                     }
 
-                    HorizontalLayout {
+                    if root.show-advanced: HorizontalLayout {
                         spacing: Spacing.sm;
 
                         Rectangle {
@@ -95,29 +148,6 @@ export component LoginPage inherits Rectangle {
                             Text { text: "Tunnel"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
                             TouchArea { clicked => { root.server-url = "https://seeker-dance-ignored-clusters.trycloudflare.com"; } }
                         }
-                    }
-
-                    // Username
-                    Input {
-                        placeholder: "Username";
-                        text <=> root.username;
-                        disabled: root.loading;
-                    }
-
-                    // Password
-                    Input {
-                        placeholder: "Password";
-                        password: true;
-                        text <=> root.password;
-                        disabled: root.loading;
-                    }
-
-                    // PIN (optional)
-                    Input {
-                        placeholder: "PIN (optional, for key recovery)";
-                        password: true;
-                        text <=> root.pin;
-                        disabled: root.loading;
                     }
 
                     if error != "": Text {

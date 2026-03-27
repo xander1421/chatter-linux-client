@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
@@ -22,6 +23,7 @@ export component RegisterPage inherits Rectangle {
 
     property <bool> submitted: false;
     property <bool> passwords-match: password == confirm-password;
+    property <bool> show-advanced: false;
 
     callback register(string, string, string, string, string);
     callback select-avatar();
@@ -122,44 +124,6 @@ export component RegisterPage inherits Rectangle {
                         }
                     }
 
-                    // Server URL
-                    Input {
-                        placeholder: "Server URL";
-                        text <=> root.server-url;
-                        disabled: root.loading;
-                    }
-
-                    HorizontalLayout {
-                        spacing: Spacing.sm;
-
-                        Rectangle {
-                            height: 28px;
-                            horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "Localhost"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = "http://localhost:50051"; } }
-                        }
-
-                        Rectangle {
-                            height: 28px;
-                            horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "LAN"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = "http://192.168.0.7:50051"; } }
-                        }
-
-                        Rectangle {
-                            height: 28px;
-                            horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "Tunnel"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = "https://seeker-dance-ignored-clusters.trycloudflare.com"; } }
-                        }
-                    }
-
                     // Display name
                     Input {
                         placeholder: "Display name";
@@ -195,6 +159,71 @@ export component RegisterPage inherits Rectangle {
                         placeholder: "6-digit PIN (for account recovery)";
                         text <=> root.pin;
                         disabled: root.loading;
+                    }
+
+                    // Advanced settings toggle
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 4px;
+
+                        Image {
+                            source: root.show-advanced ? Icons.chevron-left : Icons.chevron-right;
+                            width: 12px;
+                            height: 12px;
+                            colorize: Colors.text-muted;
+                            y: (parent.height - self.height) / 2;
+                            rotation-angle: root.show-advanced ? -90deg : 0deg;
+                        }
+
+                        Text {
+                            text: "Advanced";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            vertical-alignment: center;
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.show-advanced = !root.show-advanced; }
+                            }
+                        }
+                    }
+
+                    // Server URL (hidden behind Advanced)
+                    if root.show-advanced: Input {
+                        placeholder: "Server URL";
+                        text <=> root.server-url;
+                        disabled: root.loading;
+                    }
+
+                    if root.show-advanced: HorizontalLayout {
+                        spacing: Spacing.sm;
+
+                        Rectangle {
+                            height: 28px;
+                            horizontal-stretch: 1;
+                            background: Colors.surface-hover;
+                            border-radius: Spacing.radius-sm;
+                            Text { text: "Localhost"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.server-url = "http://localhost:50051"; } }
+                        }
+
+                        Rectangle {
+                            height: 28px;
+                            horizontal-stretch: 1;
+                            background: Colors.surface-hover;
+                            border-radius: Spacing.radius-sm;
+                            Text { text: "LAN"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.server-url = "http://192.168.0.7:50051"; } }
+                        }
+
+                        Rectangle {
+                            height: 28px;
+                            horizontal-stretch: 1;
+                            background: Colors.surface-hover;
+                            border-radius: Spacing.radius-sm;
+                            Text { text: "Tunnel"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.server-url = "https://seeker-dance-ignored-clusters.trycloudflare.com"; } }
+                        }
                     }
 
                     // Validation errors
