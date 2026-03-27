@@ -86,9 +86,91 @@ export component SettingsScreen inherits Rectangle {
 
     background: Colors.background;
 
-    HorizontalLayout {
-        // Sidebar navigation (responsive: 200px on phones, 240px on desktop)
-        Rectangle {
+    // Responsive breakpoint: compact mode when width < 500px
+    property <bool> compact-mode: root.width < 500px;
+
+    // Responsive content padding
+    property <length> content-padding: compact-mode ? Spacing.md : Spacing.xl;
+
+    VerticalLayout {
+
+        // Compact mode: horizontal tab bar at top
+        if compact-mode: Rectangle {
+            height: 48px;
+            background: Colors.surface;
+
+            HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+
+                // Close button
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    border-radius: Spacing.radius-sm;
+                    background: compact-close-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "\u{2715}";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    compact-close-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.close-settings(); }
+                    }
+                }
+
+                // Tab bar (scrollable)
+                Flickable {
+                    horizontal-stretch: 1;
+                    viewport-width: tab-layout.preferred-width;
+
+                    tab-layout := HorizontalLayout {
+                        spacing: 2px;
+                        padding: Spacing.xs;
+
+                        for item in [
+                            { id: "account", label: "Account", enabled: true },
+                            { id: "privacy", label: "Privacy", enabled: true },
+                            { id: "encryption", label: "Encrypt", enabled: true },
+                            { id: "ai", label: "AI", enabled: true },
+                            { id: "appearance", label: "Theme", enabled: true }
+                        ]: Rectangle {
+                            width: compact-tab-text.preferred-width + Spacing.md * 2;
+                            height: 32px;
+                            border-radius: Spacing.radius-sm;
+                            background: active-section == item.id ? Colors.primary :
+                                       (compact-tab-touch.has-hover ? Colors.surface-hover : transparent);
+
+                            compact-tab-text := Text {
+                                text: item.label;
+                                color: active-section == item.id ? Colors.text-primary : Colors.text-secondary;
+                                font-size: Typography.xs;
+                                font-weight: active-section == item.id ? Typography.medium : Typography.normal;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            compact-tab-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    if item.enabled { active-section = item.id; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+
+        // Sidebar navigation — hidden in compact mode
+        if !compact-mode: Rectangle {
             width: min(240px, root.width * 0.35);
             background: Colors.surface;
 
@@ -164,16 +246,16 @@ export component SettingsScreen inherits Rectangle {
 
             Flickable {
                 viewport-width: self.width;
-                viewport-height: content-layout.preferred-height + Spacing.xl * 2;
+                viewport-height: content-layout.preferred-height + root.content-padding * 2;
 
                 content-layout := VerticalLayout {
-                    padding: Spacing.xl;
-                    spacing: Spacing.lg;
+                    padding: root.content-padding;
+                    spacing: root.compact-mode ? Spacing.md : Spacing.lg;
                     alignment: start;
 
-                    // Center content with max-width
+                    // Center content with max-width (wider in compact mode to use space)
                     Rectangle {
-                        max-width: 600px;
+                        max-width: root.compact-mode ? root.width : 600px;
 
                         // Account section
                         if active-section == "account": VerticalLayout {
@@ -1324,5 +1406,6 @@ export component SettingsScreen inherits Rectangle {
                 }
             }
         }
-    }
+        } // HorizontalLayout
+    } // VerticalLayout
 }
