@@ -72,12 +72,19 @@ export component MessageComposer inherits Rectangle {
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback process-text(string) -> string;  // Insert word breaks for wrapping
+    callback format-text(string);  // Apply formatting: "bold", "italic", "code", "strikethrough"
+
+    // Formatting toolbar visibility (toggle with Ctrl+Shift+F or button)
+    property <bool> show-formatting: false;
+
+    // Formatting bar height
+    property <length> format-bar-height: show-formatting ? 32px : 0px;
 
     // Forward focus to input
     forward-focus: text-input;
 
     // Layout - dynamic height based on content
-    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + Spacing.sm * 2 + 1px;  // +1px for top border
+    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + Spacing.sm * 2 + 1px;  // +1px for top border
     background: Colors.surface;
 
     // Count newlines in string
@@ -224,6 +231,143 @@ export component MessageComposer inherits Rectangle {
                         clicked => {
                             root.cancel-reply();
                         }
+                    }
+                }
+            }
+        }
+
+        // Formatting toolbar (toggled)
+        if root.show-formatting: Rectangle {
+            width: 100%;
+            height: 32px;
+            background: Colors.background;
+
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                spacing: 2px;
+                alignment: start;
+
+                // Bold button
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: Spacing.radius-sm;
+                    background: fmt-bold-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "B";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.bold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    fmt-bold-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.format-text("bold"); }
+                    }
+                }
+
+                // Italic button
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: Spacing.radius-sm;
+                    background: fmt-italic-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "I";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        font-italic: true;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    fmt-italic-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.format-text("italic"); }
+                    }
+                }
+
+                // Strikethrough button
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: Spacing.radius-sm;
+                    background: fmt-strike-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "S";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    // Strikethrough line
+                    Rectangle {
+                        width: 10px;
+                        height: 1px;
+                        x: (parent.width - self.width) / 2;
+                        y: parent.height / 2;
+                        background: Colors.text-secondary;
+                    }
+
+                    fmt-strike-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.format-text("strikethrough"); }
+                    }
+                }
+
+                // Code button
+                Rectangle {
+                    width: 28px;
+                    height: 28px;
+                    border-radius: Spacing.radius-sm;
+                    background: fmt-code-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "</>";
+                        color: Colors.text-secondary;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    fmt-code-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.format-text("code"); }
+                    }
+                }
+
+                // Separator
+                Rectangle {
+                    width: 1px;
+                    height: 20px;
+                    background: Colors.text-muted.with-alpha(0.2);
+                }
+
+                // Code block button
+                Rectangle {
+                    width: 36px;
+                    height: 28px;
+                    border-radius: Spacing.radius-sm;
+                    background: fmt-codeblock-touch.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "```";
+                        color: Colors.text-secondary;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    fmt-codeblock-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.format-text("codeblock"); }
                     }
                 }
             }
@@ -426,6 +570,33 @@ export component MessageComposer inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => {
                         root.attachment-clicked();
+                    }
+                }
+            }
+
+            // Format toggle button
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                background: root.show-formatting ? Colors.primary.transparentize(0.85) :
+                           (fmt-toggle-touch.has-hover ? Colors.surface-hover : transparent);
+                border-radius: Spacing.radius-sm;
+                opacity: root.disabled ? 0.5 : 1.0;
+
+                Text {
+                    text: "Aa";
+                    color: root.show-formatting ? Colors.primary : Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                fmt-toggle-touch := TouchArea {
+                    enabled: !root.disabled;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.show-formatting = !root.show-formatting;
                     }
                 }
             }
