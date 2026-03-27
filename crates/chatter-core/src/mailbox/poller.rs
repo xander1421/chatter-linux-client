@@ -351,18 +351,16 @@ impl MailboxPoller {
     /// Uses GroupFanout for actual polling with timing obfuscation and dummy polls.
     async fn poll_group_mailboxes(
         &self,
-        _client: &mut MailboxClient,
+        client: &mut MailboxClient,
     ) -> Result<Vec<GroupPollResult>, MailboxError> {
         // Apply timing delay before polling
         self.timing.delay_before_poll().await;
 
-        // Maybe do a dummy poll (poll a decoy mailbox)
+        // Maybe do a dummy poll (poll a decoy mailbox to generate cover traffic)
         if self.should_dummy_poll() {
-            // TODO: Implement decoy group mailbox polling
-            // For now just record the dummy poll
-            let mut stats = self.stats.write().await;
-            stats.dummy_polls += 1;
-            stats.total_polls += 1;
+            if let Err(e) = self.perform_dummy_poll(client).await {
+                tracing::trace!(error = %e, "Group decoy poll failed (expected)");
+            }
         }
 
         // Poll all group mailboxes via GroupFanout
