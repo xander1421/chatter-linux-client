@@ -85,8 +85,8 @@ export component ChatHeader inherits Rectangle {
     // Show call buttons for everything except saved messages
     property <bool> show-calls: channel-type != "saved";
 
-    // Layout (56px header + 22px encryption banner)
-    height: 78px;
+    // Layout (56px header + 28px encryption banner)
+    height: 84px;
     background: Colors.surface;
 
     // Main content (constrained to top 56px)
@@ -378,21 +378,23 @@ export component ChatHeader inherits Rectangle {
 
     // Encryption trust banner
     Rectangle {
-        y: parent.height - 22px;
+        y: parent.height - 28px;
         width: 100%;
-        height: 22px;
+        height: 28px;
         background: Colors.surface;
 
         HorizontalLayout {
             alignment: center;
-            spacing: 4px;
+            spacing: 6px;
+            padding-top: 4px;
+            padding-bottom: 4px;
 
             Image {
                 source: Icons.lock;
-                width: 10px;
-                height: 10px;
+                width: 12px;
+                height: 12px;
                 colorize: Colors.success;
-                y: (parent.height - self.height) / 2;
+                vertical-alignment: center;
             }
 
             Text {

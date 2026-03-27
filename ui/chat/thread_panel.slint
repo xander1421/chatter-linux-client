@@ -34,7 +34,7 @@ export component ThreadPanel inherits Rectangle {
     callback react-clicked(string, string);  // (sender_id, timestamp_ns)
 
     // Panel sizing — adjustable width with drag handle
-    in-out property <length> panel-width: 320px;
+    in-out property <length> panel-width: Spacing.thread-panel-width;
     property <length> min-panel-width: 240px;
     property <length> max-panel-width: 500px;
 

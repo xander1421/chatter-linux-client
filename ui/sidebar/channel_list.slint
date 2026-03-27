@@ -8,6 +8,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { ChannelListItem } from "channel_list_item.slint";
+import { EmptyState } from "../components/empty_state.slint";
 
 // Data struct for channel items (mirrors Rust ChannelListItemData)
 export struct ChannelListItemData {
@@ -135,29 +136,11 @@ export component ChannelList inherits Rectangle {
         }
 
         // Empty state when no channels
-        if !root.collapsed && root.channels.length == 0: VerticalLayout {
-            padding: Spacing.md;
-            spacing: Spacing.xs;
-            alignment: center;
-
-            Text {
-                text: "No channels yet";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: "Join or create a channel";
-                color: Colors.primary;
-                font-size: Typography.xs;
-                horizontal-alignment: center;
-
-                TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { root.join-channel-clicked(); }
-                }
-            }
+        if !root.collapsed && root.channels.length == 0: EmptyState {
+            icon: Icons.hash;
+            message: "No channels yet";
+            cta-text: "Browse channels";
+            cta-clicked => { root.join-channel-clicked(); }
         }
 
         // Scrollable channel list

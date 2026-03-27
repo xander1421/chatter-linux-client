@@ -1,0 +1,65 @@
+// Reusable empty state component
+//
+// Shows an icon, message, and optional CTA button when a list has no items.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component EmptyState inherits Rectangle {
+    in property <image> icon;
+    in property <string> message: "";
+    in property <string> cta-text: "";
+    in property <bool> show-cta: cta-text != "";
+
+    callback cta-clicked();
+
+    VerticalLayout {
+        alignment: center;
+        spacing: Spacing.xs;
+        padding: Spacing.md;
+
+        // Icon in tinted circle
+        HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                border-radius: 18px;
+                background: Colors.primary.with-alpha(0.10);
+
+                Image {
+                    source: root.icon;
+                    width: 18px;
+                    height: 18px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.primary;
+                }
+            }
+        }
+
+        // Message text
+        Text {
+            text: root.message;
+            color: Colors.text-muted;
+            font-size: Typography.xs;
+            horizontal-alignment: center;
+        }
+
+        // CTA link
+        if root.show-cta: Text {
+            text: root.cta-text;
+            color: Colors.primary;
+            font-size: Typography.xs;
+            font-weight: 600;
+            horizontal-alignment: center;
+
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.cta-clicked(); }
+            }
+        }
+    }
+}

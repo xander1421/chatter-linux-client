@@ -7,6 +7,8 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { DMListItem } from "dm_list_item.slint";
+import { EmptyState } from "../components/empty_state.slint";
+import { Icons } from "../theme/icons.slint";
 
 // Data struct for DM items (mirrors Rust DMListItemData)
 export struct DMListItemData {
@@ -32,6 +34,7 @@ export component DMList inherits Rectangle {
 
     // Callbacks
     callback conversation-selected(string);
+    callback add-friend-clicked();
     // Tooltip callbacks removed — DMListItem now uses self-contained TooltipArea
 
     // Layout
@@ -60,24 +63,11 @@ export component DMList inherits Rectangle {
         }
 
         // Empty state when no DMs
-        if !root.collapsed && root.conversations.length == 0: VerticalLayout {
-            padding: Spacing.md;
-            spacing: Spacing.xs;
-            alignment: center;
-
-            Text {
-                text: "No conversations yet";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                horizontal-alignment: center;
-            }
-
-            Text {
-                text: "Add a friend to start chatting";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                horizontal-alignment: center;
-            }
+        if !root.collapsed && root.conversations.length == 0: EmptyState {
+            icon: Icons.message-circle;
+            message: "No conversations";
+            cta-text: "Add a friend";
+            cta-clicked => { root.add-friend-clicked(); }
         }
 
         // Scrollable DM list

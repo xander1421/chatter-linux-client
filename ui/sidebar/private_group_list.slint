@@ -5,7 +5,10 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { PrivateGroupListItem } from "private_group_list_item.slint";
+import { EmptyState } from "../components/empty_state.slint";
 
 // Data struct for private group items
 export struct PrivateGroupListItemData {
@@ -26,13 +29,43 @@ export component PrivateGroupList inherits Rectangle {
 
     // Callbacks
     callback group-selected(string);
+    callback create-group-clicked();
     // Tooltip callbacks removed — PrivateGroupListItem now uses self-contained TooltipArea
 
     // Layout
     background: Colors.surface;
 
     VerticalLayout {
-        // Scrollable group list (no header - it's clear from context)
+        // Section header
+        header := Rectangle {
+            height: root.collapsed ? 0px : 32px;
+            background: Colors.surface;
+
+            if !root.collapsed: HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                alignment: start;
+
+                Text {
+                    text: "PRIVATE GROUPS";
+                    color: Colors.text-muted;
+                    font-size: 11px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Empty state when no groups
+        if !root.collapsed && root.groups.length == 0: EmptyState {
+            icon: Icons.lock;
+            message: "No private groups";
+            cta-text: "Create group";
+            cta-clicked => { root.create-group-clicked(); }
+        }
+
+        // Scrollable group list
         flickable := Flickable {
             viewport-height: group-layout.preferred-height;
 

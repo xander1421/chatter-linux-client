@@ -212,10 +212,10 @@ export component MessageItem inherits Rectangle {
 
     main-layout := VerticalLayout {
         width: 100%;
-        padding: root.is-continuation ? 1px : Spacing.xs;
+        padding: root.is-continuation ? Spacing.xxs : Spacing.xs;
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
-        spacing: root.is-continuation ? 1px : Spacing.xs;
+        spacing: root.is-continuation ? Spacing.xxs : Spacing.xs;
 
         // System message (centered, no bubble)
         if root.is-system && !root.is-call: Rectangle {
