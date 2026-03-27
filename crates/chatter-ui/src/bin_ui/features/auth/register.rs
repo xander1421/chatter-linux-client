@@ -1,8 +1,6 @@
 //! Register callback wiring.
 
-use std::sync::Arc;
-use std::sync::Mutex;
-use lazy_static::lazy_static;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use slint::{ComponentHandle, Image};
 
@@ -10,8 +8,9 @@ use chatter_core::client::ChatterClient;
 #[cfg(not(target_os = "android"))]
 use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
 
-lazy_static! {
-    static ref SELECTED_AVATAR: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+fn selected_avatar() -> &'static Mutex<Option<Vec<u8>>> {
+    static INSTANCE: OnceLock<Mutex<Option<Vec<u8>>>> = OnceLock::new();
+    INSTANCE.get_or_init(|| Mutex::new(None))
 }
 
 const DEFAULT_AVATARS: &[&[u8]] = &[
@@ -28,9 +27,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     // Reset selection on startup
-    if let Ok(mut guard) = SELECTED_AVATAR.lock() {
-        *guard = None;
-    }
+    if let Ok(mut g) = selected_avatar().lock() { *g = None; }
 
     window.on_register_select_default_avatar({
         let weak = weak_window.clone();
@@ -38,9 +35,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let idx = idx as usize;
             if idx < DEFAULT_AVATARS.len() {
                 let bytes = DEFAULT_AVATARS[idx].to_vec();
-                if let Ok(mut guard) = SELECTED_AVATAR.lock() {
-                    *guard = Some(bytes.clone());
-                }
+                if let Ok(mut g) = selected_avatar().lock() { *g = Some(bytes.clone()); }
 
                 let weak = weak.clone();
                 // Move image decoding to background thread
@@ -90,9 +85,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         match std::fs::read(&path) {
                             Ok(bytes) => {
                                 // Store bytes for registration
-                                if let Ok(mut guard) = SELECTED_AVATAR.lock() {
-                                    *guard = Some(bytes.clone());
-                                }
+                                if let Ok(mut g) = selected_avatar().lock() { *g = Some(bytes.clone()); }
 
                                 // Decode image BEFORE invoke_from_event_loop (already in tokio::spawn)
                                 let decoded = image::load_from_memory(&bytes).ok().map(|img| {
@@ -143,17 +136,6 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let server_url = server_url.to_string();
 
             tokio::spawn(async move {
-                // Validate PIN is exactly 6 digits
-                if pin.len() != 6 || !pin.chars().all(|c: char| c.is_ascii_digit()) {
-                    let weak_for_error = weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak_for_error.upgrade() {
-                            w.set_register_error("PIN must be exactly 6 digits".into());
-                        }
-                    });
-                    return;
-                }
-                
                 // Set loading state
                 let weak_for_loading = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
@@ -191,10 +173,10 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 }
 
-                // Use pre-built auth service from UIContext
+                // Use pre-built auth service from ChatterClient
                 let auth_service = &ui_ctx.auth();
                 // Get selected avatar or use random default
-                let user_avatar = SELECTED_AVATAR.lock().ok().and_then(|g| g.clone());
+                let user_avatar = selected_avatar().lock().ok().and_then(|g| g.clone());
 
                 let avatar_bytes = if let Some(ref bytes) = user_avatar {
                     bytes.as_slice()
@@ -210,10 +192,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 // Register via SDK (handles auth + state + inbox + presence)
                 match ui_ctx.register(&username, &password, &display_name, "linux-client", Some(avatar_bytes), Some(&pin)).await {
-                    Ok(_result) => {
-                        if let Ok(mut guard) = SELECTED_AVATAR.lock() {
-                            *guard = None;
-                        }
+                    Ok(result) => {
+                        if let Ok(mut g) = selected_avatar().lock() { *g = None; }
 
                         // Spawn UI-only event handlers
                         crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);
@@ -238,31 +218,44 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             });
                         }
 
-                        // Subscribe to raw InboxEvent for UI-level handlers
-                        if let Some(mut event_rx) = ui_ctx.start_inbox_provider().await {
-                            let weak_for_inbox = weak.clone();
-                            let ui_ctx_for_inbox = ui_ctx.clone();
-                            tokio::spawn(async move {
-                                loop {
-                                    match event_rx.recv().await {
-                                        Ok(event) => {
-                                            super::handle_inbox_event(event, &weak_for_inbox, &ui_ctx_for_inbox).await;
-                                        }
-                                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                                    }
+                        // Check if registration returned recovery codes
+                        let has_recovery_codes = result.recovery_codes
+                            .as_ref()
+                            .map(|codes| !codes.is_empty())
+                            .unwrap_or(false);
+
+                        if has_recovery_codes {
+                            let codes = result.recovery_codes.unwrap();
+                            let weak_for_codes = weak.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak_for_codes.upgrade() {
+                                    // Set recovery codes model
+                                    let model: Vec<slint::SharedString> = codes.iter()
+                                        .map(|c| slint::SharedString::from(c.as_str()))
+                                        .collect();
+                                    let model_rc = std::rc::Rc::new(slint::VecModel::from(model));
+                                    w.set_recovery_codes(slint::ModelRc::from(model_rc));
+
+                                    w.set_register_loading(false);
+                                    // Show recovery codes modal - stay on register view temporarily
+                                    w.set_current_view("main".into());
+                                    w.set_active_modal("recovery-codes".into());
+                                }
+                            });
+
+                            // Wire the confirmed callback to actually proceed
+                            // (The on_recovery_codes_confirmed callback is wired separately;
+                            //  initial data loads now so it's ready when user confirms)
+                        } else {
+                            // No recovery codes - go straight to main view
+                            let weak_for_view = weak.clone();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak_for_view.upgrade() {
+                                    w.set_register_loading(false);
+                                    w.set_current_view("main".into());
                                 }
                             });
                         }
-
-                        // Switch to main view
-                        let weak_for_view = weak.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak_for_view.upgrade() {
-                                w.set_register_loading(false);
-                                w.set_current_view("main".into());
-                            }
-                        });
 
                         load_initial_data(weak, &ui_ctx).await;
                     }

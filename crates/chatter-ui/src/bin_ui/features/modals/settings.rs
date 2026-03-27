@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, SharedString};
+use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
 
@@ -139,6 +139,136 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 }
             }
         });
+    });
+
+    // Change PIN
+    let weak_window = window.as_weak();
+    let ui_ctx_pin = ui_ctx.clone();
+    window.on_settings_change_pin(move |current_pin: SharedString, new_pin: SharedString| {
+        let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_pin.clone();
+        let current_pin = current_pin.to_string();
+        let new_pin = new_pin.to_string();
+
+        tokio::spawn(async move {
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_settings_change_pin_loading(true);
+                    w.set_settings_change_pin_error("".into());
+                    w.set_settings_change_pin_success("".into());
+                }
+            });
+
+            // Get username from auth state
+            let username = ui_ctx.auth_state().get().display_name.unwrap_or_default();
+
+            match ui_ctx.change_pin(&current_pin, &new_pin, &username).await {
+                Ok(()) => {
+                    tracing::info!("PIN changed successfully");
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_change_pin_loading(false);
+                            w.set_settings_change_pin_success("PIN changed successfully".into());
+                            w.set_settings_change_pin_current("".into());
+                            w.set_settings_change_pin_new("".into());
+                            w.set_settings_change_pin_confirm("".into());
+                        }
+                    });
+                }
+                Err(e) => {
+                    let error_msg = e.to_string();
+                    tracing::error!("Failed to change PIN: {}", error_msg);
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_settings_change_pin_loading(false);
+                            w.set_settings_change_pin_error(error_msg.into());
+                        }
+                    });
+                }
+            }
+        });
+    });
+
+    // Retry SVR backup
+    // Note: retry_svr_backup(pin, username, password) requires the plaintext password
+    // for key derivation. Since passwords are never stored, we inform the user.
+    let weak_window = window.as_weak();
+    window.on_settings_retry_backup(move |_pin: SharedString| {
+        let weak = weak_window.clone();
+
+        tokio::spawn(async move {
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_settings_backup_retry_loading(true);
+                    w.set_settings_backup_retry_error("".into());
+                }
+            });
+
+            // retry_svr_backup(pin, username, password) requires the plaintext password
+            // for key derivation. Since passwords are never stored, show guidance.
+            let error_msg = "Retry backup requires your password for key derivation. Please log out and log in again to retry the backup automatically.".to_string();
+            tracing::warn!("SVR backup retry attempted but password not available");
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_settings_backup_retry_loading(false);
+                    w.set_settings_backup_retry_error(error_msg.into());
+                }
+            });
+        });
+    });
+
+    // Recovery codes confirmed (after registration)
+    let weak_window = window.as_weak();
+    window.on_recovery_codes_confirmed(move || {
+        let weak = weak_window.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                // Modal is already set to "none" by the Slint callback
+                // Just ensure we're in main view
+                w.set_current_view("main".into());
+            }
+        });
+    });
+
+    // Recovery codes copy all
+    window.on_recovery_codes_copy_all({
+        let weak = window.as_weak();
+        move || {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    let codes_model = w.get_recovery_codes();
+                    let mut all_codes = String::new();
+                    for i in 0..codes_model.row_count() {
+                        if i > 0 {
+                            all_codes.push('\n');
+                        }
+                        all_codes.push_str(&codes_model.row_data(i).unwrap_or_default());
+                    }
+
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        use chatter_core::system::Clipboard;
+                        match Clipboard::new() {
+                            Ok(mut clipboard) => {
+                                if let Err(e) = clipboard.set_text(&all_codes) {
+                                    tracing::error!("Failed to copy recovery codes to clipboard: {}", e);
+                                } else {
+                                    tracing::info!("Recovery codes copied to clipboard");
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to access clipboard: {}", e);
+                            }
+                        }
+                    }
+                    #[cfg(target_os = "android")]
+                    tracing::warn!("Clipboard not supported on Android");
+                }
+            });
+        }
     });
 
     // Edit profile
