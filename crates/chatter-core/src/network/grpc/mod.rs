@@ -19,6 +19,7 @@ pub mod mailbox_client;
 pub mod message_client;
 pub mod notification_client;
 pub mod provisioning_client;
+pub mod svr_client;
 pub mod user_client;
 
 pub use anonymous_client::{AnonymousAuthClient, AnonymousMessageClient};
@@ -35,4 +36,5 @@ pub use mailbox_client::MailboxClient;
 pub use message_client::MessageClient;
 pub use notification_client::NotificationClient;
 pub use provisioning_client::{ProvisioningClient, ProvisioningPollResult};
+pub use svr_client::{FetchBackupResult, SvrClient};
 pub use user_client::UserClient;

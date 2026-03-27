@@ -268,6 +268,11 @@ impl GrpcClientPool {
         super::IntegrationClient::new(self.channel(), self.auth_clone())
     }
 
+    /// Create an authenticated SvrClient for backup operations.
+    pub fn svr_client(&self) -> super::SvrClient {
+        super::SvrClient::new(self.channel(), self.auth_clone())
+    }
+
     /// Create an anonymous mailbox client (no auth headers).
     pub fn anonymous_mailbox_client(&self) -> super::AnonymousMailboxClient {
         super::AnonymousMailboxClient::new(self.channel())
