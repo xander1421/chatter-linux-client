@@ -436,6 +436,11 @@ export component MainWindow inherits Window {
     callback go-to-login <=> app.go-to-login;
     callback go-to-recovery <=> app.go-to-recovery;
 
+    // ========== Welcome page callbacks ==========
+    callback welcome-add-friends <=> app.welcome-add-friends;
+    callback welcome-browse-channels <=> app.welcome-browse-channels;
+    callback welcome-get-started <=> app.welcome-get-started;
+
     // ========== Sidebar callbacks ==========
     callback channel-selected <=> app.channel-selected;
     callback dm-selected <=> app.dm-selected;

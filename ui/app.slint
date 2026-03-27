@@ -10,6 +10,7 @@ import { LoginPage } from "pages/login.slint";
 import { RegisterPage } from "pages/register.slint";
 import { AccountRecoveryPage } from "pages/account_recovery.slint";
 import { LoadingPage } from "pages/loading.slint";
+import { WelcomePage } from "pages/welcome.slint";
 
 // Import main layout components
 import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData } from "sidebar/sidebar.slint";
@@ -482,6 +483,11 @@ export component App inherits Rectangle {
     callback go-to-login();
     callback go-to-recovery();
 
+    // Welcome page callbacks
+    callback welcome-add-friends();
+    callback welcome-browse-channels();
+    callback welcome-get-started();
+
     // ========== Sidebar callbacks ==========
     callback channel-selected(string);
     callback dm-selected(string);
@@ -755,6 +761,14 @@ export component App inherits Rectangle {
             go-to-login => {
                 root.go-to-login();
             }
+        }
+
+        // Welcome page (shown after first registration)
+        if current-view == "welcome": WelcomePage {
+            display-name: root.user-display-name;
+            add-friends => { root.welcome-add-friends(); }
+            browse-channels => { root.welcome-browse-channels(); }
+            get-started => { root.welcome-get-started(); }
         }
 
         // Main chat layout

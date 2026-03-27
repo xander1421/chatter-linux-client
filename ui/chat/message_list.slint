@@ -6,6 +6,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 import { Skeleton } from "../components/skeleton.slint";
 import { MessageItem } from "message_item.slint";
 import { MessageAttachmentData, MessageItemData, ReactionEntry } from "types.slint";
@@ -124,6 +125,31 @@ export component MessageList inherits Rectangle {
                 color: Colors.text-muted;
                 font-size: Typography.sm;
                 horizontal-alignment: center;
+            }
+
+            // Encryption indicator in empty state
+            Rectangle {
+                height: Spacing.lg;
+            }
+
+            HorizontalLayout {
+                alignment: center;
+                spacing: 4px;
+
+                Image {
+                    source: Icons.lock;
+                    width: 12px;
+                    height: 12px;
+                    colorize: Colors.success;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: "Messages are end-to-end encrypted";
+                    color: Colors.success;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                }
             }
         }
     }

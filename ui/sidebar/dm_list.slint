@@ -5,6 +5,7 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
 import { DMListItem } from "dm_list_item.slint";
 
 // Data struct for DM items (mirrors Rust DMListItemData)
@@ -56,6 +57,27 @@ export component DMList inherits Rectangle {
                     letter-spacing: 0.5px;
                     vertical-alignment: center;
                 }
+            }
+        }
+
+        // Empty state when no DMs
+        if !root.collapsed && root.conversations.length == 0: VerticalLayout {
+            padding: Spacing.md;
+            spacing: Spacing.xs;
+            alignment: center;
+
+            Text {
+                text: "No conversations yet";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Add a friend to start chatting";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: center;
             }
         }
 
