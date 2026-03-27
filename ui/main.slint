@@ -9,12 +9,19 @@ export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageI
 export component MainWindow inherits Window {
     title: "Chatter";
     icon: @image-url("../assets/icon-256.png");
-    min-width: 800px;
-    min-height: 600px;
+    // Responsive: allow narrow widths for phones (360dp minimum)
+    min-width: 360px;
+    min-height: 480px;
+    preferred-width: 800px;
+    preferred-height: 600px;
     default-font-family: "Inter, Noto Sans, sans-serif";
     default-font-size: 14px;
 
     // Expose App properties through MainWindow for Rust binding
+    // ========== Safe area insets (Android status bar / nav bar) ==========
+    in property <length> safe-area-top <=> app.safe-area-top;
+    in property <length> safe-area-bottom <=> app.safe-area-bottom;
+
     // ========== View routing ==========
     in-out property <string> current-view <=> app.current-view;
 

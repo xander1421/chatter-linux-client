@@ -56,6 +56,10 @@ import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
 
 export component App inherits Rectangle {
+    // ========== Safe area insets (set by Rust on Android) ==========
+    in property <length> safe-area-top: 0px;     // Android status bar (~24dp)
+    in property <length> safe-area-bottom: 0px;  // Android nav bar / gesture area
+
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
     in-out property <string> current-view: "loading";
@@ -709,10 +713,12 @@ export component App inherits Rectangle {
     }
 
     // ========== Main content layer ==========
-    // Explicit sizing ensures width flows to all child components for text wrapping
+    // Explicit sizing ensures width flows to all child components for text wrapping.
+    // Safe area insets push content below Android status bar and above nav bar.
     Rectangle {
         width: root.width;
-        height: root.height;
+        height: root.height - root.safe-area-top - root.safe-area-bottom;
+        y: root.safe-area-top;
 
         // Loading page
         if current-view == "loading": LoadingPage {
