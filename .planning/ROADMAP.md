@@ -1260,6 +1260,52 @@ Completes the SVR feature started in Phase 77 (rename) and the crypto foundation
 
 ---
 
+### Phase 94: PIN Change Flow
+**Goal**: Implement ChangePinBackup RPC end-to-end — server handler, client method, re-encrypt backup with new PIN, update registration lock atomically
+**Depends on**: Phase 93
+**Research**: No
+**Status**: Not started
+**Plans**: 0/3
+
+Plans:
+- [ ] 94-01: Server ChangePinBackup handler + service (verify old_backup_id_hash, atomic swap, update registration lock + SVR public key)
+- [ ] 94-02: Client change_pin method (fetch old backup → decrypt → re-encrypt with new SVR secret → upload via ChangePinBackup)
+- [ ] 94-03: Generate proto code + integration test
+
+**Scope:**
+- Server: Implement ChangePinBackup handler that verifies old_backup_id_hash matches, atomically replaces backup + registration lock + SVR public key
+- Client: `ChatterClient::change_pin(old_pin, new_pin, username)` method
+- Proto already defined in svr.proto (ChangePinBackupRequest/Response added in Phase 93)
+- Rate-limit ChangePinBackup (requires successful old backup verification)
+
+---
+
+### Phase 95: Account Recovery Codes
+**Goal**: Generate one-time recovery codes at registration that allow account access when both password and PIN are forgotten
+**Depends on**: Phase 94
+**Research**: Likely (recovery code UX patterns, secure storage of hashed codes)
+**Status**: Not started
+**Plans**: 0/3
+
+Plans:
+- [ ] 95-01: Server proto + migration (recovery_codes table, UseRecoveryCode RPC)
+- [ ] 95-02: Server service (hash codes with Argon2id, verify + invalidate on use, generate during registration)
+- [ ] 95-03: Client integration (display codes at registration, use code to reset password + PIN)
+
+**Scope:**
+- Generate 8 recovery codes (8 alphanumeric chars each) during registration
+- Store Argon2id hashes on server (zero-knowledge — server never sees plaintext codes)
+- Each code is one-time use (invalidated after use)
+- UseRecoveryCode RPC: verifies code hash, resets password, allows new PIN setup
+- Client displays codes once at registration (user must save them)
+- Rate-limited: 3 attempts per hour
+
+**By-design limitations (not fixable):**
+- PIN recovery without recovery codes is impossible (zero-knowledge model)
+- Old group messages lost on device change (sender keys are ephemeral, Signal has same limitation)
+
+---
+
 ## Jarvis Progress
 
 | Phase | Name | Plans | Status | Completed |
