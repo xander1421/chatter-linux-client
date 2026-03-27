@@ -54,15 +54,29 @@ export component ChannelListItem inherits Rectangle {
             }
         }
 
-        // Channel name
-        Text {
-            text: root.name;
-            color: root.selected ? Colors.text-primary : Colors.text-secondary;
-            font-size: 14px;
-            font-weight: root.unread-count > 0 ? 600 : 400;
-            vertical-alignment: center;
-            overflow: elide;
+        // Channel name with encryption indicator
+        HorizontalLayout {
+            spacing: 4px;
             horizontal-stretch: 1;
+
+            Text {
+                text: root.name;
+                color: root.selected ? Colors.text-primary : Colors.text-secondary;
+                font-size: 14px;
+                font-weight: root.unread-count > 0 ? 600 : 400;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            // Encryption lock indicator
+            Image {
+                source: Icons.lock;
+                width: 10px;
+                height: 10px;
+                colorize: Colors.success;
+                y: (parent.height - self.height) / 2;
+            }
         }
 
         // Unread count badge

@@ -102,6 +102,15 @@ export component PrivateGroupListItem inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
+                // Encryption lock indicator
+                Image {
+                    source: Icons.lock;
+                    width: 10px;
+                    height: 10px;
+                    colorize: Colors.success;
+                    y: (parent.height - self.height) / 2;
+                }
+
                 // Member count badge
                 if root.member-count > 0: Rectangle {
                     width: member-text.preferred-width + 8px;

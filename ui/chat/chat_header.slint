@@ -85,12 +85,36 @@ export component ChatHeader inherits Rectangle {
     // Show call buttons for everything except saved messages
     property <bool> show-calls: channel-type != "saved";
 
-    // Layout
-    height: 56px;
+    // Layout (56px header + 22px encryption banner)
+    height: 78px;
     background: Colors.surface;
 
-    // Main content
+    // Main content (constrained to top 56px)
+    Rectangle {
+        y: 0;
+        width: 100%;
+        height: 56px;
+
     HorizontalLayout {
+        // Encryption indicator — always visible
+        VerticalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 20px;
+                height: 20px;
+
+                Image {
+                    source: Icons.shield;
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.success;
+                }
+            }
+        }
+
         padding-left: Spacing.lg;
         padding-right: Spacing.lg;
         spacing: Spacing.md;
@@ -347,6 +371,36 @@ export component ChatHeader inherits Rectangle {
                         clicked => { root.settings-clicked(); }
                     }
                 }
+            }
+        }
+    }
+    } // end main content Rectangle
+
+    // Encryption trust banner
+    Rectangle {
+        y: parent.height - 22px;
+        width: 100%;
+        height: 22px;
+        background: Colors.surface;
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 4px;
+
+            Image {
+                source: Icons.lock;
+                width: 10px;
+                height: 10px;
+                colorize: Colors.success;
+                y: (parent.height - self.height) / 2;
+            }
+
+            Text {
+                text: root.is-anon-dm ? "Anonymous · End-to-end encrypted"
+                    : "Messages are end-to-end encrypted";
+                color: Colors.success;
+                font-size: Typography.xs;
+                vertical-alignment: center;
             }
         }
     }

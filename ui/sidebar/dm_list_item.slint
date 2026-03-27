@@ -5,6 +5,7 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
 import { Avatar } from "../components/avatar.slint";
 
 export component DMListItem inherits Rectangle {
@@ -91,13 +92,27 @@ export component DMListItem inherits Rectangle {
             alignment: center;
             spacing: 2px;
 
-            // Display name
-            Text {
-                text: root.display-name;
-                color: root.selected ? Colors.text-primary : Colors.text-secondary;
-                font-size: 14px;
-                font-weight: root.unread-count > 0 ? 600 : 400;
-                overflow: elide;
+            // Display name with encryption indicator
+            HorizontalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: root.display-name;
+                    color: root.selected ? Colors.text-primary : Colors.text-secondary;
+                    font-size: 14px;
+                    font-weight: root.unread-count > 0 ? 600 : 400;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+
+                // Encryption lock indicator
+                Image {
+                    source: Icons.lock;
+                    width: 10px;
+                    height: 10px;
+                    colorize: Colors.success;
+                    y: (parent.height - self.height) / 2;
+                }
             }
 
             // Typing indicator or last message preview
