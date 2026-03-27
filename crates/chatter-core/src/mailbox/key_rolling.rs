@@ -74,9 +74,6 @@ pub struct KeyRollingService {
     group_manager: Arc<GroupMailboxManager>,
     /// Pending old mailboxes to be deleted after overlap period.
     pending_deletions: RwLock<Vec<PendingDeletion>>,
-    /// Rotation threshold (how soon before expiry to rotate).
-    #[allow(dead_code)]
-    rotation_threshold: Duration,
     /// Overlap period for old mailboxes.
     overlap_period: Duration,
 }
@@ -93,7 +90,6 @@ impl KeyRollingService {
             dm_manager,
             group_manager,
             pending_deletions: RwLock::new(Vec::new()),
-            rotation_threshold: Duration::hours(DEFAULT_ROTATION_THRESHOLD_HOURS),
             overlap_period: Duration::seconds(DEFAULT_OVERLAP_SECS as i64),
         }
     }
@@ -103,7 +99,6 @@ impl KeyRollingService {
         token_manager: Arc<TokenManager>,
         dm_manager: Arc<DmConversationManager>,
         group_manager: Arc<GroupMailboxManager>,
-        rotation_threshold_hours: i64,
         overlap_secs: u64,
     ) -> Self {
         Self {
@@ -111,7 +106,6 @@ impl KeyRollingService {
             dm_manager,
             group_manager,
             pending_deletions: RwLock::new(Vec::new()),
-            rotation_threshold: Duration::hours(rotation_threshold_hours),
             overlap_period: Duration::seconds(overlap_secs as i64),
         }
     }

@@ -65,9 +65,6 @@ pub fn release_bootstrap_lock(peer_id: &UserId) {
 /// 5. Build bootstrap message with mailbox address + ephemeral public key
 /// 6. Return BootstrapResult for caller to send via sealed sender
 pub struct DmBootstrap {
-    /// Database connection for persistence (reserved for future use).
-    #[allow(dead_code)]
-    db: Arc<Database>,
     /// Token manager for blind signature tokens.
     token_manager: TokenManager,
     /// Conversation manager for state persistence.
@@ -144,9 +141,8 @@ impl DmBootstrap {
     /// * `db` - Shared database connection
     pub fn new(db: Arc<Database>) -> Self {
         let token_manager = TokenManager::new(db.clone());
-        let conversation_manager = DmConversationManager::new(db.clone());
+        let conversation_manager = DmConversationManager::new(db);
         Self {
-            db,
             token_manager,
             conversation_manager,
         }
