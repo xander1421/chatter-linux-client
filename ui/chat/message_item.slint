@@ -66,6 +66,9 @@ export component MessageItem inherits Rectangle {
     in property <string> reply-count-text: "";
     in property <bool> is-thread-reply: false;
 
+    // Message grouping
+    in property <bool> is-continuation: false;  // Hide avatar/name for consecutive same-sender messages
+
     // Quote / reply-to context
     in property <bool> is-reply: false;
     in property <string> reply-to-sender-name: "";
@@ -196,10 +199,10 @@ export component MessageItem inherits Rectangle {
 
     main-layout := VerticalLayout {
         width: 100%;
-        padding: Spacing.xs;
+        padding: root.is-continuation ? 1px : Spacing.xs;
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
-        spacing: Spacing.xs;
+        spacing: root.is-continuation ? 1px : Spacing.xs;
 
         // System message (centered, no bubble)
         if root.is-system && !root.is-call: Rectangle {
@@ -326,8 +329,8 @@ export component MessageItem inherits Rectangle {
             spacing: Spacing.sm;
             alignment: root.is-own ? end : start;
 
-            // Avatar for others in channels (before bubble)
-            if !root.is-own && !root.is-dm && root.show-sender: Avatar {
+            // Avatar for others in channels (before bubble, hidden in continuations)
+            if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Avatar {
                 size: Spacing.avatar-sm;
                 source: root.sender-avatar-source;
                 fallback-text: root.sender-initials;
@@ -388,8 +391,8 @@ export component MessageItem inherits Rectangle {
                         padding-left: root.is-ai ? Spacing.sm + 6px : Spacing.sm + 2px;
                         spacing: Spacing.xs;
 
-                        // Sender name + timestamp (only in channels for others)
-                        if !root.is-own && !root.is-dm && root.show-sender: HorizontalLayout {
+                        // Sender name + timestamp (only in channels for others, hidden in continuations)
+                        if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: HorizontalLayout {
                             spacing: Spacing.sm;
                             alignment: start;
 

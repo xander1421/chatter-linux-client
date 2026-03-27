@@ -199,9 +199,45 @@ export component MessageList inherits Rectangle {
                 }
             }
 
-            for item in root.messages: MessageItem {
-                // Explicit width for text wrapping (100% of parent minus padding)
+            for item in root.messages: VerticalLayout {
                 width: parent.width - Spacing.md * 2;
+                spacing: 2px;
+
+                // Date separator bar
+                if item.show-date-separator: HorizontalLayout {
+                    width: 100%;
+                    height: 32px;
+                    spacing: Spacing.md;
+                    alignment: center;
+                    padding-top: Spacing.sm;
+                    padding-bottom: Spacing.sm;
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 1px;
+                        background: Colors.surface-hover;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: item.date-separator-text;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        font-weight: Typography.medium;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 1px;
+                        background: Colors.surface-hover;
+                        vertical-alignment: center;
+                    }
+                }
+
+            MessageItem {
+                width: 100%;
                 message-id: item.message-id;
                 sender-id: item.sender-id;
                 timestamp-ns: item.timestamp-ns;
@@ -240,6 +276,7 @@ export component MessageList inherits Rectangle {
                 reply-to-preview: item.reply-to-preview;
                 show-sender: item.show-sender;
                 delivery-status: item.delivery-status;
+                is-continuation: item.is-continuation;
 
                 message-clicked(id) => {
                     root.message-clicked(id);
@@ -269,6 +306,7 @@ export component MessageList inherits Rectangle {
                     root.audio-seek(id, pos);
                 }
             }
+            } // end VerticalLayout wrapper (date separator + message)
         }
         }
 

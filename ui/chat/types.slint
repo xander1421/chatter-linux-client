@@ -71,4 +71,8 @@ export struct MessageItemData {
     is-call: bool,            // Whether this is a call event message
     call-type: string,        // "outgoing", "incoming", "missed"
     call-duration: string,    // Formatted duration "1 min 30 s" or empty for missed
+    // Message grouping (set by Rust when preparing message list)
+    show-date-separator: bool,     // Show date separator bar before this message
+    date-separator-text: string,   // "Today", "Yesterday", "March 25, 2026"
+    is-continuation: bool,         // Same sender as previous, within time window — hide avatar/name
 }
