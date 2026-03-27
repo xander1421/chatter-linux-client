@@ -91,23 +91,27 @@ label = "Chatter"
 icon = "../../assets/icon.png"
 min_sdk_version = 26
 target_sdk_version = 34
-permissions = [
-    "android.permission.INTERNET",
-    "android.permission.CAMERA",
-    "android.permission.RECORD_AUDIO",
-    "android.permission.MODIFY_AUDIO_SETTINGS",
-    "android.permission.ACCESS_NETWORK_STATE",
-    "android.permission.WAKE_LOCK",
-    "android.permission.READ_EXTERNAL_STORAGE",
-    "android.permission.WRITE_EXTERNAL_STORAGE",
-    "android.permission.POST_NOTIFICATIONS",
-]
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.CAMERA"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.RECORD_AUDIO"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.MODIFY_AUDIO_SETTINGS"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_NETWORK_STATE"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.WAKE_LOCK"
+[[package.metadata.android.uses_permission]]
+name = "android.permission.POST_NOTIFICATIONS"
 
 [[package.metadata.android.activity]]
 config_changes = "orientation|screenSize|keyboardHidden"
 # adjustResize makes Android shrink the window when keyboard appears
 window_soft_input_mode = "adjustResize"
 
-[package.metadata.android.signing.release]
-path = "/home/alex/.android/debug.keystore"
-keystore_password = "android"
+# Release signing: set CHATTER_KEYSTORE_PATH and CHATTER_KEYSTORE_PASSWORD env vars.
+# [package.metadata.android.signing.release]
+# path = "${CHATTER_KEYSTORE_PATH}"
+# keystore_password = "${CHATTER_KEYSTORE_PASSWORD}"
