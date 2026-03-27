@@ -357,47 +357,19 @@ async fn start_call_impl(
         }
     } else {
         // =================================================================
-        // Group Call with Distributed Key
-        // =================================================================
-        // Generate random key and distribute via pairwise sealed sender
+        // Group Call — core handles key generation + initiation + distribution
         // =================================================================
 
-        let group_key = chatter_core::crypto::generate_group_call_key();
+        let start_result = {
+            let ctx = ui_ctx.clone();
+            tokio::spawn(async move {
+                ctx.start_group_call(channel_id, call_type, user_id).await
+            }).await.unwrap()
+        };
 
-        match call_service.initiate_call(
-            channel_id,
-            call_type_str,
-            call_type,
-            &group_key,
-            user_id,
-        ).await {
-            Ok(call) => {
-                tracing::info!("Started group call: {:?}", call.id);
-
-                // Publish microphone immediately after joining
-                if let Err(e) = call_service.publish_microphone(None).await {
-                    tracing::error!("Failed to publish microphone: {}", e);
-                }
-
-                // =============================================================
-                // Group Call Key Distribution (Standard Channel)
-                // =============================================================
-                // Distribute group_key to all channel members via pairwise sealed sender.
-                // This ensures all members have the same AES-256 key for E2EE media.
-                // =============================================================
-                let channel_id_clone = channel_id;
-                let call_id_str = call.id.to_string();
-                let signaling = ui_ctx.call_signaling().clone();
-
-                // gRPC - run on tokio (fire-and-forget, no UI update needed)
-                tokio::spawn(async move {
-                    match signaling.distribute_group_call_key(
-                        &channel_id_clone, &call_id_str, group_key, 0,
-                    ).await {
-                        Ok(count) => tracing::info!(call_id = %call_id_str, sent = count, "Group call key distributed"),
-                        Err(e) => tracing::error!(call_id = %call_id_str, error = %e, "Failed to distribute group call key"),
-                    }
-                });
+        match start_result {
+            Ok(setup) => {
+                tracing::info!(call_id = %setup.call_id, "Started group call via core");
 
                 if let Some(w) = weak.upgrade() {
                     let local_participant = CallParticipantData {
@@ -410,14 +382,8 @@ async fn start_call_impl(
                         is_speaking: false,
                     };
 
-                    let verification = chatter_core::services::CallVerification::derive_verification_emojis(
-                        &group_key,
-                        &call.id.to_string(),
-                    );
-                    let (e1, e2, e3, e4) = chatter_core::services::CallVerification::to_slint_tuple(&verification);
-
                     let call_data = ActiveCallData {
-                        call_id: call.id.to_string().into(),
+                        call_id: setup.call_id.to_string().into(),
                         channel_id: channel_id.to_string().into(),
                         title: if channel_name.is_empty() { call_type_str.into() } else { channel_name.into() },
                         is_video_call,
@@ -428,10 +394,10 @@ async fn start_call_impl(
                         participant_count: 1,
                         duration_seconds: 0,
                         participants: ModelRc::new(VecModel::from(vec![local_participant])),
-                        verification_emoji_1: e1.into(),
-                        verification_emoji_2: e2.into(),
-                        verification_emoji_3: e3.into(),
-                        verification_emoji_4: e4.into(),
+                        verification_emoji_1: setup.verification_emojis[0].clone().into(),
+                        verification_emoji_2: setup.verification_emojis[1].clone().into(),
+                        verification_emoji_3: setup.verification_emojis[2].clone().into(),
+                        verification_emoji_4: setup.verification_emojis[3].clone().into(),
                     };
 
                     w.set_active_call_data(call_data);

@@ -457,8 +457,13 @@ impl SesameStore for SqliteSesameStore {
         let conn = self.db.connection()?;
         let user_id_str = user_id.to_string();
 
+        // Use a transaction so SELECT + DELETE is atomic.
+        // Without this, a crash between them could cause duplicate sends.
+        let tx = conn.unchecked_transaction()
+            .map_err(StorageError::Database)?;
+
         // Load messages with attachment_ids_blob and channel_id
-        let mut stmt = conn.prepare(
+        let mut stmt = tx.prepare(
             "SELECT content, timestamp, attempts, attachment_ids_blob, channel_id FROM sesame_pending_messages
              WHERE user_id = ?1 ORDER BY id ASC",
         )?;
@@ -490,11 +495,16 @@ impl SesameStore for SqliteSesameStore {
             .filter_map(|r| r.ok())
             .collect();
 
+        // Must drop the statement before executing DELETE within the same transaction
+        drop(stmt);
+
         // Delete messages
-        conn.execute(
+        tx.execute(
             "DELETE FROM sesame_pending_messages WHERE user_id = ?1",
             params![user_id_str],
         )?;
+
+        tx.commit().map_err(StorageError::Database)?;
 
         Ok(messages)
     }

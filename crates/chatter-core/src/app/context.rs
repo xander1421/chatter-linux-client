@@ -13,7 +13,7 @@ use crate::inbox::provider::DeviceInboxProvider;
 
 use super::infrastructure::InfrastructureContainer;
 use super::services::ServiceContainer;
-use super::ui_context::UIContext;
+use super::core_services::CoreServices;
 
 /// Application context error.
 #[derive(Debug, thiserror::Error)]
@@ -38,15 +38,15 @@ pub enum ContextError {
 ///
 /// 1. **InfrastructureContainer**: Storage, crypto, network (low-level)
 /// 2. **ServiceContainer**: Pre-built services (business logic)
-/// 3. **UIContext**: Services + state stores (UI-facing API)
+/// 3. **CoreServices**: Services + state stores (UI-facing API)
 ///
-/// UI code accesses everything through `ui_context()`.
+/// UI code accesses everything through `core_services()`.
 pub struct AppContext {
     infrastructure: Arc<InfrastructureContainer>,
     services: Arc<ServiceContainer>,
-    ui_context: Arc<UIContext>,
+    core_services: Arc<CoreServices>,
 
-    // Post-boot initialization (OnceLock) - shared with UIContext
+    // Post-boot initialization (OnceLock) - shared with CoreServices
     device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
     call_service: Arc<std::sync::OnceLock<CallWorkerHandle>>,
 }
@@ -56,13 +56,13 @@ impl AppContext {
     pub fn new() -> Result<Self, ContextError> {
         let infrastructure = Arc::new(InfrastructureContainer::new()?);
         
-        // Create shared OnceLocks for post-boot services (shared with UIContext)
+        // Create shared OnceLocks for post-boot services (shared with CoreServices)
         let device_inbox_provider = Arc::new(std::sync::OnceLock::new());
         let call_service = Arc::new(std::sync::OnceLock::new());
         
         let services = Arc::new(ServiceContainer::new(&infrastructure)?);
 
-        let ui_context = Arc::new(UIContext::new(
+        let core_services = Arc::new(CoreServices::new(
             &infrastructure,
             &services,
             infrastructure.group_fanout.clone(),
@@ -75,7 +75,7 @@ impl AppContext {
         Ok(Self {
             infrastructure,
             services,
-            ui_context,
+            core_services,
             device_inbox_provider,
             call_service,
         })
@@ -94,8 +94,8 @@ impl AppContext {
     }
 
     /// Get the UI context - the primary API for UI code.
-    pub fn ui_context(&self) -> Arc<UIContext> {
-        self.ui_context.clone()
+    pub fn core_services(&self) -> Arc<CoreServices> {
+        self.core_services.clone()
     }
 
     /// Initialize the device inbox provider (call after grpc connect).
@@ -120,7 +120,7 @@ impl AppContext {
                     self.infrastructure.database.clone(),
                     self.infrastructure.grpc_pool.clone(),
                     self.infrastructure.attachment_repo.clone(),
-                    Some(self.ui_context.event_bus.clone()),
+                    Some(self.core_services.event_bus.clone()),
                 )
                 .with_anon_dm_polling(anon_dm_poller, self.services.pairwise_service.clone()),
             )
@@ -165,7 +165,7 @@ impl AppContext {
         crate::inbox::streaming::spawn_dm_bootstrap_handler_from_bus(
             self.infrastructure.database.clone(),
             self.infrastructure.grpc_pool.clone(),
-            &self.ui_context.event_bus,
+            &self.core_services.event_bus,
         )
     }
 
@@ -174,18 +174,20 @@ impl AppContext {
         use crate::events::EventHandlers;
 
         let handlers = EventHandlers::new(
-            self.ui_context.message_state.clone(),
-            self.ui_context.chat_state.clone(),
-            self.ui_context.pinned_state.clone(),
-            self.ui_context.user_state.clone(),
-            self.ui_context.presence_state.clone(),
-            self.ui_context.streaming_state.clone(),
-            self.ui_context.offline_state.clone(),
+            self.core_services.message_state.clone(),
+            self.core_services.chat_state.clone(),
+            self.core_services.pinned_state.clone(),
+            self.core_services.user_state.clone(),
+            self.core_services.presence_state.clone(),
+            self.core_services.streaming_state.clone(),
+            self.core_services.offline_state.clone(),
         )
         .with_group_coordinator(self.infrastructure.group_coordinator.clone())
-        .with_message_service(self.ui_context.message_service.clone());
+        .with_message_service(self.core_services.message_service.clone())
+        .with_anon_group_service(self.services.anon_group_service.clone())
+        .with_anon_dm_service(self.services.anon_dm_service.clone());
 
-        handlers.spawn(self.ui_context.event_bus.clone())
+        handlers.spawn(self.core_services.event_bus.clone())
     }
     
     /// Start the channel event stream service.
@@ -213,7 +215,7 @@ impl AppContext {
     /// events and flushes pending messages to new members.
     pub fn start_channel_bootstrap_service(&self) -> tokio::task::JoinHandle<()> {
         self.services.channel_bootstrap_service.start(
-            self.ui_context.event_bus.subscribe_domain()
+            self.core_services.event_bus.subscribe_domain()
         )
     }
 }

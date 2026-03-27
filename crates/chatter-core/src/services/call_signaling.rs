@@ -860,4 +860,182 @@ impl CallSignalingService {
             tracing::error!(error = %e, "Failed to save anon call history");
         }
     }
+
+    // ================================================================
+    // End-call orchestration (hangup + history + leave)
+    // ================================================================
+
+    /// End an active DM/channel call: send hangup, store history, leave.
+    ///
+    /// `call_worker` must be provided since it's behind a OnceLock in the client.
+    /// `duration_secs` comes from the UI timer (core doesn't track call duration).
+    pub async fn end_dm_call(
+        &self,
+        call_worker: &CallWorkerHandle,
+        duration_secs: i64,
+    ) -> Result<(), CallSignalingError> {
+        let call = call_worker.active_call().await
+            .ok_or(CallSignalingError::NoPendingCall)?;
+
+        // Send hangup notification to peer
+        if let Err(e) = self.send_call_hangup(
+            &call.channel_id, &call.id.to_string(), CallHangupReason::Normal,
+        ).await {
+            tracing::error!(error = %e, "Failed to send hangup notification");
+        }
+
+        // Resolve initiator name and store call history
+        let current_user = self.channel_service.current_user_id()
+            .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
+        let is_outgoing = call.initiator_id == current_user;
+
+        // Initiator name resolved by caller (ChatterClient facade) since we
+        // don't have UserService. Pass empty string — store_dm_call_history
+        // uses the initiator_id as fallback display.
+        self.store_dm_call_history(
+            &call.channel_id, &call.id.to_string(),
+            &call.initiator_id, &call.initiator_id.to_string(),
+            is_outgoing, duration_secs, false,
+        );
+
+        // Leave the call
+        if let Err(e) = call_worker.leave_call().await {
+            tracing::error!(error = %e, "Failed to leave call");
+        }
+
+        Ok(())
+    }
+
+    /// End an active anonymous call: send hangup, store history, leave.
+    pub async fn end_anon_call(
+        &self,
+        call_worker: &CallWorkerHandle,
+        duration_secs: i64,
+    ) -> Result<Option<crate::domain::anon_dm::AnonDmId>, CallSignalingError> {
+        // Try anon DM pending calls first
+        let room_name = call_worker.active_call().await
+            .map(|c| c.id.to_string())
+            .unwrap_or_default();
+
+        let pending = self.anon_dm_service
+            .take_pending_anon_call(&room_name)
+            .ok_or(CallSignalingError::NoPendingCall)?;
+
+        let conversation_id = pending.conversation_id;
+
+        // Send hangup
+        if let Err(e) = self.anon_dm_service.send_call_hangup(
+            &conversation_id, &pending.call_room_id,
+            crate::proto::content_v1::anon_call_hangup::Reason::Normal,
+        ).await {
+            tracing::error!(error = %e, "Failed to send anonymous call hangup");
+        }
+
+        // Store call history as a message in the anon DM conversation
+        {
+            let duration_str = if duration_secs > 0 {
+                format!("{}:{:02}", duration_secs / 60, duration_secs % 60)
+            } else {
+                "0:00".to_string()
+            };
+            let label = if pending.is_outgoing { "Outgoing call" } else { "Incoming call" };
+            let text = format!("\u{1F4DE} {} \u{00B7} {}", label, duration_str);
+            let content_json = format!(r#"{{"text":"{}"}}"#, text);
+            let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+            let user_id = self.channel_service.current_user_id()
+                .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
+
+            if let Err(e) = self.anon_dm_service.store_message(&conversation_id, &user_id, 1, &content_json, sent_at) {
+                tracing::error!(error = %e, "Failed to store anon call history on hangup");
+            }
+        }
+
+        // Leave/disconnect
+        if let Err(e) = call_worker.leave_call().await {
+            // Might already be disconnected
+            tracing::debug!(error = %e, "leave_call after anon hangup");
+        }
+
+        Ok(Some(conversation_id))
+    }
+
+    /// Handle remote hangup: store history, disconnect locally.
+    pub async fn handle_remote_hangup(
+        &self,
+        call_worker: &CallWorkerHandle,
+        duration_secs: i64,
+    ) -> Result<(), CallSignalingError> {
+        if let Some(call) = call_worker.active_call().await {
+            let current_user = self.channel_service.current_user_id()
+                .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
+            let is_outgoing = call.initiator_id == current_user;
+
+            self.store_dm_call_history(
+                &call.channel_id, &call.id.to_string(),
+                &call.initiator_id, &call.initiator_id.to_string(),
+                is_outgoing, duration_secs, false,
+            );
+        }
+
+        call_worker.disconnect_local().await;
+        Ok(())
+    }
+
+    /// Store a DM/channel call history message.
+    fn store_dm_call_history(
+        &self,
+        channel_id: &ChannelId,
+        call_id: &str,
+        initiator_id: &UserId,
+        initiator_name: &str,
+        _is_outgoing: bool,
+        duration_secs: i64,
+        is_missed: bool,
+    ) {
+        use crate::domain::message::*;
+
+        let call_type = if is_missed { CallMessageType::Missed } else { CallMessageType::Ended };
+        let duration = if duration_secs > 0 {
+            Some(chrono::Duration::seconds(duration_secs))
+        } else {
+            None
+        };
+
+        let call_msg = CallMessage {
+            call_id: call_id.to_string(),
+            call_type,
+            initiator_id: *initiator_id,
+            initiator_name: initiator_name.to_string(),
+            started_at: None,
+            ended_at: Some(chrono::Utc::now()),
+            duration,
+            participant_count: 2,
+        };
+
+        let message = Message {
+            id: crate::domain::ids::MessageId::new(),
+            channel_id: *channel_id,
+            sender_id: Some(*initiator_id),
+            content: MessageContent::Call(call_msg),
+            thread_id: None,
+            reply_to: None,
+            attachments: vec![],
+            is_pinned: false,
+            is_edited: false,
+            is_deleted: false,
+            sent_at: crate::util::time::TimestampNanos::now().as_u64(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            edited_at: None,
+            reaction_counts: vec![],
+            current_user_reactions: vec![],
+            mentioned_integrations: vec![],
+            targets_ai_bot: false,
+            delivery_status: String::new(),
+        };
+
+        if let Err(e) = self.message_service.store_message_local(&message) {
+            tracing::error!(error = %e, "Failed to save call history");
+        }
+    }
 }

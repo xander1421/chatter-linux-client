@@ -223,7 +223,6 @@ impl AnonDmService {
                         conversation_id: *conversation_id,
                         sender_id: *sender_id,
                         message_id,
-                        inner_content: inner_content.clone(),
                         sent_at,
                     });
                     

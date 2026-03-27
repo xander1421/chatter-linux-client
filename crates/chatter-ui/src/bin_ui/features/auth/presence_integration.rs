@@ -29,7 +29,7 @@ pub async fn initialize_presence(ui_ctx: &Arc<ChatterClient>) {
 }
 
 /// Shutdown presence on logout or app exit.
-pub async fn shutdown_presence(ui_ctx: &Arc<ChatterClient>) {
+pub async fn shutdown_presence(ui_ctx: &ChatterClient) {
     // Send offline status
     set_presence(ui_ctx, UserPresence::Offline).await;
     
@@ -69,7 +69,7 @@ pub async fn notify_chat_opened(
 
 /// Set presence and broadcast to all anon DM conversations.
 /// Delegates to `ChatterClient::set_presence()` for the broadcast.
-async fn set_presence(ui_ctx: &Arc<ChatterClient>, presence: UserPresence) {
+async fn set_presence(ui_ctx: &ChatterClient, presence: UserPresence) {
     {
         let mut current = CURRENT_PRESENCE.write().await;
         if *current == presence {

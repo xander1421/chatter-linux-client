@@ -1,4 +1,4 @@
-// Login page component with validation and loading states
+// Login page component
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -14,266 +14,173 @@ export component LoginPage inherits Rectangle {
     in property <bool> loading: false;
     in property <string> error: "";
 
-    // Internal validation state
     property <bool> submitted: false;
-    property <bool> username-empty: username == "";
-    property <bool> password-empty: password == "";
-    property <bool> server-url-empty: server-url == "";
-    property <bool> fields-valid: !username-empty && !password-empty && !server-url-empty;
 
-    callback login(string, string, string, string);  // username, password, server_url, pin
+    callback login(string, string, string, string);
     callback register();
     callback go-to-recovery();
 
     background: Colors.background;
 
-    // Centered form container
-    VerticalLayout {
-        alignment: center;
+    Flickable {
+        width: 100%;
+        height: 100%;
+        viewport-height: content.preferred-height;
+        interactive: content.preferred-height > self.height;
 
-        Rectangle {
-            max-width: 400px;
-            horizontal-stretch: 0;
-            background: Colors.surface;
-            border-radius: Spacing.radius-lg;
+        content := VerticalLayout {
+            padding: Spacing.lg;
+            spacing: 0px;
 
-            VerticalLayout {
-                alignment: center;
-                spacing: Spacing.lg;
-                padding: Spacing.xl;
+            Rectangle { height: Spacing.xl * 2; }
 
-                // App logo/title
-                Text {
-                    text: "Chatter";
-                    color: Colors.primary;
-                    font-size: Typography.xxxl;
-                    font-weight: Typography.bold;
-                    horizontal-alignment: center;
-                }
+            Rectangle {
+                max-width: 400px;
+                horizontal-stretch: 0;
+                background: Colors.surface;
+                border-radius: Spacing.radius-lg;
 
-                // Subtitle
-                Text {
-                    text: "Sign in to continue";
-                    color: Colors.text-secondary;
-                    font-size: Typography.base;
-                    horizontal-alignment: center;
-                }
-
-                // Spacer
-                Rectangle { height: Spacing.md; }
-
-                // Server URL field
                 VerticalLayout {
-                    spacing: Spacing.xs;
+                    spacing: Spacing.md;
+                    padding: Spacing.lg;
 
                     Text {
-                        text: "Server URL";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
+                        text: "Chatter";
+                        color: Colors.primary;
+                        font-size: Typography.xxxl;
+                        font-weight: Typography.bold;
+                        horizontal-alignment: center;
                     }
 
+                    Text {
+                        text: "Sign in to continue";
+                        color: Colors.text-secondary;
+                        font-size: Typography.base;
+                        horizontal-alignment: center;
+                    }
+
+                    // Server URL
                     Input {
-                        placeholder: "https://...";
+                        placeholder: "Server URL";
                         text <=> root.server-url;
                         disabled: root.loading;
-                        error: submitted && server-url-empty;
-                        error-message: submitted && server-url-empty ? "Server URL is required" : "";
                     }
 
-                    // Quick select buttons
                     HorizontalLayout {
                         spacing: Spacing.sm;
-                        alignment: start;
-                        
+
                         Rectangle {
-                            height: 24px;
-                            width: 80px;
+                            height: 28px;
+                            horizontal-stretch: 1;
                             background: Colors.surface-hover;
                             border-radius: Spacing.radius-sm;
-                            Text {
-                                text: "Localhost";
-                                font-size: Typography.xs;
-                                color: Colors.text-secondary;
-                            }
-                            TouchArea {
-                                clicked => {
-                                    root.server-url = "http://localhost:50051";
-                                }
-                            }
+                            Text { text: "Localhost"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.server-url = "http://localhost:50051"; } }
                         }
 
                         Rectangle {
-                            height: 24px;
-                            width: 80px;
+                            height: 28px;
+                            horizontal-stretch: 1;
                             background: Colors.surface-hover;
                             border-radius: Spacing.radius-sm;
-                            Text {
-                                text: "Tunnel";
-                                font-size: Typography.xs;
-                                color: Colors.text-secondary;
-                            }
-                            TouchArea {
-                                clicked => {
-                                    root.server-url = "https://seeker-dance-ignored-clusters.trycloudflare.com";
-                                }
-                            }
+                            Text { text: "LAN"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.server-url = "http://192.168.0.7:50051"; } }
+                        }
+
+                        Rectangle {
+                            height: 28px;
+                            horizontal-stretch: 1;
+                            background: Colors.surface-hover;
+                            border-radius: Spacing.radius-sm;
+                            Text { text: "Tunnel"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
+                            TouchArea { clicked => { root.server-url = "https://seeker-dance-ignored-clusters.trycloudflare.com"; } }
                         }
                     }
-                }
 
-                // Username field with label
-                VerticalLayout {
-                    spacing: Spacing.xs;
-
-                    Text {
-                        text: "Username";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                    }
-
+                    // Username
                     Input {
-                        placeholder: "Enter your username";
+                        placeholder: "Username";
                         text <=> root.username;
                         disabled: root.loading;
-                        error: submitted && username-empty;
-                        error-message: submitted && username-empty ? "Username is required" : "";
-                    }
-                }
-
-                // Password field with label
-                VerticalLayout {
-                    spacing: Spacing.xs;
-
-                    Text {
-                        text: "Password";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
                     }
 
+                    // Password
                     Input {
-                        placeholder: "Enter your password";
+                        placeholder: "Password";
                         password: true;
                         text <=> root.password;
                         disabled: root.loading;
-                        error: submitted && password-empty;
-                        error-message: submitted && password-empty ? "Password is required" : "";
-                    }
-                }
-
-                // PIN field (optional, for key recovery on new device)
-                VerticalLayout {
-                    spacing: Spacing.xs;
-
-                    Text {
-                        text: "PIN (optional)";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
                     }
 
+                    // PIN (optional)
                     Input {
-                        placeholder: "PIN (for key recovery)";
+                        placeholder: "PIN (optional, for key recovery)";
                         password: true;
                         text <=> root.pin;
                         disabled: root.loading;
                     }
 
-                    Text {
-                        text: "Enter your PIN to restore encrypted keys on a new device";
-                        color: Colors.text-secondary;
-                        font-size: Typography.xs;
+                    if error != "": Text {
+                        text: root.error;
+                        color: Colors.error;
+                        font-size: Typography.sm;
                         wrap: word-wrap;
                     }
-                }
 
-                // Forgot password link
-                HorizontalLayout {
-                    alignment: end;
-
-                    Rectangle {
-                        height: 20px;
-
+                    // Forgot password
+                    HorizontalLayout {
+                        alignment: end;
                         Text {
                             text: "Forgot password?";
                             color: Colors.primary;
                             font-size: Typography.xs;
-                            font-weight: Typography.medium;
-                        }
-
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.go-to-recovery();
+                            TouchArea {
+                                clicked => { root.go-to-recovery(); }
                             }
                         }
                     }
-                }
 
-                // Error message display
-                if error != "": Rectangle {
-                    background: Colors.error.with-alpha(0.1);
-                    border-radius: Spacing.radius-md;
+                    // Login button
+                    Button {
+                        text: loading ? "" : "Sign In";
+                        variant: "primary";
+                        loading: root.loading;
+                        disabled: root.loading;
 
+                        clicked => {
+                            submitted = true;
+                            if username != "" && password != "" && server-url != "" {
+                                root.login(root.username, root.password, root.server-url, root.pin);
+                            }
+                        }
+                    }
+
+                    // Register link
                     HorizontalLayout {
-                        padding: Spacing.md;
+                        alignment: center;
+                        spacing: Spacing.xs;
 
                         Text {
-                            text: root.error;
-                            color: Colors.error;
+                            text: "Don't have an account?";
+                            color: Colors.text-secondary;
                             font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
                         }
-                    }
-                }
-
-                // Spacer
-                Rectangle { height: Spacing.sm; }
-
-                // Login button
-                Button {
-                    text: loading ? "" : "Sign In";
-                    variant: "primary";
-                    loading: root.loading;
-                    disabled: root.loading || (submitted && !fields-valid);
-
-                    clicked => {
-                        submitted = true;
-                        if fields-valid {
-                            root.login(root.username, root.password, root.server-url, root.pin);
-                        }
-                    }
-                }
-
-                // Register link
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: Spacing.xs;
-
-                    Text {
-                        text: "Don't have an account?";
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                    }
-
-                    Rectangle {
-                        height: 20px;
 
                         Text {
                             text: "Register";
                             color: Colors.primary;
                             font-size: Typography.sm;
                             font-weight: Typography.medium;
-                        }
 
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.register();
+                            TouchArea {
+                                clicked => { root.register(); }
                             }
                         }
                     }
                 }
             }
+
+            Rectangle { height: Spacing.xl; }
         }
     }
 }

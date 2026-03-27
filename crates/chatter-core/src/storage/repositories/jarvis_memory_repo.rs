@@ -264,18 +264,43 @@ impl JarvisMemoryRepository {
     }
 
     /// Apply decay to all facts and delete low-confidence ones.
+    ///
+    /// Computes exponential decay in Rust since SQLite lacks EXP().
+    /// Formula: effective_confidence = confidence * exp(-decay_rate * days_since_reinforced)
     pub fn apply_decay(&self, threshold: f64) -> Result<u32, StorageError> {
         let conn = self.db.connection()?;
 
-        // Delete facts below threshold
-        // Using exponential decay: confidence * exp(-decay_rate * days)
-        let rows = conn.execute(
-            "DELETE FROM jarvis_facts
-             WHERE confidence * EXP(-decay_rate * (julianday('now') - julianday(last_reinforced_at))) < ?1",
-            params![threshold],
+        // Fetch all facts with their decay parameters
+        let mut stmt = conn.prepare(
+            "SELECT id, confidence, decay_rate, julianday('now') - julianday(last_reinforced_at) AS days_elapsed
+             FROM jarvis_facts",
         )?;
 
-        Ok(rows as u32)
+        let ids_to_delete: Vec<String> = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                let confidence: f64 = row.get(1)?;
+                let decay_rate: f64 = row.get(2)?;
+                let days_elapsed: f64 = row.get(3)?;
+                Ok((id, confidence, decay_rate, days_elapsed))
+            })?
+            .filter_map(|r| r.ok())
+            .filter(|(_, confidence, decay_rate, days)| {
+                confidence * (-decay_rate * days).exp() < threshold
+            })
+            .map(|(id, ..)| id)
+            .collect();
+
+        if ids_to_delete.is_empty() {
+            return Ok(0);
+        }
+
+        let count = ids_to_delete.len() as u32;
+        for id in &ids_to_delete {
+            conn.execute("DELETE FROM jarvis_facts WHERE id = ?1", params![id])?;
+        }
+
+        Ok(count)
     }
 
     /// Delete a specific fact.

@@ -275,6 +275,7 @@ fn dispatch_dm_content(
         DmContent::DeleteForMe { .. } => "DeleteForMe",
         DmContent::DeleteForEveryone { .. } => "DeleteForEveryone",
         DmContent::KeyExchange { .. } => "KeyExchange",
+        DmContent::SavedMessageSync { .. } => "SavedMessageSync",
         _ => "Other",
     };
     tracing::info!(
@@ -503,6 +504,21 @@ fn dispatch_dm_content(
                 conversation_id,
                 target_author_aci,
                 target_sent_timestamp,
+            });
+        }
+
+        DmContent::SavedMessageSync {
+            message_id,
+            text,
+            sent_at,
+            attachment_ids,
+        } => {
+            tracing::info!(message_id = %message_id, "Saved message sync received from another device");
+            let _ = event_tx.send(InboxEvent::SavedMessageSync {
+                message_id,
+                text,
+                sent_at,
+                attachment_ids,
             });
         }
 

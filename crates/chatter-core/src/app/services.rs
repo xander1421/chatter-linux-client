@@ -239,6 +239,7 @@ impl ServiceContainer {
             mailbox_manager.clone(),
             infra.grpc_pool.clone(),
             infra.token_manager.clone(),
+            infra.event_bus.clone(),
         ));
 
         // 18. Local AI actor for GPU-accelerated inference

@@ -3,22 +3,27 @@
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
 
 use crate::crypto::attachment_crypto::AttachmentCrypto;
 use crate::domain::attachment::{Attachment, AttachmentStatus, ContentLocation, FileMetadata};
 use crate::domain::ids::{AttachmentId, ChannelId};
 use crate::proto::chat_v1::FileChunk;
 
-use super::{attachment_file_path, ensure_attachments_dir, AttachmentError, AttachmentService, CdnUploadResult, UploadResult, CHUNK_SIZE};
+use super::{attachment_file_path, attachments_dir, ensure_attachments_dir, AttachmentError, AttachmentService, CdnUploadResult, UploadResult, CHUNK_SIZE};
+
+/// Files >= 10MB use the resumable multipart API instead of gRPC streaming.
+const LARGE_FILE_THRESHOLD: u64 = 10 * 1024 * 1024;
 
 impl AttachmentService {
     /// Upload a file to a channel.
     ///
-    /// Handles chunking, hashing, and streaming upload to the server.
-    /// Returns the attachment details on success.
+    /// Streams the file from disk in 256KB chunks — memory usage is O(CHUNK_SIZE)
+    /// regardless of file size. Files >= 10MB use the resumable multipart API
+    /// for automatic retry/resume support.
     pub async fn upload_file(
         &self,
-                file_path: &Path,
+        file_path: &Path,
         channel_id: &ChannelId,
     ) -> Result<UploadResult, AttachmentError> {
         // Read file metadata
@@ -34,9 +39,7 @@ impl AttachmentService {
             .to_string();
 
         // Determine MIME type
-        let mime_type = mime_guess::from_path(file_path)
-            .first_or_octet_stream()
-            .to_string();
+        let mime_type = detect_mime_type(file_path).await;
 
         tracing::debug!(
             "Uploading {} ({} bytes, {}) to channel {}",
@@ -46,89 +49,14 @@ impl AttachmentService {
             channel_id
         );
 
-        // Read file content
-        let file_content = tokio::fs::read(file_path)
-            .await
-            .map_err(|e| AttachmentError::FileError(format!("Failed to read file: {}", e)))?;
-
-        // Generate a transfer_id UUID for this upload session
-        let transfer_id = uuid::Uuid::new_v4().to_string();
-        tracing::debug!("Starting upload with transfer_id={}", transfer_id);
-
-        // Create file client
-        let mut file_client = self.grpc_pool().file_client();
-
-        // Create chunks with auth tags
-        let chunks: Vec<FileChunk> = file_content
-            .chunks(CHUNK_SIZE)
-            .enumerate()
-            .map(|(seq, chunk_data)| {
-                // Compute auth tag (16 bytes from SHA256)
-                let mut hasher = Sha256::new();
-                hasher.update(chunk_data);
-                let hash = hasher.finalize();
-
-                FileChunk {
-                    transfer_id: transfer_id.clone(),
-                    sequence: seq as u32,
-                    data: chunk_data.to_vec(),
-                    auth_tag: hash[..16].to_vec(),
-                }
-            })
-            .collect();
-
-        let chunk_count = chunks.len();
-        let total_data_size: usize = chunks.iter().map(|c| c.data.len()).sum();
-        tracing::info!(
-            "Prepared {} chunks ({} bytes total) for {}",
-            chunk_count,
-            total_data_size,
-            filename
-        );
-
-        // Create chunk stream with logging
-        let chunk_stream = tokio_stream::iter(chunks.into_iter().enumerate().map(|(i, chunk)| {
-            tracing::trace!(
-                chunk_seq = i,
-                chunk_size = chunk.data.len(),
-                "Sending chunk"
-            );
-            chunk
-        }));
-
-        // Upload with channel-id header for permission checking
-        let upload_result = file_client
-            .upload_file_with_metadata(
-                &channel_id.to_string(),
-                &filename,
-                &mime_type,
-                file_size,
-                chunk_stream,
-            )
-            .await;
-
-        // Handle the result - h2 errors can occur even when upload succeeds
-        let file_metadata = match upload_result {
-            Ok(metadata) => {
-                tracing::debug!("Upload request completed successfully");
-                metadata
-            }
-            Err(e) => {
-                let error_str = format!("{}", e);
-
-                // Check if this is an h2 protocol error - the upload may have succeeded
-                if error_str.contains("h2 protocol error") || error_str.contains("http2 error") {
-                    tracing::warn!(
-                        "Got h2 protocol error - verifying if upload succeeded for: {}",
-                        filename
-                    );
-
-                    // Verify upload by checking channel files
-                    self.verify_upload(channel_id, &filename, file_size).await?
-                } else {
-                    return Err(AttachmentError::NetworkError(format!("Upload failed: {}", e)));
-                }
-            }
+        let file_metadata = if file_size >= LARGE_FILE_THRESHOLD {
+            // Large files: resumable multipart API (supports retry/resume)
+            self.upload_file_resumable(file_path, channel_id, &filename, &mime_type, file_size)
+                .await?
+        } else {
+            // Small files: lazy gRPC stream from disk
+            self.upload_file_streaming(file_path, channel_id, &filename, &mime_type, file_size)
+                .await?
         };
 
         // Parse attachment ID from returned file metadata
@@ -228,80 +156,303 @@ impl AttachmentService {
         }
     }
 
+    /// Upload a small file via lazy gRPC streaming from disk.
+    ///
+    /// Reads CHUNK_SIZE at a time from disk — never loads the full file.
+    async fn upload_file_streaming(
+        &self,
+        file_path: &Path,
+        channel_id: &ChannelId,
+        filename: &str,
+        mime_type: &str,
+        file_size: u64,
+    ) -> Result<crate::proto::chat_v1::FileMetadata, AttachmentError> {
+        let transfer_id = uuid::Uuid::new_v4().to_string();
+        let chunk_count = (file_size as usize + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        tracing::info!(
+            "Streaming {} chunks ({} bytes) for {}",
+            chunk_count, file_size, filename
+        );
+
+        let file_path_owned = file_path.to_path_buf();
+        let transfer_id_clone = transfer_id.clone();
+
+        let chunk_stream = async_stream::stream! {
+            let mut file = tokio::fs::File::open(&file_path_owned).await
+                .expect("Failed to open file for streaming upload");
+            let mut buf = vec![0u8; CHUNK_SIZE];
+            let mut sequence = 0u32;
+            loop {
+                let n = tokio::io::AsyncReadExt::read(&mut file, &mut buf).await
+                    .expect("Failed to read chunk from file");
+                if n == 0 { break; }
+                let mut hasher = Sha256::new();
+                hasher.update(&buf[..n]);
+                let hash = hasher.finalize();
+                yield FileChunk {
+                    transfer_id: transfer_id_clone.clone(),
+                    sequence,
+                    data: buf[..n].to_vec(),
+                    auth_tag: hash[..16].to_vec(),
+                };
+                sequence += 1;
+            }
+        };
+
+        let mut file_client = self.grpc_pool().file_client();
+
+        let upload_result = file_client
+            .upload_file_with_metadata(
+                &channel_id.to_string(),
+                filename,
+                mime_type,
+                file_size,
+                chunk_stream,
+            )
+            .await;
+
+        match upload_result {
+            Ok(metadata) => {
+                tracing::debug!("Streaming upload completed successfully");
+                Ok(metadata)
+            }
+            Err(e) => {
+                let error_str = format!("{}", e);
+                if error_str.contains("h2 protocol error") || error_str.contains("http2 error") {
+                    tracing::warn!("Got h2 protocol error - verifying upload for: {}", filename);
+                    self.verify_upload(channel_id, filename, file_size).await
+                } else {
+                    Err(AttachmentError::NetworkError(format!("Upload failed: {}", e)))
+                }
+            }
+        }
+    }
+
+    /// Upload a large file via the resumable multipart API.
+    ///
+    /// Reads CHUNK_SIZE at a time from disk. Each chunk is uploaded individually
+    /// with per-chunk SHA-256 verification. Supports resume from the last
+    /// successfully uploaded chunk.
+    async fn upload_file_resumable(
+        &self,
+        file_path: &Path,
+        channel_id: &ChannelId,
+        filename: &str,
+        mime_type: &str,
+        file_size: u64,
+    ) -> Result<crate::proto::chat_v1::FileMetadata, AttachmentError> {
+        let mut file_client = self.grpc_pool().file_client();
+
+        // Initiate upload session
+        let session = file_client
+            .initiate_upload(
+                &channel_id.to_string(),
+                filename,
+                mime_type,
+                file_size,
+                CHUNK_SIZE as u32,
+            )
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to initiate upload: {}", e)))?;
+
+        let transfer_id = session.transfer_id.clone();
+        tracing::info!(
+            transfer_id = %transfer_id,
+            chunks_total = session.chunks_total,
+            chunks_uploaded = session.chunks_uploaded,
+            "Resumable upload session started for {}",
+            filename
+        );
+
+        // Open file and seek past already-uploaded chunks
+        let mut file = tokio::fs::File::open(file_path)
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("Failed to open file: {}", e)))?;
+
+        if session.chunks_uploaded > 0 {
+            let skip_bytes = session.chunks_uploaded as u64 * CHUNK_SIZE as u64;
+            tokio::io::AsyncSeekExt::seek(&mut file, std::io::SeekFrom::Start(skip_bytes))
+                .await
+                .map_err(|e| AttachmentError::FileError(format!("Failed to seek: {}", e)))?;
+        }
+
+        // Hash the whole file for the final complete call
+        let mut whole_file_hasher = Sha256::new();
+
+        // If resuming, we need to hash the already-uploaded portion too
+        if session.chunks_uploaded > 0 {
+            let mut hash_file = tokio::fs::File::open(file_path)
+                .await
+                .map_err(|e| AttachmentError::FileError(format!("Failed to open for hashing: {}", e)))?;
+            let skip_bytes = session.chunks_uploaded as u64 * CHUNK_SIZE as u64;
+            let mut remaining = skip_bytes;
+            let mut buf = vec![0u8; CHUNK_SIZE];
+            while remaining > 0 {
+                let to_read = remaining.min(CHUNK_SIZE as u64) as usize;
+                hash_file.read_exact(&mut buf[..to_read])
+                    .await
+                    .map_err(|e| AttachmentError::FileError(format!("Failed to hash skipped data: {}", e)))?;
+                whole_file_hasher.update(&buf[..to_read]);
+                remaining -= to_read as u64;
+            }
+        }
+
+        // Upload remaining chunks
+        let mut buf = vec![0u8; CHUNK_SIZE];
+        for sequence in session.chunks_uploaded..session.chunks_total {
+            let n = file.read(&mut buf)
+                .await
+                .map_err(|e| AttachmentError::FileError(format!("Failed to read chunk {}: {}", sequence, e)))?;
+            if n == 0 {
+                break;
+            }
+
+            let chunk_data = buf[..n].to_vec();
+
+            // Per-chunk SHA-256
+            let mut chunk_hasher = Sha256::new();
+            chunk_hasher.update(&chunk_data);
+            let chunk_sha256 = chunk_hasher.finalize().to_vec();
+
+            // Update whole-file hash
+            whole_file_hasher.update(&chunk_data);
+
+            // Upload chunk with retry
+            let mut retries = 0;
+            loop {
+                match file_client
+                    .upload_chunk(&transfer_id, sequence, chunk_data.clone(), chunk_sha256.clone())
+                    .await
+                {
+                    Ok(resp) => {
+                        tracing::debug!(
+                            sequence,
+                            progress = resp.progress,
+                            "Chunk uploaded"
+                        );
+                        break;
+                    }
+                    Err(e) if retries < 3 => {
+                        retries += 1;
+                        tracing::warn!(
+                            sequence,
+                            retries,
+                            error = %e,
+                            "Chunk upload failed, retrying"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(500 * retries as u64)).await;
+                    }
+                    Err(e) => {
+                        // Abort the upload session on permanent failure
+                        let _ = file_client.abort_upload(&transfer_id).await;
+                        return Err(AttachmentError::NetworkError(
+                            format!("Chunk {} upload failed after retries: {}", sequence, e),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Complete upload
+        let file_sha256 = whole_file_hasher.finalize().to_vec();
+        let metadata = file_client
+            .complete_upload(&transfer_id, file_sha256)
+            .await
+            .map_err(|e| AttachmentError::NetworkError(format!("Failed to complete upload: {}", e)))?;
+
+        tracing::info!(
+            transfer_id = %transfer_id,
+            file_id = %metadata.id,
+            "Resumable upload completed for {}",
+            filename
+        );
+
+        Ok(metadata)
+    }
+
     /// Upload a file to CDN with client-side encryption.
     ///
-    /// This is the Signal-style flow for E2E encrypted attachments:
-    /// 1. Read file content
-    /// 2. Encrypt with AES-256-CBC + HMAC-SHA256
-    /// 3. Get presigned upload URL from server
-    /// 4. Upload encrypted ciphertext via HTTP PUT
-    /// 5. Confirm upload with server
+    /// Encrypts the file in a streaming fashion (O(CHUNK_SIZE) memory) to a temp
+    /// file, then streams the encrypted temp file to the presigned PUT URL.
     ///
     /// Returns a `CdnUploadResult` with all data needed for AttachmentPointer.
     pub async fn upload_to_cdn_encrypted(
         &self,
-                file_path: &Path,
+        file_path: &Path,
     ) -> Result<CdnUploadResult, AttachmentError> {
-        // Read file content
-        let file_content = tokio::fs::read(file_path)
+        let plaintext_size = tokio::fs::metadata(file_path)
             .await
-            .map_err(|e| AttachmentError::FileError(format!("Failed to read file: {}", e)))?;
+            .map_err(|e| AttachmentError::FileError(format!("Failed to read file metadata: {}", e)))?
+            .len();
 
-        let plaintext_size = file_content.len() as u64;
         let filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("attachment")
             .to_string();
 
-        // Detect MIME type: try extension first, then fall back to magic bytes
-        let mime_type = mime_guess::from_path(file_path)
-            .first()
-            .map(|m| m.to_string())
-            .unwrap_or_else(|| detect_mime_from_bytes(&file_content));
+        let mime_type = detect_mime_type(file_path).await;
 
         tracing::debug!(
             filename = %filename,
             plaintext_size = plaintext_size,
             mime_type = %mime_type,
-            "Encrypting attachment for CDN upload"
+            "Encrypting attachment for CDN upload (streaming)"
         );
 
-        // Encrypt with Signal-compatible encryption
-        let encrypt_start = std::time::Instant::now();
-        let encrypted = AttachmentCrypto::encrypt(&file_content)
-            .map_err(|e| AttachmentError::EncryptionError(e.to_string()))?;
+        // Extract media metadata from the original file before encryption
+        let media_meta = self.extract_media_metadata(file_path, &mime_type).await;
 
-        let encrypted_size = encrypted.ciphertext.len() as u64;
+        // Streaming encryption to temp file (O(CHUNK_SIZE) memory)
+        ensure_attachments_dir()
+            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {}", e)))?;
+
+        let temp_file = tempfile::NamedTempFile::new_in(attachments_dir())
+            .map_err(|e| AttachmentError::FileError(format!("Failed to create temp file: {}", e)))?;
+
+        let input_path = file_path.to_path_buf();
+        let output_path = temp_file.path().to_path_buf();
+
+        let encrypt_start = std::time::Instant::now();
+        let encrypt_result = tokio::task::spawn_blocking(move || {
+            AttachmentCrypto::encrypt_file_to_file(&input_path, &output_path)
+        })
+        .await
+        .map_err(|e| AttachmentError::EncryptionError(format!("Encryption task failed: {}", e)))?
+        .map_err(|e| AttachmentError::EncryptionError(e.to_string()))?;
+
         tracing::info!(
-            encrypted_size = encrypted_size,
+            encrypted_size = encrypt_result.ciphertext_size,
             elapsed = ?encrypt_start.elapsed(),
-            "Attachment encrypted"
+            "Attachment encrypted (streaming)"
         );
 
         // Get presigned upload URL
         let mut file_client = self.grpc_pool().file_client();
         let upload_response = file_client
-            .get_attachment_upload_url(encrypted_size)
+            .get_attachment_upload_url(encrypt_result.ciphertext_size)
             .await
             .map_err(|e| AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e)))?;
 
         let cdn_key = upload_response.cdn_key;
         let upload_url = upload_response.upload_url;
 
-        tracing::debug!(
-            cdn_key = %cdn_key,
-            "Got presigned URL, uploading encrypted content"
-        );
+        tracing::debug!(cdn_key = %cdn_key, "Got presigned URL, streaming encrypted content");
 
-        // Upload encrypted ciphertext via HTTP PUT
+        // Stream encrypted temp file to PUT (O(CHUNK_SIZE) memory)
         let upload_start = std::time::Instant::now();
+        let encrypted_file = tokio::fs::File::open(temp_file.path())
+            .await
+            .map_err(|e| AttachmentError::FileError(format!("Failed to open temp file: {}", e)))?;
+        let stream = tokio_util::io::ReaderStream::new(encrypted_file);
+        let body = reqwest::Body::wrap_stream(stream);
+
         let http_client = reqwest::Client::new();
         let response = http_client
             .put(&upload_url)
             .header("Content-Type", "application/octet-stream")
-            .header("Content-Length", encrypted_size)
-            .body(encrypted.ciphertext.clone())
+            .header("Content-Length", encrypt_result.ciphertext_size)
+            .body(body)
             .send()
             .await
             .map_err(|e| AttachmentError::NetworkError(format!("HTTP upload failed: {}", e)))?;
@@ -324,18 +475,25 @@ impl AttachmentService {
         // Generate deterministic attachment ID from cdn_key
         let attachment_id = AttachmentId::from_cdn_key(&cdn_key);
 
-        // Extract media metadata
-        let media_meta = self.extract_media_metadata(file_path, &mime_type).await;
+        // Persist temp file to permanent location (atomic rename on same filesystem)
+        let permanent_path = attachment_file_path(&attachment_id);
+        temp_file.persist(&permanent_path)
+            .map_err(|e| AttachmentError::FileError(format!("Failed to persist encrypted file: {}", e)))?;
+
+        tracing::debug!(
+            "Persisted encrypted content to {}",
+            permanent_path.display()
+        );
 
         // Build metadata
         let domain_metadata = FileMetadata {
             name: filename.clone(),
             mime_type: mime_type.clone(),
             size: plaintext_size,
-            sha256: encrypted.digest.to_vec(),
+            sha256: encrypt_result.digest.to_vec(),
             chunk_size: 0,
-            width: if media_meta.width.is_some() { media_meta.width } else { None },
-            height: if media_meta.height.is_some() { media_meta.height } else { None },
+            width: media_meta.width,
+            height: media_meta.height,
             duration_seconds: if media_meta.duration_ms > 0 { Some((media_meta.duration_ms / 1000) as f64) } else { None },
             waveform_samples: media_meta.waveform.clone(),
             thumbnail: media_meta.thumbnail.clone(),
@@ -343,22 +501,7 @@ impl AttachmentService {
             thumbnail_height: media_meta.thumbnail_height,
         };
 
-        // Ensure attachments directory exists
-        ensure_attachments_dir()
-            .map_err(|e| AttachmentError::FileError(format!("Failed to create attachments dir: {}", e)))?;
-
-        // Write encrypted content to filesystem
-        let file_path = attachment_file_path(&attachment_id);
-        std::fs::write(&file_path, &encrypted.ciphertext)
-            .map_err(|e| AttachmentError::FileError(format!("Failed to write attachment file: {}", e)))?;
-
-        tracing::debug!(
-            "Wrote {} bytes encrypted content to {}",
-            encrypted.ciphertext.len(),
-            file_path.display()
-        );
-
-        // Create attachment record with content stored on filesystem
+        // Create attachment record
         let attachment = Attachment {
             id: attachment_id,
             metadata: domain_metadata,
@@ -366,40 +509,32 @@ impl AttachmentService {
             content_location: ContentLocation::OnFilesystem,
             local_path: None,
             remote_url: Some(cdn_key.clone()),
-            encryption_key: Some(encrypted.key.to_vec()),
-            encryption_iv: Some(encrypted.digest.to_vec()),
+            encryption_key: Some(encrypt_result.key.to_vec()),
+            encryption_iv: Some(encrypt_result.digest.to_vec()),
             created_at: chrono::Utc::now(),
         };
 
         // Save to repository with file path
-        if let Err(e) = self.attachment_repo.insert_with_file_path(&attachment, &file_path) {
-            // Clean up file on failure
-            let _ = std::fs::remove_file(&file_path);
-            tracing::warn!("Failed to save CDN attachment with file path: {}", e);
+        if let Err(e) = self.attachment_repo.insert_with_file_path(&attachment, &permanent_path) {
+            let _ = std::fs::remove_file(&permanent_path);
+            tracing::warn!("Failed to save CDN attachment: {}", e);
             return Err(AttachmentError::StorageError(e.to_string()));
         }
-
-        tracing::debug!(
-            "Saved CDN attachment {} with file path {} to database",
-            attachment_id,
-            file_path.display()
-        );
 
         tracing::info!(
             cdn_key = %cdn_key,
             attachment_id = %attachment_id,
             filename = %filename,
             plaintext_size = plaintext_size,
-            encrypted_size = encrypted_size,
-            file_path = %file_path.display(),
-            "Encrypted attachment uploaded to CDN and stored on filesystem"
+            encrypted_size = encrypt_result.ciphertext_size,
+            "Encrypted attachment uploaded to CDN (streaming)"
         );
 
         Ok(CdnUploadResult {
             attachment_id,
             cdn_key,
-            encryption_key: encrypted.key,
-            digest: encrypted.digest,
+            encryption_key: encrypt_result.key,
+            digest: encrypt_result.digest,
             plaintext_size,
             content_type: mime_type,
             file_name: filename,
@@ -575,6 +710,58 @@ impl AttachmentService {
         })
     }
 
+    /// Download a GIF from a URL and upload it to CDN (encrypted).
+    ///
+    /// Combines HTTP download + CDN upload into a single operation so the
+    /// UI layer doesn't need raw HTTP clients.
+    pub async fn download_and_upload_gif(
+        &self,
+        url: &str,
+        gif_id: &str,
+    ) -> Result<CdnUploadResult, AttachmentError> {
+        let client = reqwest::Client::new();
+        let response = client.get(url).send().await
+            .map_err(|e| AttachmentError::NetworkError(format!("GIF download failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(AttachmentError::NetworkError(
+                format!("GIF download HTTP {}", response.status())
+            ));
+        }
+
+        let bytes = response.bytes().await
+            .map_err(|e| AttachmentError::NetworkError(format!("GIF read failed: {}", e)))?;
+
+        let filename = format!("{}.gif", gif_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
+
+        self.upload_bytes_to_cdn_encrypted(&bytes, &filename, "image/gif").await
+    }
+
+    /// Download bytes from a URL (for media display, GIF animation, etc).
+    pub async fn download_url_bytes(
+        &self,
+        url: &str,
+    ) -> Result<Vec<u8>, AttachmentError> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| AttachmentError::NetworkError(format!("HTTP client error: {}", e)))?;
+
+        let response = client.get(url).send().await
+            .map_err(|e| AttachmentError::NetworkError(format!("Download failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(AttachmentError::NetworkError(
+                format!("Download HTTP {}", response.status())
+            ));
+        }
+
+        let bytes = response.bytes().await
+            .map_err(|e| AttachmentError::NetworkError(format!("Read failed: {}", e)))?;
+
+        Ok(bytes.to_vec())
+    }
+
     /// Extract media metadata from bytes (for in-memory content like downloaded GIFs).
     fn extract_media_metadata_from_bytes(&self, content: &[u8], mime_type: &str) -> MediaMetadata {
         let mut meta = MediaMetadata::default();
@@ -721,6 +908,25 @@ pub(crate) struct MediaMetadata {
     pub thumbnail_height: Option<u32>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+}
+
+/// Detect MIME type from a file path without reading the entire file.
+///
+/// Tries extension-based detection first, then falls back to reading
+/// only the first 12 bytes for magic byte detection.
+async fn detect_mime_type(file_path: &Path) -> String {
+    // Fast path: detect from file extension
+    if let Some(mime) = mime_guess::from_path(file_path).first() {
+        return mime.to_string();
+    }
+    // Fallback: read first 12 bytes for magic byte detection
+    if let Ok(mut f) = tokio::fs::File::open(file_path).await {
+        let mut buf = [0u8; 12];
+        if tokio::io::AsyncReadExt::read_exact(&mut f, &mut buf).await.is_ok() {
+            return detect_mime_from_bytes(&buf);
+        }
+    }
+    "application/octet-stream".to_string()
 }
 
 /// Detect MIME type from file content using magic bytes.

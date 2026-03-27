@@ -542,14 +542,14 @@ impl MessageService {
         match channel.channel_type {
             ChannelType::DirectMessage => {
                 // DM - use Signal Protocol via Sesame
-                // Note: Caller needs to pass MailboxManager via UIContext
+                // Note: Caller needs to pass MailboxManager via CoreServices
                 Err(MessageError::InvalidContent(
                     "DM sending requires MailboxManager - use send_dm directly".to_string()
                 ))
             }
             ChannelType::Private => {
                 // Private group - use sender keys via group mailboxes
-                // This requires GroupFanout which should be passed from UIContext
+                // This requires GroupFanout which should be passed from CoreServices
                 Err(MessageError::InvalidContent(
                     "Group sending requires GroupFanout - use group methods directly".to_string()
                 ))

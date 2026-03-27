@@ -7,6 +7,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use uuid::Uuid;
+use hkdf::Hkdf;
+use sha2::Sha256;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519Secret};
 use zeroize::Zeroize;
 
@@ -236,7 +238,9 @@ impl ConversationKey {
 
     /// Derive shared secret from their public key.
     ///
-    /// Uses X25519 ECDH to compute the shared secret.
+    /// Uses X25519 ECDH followed by HKDF-SHA256 to derive the final
+    /// encryption key. Signal spec requires HKDF on all DH outputs —
+    /// raw ECDH output should never be used directly as a cipher key.
     pub fn derive_shared_secret(
         &mut self,
         their_public: [u8; 32],
@@ -250,10 +254,16 @@ impl ConversationKey {
         // Reconstruct their public
         let their_public_key = X25519PublicKey::from(their_public);
 
-        // Compute shared secret via ECDH
-        let shared = our_secret.diffie_hellman(&their_public_key);
+        // Compute raw shared secret via ECDH
+        let raw_shared = our_secret.diffie_hellman(&their_public_key);
 
-        self.shared_secret = Some(*shared.as_bytes());
+        // Derive encryption key via HKDF-SHA256 (never use raw DH output directly)
+        let hkdf = Hkdf::<Sha256>::new(None, raw_shared.as_bytes());
+        let mut derived_key = [0u8; 32];
+        hkdf.expand(b"chatter-dm-conversation-v1", &mut derived_key)
+            .map_err(|_| MailboxError::KeyDerivationFailed("HKDF expand failed".into()))?;
+
+        self.shared_secret = Some(derived_key);
         self.established_at = Some(Utc::now());
 
         Ok(())

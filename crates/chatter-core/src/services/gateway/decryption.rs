@@ -194,8 +194,34 @@ impl MessageGateway {
                 });
             }
 
+            // Handle group management messages (MemberList, Leave, Kick, ProfileShare, Update)
+            // These arrive as top-level Content types on the group mailbox, NOT wrapped
+            // in AnonGroupMessage envelope. Route them through AnonGroupMessageReceived
+            // so InboxEventProcessor can handle them.
+            let mgmt_group_id = match &content_proto.content {
+                Some(content::Content::AnonGroupMemberList(m)) => Some(m.group_id.clone()),
+                Some(content::Content::AnonGroupLeave(m)) => Some(m.group_id.clone()),
+                Some(content::Content::AnonGroupKick(m)) => Some(m.group_id.clone()),
+                Some(content::Content::AnonGroupProfileShare(m)) => Some(m.group_id.clone()),
+                Some(content::Content::AnonGroupUpdate(m)) => Some(m.group_id.clone()),
+                _ => None,
+            };
+
+            if let Some(group_id) = mgmt_group_id {
+                tracing::info!(
+                    sender_id = %sender_id,
+                    group_id_hex = %hex::encode(&group_id),
+                    content_type = ct_name,
+                    "GATEWAY: Received group management message, routing as AnonGroupMessage"
+                );
+                return Ok(SealedSenderResult::AnonGroupMessageReceived {
+                    sender_id,
+                    group_id,
+                    inner_content: Box::new(content_proto),
+                });
+            }
+
             // Other content types in sealed sender (typing, receipt, etc.)
-            // For now just log and return success
             tracing::info!(
                 sender_id = %sender_id,
                 content_type = ct_name,
@@ -542,6 +568,14 @@ impl MessageGateway {
                     conversation_id: msg.conversation_id,
                     target_author_aci: msg.target_author_aci,
                     target_sent_timestamp: msg.target_sent_timestamp,
+                })
+            }
+            Some(content::Content::SavedMessageSync(msg)) => {
+                Ok(DmContent::SavedMessageSync {
+                    message_id: msg.message_id,
+                    text: msg.text,
+                    sent_at: msg.sent_at,
+                    attachment_ids: msg.attachment_ids,
                 })
             }
             Some(content::Content::KeyExchange(kx)) => {

@@ -1,7 +1,7 @@
-//! UI context.
+//! Core services container.
 //!
-//! The public API surface for UI code. Exposes services and state stores
-//! but never repositories or low-level infrastructure directly.
+//! Aggregates all services, state stores, and the event bus into a single
+//! container. Used internally by `ChatterClient` — never exposed to UI directly.
 
 use std::sync::Arc;
 
@@ -15,6 +15,7 @@ use crate::services::ai_service::AIService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::ai::LocalAIService;
 use crate::services::jarvis::JarvisService;
+use crate::services::notification_service::NotificationService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
 use crate::services::auth_service::AuthService;
@@ -50,7 +51,7 @@ use super::services::ServiceContainer;
 /// - Event bus for domain events
 /// - Network pool for connection management
 /// - Runtime handle for spawning async tasks from UI callbacks
-pub struct UIContext {
+pub struct CoreServices {
     // Runtime handle for async spawning from sync UI callbacks
     pub runtime_handle: tokio::runtime::Handle,
     // Services
@@ -74,6 +75,7 @@ pub struct UIContext {
     pub anon_dm_service: Arc<AnonDmService>,
     pub local_ai_service: Arc<LocalAIService>,
     pub jarvis_service: Arc<JarvisService>,
+    pub notification_service: Arc<NotificationService>,
 
     // State stores
     pub ui_state: UIState,
@@ -105,8 +107,8 @@ pub struct UIContext {
     pub device_inbox_provider: Arc<std::sync::OnceLock<Arc<DeviceInboxProvider>>>,
 }
 
-impl UIContext {
-    /// Create UIContext from infrastructure and services.
+impl CoreServices {
+    /// Create CoreServices from infrastructure and services.
     pub(crate) fn new(
         infra: &InfrastructureContainer,
         services: &ServiceContainer,
@@ -139,6 +141,18 @@ impl UIContext {
             anon_dm_service: services.anon_dm_service.clone(),
             local_ai_service: services.local_ai_service.clone(),
             jarvis_service: services.jarvis_service.clone(),
+            notification_service: {
+                let svc = NotificationService::new();
+                // Load privacy setting from local DB
+                if let Ok(Some(level_str)) = infra.settings_repo.get::<String>(
+                    crate::storage::repositories::settings_repo::keys::NOTIFICATION_DETAIL_LEVEL,
+                ) {
+                    svc.set_detail_level(
+                        crate::services::notification_service::NotificationDetailLevel::from_str(&level_str),
+                    );
+                }
+                Arc::new(svc)
+            },
 
             // State stores
             ui_state: UIState::new(),

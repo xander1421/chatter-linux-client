@@ -71,7 +71,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             #[cfg(not(target_os = "android"))]
             {
                 let weak = weak.clone();
-                tokio::spawn(async move {
+                crate::rt_handle().spawn(async move {
                     let config = FilePickerConfig {
                         title: Some("Select Avatar".to_string()),
                         filters: vec![FileFilter {
@@ -127,6 +127,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.on_register(
         move |username: slint::SharedString, password: slint::SharedString, display_name: slint::SharedString, pin: slint::SharedString, server_url: slint::SharedString| {
+            tracing::info!("REGISTER BUTTON TAPPED: user={}, server={}", username, server_url);
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
             let username = username.to_string();
@@ -135,77 +136,81 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let pin = pin.to_string();
             let server_url = server_url.to_string();
 
-            tokio::spawn(async move {
-                // Set loading state
-                let weak_for_loading = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak_for_loading.upgrade() {
-                        w.set_register_loading(true);
-                        w.set_register_error("".into());
-                    }
-                });
+            // Set loading state synchronously (we're on UI thread)
+            if let Some(w) = weak.upgrade() {
+                w.set_register_loading(true);
+                w.set_register_error("".into());
+            }
 
-                // Update server URL and connect if different from current
-                if ui_ctx.auth().endpoint() != server_url {
-                    if let Err(e) = ui_ctx.auth().set_server_url(&server_url) {
-                        let error_msg = format!("Invalid Server URL: {}", e);
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_register_loading(false);
-                                w.set_register_error(error_msg.into());
-                            }
-                        });
-                        return;
+            // Update server URL synchronously
+            if ui_ctx.auth().endpoint() != server_url {
+                if let Err(e) = ui_ctx.auth().set_server_url(&server_url) {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_register_loading(false);
+                        w.set_register_error(format!("Invalid Server URL: {}", e).into());
                     }
+                    return;
                 }
+            }
 
-                // Ensure we are connected to the selected server
-                if !ui_ctx.auth().is_connected() {
-                    if let Err(e) = ui_ctx.auth().connect().await {
-                        let error_msg = format!("Failed to connect to server: {}", e);
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_register_loading(false);
-                                w.set_register_error(error_msg.into());
-                            }
-                        });
-                        return;
-                    }
-                }
-
-                // Use pre-built auth service from ChatterClient
-                let auth_service = &ui_ctx.auth();
-                // Get selected avatar or use random default
+            // Prepare avatar bytes synchronously
+            let avatar_bytes = {
                 let user_avatar = selected_avatar().lock().ok().and_then(|g| g.clone());
-
-                let avatar_bytes = if let Some(ref bytes) = user_avatar {
-                    bytes.as_slice()
+                if let Some(bytes) = user_avatar {
+                    bytes
                 } else {
-                    // Load custom default avatars (cutouts in greyscale on black background)
                     let random_idx = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_millis() as usize % DEFAULT_AVATARS.len();
-                    DEFAULT_AVATARS[random_idx]
-                };
+                    DEFAULT_AVATARS[random_idx].to_vec()
+                }
+            };
 
+            // Spawn background thread with its own tokio runtime (energy-monitor pattern).
+            // Each async operation gets a fresh runtime that can drive I/O independently.
+            std::thread::spawn(move || {
+                tracing::info!("Register: background thread started, creating runtime...");
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                tracing::info!("Register: runtime created, entering block_on...");
+                rt.block_on(async {
+                    tracing::info!("Register: inside block_on, checking connection...");
 
-                // Register via SDK (handles auth + state + inbox + presence)
-                match ui_ctx.register(&username, &password, &display_name, "linux-client", Some(avatar_bytes), Some(&pin)).await {
+                // Test raw TCP first
+                tracing::info!("Register: testing raw TCP to server...");
+                match tokio::net::TcpStream::connect("192.168.0.7:50051").await {
+                    Ok(_) => tracing::info!("Register: raw TCP connect SUCCESS"),
+                    Err(e) => tracing::error!("Register: raw TCP connect FAILED: {}", e),
+                }
+
+                // Connect if needed
+                if !ui_ctx.auth().is_connected() {
+                    tracing::info!("Register: not connected, calling grpc connect()...");
+                    if let Err(e) = ui_ctx.auth().connect().await {
+                        let error_msg = format!("Failed to connect: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_register_loading(false);
+                                w.set_register_error(error_msg.into());
+                            }
+                        });
+                        return;
+                    }
+                }
+
+                tracing::info!("Register: connected! Calling register()...");
+                // Register
+                match ui_ctx.register(&username, &password, &display_name, "linux-client", Some(&avatar_bytes), Some(&pin)).await {
                     Ok(result) => {
+                        tracing::info!("Registration successful!");
                         if let Ok(mut g) = selected_avatar().lock() { *g = None; }
-
-                        // Spawn UI-only event handlers
-                        crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);
-                        crate::bin_ui::features::auth::inbox::spawn_anon_group_event_handler(weak.clone(), &ui_ctx);
-                        crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak.clone(), &ui_ctx);
 
                         // Subscribe to DomainEvent for UI updates
                         {
                             let mut domain_rx = ui_ctx.event_bus().subscribe_domain();
                             let weak_for_domain = weak.clone();
                             let ui_ctx_for_domain = ui_ctx.clone();
-                            tokio::spawn(async move {
+                            crate::rt_handle().spawn(async move {
                                 loop {
                                     match domain_rx.recv().await {
                                         Ok(event) => {
@@ -218,39 +223,38 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             });
                         }
 
-                        // Check if registration returned recovery codes
                         let has_recovery_codes = result.recovery_codes
                             .as_ref()
-                            .map(|codes| !codes.is_empty())
-                            .unwrap_or(false);
+                            .is_some_and(|codes| !codes.is_empty());
 
+                        let weak_for_ui = weak.clone();
+                        let ui_ctx_for_handlers = ui_ctx.clone();
                         if has_recovery_codes {
                             let codes = result.recovery_codes.unwrap();
-                            let weak_for_codes = weak.clone();
                             let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak_for_codes.upgrade() {
-                                    // Set recovery codes model
+                                // Spawn UI event handlers (must be on UI thread)
+                                crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
+                                crate::bin_ui::features::auth::inbox::spawn_anon_group_event_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
+                                crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
+
+                                if let Some(w) = weak_for_ui.upgrade() {
                                     let model: Vec<slint::SharedString> = codes.iter()
                                         .map(|c| slint::SharedString::from(c.as_str()))
                                         .collect();
                                     let model_rc = std::rc::Rc::new(slint::VecModel::from(model));
                                     w.set_recovery_codes(slint::ModelRc::from(model_rc));
-
                                     w.set_register_loading(false);
-                                    // Show recovery codes modal - stay on register view temporarily
                                     w.set_current_view("main".into());
                                     w.set_active_modal("recovery-codes".into());
                                 }
                             });
-
-                            // Wire the confirmed callback to actually proceed
-                            // (The on_recovery_codes_confirmed callback is wired separately;
-                            //  initial data loads now so it's ready when user confirms)
                         } else {
-                            // No recovery codes - go straight to main view
-                            let weak_for_view = weak.clone();
                             let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak_for_view.upgrade() {
+                                crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
+                                crate::bin_ui::features::auth::inbox::spawn_anon_group_event_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
+                                crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
+
+                                if let Some(w) = weak_for_ui.upgrade() {
                                     w.set_register_loading(false);
                                     w.set_current_view("main".into());
                                 }
@@ -260,11 +264,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         load_initial_data(weak, &ui_ctx).await;
                     }
                     Err(e) => {
-                        // Registration failed - clean up any partial state
-                        if let Err(cleanup_err) = auth_service.cleanup_failed_registration().await {
-                            tracing::warn!("Failed to cleanup after registration failure: {}", cleanup_err);
-                        }
-
+                        tracing::error!("Registration failed: {}", e);
+                        let _ = ui_ctx.auth().cleanup_failed_registration().await;
                         let error_msg = e.to_string();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
@@ -274,7 +275,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         });
                     }
                 }
-            });
+                }); // block_on
+            }); // thread::spawn
         },
     );
 }

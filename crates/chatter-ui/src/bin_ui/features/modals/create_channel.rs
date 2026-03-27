@@ -7,7 +7,6 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::{ChannelConfig, ChannelType, MessagePersistence};
 use chatter_core::domain::ids::UserId;
-use chatter_core::proto::chat_v1::IntegrationType;
 
 use crate::bin_ui::converters::channel_to_slint;
 use crate::bin_ui::features::sidebar::load_channel_into_ui;
@@ -20,7 +19,6 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let message_service = ctx.messages().clone();
     let user_service = ctx.users().clone();
     let attachment_service = ctx.attachments().clone();
-    let ai_service = ctx.ai().clone();
     let chat_state = ctx.chat_state().clone();
     let auth_state_global = ctx.auth_state().clone();
 
@@ -37,7 +35,6 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let message_service = message_service.clone();
             let user_service = user_service.clone();
             let attachment_service = attachment_service.clone();
-            let ai_service = ai_service.clone();
             let chat_state = chat_state.clone();
             let name = name.to_string();
             let description = description.to_string();
@@ -81,13 +78,13 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         chat_state.set_active_channel(channel_id);
 
                         if template == "ai-assistant" && !ai_provider.is_empty() && !ai_model.is_empty() {
-                            let provider_type = match ai_provider.as_str() {
-                                "claude" => IntegrationType::Claude,
-                                "openai" => IntegrationType::Openai,
-                                _ => IntegrationType::Custom,
-                            };
-                            if let Ok(integration) = ai_service.create(&format!("{} Assistant", name), provider_type, Some(chatter_core::proto::chat_v1::IntegrationConfig { model: ai_model.clone(), ..Default::default() })).await {
-                                let _ = ai_service.attach_to_channel(&integration.id, &channel_id.to_string()).await;
+                            if let Err(e) = ui_ctx.create_ai_integration(
+                                &format!("{} Assistant", name),
+                                &ai_provider,
+                                &ai_model,
+                                &channel_id.to_string(),
+                            ).await {
+                                tracing::error!(error = %e, "Failed to create AI integration");
                             }
                         }
 
@@ -126,19 +123,17 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     );
 
     let weak_window = window.as_weak();
-    let ai_service = ui_ctx.ai().clone();
+    let ui_ctx_ai = ui_ctx.clone();
     window.on_create_channel_provider_selected(move |provider: SharedString| {
         let weak = weak_window.clone();
-        let ai_service = ai_service.clone();
+        let ui_ctx_ai = ui_ctx_ai.clone();
         let provider_str = provider.to_string();
         tokio::spawn(async move {
-            let provider_type = match provider_str.as_str() {
-                "claude" => IntegrationType::Claude,
-                "openai" => IntegrationType::Openai,
-                _ => return,
-            };
-            if let Ok(available_models) = ai_service.list_models(provider_type).await {
-                let models: Vec<AIModelOption> = available_models.into_iter().map(|m| AIModelOption { id: m.id.into(), name: m.display_name.into(), provider: provider_str.clone().into() }).collect();
+            if !matches!(provider_str.as_str(), "claude" | "openai") {
+                return;
+            }
+            if let Ok(available_models) = ui_ctx_ai.list_ai_models(&provider_str).await {
+                let models: Vec<AIModelOption> = available_models.into_iter().map(|(id, name)| AIModelOption { id: id.into(), name: name.into(), provider: provider_str.clone().into() }).collect();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() { w.set_create_channel_ai_models(ModelRc::new(VecModel::from(models))); }
                 });

@@ -146,8 +146,14 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // 3. Send via core client
+            // Scale timeout for attachments: base 10s + 30s per attachment (upload + encrypt + send)
+            let send_timeout = if pending_attachments.is_empty() {
+                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT
+            } else {
+                std::time::Duration::from_secs(10 + 30 * pending_attachments.len() as u64)
+            };
             let result = match tokio::time::timeout(
-                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                send_timeout,
                 ui_ctx.send_message(conversation, &text, &pending_attachments, quote, None),
             ).await {
                 Ok(Ok(r)) => r,

@@ -246,40 +246,82 @@ impl InfrastructureContainer {
     }
 
     /// Get or generate database passphrase from keyring.
+    ///
+    /// On Android, the system keyring (secret-service/kwallet) is unavailable.
+    /// Falls back to file-based storage in the app's private data directory,
+    /// which is sandboxed by Android's per-app Linux UID.
     fn passphrase_or_generate(keyring: &Keyring) -> Result<String, ContextError> {
-        const MAX_RETRIES: u32 = 6;
-        const RETRY_DELAY_SECS: u64 = 5;
+        // On Android, use file-based passphrase storage (app sandbox protects it)
+        #[cfg(target_os = "android")]
+        {
+            let passphrase_file = std::path::Path::new("/data/data/com.chatter.client/files/data/.db_key");
+            if let Ok(existing) = std::fs::read_to_string(passphrase_file) {
+                let trimmed = existing.trim().to_string();
+                if !trimmed.is_empty() {
+                    tracing::info!("Retrieved existing passphrase from app storage");
+                    return Ok(trimmed);
+                }
+            }
 
-        // Try to get existing passphrase with retries
-        match keyring.get_passphrase_with_retry(MAX_RETRIES, RETRY_DELAY_SECS) {
-            Ok(passphrase) => {
-                tracing::info!("Retrieved existing passphrase from keyring");
-                return Ok(passphrase);
+            // Generate new passphrase
+            let mut bytes = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
+            let passphrase = hex::encode(bytes);
+
+            // Store in app's private directory
+            if let Some(parent) = passphrase_file.parent() {
+                let _ = std::fs::create_dir_all(parent);
             }
-            Err(e) => {
-                tracing::info!(
-                    "No existing passphrase in keyring ({}), generating new one",
-                    e
-                );
+            std::fs::write(passphrase_file, &passphrase)
+                .map_err(|e| ContextError::System(crate::error::SystemError::DirectoryCreate(e)))?;
+
+            // Restrict permissions to owner only
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(passphrase_file, std::fs::Permissions::from_mode(0o600));
             }
+
+            tracing::info!("Generated and stored new passphrase in app storage");
+            return Ok(passphrase);
         }
 
-        // Generate new passphrase (32 random bytes as hex = 64 chars)
-        let mut bytes = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
-        let passphrase = hex::encode(bytes);
+        #[cfg(not(target_os = "android"))]
+        {
+            const MAX_RETRIES: u32 = 6;
+            const RETRY_DELAY_SECS: u64 = 5;
 
-        // Store in keyring with retries
-        tracing::info!("Please unlock your password manager to store the database passphrase...");
-        keyring.set_passphrase_with_retry(&passphrase, MAX_RETRIES, RETRY_DELAY_SECS)?;
+            // Try to get existing passphrase with retries
+            match keyring.get_passphrase_with_retry(MAX_RETRIES, RETRY_DELAY_SECS) {
+                Ok(passphrase) => {
+                    tracing::info!("Retrieved existing passphrase from keyring");
+                    return Ok(passphrase);
+                }
+                Err(e) => {
+                    tracing::info!(
+                        "No existing passphrase in keyring ({}), generating new one",
+                        e
+                    );
+                }
+            }
 
-        // Verify it was stored correctly
-        match keyring.get_passphrase() {
-            Ok(_) => tracing::info!("Verified: passphrase successfully stored and retrievable"),
-            Err(e) => tracing::error!("FAILED to verify passphrase storage: {}", e),
+            // Generate new passphrase (32 random bytes as hex = 64 chars)
+            let mut bytes = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut rand::rng(), &mut bytes);
+            let passphrase = hex::encode(bytes);
+
+            // Store in keyring with retries
+            tracing::info!("Please unlock your password manager to store the database passphrase...");
+            keyring.set_passphrase_with_retry(&passphrase, MAX_RETRIES, RETRY_DELAY_SECS)?;
+
+            // Verify it was stored correctly
+            match keyring.get_passphrase() {
+                Ok(_) => tracing::info!("Verified: passphrase successfully stored and retrievable"),
+                Err(e) => tracing::error!("FAILED to verify passphrase storage: {}", e),
+            }
+
+            Ok(passphrase)
         }
-
-        Ok(passphrase)
     }
 
     /// Get the server URL being used.

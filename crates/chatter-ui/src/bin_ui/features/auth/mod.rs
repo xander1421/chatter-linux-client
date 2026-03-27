@@ -1,9 +1,8 @@
 //! Authentication feature callbacks.
 //!
-//! Handles login, register, logout, and inbox event processing.
+//! Handles login, register, logout, and domain event processing.
 
 pub mod inbox;
-mod inbox_events;
 mod initial_data;
 mod login;
 mod logout;

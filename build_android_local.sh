@@ -13,6 +13,7 @@ export ANDROID_HOME=$HOME/Android/Sdk
 export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/28.2.13676358
 export GSTREAMER_ROOT_ANDROID=$HOME/gst-android
 export JAVA_HOME=/opt/android-studio/jbr
+export ANDROID_PLATFORM=android-34
 
 # 2.1 Set up GStreamer cross-compilation variables for pkg-config
 # Only setting for arm64 (aarch64) for now as it's our primary target
@@ -40,9 +41,9 @@ fi
 
 echo "Starting local Android Build for ARM64..."
 # Build the APK locally
-cargo apk build --release --no-default-features --features mobile
+cargo apk build --release --no-default-features --features mobile -p chatter-ui
 
 echo "---------------------------------------------------"
 echo "Build complete! Your APK should be located at:"
-echo "./target/release/apk/chatter-linux.apk"
+echo "./target/release/apk/chatter_ui.apk"
 echo "---------------------------------------------------"

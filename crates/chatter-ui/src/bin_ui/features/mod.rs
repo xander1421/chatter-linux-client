@@ -4,7 +4,7 @@
 //!
 //! # Service-Based Architecture
 //!
-//! UI handlers use UIContext which provides:
+//! UI handlers use ChatterClient which provides:
 //! - Pre-built services for all business operations
 //! - State stores for reactive UI binding
 //! - Event bus for domain events
@@ -20,6 +20,7 @@ pub mod header;
 pub mod jarvis;
 pub mod modals;
 pub mod navigation;
+pub mod notifications;
 pub mod sidebar;
 pub mod status;
 pub mod thread;
@@ -45,6 +46,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     calls::wire(window, ui_ctx);
     jarvis::wire_jarvis_panel(window, ui_ctx);
     status::wire(window, ui_ctx);
+    notifications::wire(window, ui_ctx);
 
     // Initialize inline GIF animation system
     crate::bin_ui::gif_state::init_inline_animations(window.as_weak());

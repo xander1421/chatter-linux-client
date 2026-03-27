@@ -10,7 +10,7 @@ use rand::RngCore;
 
 use crate::proto::content_v1::{
     AttachmentPointer, Content, DataMessage, Delete, DeleteForMeSync, EditMessage,
-    PinMessage, Reaction, ReceiptMessage, TypingMessage, Quote,
+    PinMessage, Reaction, ReceiptMessage, SavedMessageSync, TypingMessage, Quote,
     content, typing_message, receipt_message, quote,
 };
 use crate::util::time::TimestampNanos;
@@ -334,6 +334,29 @@ pub fn build_delete_for_me_content(
             target_author_aci: target_author_aci.to_string(),
             target_sent_timestamp,
             timestamp: now,
+        })),
+        ..Default::default()
+    }
+}
+
+/// Create a Content proto for saved message sync (Note to Self multi-device).
+///
+/// Follows Signal's approach: the message content is sent as a sync message
+/// to the user's own devices. Signal Protocol device sessions provide encryption —
+/// no application-level encryption needed.
+pub fn build_saved_message_sync_content(
+    message_id: &str,
+    text: &str,
+    sent_at: u64,
+    attachment_ids: Vec<String>,
+) -> Content {
+    Content {
+        timestamp: sent_at,
+        content: Some(content::Content::SavedMessageSync(SavedMessageSync {
+            text: text.to_string(),
+            message_id: message_id.to_string(),
+            sent_at,
+            attachment_ids,
         })),
         ..Default::default()
     }

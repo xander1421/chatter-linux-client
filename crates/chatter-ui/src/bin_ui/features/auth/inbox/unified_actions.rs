@@ -7,20 +7,18 @@
 
 use slint::{Model, VecModel};
 
-use chatter_core::domain::ids::{ChannelId, UserId};
+use chatter_core::domain::ids::ChannelId;
 use chatter_core::state::{ActiveConversation, ChatState};
 
 use crate::bin_ui::features::auth::inbox::typing::{clear_typing_for_peer, set_typing_with_timer};
 use crate::bin_ui::features::auth::inbox::utils::update_reaction_summary;
 use crate::{MainWindow, MessageItemData};
 
-/// Flexible event identifier — events can come with different ID types.
+/// Event source identifier for typing/reaction routing.
 #[derive(Clone)]
 pub enum EventSource {
-    /// Server-managed channel/DM identified by ChannelId.
+    /// Channel or DM identified by ChannelId.
     Channel(ChannelId),
-    /// DM identified by peer UserId (legacy InboxEvent format).
-    Peer(UserId),
 }
 
 /// Check if an event source matches the currently active conversation.
@@ -29,9 +27,6 @@ fn is_active(chat_state: &ChatState, source: &EventSource) -> bool {
     match source {
         EventSource::Channel(channel_id) => {
             active.channel_id().map(|id| id == *channel_id).unwrap_or(false)
-        }
-        EventSource::Peer(peer_id) => {
-            matches!(active, ActiveConversation::MailboxDm { peer_id: active_peer, .. } | ActiveConversation::ServerDm { peer_id: active_peer, .. } if active_peer == *peer_id)
         }
     }
 }
@@ -46,7 +41,6 @@ fn typing_key(chat_state: &ChatState, source: &EventSource) -> String {
         ActiveConversation::Channel(id) => id.to_string(),
         ActiveConversation::None => match source {
             EventSource::Channel(id) => id.to_string(),
-            EventSource::Peer(id) => id.to_string(),
         },
     }
 }

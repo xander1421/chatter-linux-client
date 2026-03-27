@@ -65,6 +65,7 @@ export component ChatHeader inherits Rectangle {
     callback search-clicked();
     callback settings-clicked();
     callback pin-clicked();
+    callback members-clicked();
     callback voice-call-clicked();
     callback video-call-clicked();
     callback invite-clicked();
@@ -80,6 +81,9 @@ export component ChatHeader inherits Rectangle {
 
     // Show settings for regular channels and private groups, not for anon DMs
     property <bool> show-settings: !is-anon-dm || is-private-group;
+
+    // Show call buttons for everything except saved messages
+    property <bool> show-calls: channel-type != "saved";
 
     // Layout
     height: 56px;
@@ -270,8 +274,8 @@ export component ChatHeader inherits Rectangle {
                 spacing: Spacing.xs;
                 alignment: end;
 
-                // Call buttons group
-                HorizontalLayout {
+                // Call buttons group (hidden for saved messages)
+                if root.show-calls: HorizontalLayout {
                     spacing: Spacing.xs;
 
                     // Phone icon slightly smaller
@@ -302,8 +306,8 @@ export component ChatHeader inherits Rectangle {
                     }
                 }
 
-                // Divider between button groups
-                Rectangle {
+                // Divider between button groups (hidden when calls are hidden)
+                if root.show-calls: Rectangle {
                     width: 1px;
                     height: 20px;
                     background: Colors.text-muted.with-alpha(0.3);
@@ -317,6 +321,12 @@ export component ChatHeader inherits Rectangle {
                     if root.show-settings: IconButton {
                         icon: Icons.user-plus;
                         clicked => { root.invite-clicked(); }
+                    }
+
+                    // Members button (channels and private groups only)
+                    if root.show-member-count: IconButton {
+                        icon: Icons.users;
+                        clicked => { root.members-clicked(); }
                     }
 
                     // Pin button (shows when there are pinned messages)

@@ -55,13 +55,31 @@ impl Directories {
     /// Returns `SystemError::DirectoryInit` if XDG directories cannot be determined.
     /// Returns `SystemError::DirectoryCreate` if directories cannot be created.
     pub fn new() -> Result<Self, SystemError> {
-        let project_dirs = ProjectDirs::from("com", "chatter", APP_ID)
-            .ok_or(SystemError::DirectoryInit)?;
+        // On Android, XDG/HOME directories don't exist.
+        // Use the app's internal storage path instead.
+        #[cfg(target_os = "android")]
+        let (config_dir, data_dir, cache_dir, runtime_dir) = {
+            // Android apps write to /data/data/<package>/files/
+            let base = PathBuf::from("/data/data/com.chatter.client/files");
+            (
+                base.join("config"),
+                base.join("data"),
+                base.join("cache"),
+                None::<PathBuf>,
+            )
+        };
 
-        let config_dir = project_dirs.config_dir().to_path_buf();
-        let data_dir = project_dirs.data_dir().to_path_buf();
-        let cache_dir = project_dirs.cache_dir().to_path_buf();
-        let runtime_dir = project_dirs.runtime_dir().map(|p| p.to_path_buf());
+        #[cfg(not(target_os = "android"))]
+        let (config_dir, data_dir, cache_dir, runtime_dir) = {
+            let project_dirs = ProjectDirs::from("com", "chatter", APP_ID)
+                .ok_or(SystemError::DirectoryInit)?;
+            (
+                project_dirs.config_dir().to_path_buf(),
+                project_dirs.data_dir().to_path_buf(),
+                project_dirs.cache_dir().to_path_buf(),
+                project_dirs.runtime_dir().map(|p| p.to_path_buf()),
+            )
+        };
 
         // Create directories with secure permissions (0700)
         create_secure_dir(&config_dir)?;

@@ -164,52 +164,25 @@ pub(super) fn handle_anon_dm_profile_updated(
         }
     });
 
-    // Download avatar from URL asynchronously and update repo + UI
+    // Download avatar from URL via service (handles HTTP + DB storage)
     if let Some(url) = avatar_url.clone() {
         let anon_dm_service = ui_ctx.anon_dms().clone();
         let weak_for_avatar = weak.clone();
         let conv_id_for_avatar = conversation_id_str.clone();
 
         tokio::spawn(async move {
-            let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new());
+            let conv_id = match conv_id_for_avatar.parse::<chatter_core::domain::anon_dm::AnonDmId>() {
+                Ok(id) => id,
+                Err(_) => return,
+            };
 
-            let response = match client.get(&url).send().await {
-                Ok(r) if r.status().is_success() => r,
-                Ok(r) => {
-                    tracing::warn!("Failed to download avatar from {}: HTTP {}", url, r.status());
-                    return;
-                }
+            let bytes = match anon_dm_service.download_and_store_avatar(&conv_id, &url).await {
+                Ok(b) => b,
                 Err(e) => {
-                    tracing::warn!("Failed to download avatar from {}: {}", url, e);
+                    tracing::warn!("Failed to download avatar for anon DM {}: {}", conv_id_for_avatar, e);
                     return;
                 }
             };
-
-            let bytes = match response.bytes().await {
-                Ok(b) => b.to_vec(),
-                Err(e) => {
-                    tracing::warn!("Failed to read avatar bytes from {}: {}", url, e);
-                    return;
-                }
-            };
-
-            if bytes.is_empty() {
-                return;
-            }
-
-            // Store avatar bytes in the conversation record
-            let repo = anon_dm_service.anon_dm_repo();
-            if let Ok(Some(mut conv)) = repo.get_conversation(
-                &conv_id_for_avatar.parse().unwrap(),
-            ) {
-                conv.peer_avatar = Some(bytes.clone());
-                if let Err(e) = repo.update_conversation(&conv) {
-                    tracing::warn!("Failed to store avatar for anon DM {}: {}", conv_id_for_avatar, e);
-                }
-            }
 
             // Update avatar in sidebar UI
             let _ = slint::invoke_from_event_loop(move || {

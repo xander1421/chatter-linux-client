@@ -384,12 +384,12 @@ mod tests {
     #[tokio::test]
     async fn test_domain_sender_across_cloned_bus() {
         // This tests the exact pattern used in inbox provider:
-        // - event_bus is cloned from UIContext
+        // - event_bus is cloned from CoreServices
         // - domain_sender() is called on the clone
         // - subscribe_domain() is called on another clone
         let bus1 = EventBus::new();
 
-        // Clone like UIContext.event_bus.clone()
+        // Clone like CoreServices.event_bus.clone()
         let bus2 = bus1.clone();
 
         // Handler subscribes on one clone

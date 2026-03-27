@@ -66,12 +66,11 @@ impl AnonContentService for DmContentBridge<'_> {
             .map_err(|e| e.to_string())
     }
 
-    fn message_received_event(&self, id: AnonDmId, sender_id: UserId, message_id: String, inner_content: Content, sent_at: u64) -> DomainEvent {
+    fn message_received_event(&self, id: AnonDmId, sender_id: UserId, message_id: String, _inner_content: Content, sent_at: u64) -> DomainEvent {
         DomainEvent::AnonDmMessageReceived {
             conversation_id: id,
             sender_id,
             message_id: crate::domain::anon_dm::AnonDmMessageId::from_string(message_id),
-            inner_content,
             sent_at,
         }
     }

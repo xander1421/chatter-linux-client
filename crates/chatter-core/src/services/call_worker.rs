@@ -120,6 +120,12 @@ enum CallCommand {
     Reconnect {
         response: oneshot::Sender<Result<(), CallError>>,
     },
+    /// Rotate the encryption key (for member-leave key rotation).
+    /// Replaces the current key entirely with a new random key.
+    RotateKey {
+        new_key: [u8; 32],
+        response: oneshot::Sender<Result<u32, CallError>>,
+    },
     /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
     ConnectWithToken {
         access_token: String,
@@ -418,6 +424,18 @@ impl CallWorkerHandle {
         rx.await.ok().flatten()
     }
 
+    /// Rotate the encryption key after a member leaves.
+    ///
+    /// Replaces the current key with a new random key (not derived from the old one),
+    /// so the departed member cannot decrypt future frames. Returns the new epoch.
+    pub async fn rotate_key(&self, new_key: [u8; 32]) -> Result<u32, CallError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::RotateKey { new_key, response: tx })
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await.map_err(|_| CallError::WorkerShutdown)?
+    }
+
     /// Set encryption key externally (e.g., from CallKeyState ratchet).
     ///
     /// Use this when managing keys via the Signal-based CallKeyState.
@@ -685,6 +703,26 @@ fn run_call_worker(
 
                 CallCommand::IsScreenSharing { response } => {
                     let _ = response.send(room_manager.is_screen_sharing());
+                }
+
+                CallCommand::RotateKey { new_key, response } => {
+                    let result = {
+                        let mut call_guard = active_call.write();
+                        if let Some(ref mut state) = *call_guard {
+                            state.key_state.reset(new_key);
+                            let epoch = state.key_state.epoch();
+                            tracing::info!(epoch, "Call key rotated after member departure");
+                            Ok(epoch)
+                        } else {
+                            Err(CallError::NotInCall)
+                        }
+                    };
+
+                    if result.is_ok() {
+                        room_manager.set_encryption_key(new_key.to_vec());
+                    }
+
+                    let _ = response.send(result);
                 }
 
                 CallCommand::RatchetKey { response } => {

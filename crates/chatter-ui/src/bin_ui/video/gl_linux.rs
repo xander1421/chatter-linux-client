@@ -577,10 +577,35 @@ pub fn start_gl_video(data: Vec<u8>) -> Option<f64> {
 
                     if name.starts_with("video/") {
                         if let Some(pipeline) = pipeline_weak.upgrade() {
-                            // Add GL elements: glupload -> glcolorconvert -> appsink
-                            // This explicit chain fixes YUV->RGBA conversion for AVI/MPEG4 videos
+                            // Add queue + videoconvert before GL elements.
+                            // videoconvert is CRITICAL: AVI codecs (MPEG-4 Part 2, DivX, etc.)
+                            // often decode to formats like YV12/BGR that glupload can't accept
+                            // directly, while MKV's H.264 decodes to NV12/I420 which glupload
+                            // handles natively. videoconvert bridges the gap for all formats.
+                            // queue decouples the decoder thread from the GL sink thread.
+                            let queue = match gst::ElementFactory::make("queue")
+                                .property("max-size-buffers", 10u32)
+                                .property("max-size-time", 500_000_000u64)
+                                .build()
+                            {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    tracing::error!("GL video: failed to create video queue: {}", e);
+                                    return;
+                                }
+                            };
+                            let videoconvert = match gst::ElementFactory::make("videoconvert").build() {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    tracing::error!("GL video: failed to create videoconvert: {}", e);
+                                    return;
+                                }
+                            };
+
                             let appsink_element: &gst::Element = appsink_clone.upcast_ref();
                             let elements: &[&gst::Element] = &[
+                                &queue,
+                                &videoconvert,
                                 &glupload,
                                 &glcolorconvert,
                                 appsink_element,
@@ -601,14 +626,14 @@ pub fn start_gl_video(data: Vec<u8>) -> Option<f64> {
                                 e.sync_state_with_parent().ok();
                             }
 
-                            // Link decodebin output to glupload input
-                            if let Some(sink_pad) = glupload.static_pad("sink") {
+                            // Link decodebin output to queue input
+                            if let Some(sink_pad) = queue.static_pad("sink") {
                                 if let Err(e) = src_pad.link(&sink_pad) {
-                                    tracing::error!("GL video: failed to link decodebin to glupload: {:?}", e);
+                                    tracing::error!("GL video: failed to link decodebin to queue: {:?}", e);
                                     return;
                                 }
                                 video_linked_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-                                tracing::info!("GL video pipeline linked: decodebin -> glupload -> glcolorconvert -> appsink");
+                                tracing::info!("GL video pipeline linked: decodebin -> queue -> videoconvert -> glupload -> glcolorconvert -> appsink");
                             }
                         }
                     } else if name.starts_with("audio/") {
@@ -731,8 +756,12 @@ pub fn start_gl_video(data: Vec<u8>) -> Option<f64> {
                             }
                         }
                     }
+                    // Drop handled GL context messages
+                    return gst::BusSyncReply::Drop;
                 }
-                gst::BusSyncReply::Drop
+                // Pass through all other messages (errors, warnings, state changes)
+                // so the error-checking loop can see them
+                gst::BusSyncReply::Pass
             });
         }
 

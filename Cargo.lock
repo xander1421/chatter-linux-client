@@ -272,20 +272,21 @@ dependencies = [
 
 [[package]]
 name = "android-activity"
-version = "0.6.0"
-source = "git+https://github.com/rust-mobile/android-activity?branch=main#43de2770b91b1b8ff870f00551f89f04062216cc"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f2a1bb052857d5dd49572219344a7332b31b76405648eabac5bc68978251bcd"
 dependencies = [
  "android-properties",
  "bitflags 2.11.0",
  "cc",
- "jni 0.22.3",
+ "jni 0.22.4",
  "libc",
  "log",
  "ndk 0.9.0",
  "ndk-context",
  "ndk-sys 0.6.0+11769913",
  "num_enum",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1721,6 +1722,7 @@ dependencies = [
  "hpke",
  "http 1.4.0",
  "image",
+ "jni 0.21.1",
  "keyring",
  "ksni",
  "lazy_static",
@@ -1734,6 +1736,7 @@ dependencies = [
  "mistralrs",
  "mockall",
  "muda",
+ "ndk-context",
  "notify-rust",
  "once_cell",
  "open",
@@ -1783,7 +1786,7 @@ dependencies = [
 name = "chatter-ui"
 version = "0.1.0"
 dependencies = [
- "android-activity 0.6.0",
+ "android-activity 0.6.1",
  "arboard",
  "base64 0.22.1",
  "chatter-core",
@@ -5591,7 +5594,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e96c2ccc34adf9194dade4093f1a191a241d33d8da06765c15cf67e0d28bbcc9"
 dependencies = [
  "android-activity 0.5.2",
- "android-activity 0.6.0",
+ "android-activity 0.6.1",
  "android-build",
  "i-slint-core",
  "i-slint-renderer-skia",
@@ -6321,9 +6324,9 @@ dependencies = [
 
 [[package]]
 name = "jni"
-version = "0.22.3"
+version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "295dc9997acda1562fdf8d299f56063c936443b60f078e63a5d8d3c34ef2642b"
+checksum = "5efd9a482cf3a427f00d6b35f14332adc7902ce91efb778580e180ff90fa3498"
 dependencies = [
  "cfg-if",
  "combine",
@@ -6338,9 +6341,9 @@ dependencies = [
 
 [[package]]
 name = "jni-macros"
-version = "0.22.2"
+version = "0.22.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c3d1da60c95c98847b26b9d45f4360fee718b31de746df016d9cd6de916a7ef"
+checksum = "a00109accc170f0bdb141fed3e393c565b6f5e072365c3bd58f5b062591560a3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -14334,7 +14337,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d"
 dependencies = [
  "ahash",
- "android-activity 0.6.0",
+ "android-activity 0.6.1",
  "atomic-waker",
  "bitflags 2.11.0",
  "block2 0.5.1",

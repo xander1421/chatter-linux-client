@@ -7,12 +7,41 @@ use slint::{Model, Weak};
 use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
-/// Update unread count badge in sidebar.
+/// Update unread count badge in sidebar (DM + channel models).
 pub(super) fn update_unread_count(window: &MainWindow, channel_id: &str, count: u32) {
-    // This would update the sidebar model
-    // Implementation depends on how sidebar models are structured
-    tracing::trace!(channel_id, count, "Updating unread count badge");
-    let _ = (window, channel_id, count); // Suppress unused warnings for now
+    let count_i32 = count as i32;
+
+    // Try DM sidebar first (match by channel_id field)
+    let dms = window.get_dm_conversations();
+    for i in 0..dms.row_count() {
+        if let Some(dm) = dms.row_data(i) {
+            if dm.channel_id.as_str() == channel_id {
+                let mut updated = dm.clone();
+                updated.unread_count = count_i32;
+                if let Some(model) = dms.as_any().downcast_ref::<slint::VecModel<crate::DMListItemData>>() {
+                    model.set_row_data(i, updated);
+                }
+                return;
+            }
+        }
+    }
+
+    // Try channel sidebar
+    let channels = window.get_channels();
+    for i in 0..channels.row_count() {
+        if let Some(ch) = channels.row_data(i) {
+            if ch.channel_id.as_str() == channel_id {
+                let mut updated = ch.clone();
+                updated.unread_count = count_i32;
+                if let Some(model) = channels.as_any().downcast_ref::<slint::VecModel<crate::ChannelListItemData>>() {
+                    model.set_row_data(i, updated);
+                }
+                return;
+            }
+        }
+    }
+
+    tracing::trace!(channel_id, count, "Unread count: no matching sidebar entry");
 }
 
 /// Handle pin/unpin domain events for UI update.

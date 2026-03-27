@@ -29,11 +29,22 @@ impl IdentityKeyManager {
     /// This should only be called once during device registration.
     /// The registration ID is a 14-bit value (1-16383) per Signal spec.
     ///
+    /// Returns an error if an identity already exists (to prevent
+    /// accidentally breaking all existing sessions).
+    ///
     /// Returns the registration ID and identity key pair.
     pub fn generate_identity<R: CryptoRng + Rng>(
         &self,
         rng: &mut R,
     ) -> Result<(u32, IdentityKeyPair), CryptoError> {
+        // Guard: never overwrite an existing identity — doing so would
+        // silently break every established session.
+        if self.has_identity()? {
+            return Err(CryptoError::Protocol(
+                "identity already exists — cannot overwrite".into(),
+            ));
+        }
+
         // Generate 14-bit registration ID (Signal spec: 1-16383, avoid 0)
         let registration_id = (rng.random::<u32>() % 0x3FFF) + 1;
 

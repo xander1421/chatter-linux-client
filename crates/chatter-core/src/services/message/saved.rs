@@ -1,12 +1,19 @@
 //! Saved messages (Note to Self) operations.
 //!
-//! Send and retrieve saved messages, with multi-device sync support.
+//! Follows Signal's approach:
+//! - Store locally on the sending device
+//! - If multi-device: send SavedMessageSync to other devices via Signal Protocol
+//! - No application-level encryption (Signal Protocol device sessions provide it)
+//! - No profile key usage (profile key is shared with friends — wrong threat model)
+
+use prost::Message as ProstMessage;
 
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use crate::domain::message::Message;
-use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::message_client::MessageClient;
+use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::current_user::CurrentUserProvider;
+use crate::services::gateway::build_saved_message_sync_content;
 use crate::storage::repositories::settings_repo::keys;
 use crate::util::time::TimestampNanos;
 
@@ -16,17 +23,16 @@ use super::{MessageError, MessageService};
 impl MessageService {
     /// Send a message to the SavedMessages channel (Note to Self).
     ///
-    /// Follows Signal's approach:
-    /// - If only one device (this device): store locally only
-    /// - If multiple devices: send encrypted sync message to all devices
-    pub async fn send_saved_message(
+    /// Follows Signal Desktop's approach:
+    /// - Always store locally first
+    /// - If multi-device: build SavedMessageSync Content proto, encrypt via
+    ///   Signal Protocol for each linked device, deliver via device queue
+    /// - Single device: local-only (nothing hits the network)
+    pub async fn save_message(
         &self,
-        auth_client: &mut AuthClient,
-        _message_client: &mut MessageClient, // Reserved for multi-device sync
         text: &str,
         attachment_ids: Vec<AttachmentId>,
     ) -> Result<Message, MessageError> {
-        // Check logged in
         let sender_id = self.settings_repo.current_user_id()?;
 
         // Validate content
@@ -37,80 +43,165 @@ impl MessageService {
             ));
         }
 
-        // Get current device ID
-        let current_device_id: u32 = self
-            .settings_repo
-            .get(keys::CURRENT_DEVICE_ID)
-            .map_err(MessageError::Storage)?
-            .unwrap_or(1);
-
-        // List all our devices to determine if we need to sync
-        let devices = auth_client.list_devices().await?;
-        let device_count = devices.devices.len();
-
-        tracing::debug!(
-            "SavedMessages: device_count={}, current_device_id={}",
-            device_count,
-            current_device_id
-        );
-
-        // Create the message locally first
+        // Create and store the message locally
         let channel_id = ChannelId::from(sender_id); // SavedMessages channel_id = user_id
-
-        // Generate timestamp ONCE - used everywhere
         let sent_at = TimestampNanos::now().as_u64();
         let mut message = Message::new_text(channel_id, Some(sender_id), trimmed_text.to_string(), sent_at);
-        message.attachments = attachment_ids;
-
-        // Store locally
+        message.attachments = attachment_ids.clone();
         self.message_repo.insert(&message)?;
 
-        if device_count <= 1 {
-            // Only this device - we're done (local-only storage)
-            tracing::info!(
-                "SavedMessages: stored locally only (single device), message_id={}",
-                message.id
-            );
-        } else {
-            // Multiple devices - need to sync to other devices
-            // Signal uses SentTranscript sync messages for this
-            //
-            // TODO: Implement proper multi-device sync:
-            // 1. Create SentTranscript proto message
-            // 2. Encrypt for each linked device using Signal Protocol
-            // 3. Send via device-specific queue (requires server support)
-            //
-            // For now, message is stored locally only. Other devices won't see it
-            // until proper sync is implemented.
-            let other_device_ids: Vec<u32> = devices
-                .devices
-                .iter()
-                .filter(|d| d.device_id != current_device_id)
-                .map(|d| d.device_id)
-                .collect();
-
+        // Sync to other devices (non-blocking — local message is already stored)
+        if let Err(e) = self.sync_saved_message_to_devices(
+            sender_id,
+            &message.id,
+            trimmed_text,
+            sent_at,
+            &attachment_ids,
+        ).await {
+            // Sync failure is non-fatal: message is stored locally, other devices
+            // will miss it until next full sync. Log and continue.
             tracing::warn!(
-                "SavedMessages: multi-device sync not yet implemented. \
-                 Message stored locally only. Other devices {:?} won't see message_id={}",
-                other_device_ids,
-                message.id
+                message_id = %message.id,
+                error = %e,
+                "SavedMessages: multi-device sync failed (message stored locally)"
             );
         }
 
         Ok(message)
     }
 
-    /// Send a message to SavedMessages (simplified API - no client params).
-    pub async fn save_message(
+    /// Sync a saved message to the user's other linked devices.
+    ///
+    /// Signal Protocol device sessions provide forward-secret encryption.
+    /// Skips the current device (we already stored locally).
+    async fn sync_saved_message_to_devices(
         &self,
+        sender_id: UserId,
+        message_id: &MessageId,
         text: &str,
-        attachment_ids: Vec<AttachmentId>,
-    ) -> Result<Message, MessageError> {
+        sent_at: u64,
+        attachment_ids: &[AttachmentId],
+    ) -> Result<(), MessageError> {
         let mut auth_client = self.auth_client();
-        let mut message_client = self.message_client();
 
-        self.send_saved_message(&mut auth_client, &mut message_client, text, attachment_ids)
+        // Check how many devices we have
+        let current_device_id: u32 = self.settings_repo
+            .get(keys::CURRENT_DEVICE_ID)
+            .map_err(MessageError::Storage)?
+            .unwrap_or(1);
+
+        let devices = auth_client.list_devices().await?;
+        let other_devices: Vec<u32> = devices.devices.iter()
+            .filter(|d| d.device_id != current_device_id)
+            .map(|d| d.device_id)
+            .collect();
+
+        if other_devices.is_empty() {
+            tracing::debug!(message_id = %message_id, "SavedMessages: single device, no sync needed");
+            return Ok(());
+        }
+
+        // Build SavedMessageSync Content proto
+        let att_id_strings: Vec<String> = attachment_ids.iter()
+            .map(|id| id.to_string())
+            .collect();
+        let content = build_saved_message_sync_content(
+            &message_id.to_string(),
+            text,
+            sent_at,
+            att_id_strings,
+        );
+        let plaintext = content.encode_to_vec();
+
+        // Encrypt with Signal Protocol for all our own devices (forward secrecy)
+        let sender_id_str = sender_id.to_string();
+        let device_ciphertexts = self.signal_service
+            .encrypt_message_all_devices(&mut auth_client, &sender_id_str, &plaintext)
             .await
+            .map_err(|e| MessageError::EncryptionFailed(format!("SavedMessages sync encrypt: {}", e)))?;
+
+        // Send to each device via device message queue
+        let mut message_client = self.message_client();
+        let now = TimestampNanos::now().as_u64();
+
+        for (device_id, ciphertext) in &device_ciphertexts {
+            if *device_id == current_device_id {
+                continue; // Skip ourselves
+            }
+
+            let sealed = SealedSenderMessage {
+                sealed_body: ciphertext.clone(),
+                server_key_id: 0,
+                timestamp: now,
+            };
+
+            match message_client.send_sealed_message(&sender_id_str, *device_id, sealed).await {
+                Ok(_) => {
+                    tracing::debug!(
+                        device_id,
+                        message_id = %message_id,
+                        "SavedMessages: synced to device"
+                    );
+                }
+                Err(e) => {
+                    // Individual device failure is non-fatal
+                    tracing::warn!(
+                        device_id,
+                        message_id = %message_id,
+                        error = %e,
+                        "SavedMessages: failed to sync to device"
+                    );
+                }
+            }
+        }
+
+        tracing::info!(
+            message_id = %message_id,
+            synced_devices = device_ciphertexts.len().saturating_sub(1),
+            "SavedMessages: multi-device sync complete"
+        );
+
+        Ok(())
+    }
+
+    /// Store a saved message received via sync from another device.
+    ///
+    /// Called by the inbox handler when a SavedMessageSync is received.
+    pub fn store_synced_saved_message(
+        &self,
+        message_id: &str,
+        text: &str,
+        sent_at: u64,
+        attachment_ids: Vec<String>,
+    ) -> Result<Message, MessageError> {
+        let sender_id = self.settings_repo.current_user_id()?;
+        let channel_id = ChannelId::from(sender_id);
+
+        let parsed_id: MessageId = message_id.parse()
+            .map_err(|_| MessageError::InvalidContent(format!("invalid message ID: {}", message_id)))?;
+
+        // Check for duplicate (idempotent)
+        if self.message_repo.get(&parsed_id)?.is_some() {
+            tracing::debug!(message_id, "SavedMessages sync: message already exists, skipping");
+            return Ok(self.message_repo.get(&parsed_id)?.unwrap());
+        }
+
+        let att_ids: Vec<AttachmentId> = attachment_ids.iter()
+            .map(|s| AttachmentId::from_cdn_key(s))
+            .collect();
+
+        let mut message = Message::new_text(channel_id, Some(sender_id), text.to_string(), sent_at);
+        message.id = parsed_id;
+        message.attachments = att_ids;
+
+        self.message_repo.insert(&message)?;
+
+        tracing::info!(
+            message_id,
+            "SavedMessages: stored synced message from another device"
+        );
+
+        Ok(message)
     }
 
     /// Get messages from a channel.

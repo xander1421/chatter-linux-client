@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use chatter_core::app::UIContext;
+use chatter_core::app::CoreServices;
 use chatter_core::network::grpc::GifClient;
 use chatter_core::mailbox::blind_signature::UnblindedToken;
 

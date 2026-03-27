@@ -418,6 +418,14 @@ pub enum DomainEvent {
         /// When the sync was issued (ms since epoch).
         timestamp: u64,
     },
+    /// Saved message synced from another device (Note to Self).
+    ///
+    /// Emitted when a SavedMessageSync is received and stored locally.
+    /// Treated like MessageReceived — added to message_state for UI display.
+    SavedMessageSynced {
+        /// The full message (already stored in DB).
+        message: crate::domain::message::Message,
+    },
     /// Call hangup received from peer (remote call ended).
     ///
     /// This event signals that the peer has ended the call and we should
@@ -588,15 +596,16 @@ pub enum DomainEvent {
     },
 
     /// Message received in an anonymous DM conversation.
+    ///
+    /// The message is already stored in the DB by the time this fires.
+    /// Consumers should fetch it via `anon_dms().get_message(&message_id)`.
     AnonDmMessageReceived {
         /// The conversation ID.
         conversation_id: AnonDmId,
         /// Sender of the message.
         sender_id: UserId,
-        /// The stored message ID.
+        /// The stored message ID (fetch from DB for display).
         message_id: AnonDmMessageId,
-        /// The inner message content.
-        inner_content: Content,
         /// The sender's timestamp (nanoseconds) for ordering.
         sent_at: u64,
     },
@@ -938,6 +947,7 @@ impl DomainEvent {
             DomainEvent::SenderKeyReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::GroupMailboxReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::DeleteForMeSync { conversation_id, .. } => Some(*conversation_id),
+            DomainEvent::SavedMessageSynced { message } => Some(message.channel_id),
             DomainEvent::CallHangupReceived { .. } => None, // Calls don't have a channel context here
             DomainEvent::CallKeyAnswerReceived { .. } => None, // Call answer doesn't have channel context
             DomainEvent::GroupCallKeyReceived { channel_id, .. } => Some(*channel_id),

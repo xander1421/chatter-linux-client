@@ -383,12 +383,12 @@ pub struct OutgoingServices<'a> {
 }
 
 impl<'a> OutgoingServices<'a> {
-    /// Build from UIContext — fills all service references, eliminating
+    /// Build from CoreServices — fills all service references, eliminating
     /// the per-branch Some/None assembly in send_message.rs.
     ///
     /// `group_fanout` is optional because it's a post-boot service.
     pub fn from_ctx(
-        ctx: &'a crate::app::UIContext,
+        ctx: &'a crate::app::CoreServices,
         group_fanout: Option<&'a GroupFanout>,
     ) -> Self {
         Self {
@@ -650,7 +650,7 @@ async fn route_anon_group(
 }
 
 // =============================================================================
-// Send options + upload helpers (shared by ChatterClient and UIContext)
+// Send options + upload helpers (shared by ChatterClient and CoreServices)
 // =============================================================================
 
 /// Options for [`send_message()`].

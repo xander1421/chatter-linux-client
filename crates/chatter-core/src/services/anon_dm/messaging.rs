@@ -3,7 +3,7 @@ use crate::domain::UserId;
 use crate::proto::content_v1::{self, AnonDmMessage, AnonDmPresence, AnonDmProfileUpdate, Content, anon_dm_presence};
 use crate::services::gateway::builders::{
     build_typing_content, build_reaction_content, build_read_receipt_content,
-    build_delete_for_everyone_content, build_pin_content, build_edit_content,
+    build_delivery_receipt_content, build_delete_for_everyone_content, build_pin_content, build_edit_content,
     build_data_message_content_with_quote,
 };
 use crate::util::time::TimestampNanos;
@@ -139,6 +139,21 @@ impl AnonDmService {
         };
         self.anon_dm_repo.insert_message(&message)?;
         let message_id = message.id;
+
+        // Emit DomainEvent so the UI displays the message immediately (optimistic insert).
+        // Without this, the sender's own message would only appear when echoed back.
+        tracing::info!(
+            conversation_id = %conversation_id,
+            message_id = %message_id,
+            attachment_count = attachment_ids.len(),
+            "[ANON_DM] Emitting sender-side AnonDmMessageReceived (optimistic)"
+        );
+        self.event_bus.emit_domain(crate::inbox::DomainEvent::AnonDmMessageReceived {
+            conversation_id: *conversation_id,
+            sender_id: current_user,
+            message_id: message_id.clone(),
+            sent_at,
+        });
 
         // NDSS '21 decorrelation: if this message carries attachment pointers,
         // delay the anonymous mailbox send so the server can't trivially
@@ -483,6 +498,29 @@ impl AnonDmService {
             timestamp_count = message_timestamps.len(),
             "[ANON_DM_SEND_RECEIPT] Sending read receipt to peer"
         );
+
+        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content).await
+    }
+
+    /// Send a delivery receipt to the peer.
+    pub async fn send_delivery_receipt(
+        &self,
+        conversation_id: &AnonDmId,
+        message_timestamps: Vec<u64>,
+    ) -> Result<(), AnonDmError> {
+        if message_timestamps.is_empty() { return Ok(()); }
+
+        if self.check_conversation_not_blocked(conversation_id).is_err() {
+            return Ok(());
+        }
+
+        let dm = match self.anon_dm_repo.get_conversation(conversation_id)? {
+            Some(dm) if dm.is_ready() => dm,
+            _ => return Ok(()),
+        };
+
+        let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
+        let content = build_delivery_receipt_content(message_timestamps);
 
         self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content).await
     }

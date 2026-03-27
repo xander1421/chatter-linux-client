@@ -53,6 +53,7 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::AnonCallHangup(_)) => "AnonCallHangup",
         Some(content::Content::AnonDmPresence(_)) => "AnonDmPresence",
         Some(content::Content::AnonDmProfileUpdate(_)) => "AnonDmProfileUpdate",
+        Some(content::Content::SavedMessageSync(_)) => "SavedMessageSync",
         None => "None",
     }
 }
@@ -149,6 +150,13 @@ pub enum DmContent {
         call_id: String,
         reason: CallHangupReason,
         timestamp: u64,
+    },
+    /// Saved message sync from another device (Note to Self).
+    SavedMessageSync {
+        message_id: String,
+        text: String,
+        sent_at: u64,
+        attachment_ids: Vec<String>,
     },
     // ========================================================================
     // Anonymous Group Messages (NDSS'21 style)

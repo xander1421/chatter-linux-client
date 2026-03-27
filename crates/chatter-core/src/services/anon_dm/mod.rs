@@ -124,6 +124,8 @@ pub struct AnonDmService {
     pub(crate) mailbox_manager: Arc<MailboxManager>,
     pub(crate) grpc_pool: Arc<GrpcClientPool>,
     pub(crate) token_manager: Arc<TokenManager>,
+    /// Event bus for emitting DomainEvents (sender-side message display).
+    pub(crate) event_bus: crate::events::EventBus,
 }
 
 impl AnonDmService {
@@ -136,6 +138,7 @@ impl AnonDmService {
         mailbox_manager: Arc<MailboxManager>,
         grpc_pool: Arc<GrpcClientPool>,
         token_manager: Arc<TokenManager>,
+        event_bus: crate::events::EventBus,
     ) -> Self {
         Self {
             settings_repo,
@@ -145,6 +148,7 @@ impl AnonDmService {
             mailbox_manager,
             grpc_pool,
             token_manager,
+            event_bus,
         }
     }
 
@@ -172,6 +176,46 @@ impl AnonDmService {
             .flatten()
     }
     
+    /// Download avatar from URL and store it in the conversation record.
+    ///
+    /// Returns the downloaded bytes on success (for UI display).
+    pub async fn download_and_store_avatar(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        url: &str,
+    ) -> Result<Vec<u8>, AnonDmError> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .map_err(|e| AnonDmError::MessageError(format!("HTTP client error: {}", e)))?;
+
+        let response = client.get(url).send().await
+            .map_err(|e| AnonDmError::MessageError(format!("Avatar download failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(AnonDmError::MessageError(
+                format!("Avatar download HTTP {}", response.status())
+            ));
+        }
+
+        let bytes = response.bytes().await
+            .map_err(|e| AnonDmError::MessageError(format!("Avatar read failed: {}", e)))?
+            .to_vec();
+
+        if bytes.is_empty() {
+            return Err(AnonDmError::MessageError("Empty avatar response".into()));
+        }
+
+        // Persist to DB
+        if let Ok(Some(mut conv)) = self.anon_dm_repo.get_conversation(conversation_id) {
+            conv.peer_avatar = Some(bytes.clone());
+            self.anon_dm_repo.update_conversation(&conv)
+                .map_err(|e| AnonDmError::MessageError(format!("Avatar store failed: {}", e)))?;
+        }
+
+        Ok(bytes)
+    }
+
     /// Get an available call room token.
     pub fn get_available_call_room_token(&self) -> Result<Option<crate::mailbox::CallRoomToken>, AnonDmError> {
         self.token_manager

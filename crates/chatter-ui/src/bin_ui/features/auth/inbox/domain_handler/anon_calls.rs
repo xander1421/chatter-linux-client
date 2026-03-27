@@ -13,46 +13,17 @@ use crate::MainWindow;
 /// Handle anonymous call offer received.
 pub(super) fn handle_anon_call_offer(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
+    _ui_ctx: &Arc<ChatterClient>,
     conversation_id: AnonDmId,
     sender_id: UserId,
-    call_room_id: Vec<u8>,
+    _call_room_id: Vec<u8>,
     room_name: String,
     call_type: i32,
     caller_display_name: String,
-    call_encryption_key: Vec<u8>,
+    _call_encryption_key: Vec<u8>,
 ) {
-    // Store pending call state for later use when accepting/declining
-    // We'll get a real token when accepting
-    let dummy_token = chatter_core::mailbox::CallRoomToken {
-        id: String::new(),
-        public_key: vec![],
-        private_key: vec![],
-        signature: vec![],
-        randomizer: None,
-    };
-
-    // Convert call_room_id from Vec<u8> to [u8; 16]
-    let mut call_room_id_array = [0u8; 16];
-    if call_room_id.len() >= 16 {
-        call_room_id_array.copy_from_slice(&call_room_id[..16]);
-    } else {
-        call_room_id_array[..call_room_id.len()].copy_from_slice(&call_room_id);
-    }
-
-    let pending = chatter_core::services::anon_dm::PendingAnonCall {
-        call_room_id: call_room_id_array,
-        room_name: room_name.clone(),
-        conversation_id,
-        token: dummy_token, // Will be replaced when accepting
-        is_video_call: call_type == 2,
-        is_outgoing: false,  // This is an incoming call
-        display_name: caller_display_name.clone(),
-        encryption_key: call_encryption_key,
-        sender_id: Some(sender_id),
-        started_at: None, // Will be set when call is accepted
-    };
-    ui_ctx.anon_dms().store_pending_anon_call(room_name.clone(), pending);
+    // Pending call state is stored by core EventHandlers on AnonCallOfferReceived.
+    // UI only shows the incoming call modal.
 
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -238,49 +209,17 @@ pub(super) fn handle_anon_call_hangup(
 /// Handle anonymous group call offer received.
 pub(super) fn handle_anon_group_call_offer(
     window: &Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
+    _ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
     sender_id: UserId,
-    call_room_id: Vec<u8>,
+    _call_room_id: Vec<u8>,
     room_name: String,
     call_type: i32,
     caller_display_name: String,
-    call_encryption_key: Vec<u8>,
+    _call_encryption_key: Vec<u8>,
 ) {
-    // Store pending call state
-    let dummy_token = chatter_core::mailbox::CallRoomToken {
-        id: String::new(),
-        public_key: vec![],
-        private_key: vec![],
-        signature: vec![],
-        randomizer: None,
-    };
-
-    let mut call_room_id_array = [0u8; 16];
-    if call_room_id.len() >= 16 {
-        call_room_id_array.copy_from_slice(&call_room_id[..16]);
-    } else {
-        call_room_id_array[..call_room_id.len()].copy_from_slice(&call_room_id);
-    }
-
-    // Store as pending anon call (reuse the DM pending call infrastructure)
-    let conversation_id = chatter_core::domain::anon_dm::AnonDmId::try_from_slice(
-        group_id.as_bytes()
-    ).expect("AnonGroupId is 16 bytes");
-
-    let pending = chatter_core::services::anon_dm::PendingAnonCall {
-        call_room_id: call_room_id_array,
-        room_name: room_name.clone(),
-        conversation_id,
-        token: dummy_token,
-        is_video_call: call_type == 2,
-        is_outgoing: false,
-        display_name: caller_display_name.clone(),
-        encryption_key: call_encryption_key,
-        sender_id: Some(sender_id),
-        started_at: None,
-    };
-    ui_ctx.anon_dms().store_pending_anon_call(room_name.clone(), pending);
+    // Pending call state is stored by core EventHandlers on AnonGroupCallOfferReceived.
+    // UI only shows the incoming call modal.
 
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {

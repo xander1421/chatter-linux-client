@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use slint::{Model, VecModel};
 
+use chatter_core::domain::Attachment;
 use chatter_core::domain::ids::AttachmentId;
-use chatter_core::proto::content_v1::AttachmentPointer;
 use chatter_core::services::attachment::AttachmentService;
 
 use crate::MainWindow;
@@ -16,27 +16,30 @@ use crate::MainWindow;
 /// Download attachments and handle GIF/image processing.
 ///
 /// This is the single entry point for all channel types.
-/// Handles:
-/// - Downloading encrypted content to filesystem
-/// - GIF: decrypts once, decodes progressively, registers animation
-/// - Images: generates thumbnails if missing
+/// Takes resolved `Attachment` domain objects (not proto types).
 pub async fn download_attachments(
-    pointers: Vec<AttachmentPointer>,
+    attachments: &[Attachment],
     attachment_service: Arc<AttachmentService>,
     weak_window: slint::Weak<MainWindow>,
     conversation_id: String,
 ) {
-    for pointer in pointers {
-        let cdn_key = pointer.cdn_key.clone();
-        let att_id = AttachmentId::from_cdn_key(&cdn_key);
-        let is_image = pointer.content_type.starts_with("image/");
-        let is_gif = pointer.content_type == "image/gif"
-            || pointer.file_name.to_lowercase().ends_with(".gif");
+    for att in attachments {
+        let cdn_key = match &att.remote_url {
+            Some(url) if !url.is_empty() => url.clone(),
+            _ => continue,
+        };
+        let att_id = att.id;
+        let mime = &att.metadata.mime_type;
+        let filename = &att.metadata.name;
+        let is_image = mime.starts_with("image/");
+        let is_gif = mime == "image/gif"
+            || filename.to_lowercase().ends_with(".gif");
+        let has_thumbnail = att.metadata.thumbnail.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
 
         tracing::info!(
             cdn_key = %cdn_key,
-            filename = %pointer.file_name,
-            content_type = %pointer.content_type,
+            filename = %filename,
+            content_type = %mime,
             conversation_id = %conversation_id,
             "Auto-downloading attachment"
         );
@@ -78,7 +81,7 @@ pub async fn download_attachments(
                         &weak_window,
                         &conversation_id,
                     );
-                } else if is_image && pointer.thumbnail.is_empty() {
+                } else if is_image && !has_thumbnail {
                     handle_image(
                         &attachment_service,
                         &att_id,

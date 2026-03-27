@@ -41,7 +41,7 @@ pub struct Content {
     /// Padding is random bytes, stripped after decryption.
     #[prost(bytes="vec", tag="200")]
     pub padding: ::prost::alloc::vec::Vec<u8>,
-    #[prost(oneof="content::Content", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32")]
+    #[prost(oneof="content::Content", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33")]
     pub content: ::core::option::Option<content::Content>,
 }
 /// Nested message and enum types in `Content`.
@@ -135,6 +135,9 @@ pub mod content {
         AnonCallAnswer(super::AnonCallAnswer),
         #[prost(message, tag="32")]
         AnonCallHangup(super::AnonCallHangup),
+        /// Saved message sync (multi-device Note to Self)
+        #[prost(message, tag="33")]
+        SavedMessageSync(super::SavedMessageSync),
     }
 }
 // =============================================================================
@@ -584,6 +587,30 @@ pub struct DeleteForMeSync {
     /// When this sync was issued (nanoseconds since epoch)
     #[prost(fixed64, tag="4")]
     pub timestamp: u64,
+}
+// =============================================================================
+// SavedMessageSync: Sync saved messages (Note to Self) across devices
+// =============================================================================
+//
+// Follows Signal's approach: saved messages are sent as sync messages to
+// the user's own devices via Signal Protocol device sessions. No special
+// encryption key — Signal Protocol provides forward secrecy.
+
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SavedMessageSync {
+    /// Message text content
+    #[prost(string, tag="1")]
+    pub text: ::prost::alloc::string::String,
+    /// Message ID (UUID, same across all devices)
+    #[prost(string, tag="2")]
+    pub message_id: ::prost::alloc::string::String,
+    /// When the message was sent (nanoseconds since epoch)
+    #[prost(fixed64, tag="3")]
+    pub sent_at: u64,
+    /// Attachment IDs (CDN keys for pre-uploaded attachments)
+    #[prost(string, repeated, tag="4")]
+    pub attachment_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 // =============================================================================
 // Group Encryption Messages

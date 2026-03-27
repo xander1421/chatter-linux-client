@@ -93,6 +93,25 @@ pub struct EncryptedAttachment {
     pub plaintext_size: usize,
 }
 
+/// Result of streaming file-to-file encryption.
+///
+/// Contains the key material and digest needed to build an `AttachmentPointer`,
+/// without holding the ciphertext in memory.
+#[derive(Debug, ZeroizeOnDrop)]
+pub struct StreamingEncryptResult {
+    /// Combined encryption key: [AES key (32)] + [MAC key (32)].
+    pub key: [u8; KEY_SET_LENGTH],
+    /// SHA-256 digest of the complete ciphertext (IV + encrypted + HMAC).
+    #[zeroize(skip)]
+    pub digest: [u8; 32],
+    /// Total ciphertext size in bytes.
+    #[zeroize(skip)]
+    pub ciphertext_size: u64,
+    /// Original plaintext size in bytes.
+    #[zeroize(skip)]
+    pub plaintext_size: u64,
+}
+
 /// Attachment encryption service.
 ///
 /// Provides Signal-compatible encryption using AES-256-CBC + HMAC-SHA256.
@@ -387,6 +406,165 @@ impl AttachmentCrypto {
         Self::round_to_block_size(result)
     }
 
+    /// Encrypt a file to another file in a streaming fashion.
+    ///
+    /// Reads the input in 256KB chunks, encrypts with AES-256-CBC, and writes
+    /// the ciphertext (IV + encrypted + HMAC) to the output file. Memory usage
+    /// is O(CHUNK_SIZE) regardless of file size.
+    ///
+    /// The output format is identical to [`Self::encrypt`]: Signal-compatible
+    /// `IV (16) || AES-CBC(padded plaintext) || HMAC-SHA256 (32)`.
+    ///
+    /// This function is synchronous and should be called from `spawn_blocking`.
+    pub fn encrypt_file_to_file(
+        input_path: &std::path::Path,
+        output_path: &std::path::Path,
+    ) -> Result<StreamingEncryptResult, CryptoError> {
+        use std::io::{Read, Write, BufWriter};
+
+        const CHUNK_SIZE: usize = 256 * 1024;
+
+        // Get file size for padding calculation
+        let input_metadata = std::fs::metadata(input_path)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("read metadata: {}", e)))?;
+        let plaintext_size = input_metadata.len() as usize;
+        let padded_size = Self::padded_size(plaintext_size);
+
+        // Generate random key and IV
+        let mut key = [0u8; KEY_SET_LENGTH];
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+        let aes_key = &key[..AES_KEY_LENGTH];
+        let mac_key = &key[AES_KEY_LENGTH..];
+
+        let mut iv = [0u8; IV_LENGTH];
+        rand::RngCore::fill_bytes(&mut rand::rng(), &mut iv);
+
+        // Open files
+        let mut input = std::io::BufReader::new(
+            std::fs::File::open(input_path)
+                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("open input: {}", e)))?,
+        );
+        let mut output = BufWriter::new(
+            std::fs::File::create(output_path)
+                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("create output: {}", e)))?,
+        );
+
+        // Init crypto processors
+        let cipher = Cipher::aes_256_cbc();
+        let mut crypter = Crypter::new(cipher, Mode::Encrypt, aes_key, Some(&iv))
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init crypter: {}", e)))?;
+        crypter.pad(false); // We handle padding ourselves
+
+        let pkey = PKey::hmac(mac_key)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init hmac key: {}", e)))?;
+        let mut hmac_signer = Signer::new(MessageDigest::sha256(), &pkey)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init hmac: {}", e)))?;
+
+        let mut digest_hasher = Hasher::new(MessageDigest::sha256())
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init digest: {}", e)))?;
+
+        // Write IV
+        output.write_all(&iv)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write iv: {}", e)))?;
+        hmac_signer.update(&iv)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac iv: {}", e)))?;
+        digest_hasher.update(&iv)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest iv: {}", e)))?;
+
+        // Encrypt buffer: chunk + one AES block headroom
+        let mut encrypt_buf = vec![0u8; CHUNK_SIZE + cipher.block_size()];
+        let mut read_buf = vec![0u8; CHUNK_SIZE];
+        let mut bytes_fed: usize = 0; // total plaintext bytes fed to crypter (including padding)
+
+        // Read and encrypt file content in chunks
+        loop {
+            let n = input.read(&mut read_buf)
+                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("read: {}", e)))?;
+            if n == 0 {
+                break;
+            }
+
+            let count = crypter.update(&read_buf[..n], &mut encrypt_buf)
+                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("encrypt: {}", e)))?;
+
+            if count > 0 {
+                output.write_all(&encrypt_buf[..count])
+                    .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write: {}", e)))?;
+                hmac_signer.update(&encrypt_buf[..count])
+                    .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac: {}", e)))?;
+                digest_hasher.update(&encrypt_buf[..count])
+                    .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest: {}", e)))?;
+            }
+
+            bytes_fed += n;
+        }
+
+        // Encrypt zero-padding if needed (padded_size > bytes read from file).
+        // Write in chunks to avoid exceeding the encrypt_buf capacity.
+        if bytes_fed < padded_size {
+            let mut padding_remaining = padded_size - bytes_fed;
+            let zero_chunk = vec![0u8; CHUNK_SIZE.min(padding_remaining)];
+            while padding_remaining > 0 {
+                let chunk_len = CHUNK_SIZE.min(padding_remaining);
+                let count = crypter.update(&zero_chunk[..chunk_len], &mut encrypt_buf)
+                    .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("encrypt pad: {}", e)))?;
+                if count > 0 {
+                    output.write_all(&encrypt_buf[..count])
+                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write pad: {}", e)))?;
+                    hmac_signer.update(&encrypt_buf[..count])
+                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac pad: {}", e)))?;
+                    digest_hasher.update(&encrypt_buf[..count])
+                        .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest pad: {}", e)))?;
+                }
+                padding_remaining -= chunk_len;
+            }
+        }
+
+        // Finalize AES
+        let final_count = crypter.finalize(&mut encrypt_buf)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("finalize: {}", e)))?;
+        if final_count > 0 {
+            output.write_all(&encrypt_buf[..final_count])
+                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write final: {}", e)))?;
+            hmac_signer.update(&encrypt_buf[..final_count])
+                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac final: {}", e)))?;
+            digest_hasher.update(&encrypt_buf[..final_count])
+                .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest final: {}", e)))?;
+        }
+
+        // Finalize HMAC and write it
+        let hmac_result = hmac_signer.sign_to_vec()
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac finalize: {}", e)))?;
+        output.write_all(&hmac_result)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write hmac: {}", e)))?;
+
+        // Feed HMAC bytes into digest (digest covers IV + encrypted + HMAC)
+        digest_hasher.update(&hmac_result)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest hmac: {}", e)))?;
+
+        // Finalize digest
+        let digest_result = digest_hasher.finish()
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest finalize: {}", e)))?;
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&digest_result);
+
+        // Flush output
+        output.flush()
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("flush: {}", e)))?;
+
+        // Compute ciphertext size: IV + padded_encrypted + HMAC
+        let ciphertext_size = std::fs::metadata(output_path)
+            .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("output metadata: {}", e)))?
+            .len();
+
+        Ok(StreamingEncryptResult {
+            key,
+            digest,
+            ciphertext_size,
+            plaintext_size: plaintext_size as u64,
+        })
+    }
+
     /// Round up to the next multiple of 16 (AES block size).
     #[inline]
     fn round_to_block_size(size: usize) -> usize {
@@ -574,5 +752,136 @@ mod tests {
         let expected_length = IV_LENGTH + expected_padded + HMAC_LENGTH;
 
         assert_eq!(encrypted.ciphertext.len(), expected_length);
+    }
+
+    // =========================================================================
+    // Streaming encryption tests
+    // =========================================================================
+
+    #[test]
+    fn test_streaming_encrypt_decrypt_roundtrip() {
+        let plaintext = b"Hello, streaming Signal-compatible encryption!";
+
+        // Write plaintext to a temp file
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), plaintext).unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+
+        // Encrypt via streaming
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).expect("streaming encryption should succeed");
+
+        assert_eq!(result.plaintext_size, plaintext.len() as u64);
+
+        // Read ciphertext and decrypt with in-memory decrypt
+        let ciphertext = std::fs::read(output_file.path()).unwrap();
+        assert_eq!(ciphertext.len() as u64, result.ciphertext_size);
+
+        let decrypted = AttachmentCrypto::decrypt(
+            &ciphertext,
+            &result.key,
+            &result.digest,
+            plaintext.len(),
+        ).expect("decryption should succeed");
+
+        assert_eq!(decrypted.as_slice(), plaintext);
+    }
+
+    #[test]
+    fn test_streaming_encrypt_large_file() {
+        // 1MB of patterned data
+        let plaintext: Vec<u8> = (0..1024 * 1024).map(|i| (i % 256) as u8).collect();
+
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), &plaintext).unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).expect("streaming encryption should succeed");
+
+        let ciphertext = std::fs::read(output_file.path()).unwrap();
+
+        let decrypted = AttachmentCrypto::decrypt(
+            &ciphertext,
+            &result.key,
+            &result.digest,
+            plaintext.len(),
+        ).expect("decryption should succeed");
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_streaming_encrypt_format_matches_in_memory() {
+        // Verify the output format is the same as in-memory encrypt:
+        // IV (16) + padded_encrypted + HMAC (32)
+        let plaintext = b"format compatibility test";
+
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), plaintext).unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).expect("streaming encryption should succeed");
+
+        let ciphertext = std::fs::read(output_file.path()).unwrap();
+
+        // Verify format: IV(16) + encrypted(padded_size) + HMAC(32)
+        let expected_padded = AttachmentCrypto::padded_size(plaintext.len());
+        let expected_length = IV_LENGTH + expected_padded + HMAC_LENGTH;
+        assert_eq!(ciphertext.len(), expected_length);
+
+        // Verify digest matches compute_digest on the output
+        let recomputed_digest = AttachmentCrypto::compute_digest(&ciphertext);
+        assert_eq!(result.digest, recomputed_digest);
+    }
+
+    #[test]
+    fn test_streaming_encrypt_empty_file() {
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), b"").unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).expect("streaming encryption of empty file should succeed");
+
+        assert_eq!(result.plaintext_size, 0);
+
+        let ciphertext = std::fs::read(output_file.path()).unwrap();
+        let decrypted = AttachmentCrypto::decrypt(
+            &ciphertext,
+            &result.key,
+            &result.digest,
+            0,
+        ).expect("decryption of empty should succeed");
+
+        assert!(decrypted.is_empty());
+    }
+
+    #[test]
+    fn test_streaming_encrypt_key_length() {
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), b"key length test").unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).expect("streaming encryption should succeed");
+
+        assert_eq!(result.key.len(), KEY_SET_LENGTH);
     }
 }

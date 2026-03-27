@@ -155,6 +155,17 @@ pub enum InboxEvent {
         /// Target message timestamp.
         target_sent_timestamp: u64,
     },
+    /// Saved message synced from another device (Note to Self).
+    SavedMessageSync {
+        /// Message ID (UUID, same across all devices).
+        message_id: String,
+        /// Message text.
+        text: String,
+        /// When the message was sent (nanoseconds since epoch).
+        sent_at: u64,
+        /// Attachment IDs.
+        attachment_ids: Vec<String>,
+    },
     /// Delete for everyone received (peer wants us to delete).
     DmDeleteForEveryone {
         /// Peer user ID (who sent the delete request).

@@ -62,6 +62,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 
             // Update chat state with active channel
             chat_state.set_active_channel(channel_id);
+            chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
 
             // Load the saved messages channel and its messages
             let current_user_id = Some(user_id.to_string());

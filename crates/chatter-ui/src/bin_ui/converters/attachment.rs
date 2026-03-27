@@ -3,8 +3,6 @@
 use slint::{Image, ModelRc, VecModel};
 
 use chatter_core::domain::attachment::{Attachment, AttachmentStatus};
-use chatter_core::domain::ids::AttachmentId;
-use chatter_core::proto::content_v1::AttachmentPointer;
 use chatter_core::state::PendingAttachment;
 
 use crate::bin_ui::audio_state;
@@ -258,80 +256,6 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
             }
             bytes
         },
-        thumbnail_pixels: None, // Pre-decode with decode_thumbnail() before UI thread
-    }
-}
-
-/// Convert an AttachmentPointer (from proto) to thread-safe AttachmentDisplayData.
-///
-/// Used for displaying attachments immediately upon receive, before download completes.
-/// Shows filename, size, type info while download happens in background.
-pub fn attachment_pointer_to_display_data(pointer: &AttachmentPointer) -> AttachmentDisplayData {
-    let category = mime_to_category(&pointer.content_type);
-    let is_image = pointer.content_type.starts_with("image/");
-    let is_video = pointer.content_type.starts_with("video/");
-    let _is_audio = pointer.content_type.starts_with("audio/");
-
-    // Get icon and color for category
-    let (icon, icon_color) = category_to_icon_and_color(category);
-
-    // Use waveform from pointer if available (sender-side generated)
-    let waveform: Vec<i32> = if !pointer.waveform.is_empty() {
-        let converted: Vec<i32> = pointer.waveform.iter().map(|&s| s as i32).collect();
-        let max = converted.iter().max().copied().unwrap_or(0);
-        tracing::debug!(
-            "attachment_pointer_to_display_data: waveform has {} samples, max={}, first_5={:?}",
-            converted.len(), max, &converted[..5.min(converted.len())]
-        );
-        converted
-    } else {
-        tracing::debug!("attachment_pointer_to_display_data: no waveform in pointer, using flat default");
-        vec![10; 32] // Default flat waveform
-    };
-
-    // Format duration from pointer (milliseconds)
-    let duration_display = if pointer.duration_ms > 0 {
-        let total_secs = pointer.duration_ms / 1000;
-        let minutes = total_secs / 60;
-        let seconds = total_secs % 60;
-        format!("{}:{:02}", minutes, seconds)
-    } else {
-        String::new()
-    };
-
-    // Check if we have sender-provided thumbnail (instant preview)
-    let has_thumbnail = !pointer.thumbnail.is_empty();
-
-    // No download needed if we have thumbnail OR it's audio with waveform
-    // Video still needs download since we can't play without full file
-    let needs_download = is_video || (is_image && !has_thumbnail);
-
-    // Use deterministic UUID from cdn_key for consistent ID matching
-    // This ensures the ID matches what's stored in the attachment repository
-    let attachment_id = AttachmentId::from_cdn_key(&pointer.cdn_key).to_string();
-
-    AttachmentDisplayData {
-        id: attachment_id,
-        filename: pointer.file_name.clone(),
-        size_display: format_file_size(pointer.plaintext_size),
-        mime_type: pointer.content_type.clone(),
-        category: category.to_string(),
-        thumbnail_url: String::new(),
-        download_url: pointer.cdn_key.clone(), // CDN key for download
-        local_path: None, // Not downloaded yet
-        is_image,
-        is_video,
-        width: pointer.width as i32,
-        height: pointer.height as i32,
-        is_playing: false,
-        icon: icon.to_string(),
-        icon_color,
-        waveform,
-        duration_display,
-        is_uploading: false,
-        is_downloading: needs_download,
-        progress: 0.0,
-        thumbnail_bytes: pointer.thumbnail.clone(),
         thumbnail_pixels: None, // Pre-decode with decode_thumbnail() before UI thread
     }
 }

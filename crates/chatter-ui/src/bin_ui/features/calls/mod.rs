@@ -27,20 +27,6 @@ mod outgoing;
 mod room_events;
 pub mod timers;
 
-// Re-export for external use (cleanup_call_ui_state is used by auth/inbox)
-
-/// Clean up call UI state when a call ends remotely (via hangup notification).
-///
-/// This must be called from the main UI thread via `invoke_from_event_loop`.
-/// Use this from inbox_events.rs when receiving CallHangup.
-pub fn cleanup_call_ui_state() {
-    timers::stop_call_timer();
-    timers::stop_video_frame_timer();
-    // Clear any pending outgoing call state
-    key_exchange::clear_pending_call();
-    tracing::debug!("Call UI state cleaned up (remote hangup)");
-}
-
 /// Wire all call-related callbacks.
 ///
 /// Note: call_service is passed separately because it's initialized post-boot

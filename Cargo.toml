@@ -5,8 +5,7 @@ members = [
 ]
 resolver = "3"
 
-[patch.crates-io]
-android-activity = { git = "https://github.com/rust-mobile/android-activity", branch = "main" }
+# android-activity 0.6.1 from crates.io (git main was causing JVM attach failures)
 
 # =============================================================================
 # Development Profile - Optimized for fast rebuilds

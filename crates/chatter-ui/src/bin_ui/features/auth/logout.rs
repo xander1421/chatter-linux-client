@@ -17,7 +17,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
 
         tokio::spawn(async move {
-            // Use pre-built auth service from UIContext
+            // Use pre-built auth service from ChatterClient
             let auth_service = &ui_ctx.auth();
 
             // Attempt logout (ignore errors - we logout locally regardless)

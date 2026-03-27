@@ -13,16 +13,6 @@ use crate::MainWindow;
 
 use super::timers::{start_call_timer, start_video_frame_timer};
 
-/// Clear any pending outgoing call state.
-///
-/// Since pending state is now managed in core (CallSignalingService),
-/// this is a no-op on the UI side. Kept for API compatibility with
-/// cleanup_call_ui_state().
-pub fn clear_pending_call() {
-    // Pending state lives in core's CallSignalingService now.
-    // It is consumed by complete_dm_call() or cleared on hangup via core.
-}
-
 /// Handle receiving a call key answer (peer's ephemeral key).
 ///
 /// Delegates to core's complete_dm_call() which handles:

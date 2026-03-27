@@ -44,19 +44,17 @@ pub(super) fn handle_joined(
     });
 }
 
-/// Handle anonymous group member joined.
+/// Handle anonymous group member joined — log only.
+/// System message creation should be done in core (like ChannelMemberJoined).
 pub(super) fn handle_member_joined(
     group_id: AnonGroupId,
     user_id: UserId,
     display_name: Option<String>,
 ) {
     tracing::info!(
-        group_id = %group_id,
-        user_id = %user_id,
-        display_name = ?display_name,
+        group_id = %group_id, user_id = %user_id, display_name = ?display_name,
         "Member joined anon group"
     );
-    // Could show a system message or notification
 }
 
 /// Handle anonymous group member left.
@@ -67,9 +65,7 @@ pub(super) fn handle_member_left(group_id: AnonGroupId, user_id: UserId) {
 /// Handle anonymous group member kicked.
 pub(super) fn handle_member_kicked(group_id: AnonGroupId, user_id: UserId, kicked_by: UserId) {
     tracing::info!(
-        group_id = %group_id,
-        user_id = %user_id,
-        kicked_by = %kicked_by,
+        group_id = %group_id, user_id = %user_id, kicked_by = %kicked_by,
         "Member kicked from anon group"
     );
 }
@@ -123,18 +119,42 @@ pub(super) fn handle_message_received(
         .map(|uid| uid.to_string())
         .unwrap_or_default();
 
+    // Build sidebar preview from the message
+    let msg_text = msg.as_text().unwrap_or_default();
+    let preview = if msg_text.is_empty() {
+        "[Attachment]".to_string()
+    } else if msg_text.chars().count() > 50 {
+        let truncated: String = msg_text.chars().take(47).collect();
+        format!("{}...", truncated)
+    } else {
+        msg_text.to_string()
+    };
+    let timestamp_str = super::super::utils::format_timestamp(msg.sent_at);
+
     let _ = slint::invoke_from_event_loop(move || {
         let Some(window) = weak.upgrade() else { return };
+
+        // Push to message model if this group is active
         let selected_group = window.get_selected_private_group_id().to_string();
-        if selected_group != group_id_str {
-            return;
+        if selected_group == group_id_str {
+            let messages = window.get_messages();
+            if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
+                let msg_item = display_data.to_slint_with_user(&current_user_id);
+                model.push(msg_item);
+            }
+
+            // Auto-scroll if at bottom
+            if window.get_is_at_bottom() {
+                window.set_message_scroll_position(-99999.0);
+                window.set_is_at_bottom(true);
+            }
         }
 
-        let messages = window.get_messages();
-        if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
-            let msg_item = display_data.to_slint_with_user(&current_user_id);
-            model.push(msg_item);
-        }
+        // Always update sidebar preview + unread
+        let conversation = chatter_core::state::ActiveConversation::AnonGroup(group_id);
+        crate::bin_ui::features::sidebar::update_sidebar_preview(
+            &window, conversation, &preview, &timestamp_str, true,
+        );
     });
 }
 
@@ -148,11 +168,11 @@ pub(super) fn handle_member_list_received(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
-    members: Vec<chatter_core::proto::content_v1::AnonGroupMemberInfo>,
+    member_count: usize,
 ) {
     tracing::debug!(
         group_id = %group_id,
-        member_count = members.len(),
+        member_count,
         "Received anon group member list"
     );
 

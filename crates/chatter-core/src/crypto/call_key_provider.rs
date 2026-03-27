@@ -413,6 +413,17 @@ impl CallKeyState {
         &self.call_id
     }
 
+    /// Replace the current key with a new random key (for member-leave rotation).
+    ///
+    /// Unlike `ratchet()` which derives deterministically from the current key,
+    /// this replaces the key entirely. The departed member cannot derive the
+    /// new key since it's randomly generated. The caller must redistribute
+    /// the new key to remaining participants.
+    pub fn reset(&mut self, new_key: [u8; 32]) {
+        self.current_key = new_key;
+        self.epoch += 1;
+    }
+
     /// Ratchet the key forward (for long-running calls).
     ///
     /// Derives a new key from the current key + epoch, providing
@@ -677,6 +688,52 @@ mod tests {
 
         // Keys should be unique
         assert_ne!(key1, key2, "Each group call key should be unique");
+    }
+
+    #[test]
+    fn test_key_state_reset() {
+        let shared_secret = [1u8; 32];
+        let mut state = CallKeyState::new(&shared_secret, "test-call").unwrap();
+
+        let initial_key = *state.current_key();
+        assert_eq!(state.epoch(), 0);
+
+        // Ratchet once so we're at epoch 1
+        state.ratchet().unwrap();
+        let ratcheted_key = *state.current_key();
+        assert_eq!(state.epoch(), 1);
+
+        // Reset with a new random key
+        let new_key = [42u8; 32];
+        state.reset(new_key);
+        assert_eq!(state.epoch(), 2);
+        assert_ne!(*state.current_key(), initial_key);
+        assert_ne!(*state.current_key(), ratcheted_key);
+
+        // The new key is derived from new_key (not the old chain)
+        // Subsequent ratchets should work from the new key
+        state.ratchet().unwrap();
+        assert_eq!(state.epoch(), 3);
+        assert_ne!(*state.current_key(), new_key);
+    }
+
+    #[test]
+    fn test_key_state_reset_breaks_chain() {
+        // Verify that reset() produces a key the old chain can't derive
+        let shared_secret = [1u8; 32];
+        let mut state_a = CallKeyState::new(&shared_secret, "test-call").unwrap();
+        let mut state_b = CallKeyState::new(&shared_secret, "test-call").unwrap();
+
+        // Both at epoch 0, same key
+        assert_eq!(state_a.current_key(), state_b.current_key());
+
+        // A resets with new key (member left), B continues ratcheting (departed member)
+        let new_key = generate_group_call_key();
+        state_a.reset(new_key);
+        state_b.ratchet().unwrap();
+
+        // Keys must differ — departed member can't derive the rotated key
+        assert_ne!(state_a.current_key(), state_b.current_key());
     }
 
     #[test]

@@ -9,11 +9,13 @@
 
 use crate::error::StorageError;
 use crate::storage::migrations::default_migrations;
-use parking_lot::{Mutex, MutexGuard};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use rusqlite::{Connection, OpenFlags};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use zeroize::Zeroizing;
 
 /// Number of reader connections in the pool.
@@ -31,30 +33,33 @@ pub struct Database {
 
 /// Pool of read-only connections for concurrent database reads.
 struct ReaderPool {
-    /// Available reader connections.
+    /// Available reader connections + condvar for waiters.
     available: Mutex<VecDeque<Connection>>,
+    /// Notified when a connection is returned to the pool.
+    returned: Condvar,
     /// Path for creating new connections.
     path: PathBuf,
     /// Passphrase for new connections.
     /// Wrapped in Zeroizing to ensure memory is cleared on drop.
     passphrase: Mutex<Zeroizing<String>>,
-    /// Current number of connections (available + in-use).
-    count: Mutex<usize>,
+    /// Current number of connections (available + in-use). Atomic for race-free creation.
+    count: AtomicUsize,
 }
 
 impl ReaderPool {
     fn new(path: PathBuf, passphrase: String) -> Self {
         Self {
             available: Mutex::new(VecDeque::with_capacity(READER_POOL_SIZE)),
+            returned: Condvar::new(),
             path,
             passphrase: Mutex::new(Zeroizing::new(passphrase)),
-            count: Mutex::new(0),
+            count: AtomicUsize::new(0),
         }
     }
 
     /// Acquire a reader connection from the pool.
     fn acquire(&self) -> Result<PooledReader<'_>, StorageError> {
-        // ... (existing logic)
+        // Fast path: grab an available connection.
         {
             let mut available = self.available.lock();
             if let Some(conn) = available.pop_front() {
@@ -65,35 +70,47 @@ impl ReaderPool {
             }
         }
 
-        let should_create = {
-            let count = self.count.lock();
-            *count < READER_POOL_SIZE
-        };
-
-        if should_create {
-            let conn = self.open_reader()?;
-            *self.count.lock() += 1;
-            return Ok(PooledReader {
-                conn: Some(conn),
-                pool: self,
-            });
+        // Try to create a new connection if pool isn't full.
+        // compare_exchange prevents the race where two threads both see count < MAX
+        // and both create a connection, exceeding the pool size.
+        let current = self.count.load(Ordering::Relaxed);
+        if current < READER_POOL_SIZE {
+            if self.count.compare_exchange(
+                current, current + 1, Ordering::AcqRel, Ordering::Relaxed,
+            ).is_ok() {
+                return match self.open_reader() {
+                    Ok(conn) => Ok(PooledReader { conn: Some(conn), pool: self }),
+                    Err(e) => {
+                        self.count.fetch_sub(1, Ordering::Relaxed);
+                        Err(e)
+                    }
+                };
+            }
         }
 
+        // Pool is full and all connections are in use — wait up to 10s for one to be returned.
+        let mut available = self.available.lock();
+        let deadline = Duration::from_secs(10);
+        let start = std::time::Instant::now();
         loop {
-            std::thread::yield_now();
-            let mut available = self.available.lock();
             if let Some(conn) = available.pop_front() {
-                return Ok(PooledReader {
-                    conn: Some(conn),
-                    pool: self,
-                });
+                return Ok(PooledReader { conn: Some(conn), pool: self });
             }
+            let elapsed = start.elapsed();
+            if elapsed >= deadline {
+                return Err(StorageError::ConnectionPool(
+                    "Reader pool exhausted: all connections in use for >10s".into(),
+                ));
+            }
+            let remaining = deadline - elapsed;
+            self.returned.wait_for(&mut available, remaining);
         }
     }
 
     /// Return a connection to the pool.
     fn release(&self, conn: Connection) {
         self.available.lock().push_back(conn);
+        self.returned.notify_one();
     }
 
     /// Open a new read-only SQLCipher connection.
@@ -106,10 +123,10 @@ impl ReaderPool {
         conn.pragma_update(None, "key", &**passphrase)
             .map_err(|e| StorageError::Encryption(format!("Failed to set reader key: {}", e)))?;
 
-        // ... (rest of verification and optimizations)
         conn.execute_batch("SELECT count(*) FROM sqlite_master;")
             .map_err(|e| StorageError::Encryption(format!("Invalid reader key: {}", e)))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "busy_timeout", "5000")?;
         conn.pragma_update(None, "cache_size", "-65536")?;
         conn.pragma_update(None, "mmap_size", "268435456")?;
 
@@ -180,6 +197,16 @@ impl Database {
         // Enable WAL mode for better concurrency (allows concurrent reads while writing)
         // This is essential for proactive DM session establishment which opens a second connection
         conn.pragma_update(None, "journal_mode", "WAL")?;
+
+        // busy_timeout: wait up to 5 seconds if database is locked by another connection
+        // Without this, concurrent writes/reads that hit a lock fail immediately with SQLITE_BUSY.
+        // 5s is generous for a desktop app — typical lock hold times are <10ms.
+        conn.pragma_update(None, "busy_timeout", "5000")?;
+
+        // synchronous=NORMAL is safe with WAL mode — data is still durable across crashes.
+        // FULL (default) forces extra fsync on every commit which is unnecessary with WAL.
+        // Signal Desktop uses the same setting.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
 
         // Performance optimizations for large BLOB reads (attachments)
         // cache_size: negative value = KB, so -65536 = 64MB cache (default is ~2MB)
@@ -254,6 +281,7 @@ impl Database {
 
         // Set WAL mode for reads
         conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "busy_timeout", "5000")?;
 
         // Performance optimizations for large BLOB streaming
         conn.pragma_update(None, "cache_size", "-65536")?; // 64MB cache

@@ -1,6 +1,6 @@
 //! Initial data loading after login.
 //!
-//! Uses UIContext services for all operations - no direct repository access.
+//! Uses ChatterClient services for all operations - no direct repository access.
 
 use std::sync::Arc;
 

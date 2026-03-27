@@ -7,6 +7,7 @@ use memmap2::Mmap;
 use crate::crypto::attachment_crypto::KEY_SET_LENGTH;
 use crate::crypto::attachment_crypto_fast::decrypt_zero_copy;
 use crate::crypto::secure_buffer::SecureBuffer;
+use crate::crypto::streaming_decrypt::StreamingDecryptor;
 use crate::domain::attachment::ContentLocation;
 use crate::domain::ids::AttachmentId;
 
@@ -184,21 +185,28 @@ impl AttachmentService {
         Ok(())
     }
 
-    /// Decrypt attachment using streaming mmap I/O.
+    /// Decrypt attachment using true streaming I/O.
     ///
-    /// For large attachments (>1MB), uses memory-mapped file access
-    /// for efficient streaming decryption.
+    /// Uses `StreamingDecryptor` which reads in 512KB chunks with OpenSSL
+    /// hardware-accelerated SHA-NI + AES-NI. Single-pass: computes SHA256,
+    /// HMAC-SHA256, and AES-CBC decryption simultaneously.
+    ///
+    /// ## Memory Usage
+    ///
+    /// For an 874MB attachment: ~512KB buffer (not 1.7GB like decrypt_zero_copy).
+    /// The output plaintext still requires memory, but the ciphertext is never
+    /// fully loaded — it streams from the file.
     ///
     /// ## Performance
     ///
-    /// - Mmap: ~6.5 GB/s throughput (2x faster than SQLite BLOB)
-    /// - Memory efficient: pages loaded on-demand by OS
+    /// Single-pass with OpenSSL hardware crypto is faster than the rayon parallel
+    /// approach because it avoids the 874MB allocation + copy overhead.
     pub fn decrypt_streaming(
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<SecureBuffer, AttachmentError> {
         let start = std::time::Instant::now();
-        tracing::info!(attachment_id = %attachment_id, "Starting streaming decryption");
+        tracing::info!(attachment_id = %attachment_id, "Starting streaming decryption (OpenSSL single-pass)");
 
         // Get attachment metadata
         let attachment = self
@@ -242,13 +250,18 @@ impl AttachmentService {
             digest_arr[..digest.len()].copy_from_slice(digest);
         }
 
-        // Open file and mmap
+        // Open file for streaming (BufReader for efficient I/O)
         let file_path = attachment_file_path(attachment_id);
+        let file_size = std::fs::metadata(&file_path)
+            .map_err(|e| AttachmentError::FileError(format!("Failed to stat file: {}", e)))?
+            .len() as usize;
+
         tracing::debug!(
             attachment_id = %attachment_id,
             file_path = %file_path.display(),
+            file_size = file_size,
             plaintext_size = attachment.metadata.size,
-            "Opening memory-mapped file for streaming decryption"
+            "Opening file for streaming decryption"
         );
 
         let file = std::fs::File::open(&file_path).map_err(|e| {
@@ -258,23 +271,29 @@ impl AttachmentService {
                 e
             ))
         })?;
+        let reader = std::io::BufReader::with_capacity(512 * 1024, file);
 
-        let mmap = unsafe { Mmap::map(&file) }.map_err(|e| {
-            AttachmentError::FileError(format!("Failed to memory-map file: {}", e))
-        })?;
+        // Use StreamingDecryptor — single-pass, 512KB chunks, OpenSSL hardware crypto
+        let mut decryptor = StreamingDecryptor::new(
+            reader,
+            &key,
+            &digest_arr,
+            attachment.metadata.size as usize,
+            file_size,
+        );
 
-        let ciphertext = mmap.to_vec();
-        drop(mmap);
-
-        let plaintext = decrypt_zero_copy(ciphertext, &key, &digest_arr, attachment.metadata.size as usize)
+        let plaintext = decryptor
+            .decrypt_all()
             .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
 
         let total_elapsed = start.elapsed();
+        let size_mb = plaintext.len() as f64 / (1024.0 * 1024.0);
         tracing::info!(
             attachment_id = %attachment_id,
             plaintext_len = plaintext.len(),
             total_ms = total_elapsed.as_millis(),
-            "Decrypted attachment via streaming mmap"
+            throughput_mbps = format_args!("{:.1}", size_mb / total_elapsed.as_secs_f64()),
+            "Decrypted attachment via streaming (single-pass)"
         );
 
         Ok(SecureBuffer::new(plaintext))
@@ -282,12 +301,32 @@ impl AttachmentService {
 
     /// Decrypt attachment using the best method for its size.
     ///
-    /// Both methods use mmap - this just controls logging verbosity.
+    /// - Small files (<1MB): `decrypt_to_memory` with rayon parallel (fast for small data)
+    /// - Large files (>=1MB): `decrypt_streaming` with OpenSSL single-pass (low memory)
+    ///
+    /// The threshold is 1MB because below that, the overhead of OpenSSL init
+    /// and single-pass coordination exceeds the memory savings.
     pub fn decrypt_auto(
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<SecureBuffer, AttachmentError> {
-        // All decryption now uses mmap, so just call decrypt_to_memory
-        self.decrypt_to_memory(attachment_id)
+        // Check file size to pick strategy
+        let file_path = attachment_file_path(attachment_id);
+        let file_size = std::fs::metadata(&file_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        const STREAMING_THRESHOLD: u64 = 1024 * 1024; // 1MB
+
+        if file_size >= STREAMING_THRESHOLD {
+            tracing::debug!(
+                attachment_id = %attachment_id,
+                file_size = file_size,
+                "Using streaming decryption (file >= 1MB)"
+            );
+            self.decrypt_streaming(attachment_id)
+        } else {
+            self.decrypt_to_memory(attachment_id)
+        }
     }
 }

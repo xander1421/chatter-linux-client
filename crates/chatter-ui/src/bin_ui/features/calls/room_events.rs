@@ -14,6 +14,7 @@ use crate::{CallParticipantData, MainWindow};
 pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let call_service = ui_ctx.call_service().clone();
+    let ui_ctx = ui_ctx.clone();
 
     // Spawn a tokio task to consume room events (tokio runtime needed for channels and sleep)
     tokio::spawn(async move {
@@ -130,6 +131,15 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                             w.set_active_call_data(data);
                             tracing::debug!("UI updated for participant leave");
+                        }
+                    });
+
+                    // Key rotation: core decides if we're the initiator of a
+                    // channel group call and rotates + redistributes if so.
+                    let ui_ctx = ui_ctx.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = ui_ctx.handle_participant_departed().await {
+                            tracing::error!(error = %e, "Failed to handle participant departure");
                         }
                     });
                 }

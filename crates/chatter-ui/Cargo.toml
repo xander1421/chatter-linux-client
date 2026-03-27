@@ -9,6 +9,11 @@ repository = "https://github.com/xander1421/chatter"
 rust-version = "1.85"
 default-run = "chatter-ui"
 
+[lib]
+name = "chatter_ui"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
 [[bin]]
 name = "chatter-ui"
 path = "src/main.rs"
@@ -23,7 +28,7 @@ chatter-core = { path = "../chatter-core" }
 # ============================================================================
 # UI Framework - Slint
 # ============================================================================
-slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility", "backend-android-activity-06"] }
+slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility"] }
 i-slint-backend-winit = { version = "1.15.1", optional = true }
 winit = { version = "0.30", optional = true }
 slint-code-view = { path = "../../../slint-code-view" }
@@ -52,7 +57,7 @@ mime_guess = "2"
 once_cell = "1"
 lazy_static = "1.5.0"
 zeroize = { version = "1.8", features = ["derive"] }
-arboard = { version = "3", features = ["wayland-data-control"] }
+arboard = { version = "3", features = ["wayland-data-control"], optional = true }
 
 # ============================================================================
 # Platform-specific: Linux (GL video rendering)
@@ -73,9 +78,9 @@ slint-build = "1.15.1"
 
 [features]
 default = ["desktop"]
-desktop = ["dep:i-slint-backend-winit", "dep:winit", "slint/backend-winit", "slint/renderer-femtovg", "chatter-core/desktop-system"]
+desktop = ["dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", "slint/renderer-femtovg", "chatter-core/desktop-system"]
 local-ai = ["chatter-core/local-ai"]
-mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity"]
+mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "slint/backend-android-activity-06"]
 
 # =============================================================================
 # Android Metadata (for cargo-apk)
@@ -95,4 +100,14 @@ permissions = [
     "android.permission.WAKE_LOCK",
     "android.permission.READ_EXTERNAL_STORAGE",
     "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.POST_NOTIFICATIONS",
 ]
+
+[[package.metadata.android.activity]]
+config_changes = "orientation|screenSize|keyboardHidden"
+# adjustResize makes Android shrink the window when keyboard appears
+window_soft_input_mode = "adjustResize"
+
+[package.metadata.android.signing.release]
+path = "/home/alex/.android/debug.keystore"
+keystore_password = "android"

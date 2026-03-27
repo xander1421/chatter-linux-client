@@ -577,7 +577,8 @@ impl KeyStore {
     pub const SENDER_KEY_MAX_AGE_SECS: i64 = 24 * 60 * 60;
 
     /// Maximum messages per sender key before rotation.
-    pub const SENDER_KEY_MAX_MESSAGES: i64 = 100;
+    /// Signal uses 2000 messages per sender key chain before rotation.
+    pub const SENDER_KEY_MAX_MESSAGES: i64 = 2000;
 
     /// Initialize sender key metadata when creating a new sender key.
     pub fn init_sender_key_metadata(&self, channel_id: &str) -> Result<(), StorageError> {

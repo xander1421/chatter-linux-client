@@ -94,6 +94,10 @@ pub struct EventHandlers {
     group_coordinator: Option<Arc<GroupCoordinator>>,
     /// Message service for DB persistence of edits/deletes.
     message_service: Option<Arc<crate::services::message::MessageService>>,
+    /// Anon group service for profile sharing after member list updates.
+    anon_group_service: Option<Arc<crate::services::anon_group::AnonGroupService>>,
+    /// Anon DM service for conversation creation from ECIES init messages.
+    anon_dm_service: Option<Arc<crate::services::anon_dm::AnonDmService>>,
 }
 
 impl EventHandlers {
@@ -128,6 +132,8 @@ impl EventHandlers {
             offline_state,
             group_coordinator: None,
             message_service: None,
+            anon_group_service: None,
+            anon_dm_service: None,
         }
     }
 
@@ -142,6 +148,18 @@ impl EventHandlers {
     /// Called after construction when GroupCoordinator is available.
     pub fn with_group_coordinator(mut self, coordinator: Arc<GroupCoordinator>) -> Self {
         self.group_coordinator = Some(coordinator);
+        self
+    }
+
+    /// Set the anon group service for profile sharing after member list updates.
+    pub fn with_anon_group_service(mut self, service: Arc<crate::services::anon_group::AnonGroupService>) -> Self {
+        self.anon_group_service = Some(service);
+        self
+    }
+
+    /// Set the anon DM service for conversation creation from ECIES init messages.
+    pub fn with_anon_dm_service(mut self, service: Arc<crate::services::anon_dm::AnonDmService>) -> Self {
+        self.anon_dm_service = Some(service);
         self
     }
 
@@ -515,6 +533,12 @@ impl EventHandlers {
                 }
             }
 
+            DomainEvent::SavedMessageSynced { message } => {
+                let channel_id = message.channel_id;
+                trace!(?channel_id, message_id = ?message.id, "SavedMessageSynced: adding to state");
+                self.message_state.append_message(channel_id, message);
+            }
+
             // ================================================================
             // Call Events
             // ================================================================
@@ -575,8 +599,11 @@ impl EventHandlers {
             }
 
             DomainEvent::AnonGroupMemberListReceived { group_id, ref members } => {
-                // Member list update - handled by UI thread.
-                trace!(?group_id, member_count = members.len(), "AnonGroupMemberListReceived: handled by UI thread");
+                // Profile sharing is NOT triggered here — Signal Protocol model:
+                // profiles are shared once at join time (invite + JoinAck), and the
+                // owner's member list broadcast already includes all profile data.
+                // Re-sharing on every member list update is unnecessary and wasteful.
+                trace!(?group_id, member_count = members.len(), "AnonGroupMemberListReceived: UI handles display refresh");
             }
 
             // ================================================================
@@ -597,9 +624,42 @@ impl EventHandlers {
                 trace!(?conversation_id, ?sender_id, "AnonDmMessageReceived: handled by UI thread");
             }
 
-            DomainEvent::AnonDmInitReceived { conversation_id, intro_message, .. } => {
-                // NDSS'21 ECIES init message - handled by anon DM service to create conversation.
-                trace!(?conversation_id, intro_len = intro_message.len(), "AnonDmInitReceived: handled by anon DM service");
+            DomainEvent::AnonDmInitReceived {
+                conversation_id,
+                sender_id,
+                sender_display_name,
+                sender_avatar,
+                peer_mailbox_pk,
+                peer_identity_key,
+                peer_delivery_token,
+                ref intro_message,
+                ..
+            } => {
+                // NDSS'21 ECIES init — create conversation in DB (was previously in UI)
+                if let Some(ref svc) = self.anon_dm_service {
+                    let dm = crate::domain::anon_dm::AnonDm::from_request(
+                        conversation_id, sender_id, peer_mailbox_pk,
+                    ).with_display_name(&sender_display_name)
+                     .with_avatar_opt(sender_avatar);
+
+                    if let Err(e) = svc.create_incoming_conversation(
+                        &dm, &peer_identity_key, &peer_delivery_token,
+                    ) {
+                        warn!(
+                            conversation_id = %conversation_id,
+                            error = %e,
+                            "Failed to create anon DM conversation from ECIES init"
+                        );
+                    } else {
+                        debug!(
+                            conversation_id = %conversation_id,
+                            sender_id = %sender_id,
+                            "Created anon DM conversation from ECIES init"
+                        );
+                    }
+                } else {
+                    trace!(?conversation_id, intro_len = intro_message.len(), "AnonDmInitReceived: no anon_dm_service configured");
+                }
             }
 
             DomainEvent::AnonDmMessageDeleted { conversation_id, message_timestamp } => {
@@ -617,9 +677,36 @@ impl EventHandlers {
                 trace!(?group_id, ?message_timestamp, "AnonGroupMessageEdited: handled by UI thread");
             }
 
-            DomainEvent::AnonCallOfferReceived { conversation_id, room_name, .. } => {
-                // Anonymous call offer - handled by UI thread for incoming call UI.
-                trace!(?conversation_id, ?room_name, "AnonCallOfferReceived: handled by UI thread");
+            DomainEvent::AnonCallOfferReceived {
+                conversation_id, sender_id, call_room_id, room_name,
+                call_type, caller_display_name, call_encryption_key, ..
+            } => {
+                // Store pending call state so it's ready when UI accepts/declines
+                if let Some(ref svc) = self.anon_dm_service {
+                    let mut call_room_id_array = [0u8; 16];
+                    if call_room_id.len() >= 16 {
+                        call_room_id_array.copy_from_slice(&call_room_id[..16]);
+                    } else {
+                        call_room_id_array[..call_room_id.len()].copy_from_slice(&call_room_id);
+                    }
+                    let pending = crate::services::anon_dm::PendingAnonCall {
+                        call_room_id: call_room_id_array,
+                        room_name: room_name.clone(),
+                        conversation_id,
+                        token: crate::mailbox::CallRoomToken {
+                            id: String::new(), public_key: vec![], private_key: vec![],
+                            signature: vec![], randomizer: None,
+                        },
+                        is_video_call: call_type == 2,
+                        is_outgoing: false,
+                        display_name: caller_display_name,
+                        encryption_key: call_encryption_key,
+                        sender_id: Some(sender_id),
+                        started_at: None,
+                    };
+                    svc.store_pending_anon_call(room_name.clone(), pending);
+                    debug!(?conversation_id, ?room_name, "Stored pending anon call offer");
+                }
             }
 
             DomainEvent::AnonCallAnswerReceived { conversation_id, accepted, .. } => {
@@ -632,8 +719,39 @@ impl EventHandlers {
                 trace!(?conversation_id, ?reason, "AnonCallHangupReceived: handled by UI thread");
             }
 
-            DomainEvent::AnonGroupCallOfferReceived { group_id, room_name, .. } => {
-                trace!(?group_id, ?room_name, "AnonGroupCallOfferReceived: handled by UI thread");
+            DomainEvent::AnonGroupCallOfferReceived {
+                group_id, sender_id, call_room_id, room_name,
+                call_type, caller_display_name, call_encryption_key, ..
+            } => {
+                // Store pending call state (reuse anon DM pending call infra)
+                if let Some(ref svc) = self.anon_dm_service {
+                    let mut call_room_id_array = [0u8; 16];
+                    if call_room_id.len() >= 16 {
+                        call_room_id_array.copy_from_slice(&call_room_id[..16]);
+                    } else {
+                        call_room_id_array[..call_room_id.len()].copy_from_slice(&call_room_id);
+                    }
+                    let conversation_id = crate::domain::anon_dm::AnonDmId::try_from_slice(
+                        group_id.as_bytes()
+                    ).expect("AnonGroupId is 16 bytes");
+                    let pending = crate::services::anon_dm::PendingAnonCall {
+                        call_room_id: call_room_id_array,
+                        room_name: room_name.clone(),
+                        conversation_id,
+                        token: crate::mailbox::CallRoomToken {
+                            id: String::new(), public_key: vec![], private_key: vec![],
+                            signature: vec![], randomizer: None,
+                        },
+                        is_video_call: call_type == 2,
+                        is_outgoing: false,
+                        display_name: caller_display_name,
+                        encryption_key: call_encryption_key,
+                        sender_id: Some(sender_id),
+                        started_at: None,
+                    };
+                    svc.store_pending_anon_call(room_name.clone(), pending);
+                    debug!(?group_id, ?room_name, "Stored pending anon group call offer");
+                }
             }
 
             DomainEvent::AnonGroupCallAnswerReceived { group_id, accepted, .. } => {

@@ -17,6 +17,10 @@ pub mod notifications;
 #[cfg(not(target_os = "android"))]
 pub mod open;
 
+// Android-only modules
+#[cfg(target_os = "android")]
+pub mod android_notifications;
+
 // Linux-only modules
 #[cfg(target_os = "linux")]
 pub mod dbus;
@@ -36,6 +40,8 @@ pub use keyring::Keyring;
 pub use notifications::DesktopNotifications;
 #[cfg(not(target_os = "android"))]
 pub use open::ExternalOpener;
+#[cfg(target_os = "android")]
+pub use android_notifications::AndroidNotifications;
 
 #[cfg(target_os = "linux")]
 pub use dbus::DbusClient;

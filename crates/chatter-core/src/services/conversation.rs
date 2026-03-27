@@ -1,6 +1,6 @@
 //! Polymorphic conversation operations.
 //!
-//! `ConversationHandle` wraps `ActiveConversation` + `UIContext` to provide
+//! `ConversationHandle` wraps `ActiveConversation` + `ChatterClient` to provide
 //! a single API for messaging operations across all conversation types
 //! (Channel, DM, Anon DM, Anon Group).
 //!
@@ -483,7 +483,14 @@ impl ConversationHandle {
     pub async fn send_read_receipt(&self, timestamps: &[u64]) -> ConversationResult {
         if timestamps.is_empty() { return Ok(()); }
         match &self.conversation {
-            ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_) => Ok(()),
+            ActiveConversation::AnonDm(dm_id) => {
+                self.client.anon_dms()
+                    .send_read_receipt(dm_id, timestamps.to_vec())
+                    .await
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            // Groups don't track per-user read state to preserve sender anonymity.
+            ActiveConversation::AnonGroup(_) => Ok(()),
             ActiveConversation::MailboxDm { peer_id, .. } => {
                 let content = crate::services::gateway::build_read_receipt_content(timestamps.to_vec());
                 self.send_dm_content(content, peer_id).await
@@ -507,7 +514,14 @@ impl ConversationHandle {
     pub async fn send_delivery_receipt(&self, timestamps: &[u64]) -> ConversationResult {
         if timestamps.is_empty() { return Ok(()); }
         match &self.conversation {
-            ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_) => Ok(()),
+            ActiveConversation::AnonDm(dm_id) => {
+                self.client.anon_dms()
+                    .send_delivery_receipt(dm_id, timestamps.to_vec())
+                    .await
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            // Groups don't track per-user delivery state to preserve sender anonymity.
+            ActiveConversation::AnonGroup(_) => Ok(()),
             ActiveConversation::MailboxDm { peer_id, .. } => {
                 let content = crate::services::gateway::build_delivery_receipt_content(timestamps.to_vec());
                 self.send_dm_content(content, peer_id).await

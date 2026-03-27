@@ -124,13 +124,14 @@ impl IdentityKeyStore for SignalStore {
                 address = %address_str,
                 "Identity key changed - archiving session for re-establishment"
             );
-            if let Err(e) = self.key_store.delete_session(&address_str) {
+            self.key_store.delete_session(&address_str).map_err(|e| {
                 tracing::error!(
                     address = %address_str,
                     error = %e,
                     "Failed to archive session after identity key change"
                 );
-            }
+                storage_to_signal_error(e)
+            })?;
         }
 
         Ok(IdentityChange::from_changed(key_changed))

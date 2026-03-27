@@ -68,7 +68,7 @@ impl InboxEventProcessor {
         }
     }
 
-    /// Create from a UIContext (convenience constructor).
+    /// Create from a CoreServices (convenience constructor).
     pub fn from_client(client: &Arc<crate::client::ChatterClient>) -> Self {
         Self {
             message_service: client.messages().clone(),
@@ -571,6 +571,7 @@ impl InboxEventProcessor {
                 peer_id,
                 channel_id,
                 timestamp,
+                message_id,
                 attachments,
                 ..
             } => {
@@ -601,13 +602,20 @@ impl InboxEventProcessor {
                         tracing::warn!("Failed to send DM delivery receipt: {}", e);
                     }
                 });
-                // UI still needs to display the message
-                false
+
+                // Emit DomainEvent so domain_handler can display the message
+                if let Ok(mid) = message_id.parse::<crate::domain::ids::MessageId>() {
+                    if let Ok(Some(message)) = self.message_service.get_message_local(&mid) {
+                        self.event_bus.emit_domain(DomainEvent::MessageReceived { message });
+                    }
+                }
+                true
             }
 
             InboxEvent::ChannelMessageReceived {
                 channel_id,
                 sender_id,
+                message_id,
                 timestamp,
                 attachments,
                 ..
@@ -663,8 +671,14 @@ impl InboxEventProcessor {
                         tracing::warn!("Failed to send channel delivery receipt: {}", e);
                     }
                 });
-                // UI still needs to display the message
-                false
+
+                // Emit DomainEvent so domain_handler can display the message
+                if let Ok(mid) = message_id.parse::<crate::domain::ids::MessageId>() {
+                    if let Ok(Some(message)) = self.message_service.get_message_local(&mid) {
+                        self.event_bus.emit_domain(DomainEvent::MessageReceived { message });
+                    }
+                }
+                true
             }
 
             InboxEvent::CallHangup {
@@ -799,6 +813,25 @@ impl InboxEventProcessor {
                             message_id: msg.id, pinner_id: *sender_id,
                             channel_id: *channel_id, target_sent_timestamp: *target_sent_timestamp,
                         });
+                    }
+                }
+                false
+            }
+
+            InboxEvent::SavedMessageSync { message_id, text, sent_at, attachment_ids } => {
+                // Saved message from another device — store locally
+                match self.message_service.store_synced_saved_message(
+                    message_id, text, *sent_at, attachment_ids.clone(),
+                ) {
+                    Ok(message) => {
+                        self.event_bus.emit_domain(DomainEvent::SavedMessageSynced { message });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            message_id,
+                            error = %e,
+                            "Failed to store synced saved message"
+                        );
                     }
                 }
                 false
@@ -1260,6 +1293,116 @@ impl InboxEventProcessor {
                     &anon_group_id, &peer_id, edit.target_sent_timestamp, &new_text,
                 );
             }
+            // ============================================================
+            // Group management messages (arrive as top-level Content, not
+            // wrapped in AnonGroupMessage — routed here by decryption.rs)
+            // ============================================================
+            Some(content::Content::AnonGroupMemberList(list)) => {
+                // SECURITY: Verify sender is admin or owner
+                match self.anon_group_service.get_member_role(&anon_group_id, &peer_id) {
+                    Ok(Some(role)) if role.can_broadcast_member_list() => {}
+                    _ => {
+                        tracing::warn!(
+                            sender_id = %peer_id,
+                            group_id = %anon_group_id,
+                            "Rejected member list from unauthorized sender"
+                        );
+                        return;
+                    }
+                }
+
+                let members = list.members.clone();
+                if let Err(e) = self.anon_group_service.handle_member_list(
+                    anon_group_id, peer_id, members.clone(),
+                ) {
+                    tracing::warn!(group_id = %anon_group_id, error = %e, "Failed to handle member list");
+                }
+
+                self.event_bus.emit_domain(DomainEvent::AnonGroupMemberListReceived {
+                    group_id: anon_group_id,
+                    members,
+                });
+
+                tracing::info!(group_id = %anon_group_id, sender_id = %peer_id, "Processed group member list");
+            }
+
+            Some(content::Content::AnonGroupLeave(_)) => {
+                if let Err(e) = self.anon_group_service.handle_leave(anon_group_id, peer_id) {
+                    tracing::warn!(error = %e, "Failed to handle group leave");
+                }
+                self.event_bus.emit_domain(DomainEvent::AnonGroupMemberLeft {
+                    group_id: anon_group_id,
+                    user_id: peer_id,
+                });
+                tracing::info!(group_id = %anon_group_id, sender_id = %peer_id, "Member left group");
+            }
+
+            Some(content::Content::AnonGroupKick(kick)) => {
+                let kicked_user_id = match UserId::try_from_slice(&kick.kicked_user_id) {
+                    Some(id) => id,
+                    None => {
+                        tracing::warn!("Invalid kicked_user_id in AnonGroupKick");
+                        return;
+                    }
+                };
+                if let Err(e) = self.anon_group_service.handle_kick(
+                    anon_group_id, kicked_user_id, peer_id,
+                    &kick.admin_signature, kick.timestamp,
+                ) {
+                    tracing::warn!(error = %e, "Failed to handle group kick");
+                }
+                self.event_bus.emit_domain(DomainEvent::AnonGroupMemberKicked {
+                    group_id: anon_group_id,
+                    user_id: kicked_user_id,
+                    kicked_by: peer_id,
+                });
+                tracing::info!(group_id = %anon_group_id, kicked = %kicked_user_id, by = %peer_id, "Member kicked");
+            }
+
+            Some(content::Content::AnonGroupProfileShare(profile)) => {
+                // Verify sender is a member
+                if !self.anon_group_service.is_member(&anon_group_id, &peer_id).unwrap_or(false) {
+                    tracing::debug!(sender_id = %peer_id, "Dropped profile share from non-member");
+                    return;
+                }
+
+                let profile_key = profile.profile_key.as_ref().and_then(|pk| {
+                    if pk.len() == 32 { let mut k = [0u8; 32]; k.copy_from_slice(pk); Some(k) } else { None }
+                });
+
+                use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
+
+                let display_name = match (&profile_key, &profile.encrypted_display_name) {
+                    (Some(pk), Some(enc)) if !enc.is_empty() => decrypt_display_name(pk, enc).ok().filter(|n| !n.is_empty()),
+                    _ => None,
+                };
+                let avatar = match (&profile_key, &profile.encrypted_avatar) {
+                    (Some(pk), Some(enc)) if !enc.is_empty() => decrypt_avatar(pk, enc).ok(),
+                    _ => None,
+                };
+
+                let svc = self.anon_group_service.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = svc.handle_profile_share(
+                        anon_group_id, peer_id, profile_key, display_name.clone(), avatar.clone(),
+                    ).await {
+                        tracing::warn!(error = %e, "Failed to handle profile share");
+                    }
+                });
+
+                tracing::debug!(group_id = %anon_group_id, sender_id = %peer_id, "Processed profile share");
+            }
+
+            Some(content::Content::AnonGroupUpdate(update)) => {
+                // Group metadata update (name, description, etc.)
+                self.event_bus.emit_domain(DomainEvent::AnonGroupUpdated {
+                    group_id: anon_group_id,
+                    update: update.clone(),
+                    updated_by: peer_id,
+                });
+                tracing::info!(group_id = %anon_group_id, sender_id = %peer_id, "Group updated");
+            }
+
             _ => {
                 // Typing and unknown content types — UI only
             }
@@ -1450,6 +1593,18 @@ impl InboxEventProcessor {
                     self.attachment_service.create_from_pointers(&download_pointers);
                 }
             }
+        }
+
+        // Send delivery receipt for DataMessages (not typing/reactions/etc.)
+        if let Some(crate::proto::content_v1::content::Content::DataMessage(_)) = &inner_content.content {
+            let dm_service = self.anon_dm_service.clone();
+            let dm_id = anon_dm_id;
+            let timestamp = inner_content.timestamp;
+            tokio::spawn(async move {
+                if let Err(e) = dm_service.send_delivery_receipt(&dm_id, vec![timestamp]).await {
+                    tracing::warn!(error = %e, "[ANON_DM] Failed to send delivery receipt");
+                }
+            });
         }
 
         // Delegate to service layer for business logic

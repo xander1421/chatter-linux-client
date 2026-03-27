@@ -97,7 +97,7 @@ uuid = { version = "1", features = ["v4", "v5", "serde"] }
 bytes = "1"
 http = "1"
 mime_guess = "2"
-reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking", "stream"] }
 rodio = "0.21.1"
 cpal = "0.15"
 hound = "3.5"
@@ -138,6 +138,7 @@ async-stream = "0.3.6"
 mistralrs = { version = "0.7", optional = true, features = ["cuda", "flash-attn"] }
 unicode-segmentation = "1.12.0"
 argon2 = "0.5.3"
+tempfile = "3"
 
 # ============================================================================
 # Desktop-only system deps (not available on Android)
@@ -179,6 +180,8 @@ muda = "0.17"
 [target.'cfg(target_os = "android")'.dependencies]
 gstreamer-gl-egl = "0.23"
 glutin_egl_sys = "0.7"
+jni = "0.21"           # JNI bindings for Android system APIs (notifications, etc.)
+ndk-context = "0.1"    # Access to Android app context (JNI VM + activity)
 
 [dev-dependencies]
 tokio-test = "0.4"

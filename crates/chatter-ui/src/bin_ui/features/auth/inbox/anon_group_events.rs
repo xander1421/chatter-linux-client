@@ -60,25 +60,9 @@ pub fn spawn_anon_group_event_handler(
                         kicked_by,
                     );
                 }
-                DomainEvent::AnonGroupMemberListReceived { group_id, .. } => {
-                    // Share our profile with group members we just learned about.
-                    // This ensures all members learn our display name directly rather
-                    // than relying on the group owner to relay it.
-                    let anon_group_service = ui_ctx.anon_groups().clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = anon_group_service.share_profile_with_group(&group_id).await {
-                            tracing::warn!(
-                                group_id = %group_id,
-                                error = %e,
-                                "Failed to share profile with group members"
-                            );
-                        } else {
-                            tracing::debug!(
-                                group_id = %group_id,
-                                "Shared profile with group members after member list update"
-                            );
-                        }
-                    });
+                DomainEvent::AnonGroupMemberListReceived { .. } => {
+                    // Profile sharing handled at join time (invite + JoinAck).
+                    // No action needed here — owner's member list already includes profiles.
                 }
                 _ => {
                     // Ignore other events

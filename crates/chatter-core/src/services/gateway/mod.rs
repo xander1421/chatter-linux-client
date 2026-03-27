@@ -41,6 +41,7 @@ pub use builders::{
     build_pin_content, build_pin_content_with_channel,
     build_edit_content, build_edit_content_with_channel,
     build_delete_for_me_content,
+    build_saved_message_sync_content,
     build_delete_for_everyone_content, build_delete_for_everyone_content_with_channel,
     // DM call key exchange (ephemeral keys for PFS)
     build_call_key_offer, build_call_key_answer,

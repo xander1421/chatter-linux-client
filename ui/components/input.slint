@@ -48,7 +48,7 @@ export component Input inherits Rectangle {
             border-color: border-col;
             opacity: disabled ? 0.5 : 1.0;
 
-            // Placeholder text (shown when empty)
+            // Placeholder text (shown when empty and not focused)
             if root.text == "" && !focused: Text {
                 x: Spacing.md;
                 width: parent.width - Spacing.md * 2;
@@ -59,7 +59,7 @@ export component Input inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            // Actual text input
+            // Actual text input (full width for reliable touch targeting)
             input := TextInput {
                 x: Spacing.md;
                 width: parent.width - Spacing.md * 2;
@@ -77,6 +77,12 @@ export component Input inherits Rectangle {
                 edited => {
                     root.edited(self.text);
                 }
+            }
+
+            // Full-area touch target to ensure tapping anywhere focuses the input
+            TouchArea {
+                enabled: !root.disabled;
+                clicked => { input.focus(); }
             }
         }
 

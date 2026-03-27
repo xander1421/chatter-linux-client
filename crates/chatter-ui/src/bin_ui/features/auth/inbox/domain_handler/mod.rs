@@ -1,13 +1,11 @@
 //! Domain event handler for UI updates.
 //!
-//! This module handles `DomainEvent` for pure UI updates. Protocol concerns
-//! (receipts, convergence, sender keys) are handled by `InboxEventProcessor`.
-//!
-//! # Architecture
+//! This is the single entry point for all UI updates from incoming events.
+//! Protocol concerns (receipts, convergence, sender keys) are handled by
+//! core's `InboxEventProcessor` before events reach here.
 //!
 //! ```text
-//! InboxEvent → InboxEventProcessor → DomainEvent → domain_handler (this module)
-//!                 (protocol)                           (UI only)
+//! Polling → InboxEventProcessor (core) → DomainEvent → domain_handler (this module)
 //! ```
 
 mod anon_calls;
@@ -90,15 +88,12 @@ pub async fn handle_domain_event(
         }
 
         // =========================================================================
-        // Call Key Answer
+        // Call Key Answer + Group Call Key
+        // Handled by calls/event_handlers.rs (wire_call_key_answer_handler)
+        // which delegates to key_exchange for ECDH and call_service for group keys.
         // =========================================================================
-        DomainEvent::CallKeyAnswerReceived {
-            call_id,
-            peer_id,
-            ephemeral_public_key,
-        } => {
-            calls::handle_call_key_answer(window, ui_ctx, call_id, peer_id, ephemeral_public_key);
-        }
+        DomainEvent::CallKeyAnswerReceived { .. }
+        | DomainEvent::GroupCallKeyReceived { .. } => {}
 
         // =========================================================================
         // Call Hangup
@@ -108,52 +103,70 @@ pub async fn handle_domain_event(
         }
 
         // =========================================================================
-        // Group Call Key
-        // =========================================================================
-        DomainEvent::GroupCallKeyReceived {
-            call_id,
-            sender_id,
-            key_material,
-            key_epoch,
-            channel_id,
-        } => {
-            calls::handle_group_call_key(ui_ctx, call_id, sender_id, key_material, key_epoch, channel_id);
-        }
-
-        // =========================================================================
         // Typing Indicators (pass-through / no-op)
         // =========================================================================
-        DomainEvent::TypingStarted { user_id, channel_id } => {
-            tracing::debug!(
-                user_id = %user_id,
-                channel_id = %channel_id,
-                "Typing started event received"
+        DomainEvent::TypingStarted { user_id: _, channel_id } => {
+            super::unified_actions::handle_typing(
+                window,
+                ui_ctx.chat_state(),
+                super::unified_actions::EventSource::Channel(channel_id),
+                true,
             );
         }
 
-        DomainEvent::TypingStopped { user_id, channel_id } => {
-            tracing::debug!(
-                user_id = %user_id,
-                channel_id = %channel_id,
-                "Typing stopped event received"
+        DomainEvent::TypingStopped { user_id: _, channel_id } => {
+            super::unified_actions::handle_typing(
+                window,
+                ui_ctx.chat_state(),
+                super::unified_actions::EventSource::Channel(channel_id),
+                false,
             );
         }
 
         // =========================================================================
         // Message Events (handled by EventHandlers state store)
         // =========================================================================
-        DomainEvent::MessageReceived { .. }
-        | DomainEvent::MessageEdited { .. }
-        | DomainEvent::MessageDeleted { .. }
-        | DomainEvent::MessagesRead { .. }
-        | DomainEvent::MessagesDelivered { .. }
-        | DomainEvent::ViewedReceipt { .. }
-        | DomainEvent::ReactionAdded { .. }
-        | DomainEvent::ReactionRemoved { .. }
-        | DomainEvent::DeleteForMeSync { .. } => {
-            // These are handled by EventHandlers in events/handlers.rs
-            // which updates state stores directly
+        DomainEvent::MessageReceived { message } => {
+            messaging::handle_message_received(window, ui_ctx, message);
         }
+
+        // Receipt events: update checkmarks (✓✓) in the Slint message model
+        DomainEvent::MessagesDelivered { message_timestamps, .. } => {
+            messaging::handle_delivery_status_update(window, message_timestamps, "delivered");
+        }
+
+        DomainEvent::MessagesRead { message_timestamps, .. } => {
+            messaging::handle_delivery_status_update(window, message_timestamps, "read");
+        }
+
+        // Reaction UI updates: update emoji summary on the message bubble
+        DomainEvent::ReactionAdded { message_id, emoji, timestamp, .. } => {
+            messaging::handle_reaction_update(window, &message_id.to_string(), &emoji, false, timestamp);
+        }
+        DomainEvent::ReactionRemoved { message_id, emoji, timestamp, .. } => {
+            messaging::handle_reaction_update(window, &message_id.to_string(), &emoji, true, timestamp);
+        }
+
+        // Edit UI update: replace message content in-place
+        DomainEvent::MessageEdited { message_id, new_content, .. } => {
+            use chatter_core::domain::message::MessageContent;
+            let new_text = match &new_content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Mixed(m) => m.text.clone().unwrap_or_default(),
+                MessageContent::AI(ai) => ai.text.clone(),
+                _ => String::new(),
+            };
+            messaging::handle_message_edit(window, &message_id.to_string(), &new_text);
+        }
+
+        // Delete UI update: remove message from visible list
+        DomainEvent::MessageDeleted { message_id, .. } => {
+            messaging::handle_message_delete(window, &message_id.to_string());
+        }
+
+        // State store handles these (no Slint model update needed)
+        DomainEvent::ViewedReceipt { .. }
+        | DomainEvent::DeleteForMeSync { .. } => {}
 
         DomainEvent::MessagePinned { channel_id, target_sent_timestamp, .. } => {
             helpers::handle_pin_ui_update(window, ui_ctx, channel_id, target_sent_timestamp, false);
@@ -204,8 +217,8 @@ pub async fn handle_domain_event(
             anon_group::handle_bootstrap_complete(group_id);
         }
 
-        DomainEvent::AnonGroupMemberListReceived { group_id, members } => {
-            anon_group::handle_member_list_received(window, ui_ctx, group_id, members);
+        DomainEvent::AnonGroupMemberListReceived { group_id, ref members } => {
+            anon_group::handle_member_list_received(window, ui_ctx, group_id, members.len());
         }
 
         DomainEvent::AnonGroupUpdated { group_id, updated_by, .. } => {
@@ -321,12 +334,12 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Channel Member Events
         // =========================================================================
-        DomainEvent::ChannelMemberJoined { channel_id, user_id, display_name, message: _ } => {
-            messaging::handle_channel_member_joined(channel_id, user_id, display_name);
+        DomainEvent::ChannelMemberJoined { channel_id: _, user_id: _, display_name: _, message } => {
+            messaging::handle_message_received(window, ui_ctx, message);
         }
 
-        DomainEvent::ChannelMemberLeft { channel_id, user_id, display_name, message: _ } => {
-            messaging::handle_channel_member_left(channel_id, user_id, display_name);
+        DomainEvent::ChannelMemberLeft { channel_id: _, user_id: _, display_name: _, message } => {
+            messaging::handle_message_received(window, ui_ctx, message);
         }
 
         // =========================================================================
@@ -355,5 +368,8 @@ pub async fn handle_domain_event(
                 window, ui_ctx, conversation_id, user_id, display_name, avatar_url, bio, timestamp,
             );
         }
+
+        // Handled by EventHandlers state store (appends to message_state)
+        DomainEvent::SavedMessageSynced { .. } => {}
     }
 }

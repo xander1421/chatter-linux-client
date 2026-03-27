@@ -26,8 +26,9 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     let weak_load = weak.clone();
                     let ui_ctx_load = ui_ctx.clone();
                     tokio::spawn(async move {
+                        let att_svc = ui_ctx_load.attachments().clone();
                         let raw_gifs = fetch_trending_gifs_raw(&ui_ctx_load).await;
-                        load_gif_previews(raw_gifs, weak_load);
+                        load_gif_previews(raw_gifs, weak_load, att_svc);
                     });
                 } else {
                     // Stop animations when picker is hidden
@@ -78,25 +79,9 @@ async fn download_and_send_gif(
     ui_ctx: Arc<ChatterClient>,
     weak: slint::Weak<MainWindow>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Download GIF bytes from Klipy/Tenor CDN
-    let client = reqwest::Client::new();
-    let response = client.get(url).send().await?;
-    if !response.status().is_success() {
-        return Err(format!("HTTP {}", response.status()).into());
-    }
-    let bytes = response.bytes().await?;
-    tracing::debug!("Downloaded GIF: {} bytes from {}", bytes.len(), url);
-
-    // Generate filename from GIF ID
-    let filename = format!("{}.gif", gif_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_"));
-
-    // Upload directly to our CDN (encrypts and stores encrypted on filesystem)
+    // Download GIF from CDN and upload to our CDN (via core service)
     let upload_result = ui_ctx.attachments()
-        .upload_bytes_to_cdn_encrypted(
-            &bytes,
-            &filename,
-            "image/gif",
-        )
+        .download_and_upload_gif(url, gif_id)
         .await?;
 
     tracing::info!(
@@ -106,10 +91,11 @@ async fn download_and_send_gif(
     );
 
     // Create pending attachment with pre-uploaded pointer
+    let gif_filename = upload_result.file_name.clone();
     let pending = chatter_core::state::PendingAttachment::with_pointer(
         upload_result.attachment_id,
         std::path::PathBuf::new(), // No temp file - already uploaded
-        filename,
+        gif_filename,
         upload_result.plaintext_size,
         "image/gif".to_string(),
         upload_result.to_attachment_pointer(),
@@ -145,12 +131,13 @@ pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         }
 
         tokio::spawn(async move {
+            let att_svc = ui_ctx.attachments().clone();
             let raw_gifs = if query_str.is_empty() {
                 fetch_trending_gifs_raw(&ui_ctx).await
             } else {
                 search_gifs_raw(&query_str, &ui_ctx).await
             };
-            load_gif_previews(raw_gifs, weak);
+            load_gif_previews(raw_gifs, weak, att_svc);
         });
     });
 }
@@ -163,23 +150,20 @@ struct RawGifFrames {
     frames: Vec<(Vec<u8>, u32, u32, u64)>,
 }
 
-async fn fetch_full_gif_frames(id: String, url: &str) -> Option<RawGifFrames> {
-    let client = reqwest::Client::new();
-    let response = match client.get(url).send().await {
-        Ok(r) if r.status().is_success() => r,
-        _ => return None,
-    };
-
-    let bytes = match response.bytes().await {
+async fn fetch_full_gif_frames(id: String, url: &str, attachment_service: &std::sync::Arc<chatter_core::services::attachment::AttachmentService>) -> Option<RawGifFrames> {
+    let bytes = match attachment_service.download_url_bytes(url).await {
         Ok(b) => b,
-        _ => return None,
+        Err(e) => {
+            tracing::debug!("Failed to download GIF frames: {}", e);
+            return None;
+        }
     };
 
     use image::codecs::gif::GifDecoder;
     use image::AnimationDecoder;
     use std::io::Cursor;
 
-    let cursor = Cursor::new(bytes.as_ref());
+    let cursor = Cursor::new(&bytes);
     let decoder = match GifDecoder::new(cursor) {
         Ok(d) => d,
         _ => return None,
@@ -217,6 +201,7 @@ async fn fetch_full_gif_frames(id: String, url: &str) -> Option<RawGifFrames> {
 fn load_gif_previews(
     raw_gifs: Vec<RawGifData>,
     weak_window: slint::Weak<MainWindow>,
+    attachment_service: std::sync::Arc<chatter_core::services::attachment::AttachmentService>,
 ) {
     let raw_gifs_clone: Vec<_> = raw_gifs
         .iter()
@@ -249,9 +234,10 @@ fn load_gif_previews(
     for (id, preview_url, _full_url, _width, _height) in raw_gifs {
         let weak = weak_window.clone();
         let gif_id = id.clone();
+        let att_svc = attachment_service.clone();
 
         tokio::spawn(async move {
-            if let Some(decoded) = fetch_full_gif_frames(gif_id, &preview_url).await {
+            if let Some(decoded) = fetch_full_gif_frames(gif_id, &preview_url, &att_svc).await {
                 let id_for_ui = decoded.id.clone();
                 let first_frame_raw = decoded.frames.first().unwrap();
                 let frame_bytes = first_frame_raw.0.clone();

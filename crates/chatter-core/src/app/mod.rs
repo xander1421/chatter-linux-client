@@ -8,18 +8,18 @@
 //!
 //! 1. **InfrastructureContainer**: Low-level dependencies (storage, crypto, network)
 //! 2. **ServiceContainer**: Pre-built services (business logic)
-//! 3. **UIContext**: Services + state stores (UI-facing API)
+//! 3. **CoreServices**: Services + state stores + event bus (consumed by `ChatterClient`)
 //!
-//! UI code should primarily interact with `UIContext` via `AppContext::ui_context()`.
+//! External code interacts via `ChatterClient`, not `CoreServices` directly.
 
 pub mod bootstrap;
 pub mod config;
 pub mod context;
+pub mod core_services;
 pub mod infrastructure;
 pub mod services;
 pub mod shutdown;
-pub mod ui_context;
 
 pub use context::{AppContext, ContextError};
+pub use core_services::CoreServices;
 pub use infrastructure::InfrastructureContainer;
-pub use ui_context::UIContext;

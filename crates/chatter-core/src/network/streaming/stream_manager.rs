@@ -73,6 +73,7 @@ use crate::network::connection::ConnectionStateMachine;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::streaming::message_stream::MessageEventRouter;
 use crate::network::streaming::presence_stream::PresenceRouter;
+use crate::network::streaming::push_listener::{PushEvent, PushListener, PushListenerConfig};
 
 /// Container for active stream handles.
 #[derive(Default)]
@@ -80,6 +81,7 @@ struct StreamHandles {
     message_events: Option<StreamHandle>,
     presence: Option<StreamHandle>,
     user_events: Option<StreamHandle>,
+    push_listener: Option<StreamHandle>,
 }
 
 /// Manager for all real-time gRPC streams.
@@ -116,6 +118,10 @@ pub struct StreamManager {
 
     /// Presence router for presence updates and caching.
     presence_router: Arc<PresenceRouter>,
+
+    /// Optional push listener for self-hosted ntfy (Android background push).
+    /// None on desktop (gRPC streams are sufficient).
+    push_listener: Option<Arc<PushListener>>,
 }
 
 impl StreamManager {
@@ -143,6 +149,7 @@ impl StreamManager {
             shutdown,
             message_router: Arc::new(MessageEventRouter::new()),
             presence_router: Arc::new(PresenceRouter::new()),
+            push_listener: None,
         }
     }
 
@@ -185,10 +192,28 @@ impl StreamManager {
         &self.config
     }
 
+    /// Configure a self-hosted ntfy push listener for Android background push.
+    ///
+    /// On desktop, this is optional — gRPC streams handle real-time notifications.
+    /// On Android, the OS kills background connections, so the push listener
+    /// provides wake-up signals via SSE to the self-hosted ntfy instance.
+    pub fn with_push_listener(mut self, config: PushListenerConfig) -> Self {
+        self.push_listener = Some(Arc::new(PushListener::new(config)));
+        self
+    }
+
+    /// Get a push event subscriber (if push listener is configured).
+    ///
+    /// Returns None on desktop where push listener isn't needed.
+    pub fn push_events(&self) -> Option<broadcast::Receiver<PushEvent>> {
+        self.push_listener.as_ref().map(|l| l.subscribe())
+    }
+
     /// Start all streams.
     ///
     /// Launches message events, presence, and user events streams.
     /// Each stream runs in its own tokio task.
+    /// If a push listener is configured, starts it too.
     ///
     /// # Errors
     ///
@@ -205,6 +230,11 @@ impl StreamManager {
 
         // Start presence stream
         self.start_presence_stream().await?;
+
+        // Start push listener (if configured — typically Android only)
+        if self.push_listener.is_some() {
+            self.start_push_listener().await;
+        }
 
         Ok(())
     }
@@ -225,6 +255,9 @@ impl StreamManager {
             h.stop();
         }
         if let Some(mut h) = handles.user_events.take() {
+            h.stop();
+        }
+        if let Some(mut h) = handles.push_listener.take() {
             h.stop();
         }
     }
@@ -299,6 +332,29 @@ impl StreamManager {
         self.handles.lock().message_events = Some(handle);
 
         Ok(())
+    }
+
+    /// Start the self-hosted ntfy push listener.
+    ///
+    /// Connects to the ntfy SSE endpoint and broadcasts wake-up events.
+    /// Used on Android where the OS kills background gRPC connections.
+    async fn start_push_listener(&self) {
+        let listener = match &self.push_listener {
+            Some(l) => Arc::clone(l),
+            None => return,
+        };
+
+        let shutdown_rx = self.shutdown_receiver();
+        let (shutdown_tx, _) = oneshot::channel();
+
+        let task = tokio::spawn(async move {
+            listener.listen(shutdown_rx).await;
+        });
+
+        let handle = StreamHandle::new(task, shutdown_tx);
+        self.handles.lock().push_listener = Some(handle);
+
+        tracing::info!("Push listener started");
     }
 
     /// Start the presence stream.
