@@ -4,38 +4,6 @@ use slint::Model;
 use chatter_core::domain::UserId;
 use crate::MainWindow;
 
-/// Look up the peer's user_id from a DM channel_id using the conversations model.
-#[allow(dead_code)]
-pub fn get_peer_id_from_dm_channel(window: &MainWindow, channel_id: &str) -> Option<String> {
-    let conversations = window.get_dm_conversations();
-    let count = conversations.row_count();
-    tracing::debug!(
-        channel_id = %channel_id,
-        conversation_count = count,
-        "get_peer_id_from_dm_channel: Looking up peer"
-    );
-
-    for i in 0..count {
-        if let Some(item) = conversations.row_data(i) {
-            let item_channel_id = item.channel_id.as_str();
-            let item_user_id = item.user_id.as_str();
-            if item_channel_id == channel_id {
-                tracing::debug!(
-                    found_peer_id = %item_user_id,
-                    "get_peer_id_from_dm_channel: Found matching peer"
-                );
-                return Some(item_user_id.to_string());
-            }
-        }
-    }
-
-    tracing::debug!(
-        channel_id = %channel_id,
-        "get_peer_id_from_dm_channel: No matching peer found"
-    );
-    None
-}
-
 /// Look up the DM channel_id from a peer's user_id using the conversations model.
 pub fn get_dm_channel_from_peer(window: &MainWindow, peer_id: &str) -> Option<String> {
     let conversations = window.get_dm_conversations();

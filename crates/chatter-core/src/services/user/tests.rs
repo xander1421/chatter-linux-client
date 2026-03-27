@@ -5,13 +5,13 @@ mod tests {
     use std::sync::Arc;
 
     use crate::domain::ids::UserId;
-    use crate::domain::user::{FriendshipStatus, PresenceStatus, Profile, StatusMessage};
+    use crate::domain::user::{FriendshipStatus, PresenceStatus, Profile};
     use crate::proto::chat_v1::{friend_requests_filter, UserProfile};
     use crate::storage::repositories::settings_repo::SettingsRepository;
     use crate::storage::repositories::user_repo::UserRepository;
 
     use super::super::conversions::{
-        domain_presence_to_proto, domain_to_proto_profile, presence_from_proto,
+        domain_presence_to_proto, presence_from_proto,
         proto_friend_status_to_domain, proto_to_domain_profile,
     };
     use super::super::{FriendRequestFilter, UserError, UserService};
@@ -101,41 +101,6 @@ mod tests {
         assert_eq!(profile.avatar_url, None);
         assert_eq!(profile.status_message, None);
         assert_eq!(profile.presence, PresenceStatus::Offline);
-    }
-
-    #[test]
-    fn test_domain_to_proto_profile() {
-        let user_id: UserId = "00000000-0000-0000-0000-000000000001".parse().unwrap();
-        let profile = Profile {
-            user_id,
-            display_name: "Test User".to_string(),
-            avatar_url: Some("https://example.com/avatar.png".to_string()),
-            status_message: Some(StatusMessage::new("Hello".to_string())),
-            presence: PresenceStatus::Away,
-        };
-
-        let proto = domain_to_proto_profile(&profile);
-        assert_eq!(proto.display_name, "Test User");
-        assert_eq!(proto.avatar_url, "https://example.com/avatar.png");
-        assert_eq!(proto.status_message, "Hello");
-        assert_eq!(proto.presence, 3);
-    }
-
-    #[test]
-    fn test_domain_to_proto_profile_none_fields() {
-        let user_id: UserId = "00000000-0000-0000-0000-000000000001".parse().unwrap();
-        let profile = Profile {
-            user_id,
-            display_name: "Test User".to_string(),
-            avatar_url: None,
-            status_message: None,
-            presence: PresenceStatus::DoNotDisturb,
-        };
-
-        let proto = domain_to_proto_profile(&profile);
-        assert_eq!(proto.avatar_url, "");
-        assert_eq!(proto.status_message, "");
-        assert_eq!(proto.presence, 4);
     }
 
     #[test]

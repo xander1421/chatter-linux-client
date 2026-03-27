@@ -40,22 +40,6 @@ pub fn proto_to_domain_profile(proto: &UserProfile) -> Result<Profile, UserError
     })
 }
 
-/// Convert a domain Profile to a proto UserProfile.
-#[allow(dead_code)]
-pub fn domain_to_proto_profile(profile: &Profile) -> UserProfile {
-    UserProfile {
-        user_id: profile.user_id.to_string(),
-        display_name: profile.display_name.clone(),
-        avatar_url: profile.avatar_url.clone().unwrap_or_default(),
-        status_message: profile
-            .status_message
-            .as_ref()
-            .map(|s| s.text.clone())
-            .unwrap_or_default(),
-        presence: domain_presence_to_proto(profile.presence),
-    }
-}
-
 /// Convert proto UserPresence (i32) to domain PresenceStatus.
 pub fn presence_from_proto(value: i32) -> PresenceStatus {
     match value {
