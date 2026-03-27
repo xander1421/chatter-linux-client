@@ -72,6 +72,10 @@ pub struct LoginResult {
     pub display_name: String,
     /// Whether initial prekey upload is still needed.
     pub needs_prekey_upload: bool,
+    /// Whether identity keys were restored from SVR backup during login.
+    pub keys_restored: bool,
+    /// Whether identity keys are missing locally (no backup available or restore failed).
+    pub keys_missing: bool,
 }
 
 // ============================================================================
@@ -439,6 +443,8 @@ impl AuthService {
             device_id,
             display_name,
             needs_prekey_upload: stored_device_id.is_none(), // New device needs prekey upload
+            keys_restored: false, // Set by caller after SVR restore attempt
+            keys_missing: false,  // Set by caller after SVR restore attempt
         })
     }
 
@@ -710,6 +716,8 @@ impl AuthService {
             device_id: result.device_id,
             display_name: server_display_name,
             needs_prekey_upload: false, // Prekeys already generated (upload them next)
+            keys_restored: false, // Not applicable for registration (keys are freshly generated)
+            keys_missing: false,
         })
     }
 

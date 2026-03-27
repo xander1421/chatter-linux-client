@@ -641,18 +641,29 @@ impl ChatterClient {
     ///
     /// This is the one-call entry point: authenticates, sets auth state,
     /// and starts inbox polling + event handlers.
+    ///
+    /// If `pin` is provided and this is a new device (no local identity keys),
+    /// the method attempts to restore keys from an SVR backup. The result
+    /// fields `keys_restored` / `keys_missing` indicate the outcome.
     pub async fn login(
         self: &Arc<Self>,
         username: &str,
         password: &str,
         device_name: &str,
+        pin: Option<&str>,
     ) -> Result<LoginResult, ClientError> {
-        let result = self.auth().do_login(username, password, device_name, None).await?;
+        let mut result = self.auth().do_login(username, password, device_name, pin).await?;
         self.auth_state().set_logged_in(
             result.user_id,
             result.device_id,
             result.display_name.clone(),
         );
+
+        // Attempt SVR key restore if this is a new device (no local identity keys)
+        if let Some(p) = pin {
+            self.attempt_svr_restore(p, username, &mut result).await;
+        }
+
         self.start().await?;
         Ok(result)
     }
@@ -772,6 +783,140 @@ impl ChatterClient {
         svr_secret.zeroize();
         identity_keypair.zeroize();
         profile_key.zeroize();
+    }
+
+    /// Attempt to restore identity keys from SVR backup on a new device.
+    ///
+    /// Checks whether local identity keys exist. If they do, this is an
+    /// existing device and no restore is needed. If they are missing, derives
+    /// the SVR secret from PIN + username and fetches the encrypted backup.
+    ///
+    /// On success, hydrates the local identity key store and profile key.
+    /// On failure, logs a warning and sets `keys_missing = true` so the UI
+    /// can inform the user. Restore failure NEVER blocks login.
+    async fn attempt_svr_restore(
+        &self,
+        pin: &str,
+        username: &str,
+        result: &mut LoginResult,
+    ) {
+        use crate::crypto::svr::derive_svr_secret;
+        use crate::storage::repositories::settings_repo::keys;
+        use zeroize::Zeroize;
+
+        // 1. Check if local identity keys already exist
+        let has_identity = match self.signal().key_store.has_local_identity() {
+            Ok(exists) => exists,
+            Err(e) => {
+                tracing::warn!("SVR restore: failed to check local identity: {}", e);
+                // Assume keys exist to avoid accidentally overwriting
+                return;
+            }
+        };
+
+        if has_identity {
+            tracing::debug!("SVR restore skipped: local identity keys already exist");
+            return;
+        }
+
+        tracing::info!("New device detected (no local identity keys) — attempting SVR restore");
+
+        // 2. Derive svr_secret transiently from PIN + username
+        let mut svr_secret = match derive_svr_secret(pin, username) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("SVR restore failed: could not derive svr_secret: {}", e);
+                result.keys_missing = true;
+                return;
+            }
+        };
+
+        // 3. Fetch and decrypt backup from server
+        let restore_result = match self.svr_backup().fetch_and_restore_backup(&svr_secret).await {
+            Ok(r) => r,
+            Err(e) => {
+                svr_secret.zeroize();
+                tracing::warn!("SVR restore failed (non-fatal): {}", e);
+                result.keys_missing = true;
+                return;
+            }
+        };
+
+        svr_secret.zeroize();
+
+        // 4. Hydrate identity keypair into local key store
+        //    Reconstruct libsignal IdentityKeyPair from raw 32-byte private + 32-byte public
+        let mut restored_keypair = restore_result.identity_keypair; // [u8; 64]
+        let mut restored_profile_key = restore_result.profile_key;  // [u8; 32]
+
+        let hydrate_ok = (|| -> std::result::Result<(), String> {
+            use libsignal_protocol::{IdentityKey, IdentityKeyPair, PrivateKey};
+
+            let private_key = PrivateKey::deserialize(&restored_keypair[..32])
+                .map_err(|e| format!("invalid private key: {}", e))?;
+
+            // IdentityKey expects 33 bytes: 0x05 type prefix + 32-byte public key
+            let mut public_with_prefix = [0u8; 33];
+            public_with_prefix[0] = 0x05;
+            public_with_prefix[1..].copy_from_slice(&restored_keypair[32..]);
+            let identity_key = IdentityKey::try_from(public_with_prefix.as_slice())
+                .map_err(|e| format!("invalid public key: {}", e))?;
+
+            let key_pair = IdentityKeyPair::new(identity_key, private_key);
+            let serialized = key_pair.serialize();
+
+            // Generate a registration ID for this new device (14-bit, 1-16383)
+            let registration_id = (rand::random::<u32>() % 0x3FFF) + 1;
+
+            self.signal()
+                .key_store
+                .set_local_identity(registration_id, &serialized)
+                .map_err(|e| format!("failed to store identity: {}", e))?;
+
+            // Store identity public key in settings for NDSS'21 friend codes
+            let identity_public_full = key_pair.identity_key().serialize();
+            self.signal()
+                .settings_repo
+                .set_bytes(keys::IDENTITY_KEY_PUBLIC, identity_public_full.as_ref())
+                .map_err(|e| format!("failed to store identity public key: {}", e))?;
+
+            Ok(())
+        })();
+
+        if let Err(e) = hydrate_ok {
+            tracing::warn!("SVR restore: failed to hydrate identity keypair: {}", e);
+            restored_keypair.zeroize();
+            restored_profile_key.zeroize();
+            result.keys_missing = true;
+            return;
+        }
+
+        // 5. Hydrate profile key into settings
+        if let Err(e) = self
+            .signal()
+            .settings_repo
+            .set_bytes(keys::PROFILE_KEY, &restored_profile_key)
+        {
+            tracing::warn!("SVR restore: failed to store profile key: {}", e);
+            // Identity was stored but profile key failed — partial restore
+            restored_keypair.zeroize();
+            restored_profile_key.zeroize();
+            result.keys_restored = true;
+            result.keys_missing = false;
+            return;
+        }
+
+        // 6. Zeroize sensitive intermediates
+        restored_keypair.zeroize();
+        restored_profile_key.zeroize();
+
+        result.keys_restored = true;
+        result.keys_missing = false;
+
+        tracing::info!(
+            remaining_attempts = restore_result.remaining_attempts,
+            "SVR key restore completed successfully"
+        );
     }
 
     /// Log out and shut down all background services.

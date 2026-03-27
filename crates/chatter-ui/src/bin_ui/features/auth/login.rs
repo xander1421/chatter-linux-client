@@ -59,7 +59,7 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             // Login via SDK (handles auth + state + inbox + presence)
-            match ui_ctx.login(&username, &password, "linux-client").await {
+            match ui_ctx.login(&username, &password, "linux-client", None).await {
                 Ok(_result) => {
                     // Spawn UI-only event handlers (need slint::Weak<MainWindow>)
                     crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);
@@ -80,23 +80,6 @@ pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                                         tracing::warn!(dropped_count = n, "Domain event receiver lagged");
                                     }
-                                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                                }
-                            }
-                        });
-                    }
-
-                    // Subscribe to raw InboxEvent for UI-level handlers
-                    if let Some(mut event_rx) = ui_ctx.start_inbox_provider().await {
-                        let weak_for_inbox = weak.clone();
-                        let ui_ctx_for_inbox = ui_ctx.clone();
-                        tokio::spawn(async move {
-                            loop {
-                                match event_rx.recv().await {
-                                    Ok(event) => {
-                                        super::handle_inbox_event(event, &weak_for_inbox, &ui_ctx_for_inbox).await;
-                                    }
-                                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                                 }
                             }
