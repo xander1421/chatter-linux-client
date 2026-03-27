@@ -69,147 +69,36 @@ export component RecoveryCodesModal inherits Rectangle {
 
             Rectangle { height: Spacing.sm; }
 
-            // 2x4 grid of recovery codes
+            // Recovery codes list (single column — works on all screen sizes)
             Rectangle {
                 background: Colors.background;
                 border-radius: Spacing.radius-md;
 
                 VerticalLayout {
-                    padding: Spacing.lg;
-                    spacing: Spacing.sm;
+                    padding: Spacing.md;
+                    spacing: Spacing.xs;
 
-                    // Row 1 (codes 0-1)
-                    HorizontalLayout {
-                        spacing: Spacing.lg;
-                        alignment: center;
+                    for code[i] in root.codes: Rectangle {
+                        height: 32px;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-sm;
 
-                        for code[i] in root.codes: Rectangle {
-                            visible: i < 2;
-                            width: 0px;
-                            horizontal-stretch: i < 2 ? 1 : 0;
-                            height: i < 2 ? 36px : 0px;
-                            background: Colors.surface;
-                            border-radius: Spacing.radius-sm;
+                        HorizontalLayout {
+                            padding-left: Spacing.md;
+                            padding-right: Spacing.md;
+                            alignment: center;
 
-                            HorizontalLayout {
-                                padding-left: Spacing.md;
-                                padding-right: Spacing.md;
-                                alignment: center;
-
-                                Text {
-                                    text: (i + 1) + ". ";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.sm;
-                                }
-                                Text {
-                                    text: code;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.base;
-                                    font-weight: Typography.medium;
-                                    letter-spacing: 2px;
-                                }
+                            Text {
+                                text: (i + 1) + ". ";
+                                color: Colors.text-muted;
+                                font-size: Typography.sm;
                             }
-                        }
-                    }
-
-                    // Row 2 (codes 2-3)
-                    HorizontalLayout {
-                        spacing: Spacing.lg;
-                        alignment: center;
-
-                        for code[i] in root.codes: Rectangle {
-                            visible: i >= 2 && i < 4;
-                            width: 0px;
-                            horizontal-stretch: (i >= 2 && i < 4) ? 1 : 0;
-                            height: (i >= 2 && i < 4) ? 36px : 0px;
-                            background: Colors.surface;
-                            border-radius: Spacing.radius-sm;
-
-                            HorizontalLayout {
-                                padding-left: Spacing.md;
-                                padding-right: Spacing.md;
-                                alignment: center;
-
-                                Text {
-                                    text: (i + 1) + ". ";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.sm;
-                                }
-                                Text {
-                                    text: code;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.base;
-                                    font-weight: Typography.medium;
-                                    letter-spacing: 2px;
-                                }
-                            }
-                        }
-                    }
-
-                    // Row 3 (codes 4-5)
-                    HorizontalLayout {
-                        spacing: Spacing.lg;
-                        alignment: center;
-
-                        for code[i] in root.codes: Rectangle {
-                            visible: i >= 4 && i < 6;
-                            width: 0px;
-                            horizontal-stretch: (i >= 4 && i < 6) ? 1 : 0;
-                            height: (i >= 4 && i < 6) ? 36px : 0px;
-                            background: Colors.surface;
-                            border-radius: Spacing.radius-sm;
-
-                            HorizontalLayout {
-                                padding-left: Spacing.md;
-                                padding-right: Spacing.md;
-                                alignment: center;
-
-                                Text {
-                                    text: (i + 1) + ". ";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.sm;
-                                }
-                                Text {
-                                    text: code;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.base;
-                                    font-weight: Typography.medium;
-                                    letter-spacing: 2px;
-                                }
-                            }
-                        }
-                    }
-
-                    // Row 4 (codes 6-7)
-                    HorizontalLayout {
-                        spacing: Spacing.lg;
-                        alignment: center;
-
-                        for code[i] in root.codes: Rectangle {
-                            visible: i >= 6 && i < 8;
-                            width: 0px;
-                            horizontal-stretch: (i >= 6 && i < 8) ? 1 : 0;
-                            height: (i >= 6 && i < 8) ? 36px : 0px;
-                            background: Colors.surface;
-                            border-radius: Spacing.radius-sm;
-
-                            HorizontalLayout {
-                                padding-left: Spacing.md;
-                                padding-right: Spacing.md;
-                                alignment: center;
-
-                                Text {
-                                    text: (i + 1) + ". ";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.sm;
-                                }
-                                Text {
-                                    text: code;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.base;
-                                    font-weight: Typography.medium;
-                                    letter-spacing: 2px;
-                                }
+                            Text {
+                                text: code;
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.medium;
+                                letter-spacing: 1px;
                             }
                         }
                     }
