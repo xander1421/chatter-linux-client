@@ -43,8 +43,8 @@ struct ActiveVideoStream {
 }
 
 struct LatestFrame {
-    /// RGBA8 pixel data.
-    rgba_data: Vec<u8>,
+    /// RGBA8 pixel data (Arc-wrapped for cheap sharing).
+    rgba_data: Arc<Vec<u8>>,
     /// Frame width.
     width: u32,
     /// Frame height.
@@ -116,10 +116,11 @@ impl VideoPlayback {
                         // Store in local frames map
                         {
                             let mut frames_guard = frames.write();
+                            let rgba_arc = Arc::new(rgba_data.clone());
                             frames_guard.insert(
                                 participant_id_clone.clone(),
                                 LatestFrame {
-                                    rgba_data: rgba_data.clone(),
+                                    rgba_data: rgba_arc,
                                     width,
                                     height,
                                     is_screen_share,

@@ -8,10 +8,12 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 /// Raw video frame data (Send + Sync safe).
+///
+/// Uses Arc<Vec<u8>> for rgba_data to avoid deep clones of frame buffers.
 #[derive(Clone)]
 pub struct VideoFrameData {
-    /// RGBA8 pixel data.
-    pub rgba_data: Vec<u8>,
+    /// RGBA8 pixel data (Arc-wrapped to avoid deep clones).
+    pub rgba_data: Arc<Vec<u8>>,
     /// Frame width in pixels.
     pub width: u32,
     /// Frame height in pixels.
@@ -51,7 +53,7 @@ impl SharedVideoFrames {
 
         let mut frames = self.frames.write();
         frames.insert(participant_id, VideoFrameData {
-            rgba_data,
+            rgba_data: Arc::new(rgba_data),
             width,
             height,
             is_screen_share,
