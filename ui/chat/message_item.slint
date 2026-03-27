@@ -9,7 +9,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
-import { MessageAttachmentData, ReactionEntry } from "types.slint";
+import { MessageAttachmentData, ReactionEntry, LinkPreviewData } from "types.slint";
 import { Icons } from "../theme/icons.slint";
 
 export component MessageItem inherits Rectangle {
@@ -55,6 +55,13 @@ export component MessageItem inherits Rectangle {
     in property <bool> is-media-playing: false;
     in property <float> audio-progress: 0.0;
     in property <string> audio-elapsed: "0:00";
+
+    // Link preview
+    in property <bool> has-link-preview: false;
+    in property <LinkPreviewData> link-preview;
+
+    // Callbacks for link preview
+    callback link-preview-clicked(string);  // url
 
     // Reactions
     in property <bool> has-reactions: false;
@@ -476,6 +483,83 @@ export component MessageItem inherits Rectangle {
                             wrap: word-wrap;
                             // Max width for text wrapping
                             max-width: root.width * 0.7 - Spacing.sm * 2;
+                        }
+
+                        // Link preview card
+                        if root.has-link-preview: Rectangle {
+                            max-width: 300px;
+                            background: root.is-own ? #00000015 : Colors.surface;
+                            border-radius: Spacing.radius-sm;
+                            border-width: 1px;
+                            border-color: Colors.text-muted.with-alpha(0.15);
+
+                            HorizontalLayout {
+                                padding: 0;
+                                spacing: 0;
+
+                                // Left accent bar
+                                Rectangle {
+                                    width: 3px;
+                                    background: Colors.primary;
+                                    border-radius: 1.5px;
+                                }
+
+                                // Text content
+                                VerticalLayout {
+                                    padding: Spacing.sm;
+                                    spacing: 4px;
+                                    horizontal-stretch: 1;
+
+                                    // Domain
+                                    Text {
+                                        text: root.link-preview.domain;
+                                        color: Colors.text-muted;
+                                        font-size: 10px;
+                                        overflow: elide;
+                                    }
+
+                                    // Title
+                                    if root.link-preview.title != "": Text {
+                                        text: root.link-preview.title;
+                                        color: Colors.primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        wrap: word-wrap;
+                                        max-width: root.link-preview.has-image ? 200px : 280px;
+                                    }
+
+                                    // Description
+                                    if root.link-preview.description != "": Text {
+                                        text: root.link-preview.description;
+                                        color: Colors.text-secondary;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                        overflow: elide;
+                                        max-width: root.link-preview.has-image ? 200px : 280px;
+                                    }
+                                }
+
+                                // Preview image (right side)
+                                if root.link-preview.has-image: Rectangle {
+                                    width: 72px;
+                                    clip: true;
+                                    border-radius: Spacing.radius-sm;
+
+                                    Image {
+                                        width: 100%;
+                                        height: 100%;
+                                        source: root.link-preview.preview-image;
+                                        image-fit: cover;
+                                    }
+                                }
+                            }
+
+                            link-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.link-preview-clicked(root.link-preview.url);
+                                }
+                            }
                         }
 
                         // Attachments
