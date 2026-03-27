@@ -6,8 +6,8 @@
 use std::fmt;
 
 use libsignal_protocol::{
-    DeviceId, IdentityKeyStore, KyberPreKeyStore, PreKeyStore, ProtocolAddress, SessionStore,
-    SignedPreKeyStore,
+    DeviceId, IdentityKeyStore, KyberPreKeyStore, PreKeySignalMessage, PreKeyStore,
+    ProtocolAddress, SessionStore, SignalMessage, SignedPreKeyStore,
 };
 
 use crate::crypto::signal::{SealedSenderDecryptionResult, SealedSenderManager};
@@ -516,18 +516,19 @@ impl MessageProcessor {
 
     /// Process a prekey message (initial key exchange).
     ///
-    /// Note: In the current architecture, all messages should come through sealed sender.
-    /// Non-sealed sender prekey messages are a legacy path. The envelope should contain
-    /// sender info for proper decryption. For now, we return an error indicating that
-    /// this path needs the sender address from envelope metadata (Phase 24 will handle this).
+    /// Extracts sender address from envelope metadata (source_uuid, source_device_id)
+    /// and decrypts using libsignal's PreKeySignalMessage decryption.
+    ///
+    /// This path handles initial session setup where the sender identity is provided
+    /// by the server in the envelope metadata. Most messages use sealed sender instead.
     async fn process_prekey_message<I, S, P, SP, K>(
         &self,
         message: &EphemeralMessage,
-        _identity_store: &mut I,
-        _session_store: &mut S,
-        _pre_key_store: &mut P,
-        _signed_pre_key_store: &SP,
-        _kyber_pre_key_store: &mut K,
+        identity_store: &mut I,
+        session_store: &mut S,
+        pre_key_store: &mut P,
+        signed_pre_key_store: &SP,
+        kyber_pre_key_store: &mut K,
     ) -> ProcessingResult
     where
         I: IdentityKeyStore,
@@ -536,51 +537,116 @@ impl MessageProcessor {
         SP: SignedPreKeyStore,
         K: KyberPreKeyStore,
     {
-        // Non-sealed sender prekey messages require the sender address from envelope metadata.
-        // In Signal's protocol, this typically comes from an outer envelope wrapper that
-        // includes sender info. Since we primarily use sealed sender (which includes
-        // sender info encrypted within), this path is mainly for initial session setup
-        // scenarios where the sender identity is known out-of-band.
-        //
-        // Phase 24 handlers will need to extract sender info from the envelope wrapper
-        // and pass it through. For now, we indicate this needs additional context.
-        //
-        // TODO: Phase 24 - extract sender address from envelope wrapper metadata
-        Err(ProcessingError::DecryptionFailed {
+        let sender_address = self.extract_sender_from_envelope(message)?;
+
+        let prekey_msg =
+            PreKeySignalMessage::try_from(message.encrypted_envelope.as_slice()).map_err(|e| {
+                ProcessingError::DecryptionFailed {
+                    message_id: message.id.clone(),
+                    error: format!("invalid prekey message format: {}", e),
+                }
+            })?;
+
+        let mut rng = rand::rngs::OsRng;
+        let plaintext = libsignal_protocol::message_decrypt_prekey(
+            &prekey_msg,
+            &sender_address,
+            session_store,
+            identity_store,
+            pre_key_store,
+            signed_pre_key_store,
+            kyber_pre_key_store,
+            &mut rng,
+        )
+        .await
+        .map_err(|e| ProcessingError::DecryptionFailed {
             message_id: message.id.clone(),
-            error: "prekey message requires sender address from envelope metadata (not yet implemented)".to_string(),
-        })
+            error: format!("prekey decryption failed: {}", e),
+        })?;
+
+        let content_type = self.determine_content_type(&plaintext);
+
+        Ok(ProcessedMessage::new(
+            message.id.clone(),
+            Some(sender_address),
+            content_type,
+            plaintext,
+            message.timestamp,
+            EnvelopeType::PrekeyMessage,
+        ))
     }
 
     /// Process a regular (non-prekey) message.
     ///
-    /// Note: In the current architecture, all messages should come through sealed sender.
-    /// Non-sealed sender regular messages are a legacy path. The envelope should contain
-    /// sender info for proper decryption. For now, we return an error indicating that
-    /// this path needs the sender address from envelope metadata (Phase 24 will handle this).
+    /// Extracts sender address from envelope metadata and decrypts using
+    /// libsignal's SignalMessage decryption for an established session.
+    ///
+    /// This is a fallback path; most messages use sealed sender.
     async fn process_regular_message<I, S>(
         &self,
         message: &EphemeralMessage,
-        _identity_store: &mut I,
-        _session_store: &mut S,
+        identity_store: &mut I,
+        session_store: &mut S,
     ) -> ProcessingResult
     where
         I: IdentityKeyStore,
         S: SessionStore,
     {
-        // Non-sealed sender messages require the sender address from envelope metadata.
-        // In Signal's protocol, the outer envelope contains sender info for non-sealed
-        // sender messages. Since we primarily use sealed sender, this path is mainly
-        // for fallback scenarios.
-        //
-        // Phase 24 handlers will need to extract sender info from the envelope wrapper
-        // and pass it through. For now, we indicate this needs additional context.
-        //
-        // TODO: Phase 24 - extract sender address from envelope wrapper metadata
-        Err(ProcessingError::DecryptionFailed {
+        let sender_address = self.extract_sender_from_envelope(message)?;
+
+        let signal_msg =
+            SignalMessage::try_from(message.encrypted_envelope.as_slice()).map_err(|e| {
+                ProcessingError::DecryptionFailed {
+                    message_id: message.id.clone(),
+                    error: format!("invalid signal message format: {}", e),
+                }
+            })?;
+
+        let mut rng = rand::rngs::OsRng;
+        let plaintext = libsignal_protocol::message_decrypt_signal(
+            &signal_msg,
+            &sender_address,
+            session_store,
+            identity_store,
+            &mut rng,
+        )
+        .await
+        .map_err(|e| ProcessingError::DecryptionFailed {
             message_id: message.id.clone(),
-            error: "regular message requires sender address from envelope metadata (not yet implemented)".to_string(),
-        })
+            error: format!("signal message decryption failed: {}", e),
+        })?;
+
+        let content_type = self.determine_content_type(&plaintext);
+
+        Ok(ProcessedMessage::new(
+            message.id.clone(),
+            Some(sender_address),
+            content_type,
+            plaintext,
+            message.timestamp,
+            EnvelopeType::Message,
+        ))
+    }
+
+    /// Extract sender address from envelope metadata (source_uuid, source_device_id).
+    ///
+    /// Used for non-sealed-sender envelopes (PreKey, Message) where the server
+    /// provides the sender identity in the envelope wrapper.
+    fn extract_sender_from_envelope(
+        &self,
+        message: &EphemeralMessage,
+    ) -> Result<ProtocolAddress, ProcessingError> {
+        let source_uuid = message.source_uuid.as_ref().ok_or_else(|| {
+            ProcessingError::DecryptionFailed {
+                message_id: message.id.clone(),
+                error: "non-sealed-sender envelope missing source_uuid".to_string(),
+            }
+        })?;
+
+        let source_device = message.source_device_id.unwrap_or(1);
+        let device_id = DeviceId::from(source_device);
+
+        Ok(ProtocolAddress::new(source_uuid.clone(), device_id))
     }
 
     /// Extract sender address from sealed sender decryption result.

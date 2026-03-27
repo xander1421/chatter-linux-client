@@ -129,6 +129,13 @@ pub struct EphemeralMessage {
     /// Unix timestamp in nanoseconds
     #[prost(fixed64, tag="4")]
     pub timestamp: u64,
+    /// Sender identity for non-sealed-sender envelopes (PreKey, Message).
+    /// Populated by the server from the outer envelope metadata.
+    /// Not set for SealedSender (sender revealed during decryption).
+    #[prost(string, optional, tag="5")]
+    pub source_uuid: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint32, optional, tag="6")]
+    pub source_device_id: ::core::option::Option<u32>,
 }
 // ============================================
 // Sending to Mailbox (Anonymous)
