@@ -27,14 +27,15 @@ export component Modal inherits Rectangle {
         }
     }
 
-    // Modal container - centered, sized to content
+    // Modal container - centered, responsive to viewport
     modal-container := Rectangle {
         accessible-role: none;
         accessible-description: root.title;
-        width: root.modal-width;
+        // Responsive: cap at viewport width minus 32px padding for mobile
+        width: min(root.modal-width, parent.width - 32px);
         // Use min/max constraints instead of explicit height to allow sizing to content
         min-height: 200px;
-        max-height: min(parent.height * 80%, modal-layout.preferred-height + 1px);
+        max-height: min(parent.height - 48px, modal-layout.preferred-height + 1px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Colors.surface;
