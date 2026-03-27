@@ -441,8 +441,8 @@ export component MessageComposer inherits Rectangle {
                 opacity: root.disabled ? 0.5 : 1.0;
                 clip: true;  // Prevent text from overflowing outside input bounds
 
-                // Placeholder text (shown when empty and not focused)
-                if root.text == "" && !text-input.has-focus: Text {
+                // Placeholder text (shown when empty, fades on focus)
+                if root.text == "": Text {
                     x: Spacing.md;
                     y: (parent.height - self.preferred-height) / 2;
                     width: parent.width - Spacing.md * 2;
@@ -450,6 +450,8 @@ export component MessageComposer inherits Rectangle {
                     color: Colors.text-muted;
                     font-size: Typography.base;
                     wrap: word-wrap;
+                    opacity: text-input.has-focus ? 0.5 : 1.0;
+                    animate opacity { duration: 150ms; }
                 }
 
                 // Text input

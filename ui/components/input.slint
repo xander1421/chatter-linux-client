@@ -52,8 +52,8 @@ export component Input inherits Rectangle {
             border-color: border-col;
             opacity: disabled ? 0.5 : 1.0;
 
-            // Placeholder text (shown when empty and not focused)
-            if root.text == "" && !focused: Text {
+            // Placeholder text (shown when empty, fades on focus)
+            if root.text == "": Text {
                 x: Spacing.md;
                 width: parent.width - Spacing.md * 2;
                 height: 100%;
@@ -61,6 +61,8 @@ export component Input inherits Rectangle {
                 color: Colors.text-muted;
                 font-size: Typography.base;
                 vertical-alignment: center;
+                opacity: focused ? 0.5 : 1.0;
+                animate opacity { duration: 150ms; }
             }
 
             // Actual text input (full width for reliable touch targeting)
