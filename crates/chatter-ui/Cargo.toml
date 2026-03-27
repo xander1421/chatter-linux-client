@@ -36,8 +36,8 @@ slint-code-view = { path = "../../../slint-code-view" }
 # ============================================================================
 # Shared runtime deps (needed directly by the binary)
 # ============================================================================
-tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "signal", "io-util", "net", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 gstreamer = "0.23"
