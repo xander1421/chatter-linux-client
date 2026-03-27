@@ -53,6 +53,8 @@ pub fn add_jarvis_thinking_placeholder(window: &MainWindow) -> String {
         date_separator_text: Default::default(),
         is_continuation: false,
         show_date_separator: false,
+        has_link_preview: false,
+        link_preview: Default::default(),
     };
 
     let model = window.get_messages();
@@ -120,6 +122,8 @@ pub fn replace_thinking_with_response(
         date_separator_text: Default::default(),
         is_continuation: false,
         show_date_separator: false,
+        has_link_preview: false,
+        link_preview: Default::default(),
     };
 
     messages.push(msg_item);

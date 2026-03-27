@@ -1806,6 +1806,7 @@ dependencies = [
  "slint",
  "slint-build",
  "slint-code-view",
+ "tempfile",
  "tokio",
  "tokio-util",
  "tracing",

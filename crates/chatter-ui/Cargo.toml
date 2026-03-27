@@ -72,6 +72,9 @@ glutin_egl_sys = "0.7"
 i-slint-backend-android-activity = { version = "1.15.1", default-features = false, features = ["aa-06"], optional = true }
 android-activity = { version = "0.6", features = ["native-activity"], optional = true }
 
+[dev-dependencies]
+tempfile = "3"
+
 [build-dependencies]
 slint-build = "1.15.1"
 

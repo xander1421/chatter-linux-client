@@ -330,7 +330,8 @@ async fn test_list_friends_empty() {
 
     // Might have 0 friends or some from previous tests
     // Just verify the API works
-    assert!(friends.friends.len() >= 0, "Should return friend list");
+    // Verify the API returns a valid friend list (may be empty)
+    let _ = friends.friends.len();
 }
 
 #[tokio::test]

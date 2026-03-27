@@ -99,6 +99,8 @@ pub(crate) fn handle_anon_group_member_joined(
                 date_separator_text: Default::default(),
                 is_continuation: false,
                 show_date_separator: false,
+                has_link_preview: false,
+                link_preview: Default::default(),
             };
 
             model.push(system_msg);
@@ -181,6 +183,8 @@ pub(crate) fn handle_anon_group_member_left(
                 date_separator_text: Default::default(),
                 is_continuation: false,
                 show_date_separator: false,
+                has_link_preview: false,
+                link_preview: Default::default(),
             };
 
             model.push(system_msg);
@@ -267,6 +271,8 @@ pub(crate) fn handle_anon_group_member_kicked(
                 date_separator_text: Default::default(),
                 is_continuation: false,
                 show_date_separator: false,
+                has_link_preview: false,
+                link_preview: Default::default(),
             };
 
             model.push(system_msg);

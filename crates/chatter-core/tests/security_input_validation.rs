@@ -359,8 +359,8 @@ fn test_content_type_padding_profiles() {
     // All serialized messages should be distinguishable by size before padding
     // After padding, they should be bucketed to resist traffic analysis
     // The builders may or may not add padding — verify that padding exists on at least some
-    assert!(typing.padding.len() + text.padding.len() + with_attachment.padding.len() >= 0,
-        "At least check padding field exists (may be zero if padding is done at encryption layer)");
+    // Verify padding fields are accessible (may be zero-length if padding is done at encryption layer)
+    let _total_padding = typing.padding.len() + text.padding.len() + with_attachment.padding.len();
 }
 
 /// Padding function produces cryptographically random bytes.
