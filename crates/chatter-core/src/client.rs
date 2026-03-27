@@ -15,7 +15,7 @@ use crate::app::core_services::CoreServices;
 use crate::domain::attachment::Attachment;
 use crate::domain::channel::{Channel, ChannelType};
 use crate::domain::message::Message;
-use crate::error::NetworkError;
+use crate::error::{CryptoError, NetworkError};
 use crate::events::{DomainEvent, EventBus};
 use crate::services::auth_service::{AuthError, LoginResult};
 use crate::inbox::DeviceInboxProvider;
@@ -772,7 +772,9 @@ impl ChatterClient {
             let info = format!("chatter_profile_key_{}", username.trim().to_lowercase());
             let mut profile_key = [0u8; 32];
             hk.expand(info.as_bytes(), &mut profile_key)
-                .expect("32 bytes is valid output length for HKDF-SHA256");
+                .map_err(|_| ClientError::Auth(AuthError::Crypto(
+                    CryptoError::KeyDerivationFailed("HKDF expand failed for profile key".into())
+                )))?;
 
             let hash = hash_username(username, &profile_key);
             profile_key.zeroize();
@@ -947,7 +949,9 @@ impl ChatterClient {
         let info = format!("chatter_profile_key_{}", username.trim().to_lowercase());
         let mut profile_key = [0u8; 32];
         hk.expand(info.as_bytes(), &mut profile_key)
-            .expect("32 bytes is valid output length for HKDF-SHA256");
+            .map_err(|_| ClientError::Auth(AuthError::Crypto(
+                CryptoError::KeyDerivationFailed("HKDF expand failed for profile key".into())
+            )))?;
 
         // 3. Get identity keypair from signal store
         let private_bytes = self.signal().actor.get_identity_private_key().await

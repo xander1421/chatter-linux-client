@@ -96,13 +96,13 @@ pub struct LoginResult {
 /// - Password hash is the IKM (input key material)
 /// - Username is part of the info for domain separation
 /// - Output is suitable for HMAC and AES-GCM operations
-fn derive_profile_key_from_password(password_hash: &[u8], username: &str) -> [u8; 32] {
+fn derive_profile_key_from_password(password_hash: &[u8], username: &str) -> Result<[u8; 32], CryptoError> {
     let hk = Hkdf::<Sha256>::new(None, password_hash);
     let info = format!("chatter_profile_key_{}", username.trim().to_lowercase());
     let mut profile_key = [0u8; 32];
     hk.expand(info.as_bytes(), &mut profile_key)
-        .expect("32 bytes is valid output length for HKDF-SHA256");
-    profile_key
+        .map_err(|_| CryptoError::KeyDerivationFailed("HKDF expand failed for profile key".into()))?;
+    Ok(profile_key)
 }
 
 /// Hash a username with the profile key for privacy.
@@ -319,7 +319,7 @@ impl AuthService {
 
         // PRIVACY: Derive profile key deterministically from password
         // This ensures same password produces same profile_key on any device
-        let profile_key = derive_profile_key_from_password(&password_hash, username);
+        let profile_key = derive_profile_key_from_password(&password_hash, username)?;
 
         // PRIVACY: Hash username with profile key - server never sees actual username
         let username_hash = hash_username_with_profile_key(username, &profile_key);
@@ -486,7 +486,7 @@ impl AuthService {
         // PRIVACY: Derive profile key deterministically from password
         // This ensures same password produces same profile_key on any device
         // SECURITY: Profile key stays client-side only - never sent to server
-        let profile_key = derive_profile_key_from_password(&password_hash, username);
+        let profile_key = derive_profile_key_from_password(&password_hash, username)?;
 
         // PRIVACY: Hash username with profile key - server never sees actual username
         let username_hash = hash_username_with_profile_key(username, &profile_key);
