@@ -785,6 +785,81 @@ impl ChatterClient {
         profile_key.zeroize();
     }
 
+    /// Retry SVR backup creation if it failed during registration.
+    ///
+    /// This is the public counterpart of [`perform_svr_backup`] — it derives
+    /// all key material from the raw credentials so the user can retry without
+    /// re-registering. Sensitive intermediates are zeroized on all paths.
+    ///
+    /// # Arguments
+    ///
+    /// * `pin` - Exactly 6 ASCII digits.
+    /// * `username` - Plaintext username (used for HKDF info and SVR secret derivation).
+    /// * `password` - Plaintext password (used to derive the profile key).
+    pub async fn retry_svr_backup(
+        &self,
+        pin: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<(), ClientError> {
+        use crate::crypto::svr::derive_svr_secret;
+        use hkdf::Hkdf;
+        use sha2::{Digest, Sha256};
+        use zeroize::Zeroize;
+
+        // 1. Validate PIN (6 digits)
+        if pin.len() != 6 || !pin.chars().all(|c| c.is_ascii_digit()) {
+            return Err(ClientError::Validation("PIN must be exactly 6 digits".into()));
+        }
+
+        // 2. Derive profile key from password + username
+        //    (mirrors auth_service::derive_profile_key_from_password)
+        let password_hash = Sha256::digest(password.as_bytes());
+        let hk = Hkdf::<Sha256>::new(None, &password_hash);
+        let info = format!("chatter_profile_key_{}", username.trim().to_lowercase());
+        let mut profile_key = [0u8; 32];
+        hk.expand(info.as_bytes(), &mut profile_key)
+            .expect("32 bytes is valid output length for HKDF-SHA256");
+
+        // 3. Get identity keypair from signal store
+        let private_bytes = self.signal().actor.get_identity_private_key().await
+            .map_err(|e| {
+                profile_key.zeroize();
+                ClientError::Validation(format!("failed to get identity private key: {}", e))
+            })?;
+        let public_bytes_33 = self.signal().actor.get_identity_public_key().await
+            .map_err(|e| {
+                profile_key.zeroize();
+                ClientError::Validation(format!("failed to get identity public key: {}", e))
+            })?;
+        // Strip the 0x05 type prefix to get raw 32-byte Curve25519 public key
+        let mut identity_keypair = [0u8; 64];
+        identity_keypair[..32].copy_from_slice(&private_bytes);
+        identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
+
+        // 4. Derive SVR secret from PIN + username
+        let mut svr_secret = derive_svr_secret(pin, username).map_err(|e| {
+            identity_keypair.zeroize();
+            profile_key.zeroize();
+            ClientError::Validation(format!("failed to derive svr_secret: {}", e))
+        })?;
+
+        // 5. Create and upload backup
+        let result = self
+            .svr_backup()
+            .create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key)
+            .await;
+
+        // 6. Zeroize all sensitive intermediates (both success and error paths)
+        svr_secret.zeroize();
+        identity_keypair.zeroize();
+        profile_key.zeroize();
+
+        result.map_err(|e| ClientError::Validation(format!("SVR backup upload failed: {}", e)))?;
+        tracing::info!("SVR backup retry succeeded");
+        Ok(())
+    }
+
     /// Attempt to restore identity keys from SVR backup on a new device.
     ///
     /// Checks whether local identity keys exist. If they do, this is an
