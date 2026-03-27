@@ -146,6 +146,8 @@ export component MessageComposer inherits Rectangle {
                     height: 24px;
                     background: cancel-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
                     border-radius: Spacing.radius-sm;
+                    accessible-role: button;
+                    accessible-label: "Cancel edit";
 
                     Text {
                         text: "\u{2715}";  // X mark
@@ -217,6 +219,8 @@ export component MessageComposer inherits Rectangle {
                     height: 24px;
                     background: cancel-reply-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
                     border-radius: Spacing.radius-sm;
+                    accessible-role: button;
+                    accessible-label: "Cancel reply";
 
                     Text {
                         text: "\u{2715}";  // X mark
@@ -254,6 +258,8 @@ export component MessageComposer inherits Rectangle {
                     height: 28px;
                     border-radius: Spacing.radius-sm;
                     background: fmt-bold-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Bold";
 
                     Text {
                         text: "B";
@@ -276,6 +282,8 @@ export component MessageComposer inherits Rectangle {
                     height: 28px;
                     border-radius: Spacing.radius-sm;
                     background: fmt-italic-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Italic";
 
                     Text {
                         text: "I";
@@ -298,6 +306,8 @@ export component MessageComposer inherits Rectangle {
                     height: 28px;
                     border-radius: Spacing.radius-sm;
                     background: fmt-strike-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Strikethrough";
 
                     Text {
                         text: "S";
@@ -328,6 +338,8 @@ export component MessageComposer inherits Rectangle {
                     height: 28px;
                     border-radius: Spacing.radius-sm;
                     background: fmt-code-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Inline code";
 
                     Text {
                         text: "</>";
@@ -356,6 +368,8 @@ export component MessageComposer inherits Rectangle {
                     height: 28px;
                     border-radius: Spacing.radius-sm;
                     background: fmt-codeblock-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Code block";
 
                     Text {
                         text: "```";
@@ -487,6 +501,8 @@ export component MessageComposer inherits Rectangle {
                                 height: 24px;
                                 background: remove-touch.has-hover ? Colors.error.transparentize(0.7) : Colors.error.transparentize(0.9);
                                 border-radius: Spacing.radius-full;
+                                accessible-role: button;
+                                accessible-label: "Remove attachment";
 
                                 Text {
                                     width: 100%;
@@ -516,6 +532,8 @@ export component MessageComposer inherits Rectangle {
                         border-width: 2px;
                         border-color: Colors.text-muted;
                         border-radius: Spacing.radius-sm;
+                        accessible-role: button;
+                        accessible-label: "Add attachment";
 
                         Text {
                             width: 100%;
@@ -557,6 +575,8 @@ export component MessageComposer inherits Rectangle {
                 background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
+                accessible-role: button;
+                accessible-label: "Attach file";
 
                 Text {
                     text: "\u{1F4CE}\u{FE0F}";  // Paperclip (with emoji variant selector)
@@ -582,6 +602,8 @@ export component MessageComposer inherits Rectangle {
                            (fmt-toggle-touch.has-hover ? Colors.surface-hover : transparent);
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
+                accessible-role: button;
+                accessible-label: "Toggle formatting";
 
                 Text {
                     text: "Aa";
@@ -611,6 +633,8 @@ export component MessageComposer inherits Rectangle {
                 border-color: text-input.has-focus ? Colors.primary : Colors.surface-hover;
                 opacity: root.disabled ? 0.5 : 1.0;
                 clip: true;  // Prevent text from overflowing outside input bounds
+                accessible-role: AccessibleRole.text-input;
+                accessible-label: "Message input";
 
                 // Placeholder text (shown when empty, fades on focus)
                 if root.text == "": Text {
@@ -673,6 +697,8 @@ export component MessageComposer inherits Rectangle {
                 background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
+                accessible-role: button;
+                accessible-label: "Emoji picker";
 
                 Text {
                     text: "\u{1F600}\u{FE0F}";  // Grinning face (with emoji variant selector)
@@ -697,6 +723,8 @@ export component MessageComposer inherits Rectangle {
                 background: gif-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
+                accessible-role: button;
+                accessible-label: "GIF picker";
 
                 Text {
                     text: "GIF";
@@ -723,6 +751,8 @@ export component MessageComposer inherits Rectangle {
                 background: send-touch.has-hover ? Colors.primary-hover : Colors.primary;
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
+                accessible-role: button;
+                accessible-label: "Send message";
 
                 Text {
                     text: "\u{27A4}";  // Right arrow
