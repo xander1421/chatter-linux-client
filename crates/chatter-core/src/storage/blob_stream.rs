@@ -265,7 +265,9 @@ impl OwnedBlobStream {
             return Ok(0);
         }
 
-        let blob = self.blob.as_ref().expect("blob already dropped");
+        let blob = self.blob.as_ref().ok_or_else(|| {
+            StorageError::InvalidData("blob used after drop".into())
+        })?;
         let available = self.size - offset;
         let to_read = buf.len().min(available);
 
@@ -290,7 +292,9 @@ impl Read for OwnedBlobStream {
             return Ok(0);
         }
 
-        let blob = self.blob.as_ref().expect("blob already dropped");
+        let blob = self.blob.as_ref().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "blob used after drop")
+        })?;
         let available = self.size - self.position;
         let to_read = buf.len().min(available);
 
