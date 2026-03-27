@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use rand::SeedableRng;
+
 use libsignal_protocol::{
     DeviceId, IdentityKeyStore, KyberPreKeyStore, PreKeySignalMessage, PreKeyStore,
     ProtocolAddress, SessionStore, SignalMessage, SignedPreKeyStore,
@@ -300,7 +302,7 @@ pub type ProcessingResult = Result<ProcessedMessage, ProcessingError>;
 ///     trust_root,
 ///     Some("+15551234567".to_string()),
 ///     "user-uuid".to_string(),
-///     DeviceId::from(1),
+///     DeviceId::new(1),
 /// );
 ///
 /// let result = processor.process(
@@ -547,7 +549,7 @@ impl MessageProcessor {
                 }
             })?;
 
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::StdRng::from_os_rng();
         let plaintext = libsignal_protocol::message_decrypt_prekey(
             &prekey_msg,
             &sender_address,
@@ -602,7 +604,7 @@ impl MessageProcessor {
                 }
             })?;
 
-        let mut rng = rand::rngs::OsRng;
+        let mut rng = rand::rngs::StdRng::from_os_rng();
         let plaintext = libsignal_protocol::message_decrypt_signal(
             &signal_msg,
             &sender_address,
@@ -644,7 +646,18 @@ impl MessageProcessor {
         })?;
 
         let source_device = message.source_device_id.unwrap_or(1);
-        let device_id = DeviceId::from(source_device);
+        let device_u8: u8 = source_device.try_into().map_err(|_| {
+            ProcessingError::DecryptionFailed {
+                message_id: message.id.clone(),
+                error: format!("source_device_id {} exceeds u8 range", source_device),
+            }
+        })?;
+        let device_id = DeviceId::new(device_u8).map_err(|_| {
+            ProcessingError::DecryptionFailed {
+                message_id: message.id.clone(),
+                error: format!("invalid source_device_id: {}", source_device),
+            }
+        })?;
 
         Ok(ProtocolAddress::new(source_uuid.clone(), device_id))
     }

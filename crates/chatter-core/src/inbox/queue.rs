@@ -144,6 +144,8 @@ impl PersistedQueueEntry {
             encrypted_envelope: self.encrypted_envelope.clone(),
             envelope_type: self.envelope_type,
             timestamp: self.timestamp,
+            source_uuid: None,
+            source_device_id: None,
         };
 
         QueuedInboxMessage {
@@ -462,6 +464,8 @@ mod tests {
             encrypted_envelope: vec![1, 2, 3],
             envelope_type: 1,
             timestamp: 1234567890,
+            source_uuid: None,
+            source_device_id: None,
         }
     }
 
@@ -734,6 +738,8 @@ mod tests {
             encrypted_envelope: binary_envelope.clone(),
             envelope_type: 2,
             timestamp: 1234567890,
+            source_uuid: None,
+            source_device_id: None,
         };
         queue.enqueue(msg, None);
 
