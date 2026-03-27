@@ -682,8 +682,96 @@ impl ChatterClient {
             result.device_id,
             result.display_name.clone(),
         );
+
+        // Create SVR backup after successful registration (non-blocking on failure)
+        if let Some(p) = pin {
+            self.perform_svr_backup(p, username).await;
+        }
+
         self.start().await?;
         Ok(result)
+    }
+
+    /// Create an SVR encrypted backup of identity keys and profile key.
+    ///
+    /// Called after registration to back up key material for future device recovery.
+    /// Failures are logged but never block the caller -- registration/login success
+    /// is more important than backup success.
+    async fn perform_svr_backup(&self, pin: &str, username: &str) {
+        use crate::crypto::svr::derive_svr_secret;
+        use crate::storage::repositories::settings_repo::keys;
+        use zeroize::Zeroize;
+
+        // 1. Derive svr_secret transiently from PIN + username
+        let mut svr_secret = match derive_svr_secret(pin, username) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("SVR backup skipped: failed to derive svr_secret: {}", e);
+                return;
+            }
+        };
+
+        // 2. Get identity keypair bytes (32 private + 32 public)
+        let private_bytes = match self.signal().actor.get_identity_private_key().await {
+            Ok(b) => b,
+            Err(e) => {
+                svr_secret.zeroize();
+                tracing::warn!("SVR backup skipped: failed to get identity private key: {}", e);
+                return;
+            }
+        };
+        let public_bytes_33 = match self.signal().actor.get_identity_public_key().await {
+            Ok(b) => b,
+            Err(e) => {
+                svr_secret.zeroize();
+                tracing::warn!("SVR backup skipped: failed to get identity public key: {}", e);
+                return;
+            }
+        };
+        // Strip the 0x05 type prefix to get raw 32-byte Curve25519 public key
+        let mut identity_keypair = [0u8; 64];
+        identity_keypair[..32].copy_from_slice(&private_bytes);
+        identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
+
+        // 3. Get profile key from settings
+        let mut profile_key = match self.signal().settings_repo.get_bytes(keys::PROFILE_KEY) {
+            Ok(Some(bytes)) if bytes.len() == 32 => {
+                let mut pk = [0u8; 32];
+                pk.copy_from_slice(&bytes);
+                pk
+            }
+            Ok(_) => {
+                svr_secret.zeroize();
+                identity_keypair.zeroize();
+                tracing::warn!("SVR backup skipped: profile key not found or invalid length");
+                return;
+            }
+            Err(e) => {
+                svr_secret.zeroize();
+                identity_keypair.zeroize();
+                tracing::warn!("SVR backup skipped: failed to read profile key: {}", e);
+                return;
+            }
+        };
+
+        // 4. Upload encrypted backup
+        match self
+            .svr_backup()
+            .create_and_upload_backup(&svr_secret, &identity_keypair, &profile_key)
+            .await
+        {
+            Ok(version) => {
+                tracing::info!(version, "SVR backup created successfully after registration");
+            }
+            Err(e) => {
+                tracing::warn!("SVR backup failed (non-fatal): {}", e);
+            }
+        }
+
+        // 5. Zeroize sensitive intermediates
+        svr_secret.zeroize();
+        identity_keypair.zeroize();
+        profile_key.zeroize();
     }
 
     /// Log out and shut down all background services.
