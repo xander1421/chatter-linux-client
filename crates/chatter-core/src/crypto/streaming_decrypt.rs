@@ -271,32 +271,6 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
         Ok(len)
     }
 
-    /// Decrypt the entire ciphertext to a Vec (two-pass: verify then decrypt).
-    ///
-    /// Use `decrypt_all_single_pass` for better performance.
-    #[allow(dead_code)]
-    pub fn decrypt_all_two_pass(&mut self) -> Result<Vec<u8>, CryptoError> {
-        self.verify()?;
-        self.init_decryption()?;
-
-        let mut plaintext = Vec::with_capacity(self.plaintext_size);
-        let mut output = vec![0u8; CHUNK_SIZE + 16];
-
-        loop {
-            let n = self.read_decrypted(&mut output)?;
-            if n == 0 {
-                break;
-            }
-            plaintext.extend_from_slice(&output[..n]);
-        }
-
-        let n = self.finalize(&mut output)?;
-        plaintext.extend_from_slice(&output[..n]);
-        plaintext.truncate(self.plaintext_size);
-
-        Ok(plaintext)
-    }
-
     /// Decrypt the entire ciphertext in a single pass.
     ///
     /// Reads the blob once, computing HMAC/SHA256 while decrypting.
