@@ -2,6 +2,7 @@
 //
 // Container with user profile bar, saved messages, channel list, and DM list.
 // Supports collapsing to icon-only mode (60px).
+// Tooltip handling is self-contained via TooltipArea — no signal bubbling.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -10,6 +11,7 @@ import { ChannelList, ChannelListItemData } from "channel_list.slint";
 import { DMList, DMListItemData } from "dm_list.slint";
 import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
 import { UserProfileBar } from "user_profile_bar.slint";
+import { TooltipArea } from "../components/tooltip.slint";
 
 // Re-export types for parent components
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData }
@@ -61,11 +63,6 @@ export component Sidebar inherits Rectangle {
     // Callback - Toggle collapsed
     callback toggle-collapsed();
 
-
-    // Callbacks - Tooltip (bubble up to App for global rendering)
-    callback show-tooltip(string, length, length);
-    callback hide-tooltip();
-
     // Layout - animated width transition
     width: root.collapsed ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
     background: Colors.surface;
@@ -88,10 +85,6 @@ export component Sidebar inherits Rectangle {
 
             friends-clicked => { root.friends-clicked(); }
             profile-clicked => { root.profile-clicked(); }
-            show-tooltip(text) => {
-                root.show-tooltip(text, root.width + 8px, user-profile.y + user-profile.height / 2 - 14px);
-            }
-            hide-tooltip => { root.hide-tooltip(); }
         }
 
         // Separator
@@ -100,22 +93,19 @@ export component Sidebar inherits Rectangle {
             background: Colors.surface-hover;
         }
 
-        // Friends entry
+        // Friends entry — self-contained tooltip in collapsed mode
         friends-entry := Rectangle {
             height: 44px;
             border-radius: Spacing.radius-sm;
             background: friends-touch.has-hover ? Colors.surface-hover : Colors.surface;
 
-            // Internal state for tracking if tooltip is currently shown
-            property <bool> tooltip-shown: false;
+            if !root.collapsed: HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+                alignment: start;
 
-            HorizontalLayout {
-                padding-left: root.collapsed ? 0px : Spacing.sm;
-                padding-right: root.collapsed ? 0px : Spacing.sm;
-                spacing: root.collapsed ? 0px : Spacing.sm;
-                alignment: root.collapsed ? center : start;
-
-                // Friends icon container (20px wide to match other icons)
+                // Friends icon container
                 Rectangle {
                     width: 20px;
                     height: parent.height;
@@ -128,31 +118,10 @@ export component Sidebar inherits Rectangle {
                         y: (parent.height - self.height) / 2;
                         colorize: friends-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
                     }
-
-                    // Badge for pending requests (collapsed mode)
-                    if root.collapsed && root.pending-friend-requests > 0: Rectangle {
-                        x: parent.width - 8px;
-                        y: 8px;
-                        width: root.pending-friend-requests > 9 ? 18px : 14px;
-                        height: 14px;
-                        border-radius: 7px;
-                        background: Colors.error;
-
-                        Text {
-                            text: root.pending-friend-requests > 9 ? "9+" : root.pending-friend-requests;
-                            color: Colors.text-primary;
-                            font-size: 10px;
-                            font-weight: 700;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            width: 100%;
-                            height: 100%;
-                        }
-                    }
                 }
 
-                // Text with badge (hidden when collapsed)
-                if !root.collapsed: HorizontalLayout {
+                // Text with badge
+                HorizontalLayout {
                     spacing: Spacing.xs;
                     alignment: start;
 
@@ -184,28 +153,56 @@ export component Sidebar inherits Rectangle {
                 }
             }
 
+            if root.collapsed: TooltipArea {
+                width: 100%;
+                height: 100%;
+                tooltip-text: "Friends";
+                tooltip-enabled: root.collapsed;
+                placement: "right";
+
+                HorizontalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 20px;
+                        height: parent.height;
+
+                        Image {
+                            source: Icons.users;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: friends-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                        }
+
+                        // Badge for pending requests (collapsed mode)
+                        if root.pending-friend-requests > 0: Rectangle {
+                            x: parent.width - 8px;
+                            y: 8px;
+                            width: root.pending-friend-requests > 9 ? 18px : 14px;
+                            height: 14px;
+                            border-radius: 7px;
+                            background: Colors.error;
+
+                            Text {
+                                text: root.pending-friend-requests > 9 ? "9+" : root.pending-friend-requests;
+                                color: Colors.text-primary;
+                                font-size: 10px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                    }
+                }
+            }
+
             friends-touch := TouchArea {
                 mouse-cursor: pointer;
                 clicked => { root.friends-clicked(); }
-            }
-
-            // Show tooltip when hovering in collapsed mode
-            if root.collapsed && friends-touch.has-hover && !tooltip-shown: Rectangle {
-                width: 0;
-                height: 0;
-                init => {
-                    friends-entry.tooltip-shown = true;
-                    root.show-tooltip("Friends", root.width + 8px, friends-entry.y + friends-entry.height / 2 - 14px);
-                }
-            }
-
-            if tooltip-shown && !friends-touch.has-hover: Rectangle {
-                width: 0;
-                height: 0;
-                init => {
-                    friends-entry.tooltip-shown = false;
-                    root.hide-tooltip();
-                }
             }
         }
 
@@ -215,16 +212,12 @@ export component Sidebar inherits Rectangle {
             border-radius: Spacing.radius-sm;
             background: saved-touch.has-hover ? Colors.surface-hover : Colors.surface;
 
-            // Internal state for tracking if tooltip is currently shown
-            property <bool> tooltip-shown: false;
+            if !root.collapsed: HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+                alignment: start;
 
-            HorizontalLayout {
-                padding-left: root.collapsed ? 0px : Spacing.sm;
-                padding-right: root.collapsed ? 0px : Spacing.sm;
-                spacing: root.collapsed ? 0px : Spacing.sm;
-                alignment: root.collapsed ? center : start;
-
-                // Saved messages icon - aligned with channel icons (20px wide container)
                 Rectangle {
                     width: 20px;
                     height: parent.height;
@@ -239,8 +232,7 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                // Text (hidden when collapsed)
-                if !root.collapsed: Text {
+                Text {
                     text: "Saved Messages";
                     color: Colors.text-secondary;
                     font-size: 14px;
@@ -248,28 +240,34 @@ export component Sidebar inherits Rectangle {
                 }
             }
 
+            if root.collapsed: TooltipArea {
+                width: 100%;
+                height: 100%;
+                tooltip-text: "Saved Messages";
+                tooltip-enabled: root.collapsed;
+                placement: "right";
+
+                HorizontalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 20px;
+                        height: parent.height;
+
+                        Image {
+                            source: Icons.star;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.text-secondary;
+                        }
+                    }
+                }
+            }
+
             saved-touch := TouchArea {
                 clicked => { root.saved-messages-clicked(); }
-            }
-
-            // Show tooltip when hovering in collapsed mode (transition from not-shown to shown)
-            if root.collapsed && saved-touch.has-hover && !tooltip-shown: Rectangle {
-                width: 0;
-                height: 0;
-                init => {
-                    saved-messages.tooltip-shown = true;
-                    root.show-tooltip("Saved Messages", root.width + 8px, saved-messages.y + saved-messages.height / 2 - 14px);
-                }
-            }
-
-            // Hide tooltip when hover ends (transition from shown to not-shown)
-            if tooltip-shown && !saved-touch.has-hover: Rectangle {
-                width: 0;
-                height: 0;
-                init => {
-                    saved-messages.tooltip-shown = false;
-                    root.hide-tooltip();
-                }
             }
         }
 
@@ -279,16 +277,12 @@ export component Sidebar inherits Rectangle {
             border-radius: Spacing.radius-sm;
             background: msg-req-touch.has-hover ? Colors.surface-hover : Colors.surface;
 
-            // Internal state for tracking if tooltip is currently shown
-            property <bool> tooltip-shown: false;
+            if !root.collapsed: HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+                alignment: start;
 
-            HorizontalLayout {
-                padding-left: root.collapsed ? 0px : Spacing.sm;
-                padding-right: root.collapsed ? 0px : Spacing.sm;
-                spacing: root.collapsed ? 0px : Spacing.sm;
-                alignment: root.collapsed ? center : start;
-
-                // Message icon - aligned with channel icons (20px wide container)
                 Rectangle {
                     width: 20px;
                     height: parent.height;
@@ -301,31 +295,9 @@ export component Sidebar inherits Rectangle {
                         y: (parent.height - self.height) / 2;
                         colorize: Colors.primary;
                     }
-
-                    // Badge showing count (in collapsed mode)
-                    if root.collapsed: Rectangle {
-                        x: parent.width - 8px;
-                        y: 8px;
-                        width: root.pending-message-requests > 9 ? 18px : 14px;
-                        height: 14px;
-                        border-radius: 7px;
-                        background: Colors.error;
-
-                        Text {
-                            text: root.pending-message-requests > 9 ? "9+" : root.pending-message-requests;
-                            color: Colors.text-primary;
-                            font-size: 10px;
-                            font-weight: 700;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                            width: 100%;
-                            height: 100%;
-                        }
-                    }
                 }
 
-                // Text with badge (hidden when collapsed)
-                if !root.collapsed: HorizontalLayout {
+                HorizontalLayout {
                     spacing: Spacing.xs;
                     alignment: start;
 
@@ -337,7 +309,6 @@ export component Sidebar inherits Rectangle {
                         vertical-alignment: center;
                     }
 
-                    // Badge showing count
                     Rectangle {
                         width: root.pending-message-requests > 9 ? 24px : 20px;
                         height: 20px;
@@ -358,29 +329,56 @@ export component Sidebar inherits Rectangle {
                 }
             }
 
+            if root.collapsed: TooltipArea {
+                width: 100%;
+                height: 100%;
+                tooltip-text: "Message Requests (" + root.pending-message-requests + ")";
+                tooltip-enabled: root.collapsed;
+                placement: "right";
+
+                HorizontalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 20px;
+                        height: parent.height;
+
+                        Image {
+                            source: Icons.message-circle;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.primary;
+                        }
+
+                        // Badge showing count (in collapsed mode)
+                        Rectangle {
+                            x: parent.width - 8px;
+                            y: 8px;
+                            width: root.pending-message-requests > 9 ? 18px : 14px;
+                            height: 14px;
+                            border-radius: 7px;
+                            background: Colors.error;
+
+                            Text {
+                                text: root.pending-message-requests > 9 ? "9+" : root.pending-message-requests;
+                                color: Colors.text-primary;
+                                font-size: 10px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                    }
+                }
+            }
+
             msg-req-touch := TouchArea {
                 mouse-cursor: pointer;
                 clicked => { root.message-requests-clicked(); }
-            }
-
-            // Show tooltip when hovering in collapsed mode (transition from not-shown to shown)
-            if root.collapsed && msg-req-touch.has-hover && !tooltip-shown: Rectangle {
-                width: 0;
-                height: 0;
-                init => {
-                    message-requests.tooltip-shown = true;
-                    root.show-tooltip("Message Requests (" + root.pending-message-requests + ")", root.width + 8px, message-requests.y + message-requests.height / 2 - 14px);
-                }
-            }
-
-            // Hide tooltip when hover ends (transition from shown to not-shown)
-            if tooltip-shown && !msg-req-touch.has-hover: Rectangle {
-                width: 0;
-                height: 0;
-                init => {
-                    message-requests.tooltip-shown = false;
-                    root.hide-tooltip();
-                }
             }
         }
 
@@ -406,10 +404,6 @@ export component Sidebar inherits Rectangle {
             join-channel-clicked => {
                 root.join-channel-clicked();
             }
-            show-tooltip(text, local-y) => {
-                root.show-tooltip(text, root.width + 8px, channel-list.y + local-y);
-            }
-            hide-tooltip => { root.hide-tooltip(); }
         }
 
         // Private groups list (only show if has groups)
@@ -428,10 +422,6 @@ export component Sidebar inherits Rectangle {
             group-selected(id) => {
                 root.private-group-selected(id);
             }
-            show-tooltip(text, local-y) => {
-                root.show-tooltip(text, root.width + 8px, self.y + local-y);
-            }
-            hide-tooltip => { root.hide-tooltip(); }
         }
 
         // Separator
@@ -451,10 +441,6 @@ export component Sidebar inherits Rectangle {
             conversation-selected(id) => {
                 root.dm-selected(id);
             }
-            show-tooltip(text, local-y) => {
-                root.show-tooltip(text, root.width + 8px, dm-list.y + local-y);
-            }
-            hide-tooltip => { root.hide-tooltip(); }
         }
 
         // Separator before toggle

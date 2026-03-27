@@ -1,9 +1,13 @@
-// Tooltip component for hover hints
+// Tooltip components for hover hints
+//
+// Provides both a raw Tooltip and a self-contained TooltipArea that
+// handles hover detection, eliminating the need for signal bubbling.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
+// Raw tooltip — positioned absolutely, controlled by parent
 export component Tooltip inherits Rectangle {
     in property <string> text: "";
     in property <bool> show: false;
@@ -38,5 +42,65 @@ export component Tooltip inherits Rectangle {
         color: Colors.text-primary;
         font-size: Typography.xs;
         wrap: word-wrap;
+    }
+}
+
+// Self-contained tooltip trigger — wraps any content and renders its
+// own tooltip on hover. No signal bubbling needed.
+//
+// Usage:
+//   TooltipArea {
+//       tooltip-text: "My tooltip";
+//       tooltip-enabled: sidebar-collapsed;
+//       // ... child content here ...
+//   }
+export component TooltipArea inherits Rectangle {
+    in property <string> tooltip-text: "";
+    in property <bool> tooltip-enabled: true;
+
+    // Tooltip placement relative to this element
+    in property <string> placement: "right";  // "right", "bottom", "top"
+
+    // Internal hover state
+    property <bool> hovered: tooltip-touch.has-hover;
+
+    // Forward focus and pass through mouse events
+    tooltip-touch := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: default;
+    }
+
+    @children
+
+    // Render tooltip inline when hovered and enabled
+    if root.hovered && root.tooltip-enabled && root.tooltip-text != "": Rectangle {
+        // Position based on placement
+        x: root.placement == "right" ? parent.width + 8px :
+           root.placement == "bottom" ? (parent.width - self.width) / 2 :
+           (parent.width - self.width) / 2;
+        y: root.placement == "right" ? (parent.height - self.height) / 2 :
+           root.placement == "bottom" ? parent.height + 6px :
+           -self.height - 6px;
+
+        width: Math.min(tt-text.preferred-width + Spacing.sm * 2, 200px);
+        height: tt-text.preferred-height + Spacing.sm * 2;
+
+        background: #0a0a1a;
+        border-radius: Spacing.radius-sm;
+        border-color: Colors.surface-hover;
+        border-width: 1px;
+        opacity: 1;
+        animate opacity { duration: 150ms; }
+
+        tt-text := Text {
+            x: Spacing.sm;
+            y: Spacing.sm;
+            width: parent.width - Spacing.sm * 2;
+            text: root.tooltip-text;
+            color: Colors.text-primary;
+            font-size: Typography.xs;
+            wrap: word-wrap;
+        }
     }
 }

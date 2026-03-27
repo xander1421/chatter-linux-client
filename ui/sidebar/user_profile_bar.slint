@@ -1,13 +1,14 @@
 // User profile bar component
 //
 // Displays current user's profile with avatar, name, status, and friends button.
-// Supports collapsed mode showing only centered avatar.
+// Supports collapsed mode showing only centered avatar with self-contained tooltip.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Avatar } from "../components/avatar.slint";
+import { TooltipArea } from "../components/tooltip.slint";
 
 export component UserProfileBar inherits Rectangle {
     // Properties
@@ -21,8 +22,6 @@ export component UserProfileBar inherits Rectangle {
     // Callbacks
     callback friends-clicked();
     callback profile-clicked();
-    callback show-tooltip(string);
-    callback hide-tooltip();
 
     // Friend request badge count
     in property <int> pending-friend-requests: 0;
@@ -98,56 +97,40 @@ export component UserProfileBar inherits Rectangle {
 
     }
 
-    // Collapsed layout - centered avatar
-    if root.collapsed: VerticalLayout {
+    // Collapsed layout - self-contained tooltip via TooltipArea
+    if root.collapsed: TooltipArea {
         width: 100%;
         height: 100%;
-        alignment: center;
-        spacing: 4px;
+        tooltip-text: root.display-name;
+        tooltip-enabled: root.collapsed;
+        placement: "right";
 
-        // Internal state for tracking if tooltip is currently shown
-        property <bool> tooltip-shown: false;
+        VerticalLayout {
+            width: 100%;
+            height: 100%;
+            alignment: center;
+            spacing: 4px;
 
-        // Avatar
-        collapsed-profile-touch := TouchArea {
-            height: 40px;
-            clicked => {
-                root.profile-clicked();
-            }
-
-            HorizontalLayout {
-                alignment: center;
-
-                Avatar {
-                    size: 36px;
-                    source: root.avatar-source;
-                    fallback-text: root.initials;
-                    show-presence: true;
-                    presence-color: root.presence-status == "online" ? Colors.online
-                                 : root.presence-status == "away" ? Colors.away
-                                 : root.presence-status == "dnd" ? Colors.dnd
-                                 : Colors.offline;
+            TouchArea {
+                height: 40px;
+                clicked => {
+                    root.profile-clicked();
                 }
-            }
-        }
 
-        // Show tooltip when hovering profile (transition from not-shown to shown)
-        if collapsed-profile-touch.has-hover && !tooltip-shown: Rectangle {
-            width: 0;
-            height: 0;
-            init => {
-                parent.tooltip-shown = true;
-                root.show-tooltip(root.display-name);
-            }
-        }
+                HorizontalLayout {
+                    alignment: center;
 
-        // Hide tooltip when hover ends (transition from shown to not-shown)
-        if tooltip-shown && !collapsed-profile-touch.has-hover: Rectangle {
-            width: 0;
-            height: 0;
-            init => {
-                parent.tooltip-shown = false;
-                root.hide-tooltip();
+                    Avatar {
+                        size: 36px;
+                        source: root.avatar-source;
+                        fallback-text: root.initials;
+                        show-presence: true;
+                        presence-color: root.presence-status == "online" ? Colors.online
+                                     : root.presence-status == "away" ? Colors.away
+                                     : root.presence-status == "dnd" ? Colors.dnd
+                                     : Colors.offline;
+                    }
+                }
             }
         }
     }

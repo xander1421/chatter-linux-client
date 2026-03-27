@@ -1,12 +1,13 @@
 // DM list item component
 //
 // Displays a direct message conversation with avatar, presence, name, preview, and unread badge.
-// Supports collapsed mode showing avatar + presence + badge only.
+// Supports collapsed mode showing avatar + presence + badge only with self-contained tooltip.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
 import { Avatar } from "../components/avatar.slint";
+import { TooltipArea } from "../components/tooltip.slint";
 
 export component DMListItem inherits Rectangle {
     // Properties
@@ -24,8 +25,6 @@ export component DMListItem inherits Rectangle {
 
     // Callbacks
     callback clicked();
-    callback show-tooltip(string, length); // text, local-y
-    callback hide-tooltip();
 
     // Typing animation (0.0 to 1.0 cycling)
     property <float> typing-animation-progress: 0.0;
@@ -196,10 +195,13 @@ export component DMListItem inherits Rectangle {
         }
     }
 
-    // Collapsed content layout - centered avatar with badge overlay
-    if root.collapsed: Rectangle {
+    // Collapsed content layout - self-contained tooltip via TooltipArea
+    if root.collapsed: TooltipArea {
         width: 100%;
         height: 100%;
+        tooltip-text: root.display-name;
+        tooltip-enabled: root.collapsed;
+        placement: "right";
 
         HorizontalLayout {
             alignment: center;
@@ -242,33 +244,10 @@ export component DMListItem inherits Rectangle {
         }
     }
 
-    // Internal state for tracking if tooltip is currently shown
-    property <bool> tooltip-shown: false;
-
     // Touch area for click handling
     touch := TouchArea {
         clicked => {
             root.clicked();
-        }
-    }
-
-    // Show tooltip when hovering in collapsed mode (transition from not-shown to shown)
-    if root.collapsed && touch.has-hover && !root.tooltip-shown: Rectangle {
-        width: 0;
-        height: 0;
-        init => {
-            root.tooltip-shown = true;
-            root.show-tooltip(root.display-name, root.y + root.height / 2 - 14px);
-        }
-    }
-
-    // Hide tooltip when hover ends (transition from shown to not-shown)
-    if root.tooltip-shown && !touch.has-hover: Rectangle {
-        width: 0;
-        height: 0;
-        init => {
-            root.tooltip-shown = false;
-            root.hide-tooltip();
         }
     }
 }

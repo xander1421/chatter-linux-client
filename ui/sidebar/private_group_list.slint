@@ -26,8 +26,7 @@ export component PrivateGroupList inherits Rectangle {
 
     // Callbacks
     callback group-selected(string);
-    callback show-tooltip(string, length);
-    callback hide-tooltip();
+    // Tooltip callbacks removed — PrivateGroupListItem now uses self-contained TooltipArea
 
     // Layout
     background: Colors.surface;
@@ -55,12 +54,6 @@ export component PrivateGroupList inherits Rectangle {
 
                     clicked => {
                         root.group-selected(item.group-id);
-                    }
-                    show-tooltip(text, item-y) => {
-                        root.show-tooltip(text, item-y - flickable.viewport-y);
-                    }
-                    hide-tooltip => {
-                        root.hide-tooltip();
                     }
                 }
             }

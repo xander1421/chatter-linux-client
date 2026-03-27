@@ -29,8 +29,7 @@ export component ChannelList inherits Rectangle {
     callback channel-selected(string);
     callback create-channel-clicked();
     callback join-channel-clicked();
-    callback show-tooltip(string, length); // text, local-y within this component
-    callback hide-tooltip();
+    // Tooltip callbacks removed — ChannelListItem now uses self-contained TooltipArea
 
     // Layout
     background: Colors.surface;
@@ -179,13 +178,6 @@ export component ChannelList inherits Rectangle {
 
                     clicked => {
                         root.channel-selected(item.channel-id);
-                    }
-                    show-tooltip(text, item-y) => {
-                        // Adjust y position: header height + flickable offset + item position
-                        root.show-tooltip(text, header.height + item-y - flickable.viewport-y);
-                    }
-                    hide-tooltip => {
-                        root.hide-tooltip();
                     }
                 }
             }
