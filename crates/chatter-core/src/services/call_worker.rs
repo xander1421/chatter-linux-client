@@ -146,9 +146,9 @@ enum CallCommand {
 /// to the dedicated worker thread via channels.
 #[derive(Clone)]
 pub struct CallWorkerHandle {
-    cmd_tx: mpsc::UnboundedSender<CallCommand>,
+    cmd_tx: mpsc::Sender<CallCommand>,
     /// Room events forwarded from the worker.
-    room_events_rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<LiveKitRoomEvent>>>>,
+    room_events_rx: Arc<RwLock<Option<mpsc::Receiver<LiveKitRoomEvent>>>>,
     /// Shared video frames for UI access (updated by call worker, read by UI).
     shared_video_frames: SharedVideoFrames,
 }
@@ -156,8 +156,8 @@ pub struct CallWorkerHandle {
 impl CallWorkerHandle {
     /// Spawn a new call worker on a dedicated thread.
     pub fn spawn(call_client: CallClient) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let (cmd_tx, cmd_rx) = mpsc::channel(256);
+        let (events_tx, events_rx) = mpsc::channel(256);
 
         // Create shared video frames storage (shared between worker and UI)
         let shared_video_frames = SharedVideoFrames::new();
@@ -184,7 +184,7 @@ impl CallWorkerHandle {
     }
 
     /// Take the room events receiver (can only be called once).
-    pub fn take_room_events(&self) -> Option<mpsc::UnboundedReceiver<LiveKitRoomEvent>> {
+    pub fn take_room_events(&self) -> Option<mpsc::Receiver<LiveKitRoomEvent>> {
         self.room_events_rx.write().take()
     }
 
@@ -199,7 +199,7 @@ impl CallWorkerHandle {
     ) -> Result<Call, CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::InitiateCall {
+            .try_send(CallCommand::InitiateCall {
                 channel_id,
                 title: title.to_string(),
                 call_type,
@@ -220,7 +220,7 @@ impl CallWorkerHandle {
     ) -> Result<Call, CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::JoinCall {
+            .try_send(CallCommand::JoinCall {
                 call_id,
                 encryption_root_key: *encryption_root_key,
                 joiner_id,
@@ -245,7 +245,7 @@ impl CallWorkerHandle {
     ) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::ConnectWithToken {
+            .try_send(CallCommand::ConnectWithToken {
                 access_token: access_token.to_string(),
                 livekit_url: livekit_url.to_string(),
                 encryption_key,
@@ -262,7 +262,7 @@ impl CallWorkerHandle {
     pub async fn leave_call(&self) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::LeaveCall { response: tx })
+            .try_send(CallCommand::LeaveCall { response: tx })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
@@ -271,7 +271,7 @@ impl CallWorkerHandle {
     pub async fn end_call(&self, reason: Option<&str>) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::EndCall {
+            .try_send(CallCommand::EndCall {
                 reason: reason.map(|s| s.to_string()),
                 response: tx,
             })
@@ -282,7 +282,7 @@ impl CallWorkerHandle {
     /// Disconnect locally without server notification.
     pub async fn disconnect_local(&self) {
         let (tx, rx) = oneshot::channel();
-        let _ = self.cmd_tx.send(CallCommand::DisconnectLocal { response: tx });
+        let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal { response: tx });
         let _ = rx.await;
     }
 
@@ -290,7 +290,7 @@ impl CallWorkerHandle {
     pub async fn active_call(&self) -> Option<Call> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::GetActiveCall { response: tx })
+            .try_send(CallCommand::GetActiveCall { response: tx })
             .ok()?;
         rx.await.ok().flatten()
     }
@@ -305,7 +305,7 @@ impl CallWorkerHandle {
     /// Check if currently in a call.
     pub async fn is_in_call(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(CallCommand::IsInCall { response: tx }).is_err() {
+        if self.cmd_tx.try_send(CallCommand::IsInCall { response: tx }).is_err() {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -314,7 +314,7 @@ impl CallWorkerHandle {
     /// Get room connection state.
     pub async fn room_state(&self) -> RoomState {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(CallCommand::GetRoomState { response: tx }).is_err() {
+        if self.cmd_tx.try_send(CallCommand::GetRoomState { response: tx }).is_err() {
             return RoomState::Disconnected;
         }
         rx.await.unwrap_or(RoomState::Disconnected)
@@ -324,7 +324,7 @@ impl CallWorkerHandle {
     pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::PublishMicrophone {
+            .try_send(CallCommand::PublishMicrophone {
                 device_id: device_id.map(|s| s.to_string()),
                 response: tx,
             })
@@ -336,7 +336,7 @@ impl CallWorkerHandle {
     pub async fn publish_camera(&self, device_path: Option<&str>) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::PublishCamera {
+            .try_send(CallCommand::PublishCamera {
                 device_path: device_path.map(|s| s.to_string()),
                 config: None,
                 response: tx,
@@ -347,23 +347,23 @@ impl CallWorkerHandle {
 
     /// Stop microphone capture.
     pub fn stop_microphone(&self) {
-        let _ = self.cmd_tx.send(CallCommand::StopMicrophone);
+        let _ = self.cmd_tx.try_send(CallCommand::StopMicrophone);
     }
 
     /// Stop camera capture.
     pub fn stop_camera(&self) {
-        let _ = self.cmd_tx.send(CallCommand::StopCamera);
+        let _ = self.cmd_tx.try_send(CallCommand::StopCamera);
     }
 
     /// Set microphone muted.
     pub fn set_microphone_muted(&self, muted: bool) {
-        let _ = self.cmd_tx.send(CallCommand::SetMicrophoneMuted { muted });
+        let _ = self.cmd_tx.try_send(CallCommand::SetMicrophoneMuted { muted });
     }
 
     /// Check if microphone is muted.
     pub async fn is_microphone_muted(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(CallCommand::IsMicrophoneMuted { response: tx }).is_err() {
+        if self.cmd_tx.try_send(CallCommand::IsMicrophoneMuted { response: tx }).is_err() {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -371,13 +371,13 @@ impl CallWorkerHandle {
 
     /// Set camera enabled.
     pub fn set_camera_enabled(&self, enabled: bool) {
-        let _ = self.cmd_tx.send(CallCommand::SetCameraEnabled { enabled });
+        let _ = self.cmd_tx.try_send(CallCommand::SetCameraEnabled { enabled });
     }
 
     /// Check if camera is enabled.
     pub async fn is_camera_enabled(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(CallCommand::IsCameraEnabled { response: tx }).is_err() {
+        if self.cmd_tx.try_send(CallCommand::IsCameraEnabled { response: tx }).is_err() {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -388,7 +388,7 @@ impl CallWorkerHandle {
     pub async fn publish_screen_share(&self, source: ScreenSource) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::PublishScreenShare {
+            .try_send(CallCommand::PublishScreenShare {
                 source,
                 response: tx,
             })
@@ -399,13 +399,13 @@ impl CallWorkerHandle {
     /// Stop screen share (desktop only).
     #[cfg(not(target_os = "android"))]
     pub fn stop_screen_share(&self) {
-        let _ = self.cmd_tx.send(CallCommand::StopScreenShare);
+        let _ = self.cmd_tx.try_send(CallCommand::StopScreenShare);
     }
 
     /// Check if screen sharing.
     pub async fn is_screen_sharing(&self) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(CallCommand::IsScreenSharing { response: tx }).is_err() {
+        if self.cmd_tx.try_send(CallCommand::IsScreenSharing { response: tx }).is_err() {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -418,7 +418,7 @@ impl CallWorkerHandle {
     /// Returns the new key epoch, or None if not connected.
     pub async fn ratchet_key(&self) -> Option<u32> {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(CallCommand::RatchetKey { response: tx }).is_err() {
+        if self.cmd_tx.try_send(CallCommand::RatchetKey { response: tx }).is_err() {
             return None;
         }
         rx.await.ok().flatten()
@@ -431,7 +431,7 @@ impl CallWorkerHandle {
     pub async fn rotate_key(&self, new_key: [u8; 32]) -> Result<u32, CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::RotateKey { new_key, response: tx })
+            .try_send(CallCommand::RotateKey { new_key, response: tx })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
@@ -441,7 +441,7 @@ impl CallWorkerHandle {
     /// Use this when managing keys via the Signal-based CallKeyState.
     pub async fn set_encryption_key(&self, key: Vec<u8>) -> bool {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(CallCommand::SetEncryptionKey { key, response: tx }).is_err() {
+        if self.cmd_tx.try_send(CallCommand::SetEncryptionKey { key, response: tx }).is_err() {
             return false;
         }
         rx.await.unwrap_or(false)
@@ -450,7 +450,7 @@ impl CallWorkerHandle {
     /// Get the current key epoch.
     pub async fn key_epoch(&self) -> u32 {
         let (tx, rx) = oneshot::channel();
-        if self.cmd_tx.send(CallCommand::GetKeyEpoch { response: tx }).is_err() {
+        if self.cmd_tx.try_send(CallCommand::GetKeyEpoch { response: tx }).is_err() {
             return 0;
         }
         rx.await.unwrap_or(0)
@@ -463,14 +463,14 @@ impl CallWorkerHandle {
     pub async fn reconnect(&self) -> Result<(), CallError> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
-            .send(CallCommand::Reconnect { response: tx })
+            .try_send(CallCommand::Reconnect { response: tx })
             .map_err(|_| CallError::WorkerShutdown)?;
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
 
     /// Shutdown the worker.
     pub fn shutdown(&self) {
-        let _ = self.cmd_tx.send(CallCommand::Shutdown);
+        let _ = self.cmd_tx.try_send(CallCommand::Shutdown);
     }
 }
 
@@ -478,8 +478,8 @@ impl CallWorkerHandle {
 ///
 /// This creates a single-threaded tokio runtime with LocalSet for non-Send futures.
 fn run_call_worker(
-    mut cmd_rx: mpsc::UnboundedReceiver<CallCommand>,
-    events_tx: mpsc::UnboundedSender<LiveKitRoomEvent>,
+    mut cmd_rx: mpsc::Receiver<CallCommand>,
+    events_tx: mpsc::Sender<LiveKitRoomEvent>,
     call_client: CallClient,
     shared_video_frames: SharedVideoFrames,
 ) {
@@ -512,7 +512,7 @@ fn run_call_worker(
             tracing::info!("Room events forwarder started");
             while let Some(event) = room_events_rx.recv().await {
                 tracing::info!("Forwarding room event: {:?}", event);
-                if events_tx_clone.send(event).is_err() {
+                if events_tx_clone.try_send(event).is_err() {
                     tracing::warn!("Failed to forward room event - receiver dropped");
                     break;
                 }

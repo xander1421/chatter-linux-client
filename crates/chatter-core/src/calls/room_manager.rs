@@ -76,8 +76,8 @@ pub struct RoomManager {
     room: Arc<RwLock<Option<Room>>>,
     /// Current state.
     state: Arc<RwLock<RoomState>>,
-    /// Event sender for UI updates.
-    event_tx: mpsc::UnboundedSender<RoomEvent>,
+    /// Event sender for UI updates (bounded for backpressure).
+    event_tx: mpsc::Sender<RoomEvent>,
     /// Audio capture manager.
     audio_capture: Arc<RwLock<AudioCapture>>,
     /// Audio playback manager for remote participants.
@@ -97,13 +97,13 @@ pub struct RoomManager {
 
 impl RoomManager {
     /// Create a new RoomManager.
-    pub fn new() -> (Self, mpsc::UnboundedReceiver<RoomEvent>) {
+    pub fn new() -> (Self, mpsc::Receiver<RoomEvent>) {
         Self::with_shared_frames(None)
     }
 
     /// Create a new RoomManager with shared video frame storage.
-    pub fn with_shared_frames(shared_frames: Option<SharedVideoFrames>) -> (Self, mpsc::UnboundedReceiver<RoomEvent>) {
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+    pub fn with_shared_frames(shared_frames: Option<SharedVideoFrames>) -> (Self, mpsc::Receiver<RoomEvent>) {
+        let (event_tx, event_rx) = mpsc::channel(256);
 
         // Initialize audio playback (may fail if no output device)
         let audio_playback = match AudioPlayback::new() {
@@ -417,7 +417,7 @@ impl RoomManager {
             let identity = participant.identity().to_string();
             let name = participant.name();
             tracing::info!("RoomManager: Existing participant in room - identity={}, name={}", identity, name);
-            let _ = self.event_tx.send(RoomEvent::ParticipantJoined {
+            let _ = self.event_tx.try_send(RoomEvent::ParticipantJoined {
                 identity: identity.clone(),
                 display_name: if name.is_empty() { None } else { Some(name.to_string()) },
             });
@@ -436,7 +436,7 @@ impl RoomManager {
                                 playback.add_track(identity.clone(), audio_track);
                                 tracing::info!("RoomManager: Added existing audio track to playback");
                             }
-                            let _ = self.event_tx.send(RoomEvent::TrackSubscribed {
+                            let _ = self.event_tx.try_send(RoomEvent::TrackSubscribed {
                                 participant_identity: identity.clone(),
                                 track_sid: track_sid.to_string(),
                                 is_video: false,
@@ -458,7 +458,7 @@ impl RoomManager {
                                 is_screen_share,
                             );
                             tracing::info!("RoomManager: Added existing video track to playback");
-                            let _ = self.event_tx.send(RoomEvent::TrackSubscribed {
+                            let _ = self.event_tx.try_send(RoomEvent::TrackSubscribed {
                                 participant_identity: identity.clone(),
                                 track_sid: track_sid.to_string(),
                                 is_video: true,
@@ -507,7 +507,7 @@ impl RoomManager {
             }
             video_playback.read().stop();
             *state.write() = RoomState::Disconnected;
-            let _ = event_tx.send(RoomEvent::StateChanged(RoomState::Disconnected));
+            let _ = event_tx.try_send(RoomEvent::StateChanged(RoomState::Disconnected));
         });
 
         Ok(())
@@ -658,12 +658,12 @@ impl RoomManager {
 
     fn set_state(&self, state: RoomState) {
         *self.state.write() = state.clone();
-        let _ = self.event_tx.send(RoomEvent::StateChanged(state));
+        let _ = self.event_tx.try_send(RoomEvent::StateChanged(state));
     }
 
     fn handle_room_event(
         event: livekit::RoomEvent,
-        event_tx: &mpsc::UnboundedSender<RoomEvent>,
+        event_tx: &mpsc::Sender<RoomEvent>,
         state: &Arc<RwLock<RoomState>>,
         room: &Arc<RwLock<Option<Room>>>,
         audio_playback: &Arc<RwLock<Option<AudioPlayback>>>,
@@ -679,7 +679,7 @@ impl RoomManager {
                     display_name: if name.is_empty() { None } else { Some(name.to_string()) },
                 };
                 tracing::info!("RoomManager: Sending event to channel: {:?}", event);
-                match event_tx.send(event) {
+                match event_tx.try_send(event) {
                     Ok(()) => tracing::info!("RoomManager: Event sent successfully"),
                     Err(e) => tracing::error!("RoomManager: Failed to send ParticipantJoined event: {:?}", e),
                 }
@@ -718,7 +718,7 @@ impl RoomManager {
                 // Remove video playback for this participant
                 video_playback.read().remove_track(&participant_id);
 
-                let _ = event_tx.send(RoomEvent::ParticipantLeft {
+                let _ = event_tx.try_send(RoomEvent::ParticipantLeft {
                     identity: participant_id,
                 });
             }
@@ -767,7 +767,7 @@ impl RoomManager {
                     }
                 }
 
-                let _ = event_tx.send(RoomEvent::TrackSubscribed {
+                let _ = event_tx.try_send(RoomEvent::TrackSubscribed {
                     participant_identity: participant_id,
                     track_sid: track.sid().to_string(),
                     is_video,
@@ -791,7 +791,7 @@ impl RoomManager {
                     tracing::info!("RoomManager: Removed video track from playback for {}", participant_id);
                 }
 
-                let _ = event_tx.send(RoomEvent::TrackUnsubscribed {
+                let _ = event_tx.try_send(RoomEvent::TrackUnsubscribed {
                     participant_identity: participant_id,
                     track_sid: track.sid().to_string(),
                 });
@@ -799,7 +799,7 @@ impl RoomManager {
             livekit::RoomEvent::E2eeStateChanged { participant, state: enc_state } => {
                 use livekit::webrtc::native::frame_cryptor::EncryptionState;
                 let is_encrypted = matches!(enc_state, EncryptionState::Ok | EncryptionState::KeyRatcheted);
-                let _ = event_tx.send(RoomEvent::EncryptionStateChanged {
+                let _ = event_tx.try_send(RoomEvent::EncryptionStateChanged {
                     participant_identity: participant.identity().to_string(),
                     is_encrypted,
                 });
