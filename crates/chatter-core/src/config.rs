@@ -37,13 +37,11 @@ const TRUST_ROOT_PUBLIC_KEY_SERIALIZED: [u8; 33] = [
     0x30, 0x92, 0xde, 0x51, 0x20, 0xbe, 0x68, 0x33,
 ];
 
-lazy_static::lazy_static! {
-    /// Parsed trust root public key for use with libsignal.
-    pub static ref TRUST_ROOT_PUBLIC_KEY: PublicKey = {
-        PublicKey::deserialize(&TRUST_ROOT_PUBLIC_KEY_SERIALIZED)
-            .expect("Invalid hardcoded trust root key - this is a build error")
-    };
-}
+/// Parsed trust root public key for use with libsignal.
+pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::LazyLock::new(|| {
+    PublicKey::deserialize(&TRUST_ROOT_PUBLIC_KEY_SERIALIZED)
+        .expect("Invalid hardcoded trust root key - this is a build error")
+});
 
 /// Trust root key ID (matches server's key_id in Vault).
 /// Used for key rotation coordination.

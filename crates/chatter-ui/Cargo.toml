@@ -54,8 +54,7 @@ base64 = "0.22"
 prost = "0.13"
 reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking"] }
 mime_guess = "2"
-once_cell = "1"
-lazy_static = "1.5.0"
+# once_cell + lazy_static removed — migrated to std::sync::LazyLock
 zeroize = { version = "1.8", features = ["derive"] }
 arboard = { version = "3", features = ["wayland-data-control"], optional = true }
 

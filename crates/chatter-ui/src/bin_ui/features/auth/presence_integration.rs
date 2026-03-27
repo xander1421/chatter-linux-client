@@ -10,12 +10,12 @@ use chatter_core::client::ChatterClient;
 use chatter_core::proto::UserPresence;
 
 /// Current presence state for this session
-static CURRENT_PRESENCE: once_cell::sync::Lazy<RwLock<UserPresence>> = 
-    once_cell::sync::Lazy::new(|| RwLock::new(UserPresence::Offline));
+static CURRENT_PRESENCE: std::sync::LazyLock<RwLock<UserPresence>> =
+    std::sync::LazyLock::new(|| RwLock::new(UserPresence::Offline));
 
 /// Last activity timestamp
-static LAST_ACTIVITY: once_cell::sync::Lazy<RwLock<Instant>> = 
-    once_cell::sync::Lazy::new(|| RwLock::new(Instant::now()));
+static LAST_ACTIVITY: std::sync::LazyLock<RwLock<Instant>> =
+    std::sync::LazyLock::new(|| RwLock::new(Instant::now()));
 
 /// Initialize presence on login.
 pub async fn initialize_presence(ui_ctx: &Arc<ChatterClient>) {

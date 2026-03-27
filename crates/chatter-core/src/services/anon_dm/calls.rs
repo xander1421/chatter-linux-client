@@ -103,9 +103,8 @@ pub struct ReceivedCallAnswer {
 
 // Thread-safe storage for pending anonymous calls.
 // Key is the room name.
-lazy_static::lazy_static! {
-    static ref PENDING_ANON_CALLS: Mutex<HashMap<String, PendingAnonCall>> = Mutex::new(HashMap::new());
-}
+static PENDING_ANON_CALLS: std::sync::LazyLock<Mutex<HashMap<String, PendingAnonCall>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 impl AnonDmService {
     /// Store a pending anonymous call.
