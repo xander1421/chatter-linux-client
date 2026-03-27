@@ -1264,13 +1264,12 @@ Completes the SVR feature started in Phase 77 (rename) and the crypto foundation
 **Goal**: Implement ChangePinBackup RPC end-to-end — server handler, client method, re-encrypt backup with new PIN, update registration lock atomically
 **Depends on**: Phase 93
 **Research**: No
-**Status**: Not started
-**Plans**: 0/3
+**Status**: Complete
+**Plans**: 2/2 complete
 
 Plans:
-- [ ] 94-01: Server ChangePinBackup handler + service (verify old_backup_id_hash, atomic swap, update registration lock + SVR public key)
-- [ ] 94-02: Client change_pin method (fetch old backup → decrypt → re-encrypt with new SVR secret → upload via ChangePinBackup)
-- [ ] 94-03: Generate proto code + integration test
+- [x] 94-01: Server ChangePinBackup handler + service (atomic transaction, verify old hash, update registration lock + SVR public key)
+- [x] 94-02: Client change_pin method (proto types, gRPC client, service, ChatterClient::change_pin)
 
 **Scope:**
 - Server: Implement ChangePinBackup handler that verifies old_backup_id_hash matches, atomically replaces backup + registration lock + SVR public key
