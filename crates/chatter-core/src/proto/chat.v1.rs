@@ -5293,6 +5293,46 @@ pub struct InternalDeleteUserProfileRequest {
     #[prost(string, tag="3")]
     pub compensation_request_id: ::prost::alloc::string::String,
 }
+// ==================== SVR Backup ====================
+/// StoreBackupRequest - upsert encrypted SVR backup
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StoreBackupRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub encrypted_backup: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag = "3")]
+    pub version: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StoreBackupResponse {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FetchBackupRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FetchBackupResponse {
+    #[prost(bytes = "vec", tag = "1")]
+    pub encrypted_backup: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag = "2")]
+    pub version: u32,
+    #[prost(int32, tag = "3")]
+    pub remaining_attempts: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeleteBackupRequest {
+    #[prost(bytes = "vec", tag = "1")]
+    pub backup_id_hash: ::prost::alloc::vec::Vec<u8>,
+}
 /// Encoded file descriptor set for the `chat.v1` package
 pub const FILE_DESCRIPTOR_SET: &[u8] = &[
     0x0a, 0x92, 0x6f, 0x0a, 0x25, 0x70, 0x6b, 0x67, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x63,
