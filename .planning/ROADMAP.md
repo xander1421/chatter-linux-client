@@ -1221,13 +1221,15 @@ Based on architecture review identifying call orchestration as the biggest proto
 **Depends on**: Phase 92
 **Research**: Likely (Signal SVR2/SVR3 design, rate-limiting enclave patterns)
 **Status**: In progress
-**Plans**: 4/5
+**Plans**: 5/5 complete
+**Status**: Complete
 
 Plans:
 - [x] 93-01: Server proto + migration + types (svr.proto, 000028 migration, Go domain types)
 - [x] 93-02: Server SVR backup service + handler (repository, rate-limited service, ConnectRPC handler)
 - [x] 93-03: Client backup crypto TDD (serialize/encrypt/decrypt round-trip with AES-256-GCM)
 - [x] 93-04: Client SvrClient + SvrBackupService (gRPC client, service orchestration, ChatterClient facade)
+- [x] 93-05: Client auth integration (backup after registration, restore on new device login)
 - [x] 93-03: Client backup crypto TDD (serialize/encrypt/decrypt round-trip with AES-256-GCM)
 - [ ] 93-04: Client SvrClient + SvrBackupService (gRPC client, service orchestration, ChatterClient facade)
 - [ ] 93-05: Client auth integration (backup after registration, restore on new device login)
