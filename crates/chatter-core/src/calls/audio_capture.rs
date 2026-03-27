@@ -11,6 +11,7 @@ use cpal::{SampleFormat, StreamConfig};
 use livekit::webrtc::audio_frame::AudioFrame;
 use livekit::webrtc::audio_source::native::NativeAudioSource;
 use livekit::webrtc::audio_source::AudioSourceOptions;
+use tokio::sync::mpsc;
 
 use crate::error::CallError;
 
@@ -37,6 +38,13 @@ pub struct AudioOutputDevice {
 }
 
 /// Audio capture manager for microphone input.
+/// Audio frame payload sent through the capture channel.
+struct CapturedFrame {
+    samples: Vec<i16>,
+    sample_rate: u32,
+    num_channels: u32,
+}
+
 pub struct AudioCapture {
     /// The cpal audio stream (must be kept alive).
     stream: Option<cpal::Stream>,
@@ -50,6 +58,8 @@ pub struct AudioCapture {
     sample_rate: u32,
     /// Number of channels.
     num_channels: u32,
+    /// Sender for the capture worker (dropped on stop to shut it down).
+    frame_tx: Option<mpsc::Sender<CapturedFrame>>,
 }
 
 impl AudioCapture {
@@ -62,6 +72,7 @@ impl AudioCapture {
             audio_source: None,
             sample_rate: 48000,
             num_channels: 1,
+            frame_tx: None,
         }
     }
 
@@ -189,15 +200,28 @@ impl AudioCapture {
             50, // 50ms buffer
         );
 
-        // Clone for the capture callback
-        let source_clone = audio_source.clone();
+        // Set up bounded channel + single consumer task instead of spawning per frame
+        let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(64);
+        let source_for_worker = audio_source.clone();
+        tokio::spawn(async move {
+            while let Some(captured) = frame_rx.recv().await {
+                let frame = AudioFrame {
+                    data: Cow::Owned(captured.samples),
+                    sample_rate: captured.sample_rate,
+                    num_channels: captured.num_channels,
+                    samples_per_channel: 0, // recalculated below
+                };
+                let frame = AudioFrame {
+                    samples_per_channel: frame.data.len() as u32 / frame.num_channels,
+                    ..frame
+                };
+                let _ = source_for_worker.capture_frame(&frame).await;
+            }
+        });
+
         let running = self.running.clone();
         let sample_rate = self.sample_rate;
         let num_channels = self.num_channels;
-
-        // Get a handle to the Tokio runtime for use in the callback
-        // The cpal callback runs on a separate thread without Tokio context
-        let rt_handle = tokio::runtime::Handle::current();
 
         // Build the stream based on sample format
         let stream_config: StreamConfig = supported_config.clone().into();
@@ -205,29 +229,16 @@ impl AudioCapture {
 
         let stream = match supported_config.sample_format() {
             SampleFormat::F32 => {
-                let rt_handle = rt_handle.clone();
+                let tx = frame_tx.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         if running.load(Ordering::SeqCst) {
-                            // Convert f32 to i16
                             let samples: Vec<i16> = data
                                 .iter()
                                 .map(|&s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
                                 .collect();
-
-                            let frame = AudioFrame {
-                                data: Cow::Owned(samples.clone()),
-                                sample_rate,
-                                num_channels,
-                                samples_per_channel: samples.len() as u32 / num_channels,
-                            };
-
-                            // Non-blocking capture using runtime handle
-                            let source = source_clone.clone();
-                            rt_handle.spawn(async move {
-                                let _ = source.capture_frame(&frame).await;
-                            });
+                            let _ = tx.try_send(CapturedFrame { samples, sample_rate, num_channels });
                         }
                     },
                     err_fn,
@@ -235,24 +246,13 @@ impl AudioCapture {
                 )
             }
             SampleFormat::I16 => {
-                let rt_handle = rt_handle.clone();
+                let tx = frame_tx.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         if running.load(Ordering::SeqCst) {
-                            // Copy data to owned Vec for async task
-                            let samples: Vec<i16> = data.to_vec();
-                            let frame = AudioFrame {
-                                data: Cow::Owned(samples.clone()),
-                                sample_rate,
-                                num_channels,
-                                samples_per_channel: samples.len() as u32 / num_channels,
-                            };
-
-                            let source = source_clone.clone();
-                            rt_handle.spawn(async move {
-                                let _ = source.capture_frame(&frame).await;
-                            });
+                            let samples = data.to_vec();
+                            let _ = tx.try_send(CapturedFrame { samples, sample_rate, num_channels });
                         }
                     },
                     err_fn,
@@ -276,6 +276,7 @@ impl AudioCapture {
         self.running.store(true, Ordering::SeqCst);
         self.stream = Some(stream);
         self.audio_source = Some(audio_source.clone());
+        self.frame_tx = Some(frame_tx);
 
         tracing::info!("Audio capture started successfully");
         Ok(audio_source)
@@ -291,6 +292,8 @@ impl AudioCapture {
     /// Stop audio capture.
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        // Drop frame_tx to shut down the consumer task
+        self.frame_tx = None;
         if let Some(stream) = self.stream.take() {
             drop(stream);
         }
