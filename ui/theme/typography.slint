@@ -1,8 +1,14 @@
 // Typography definitions for Chatter
 
+// Bundle Inter font so rendering is consistent regardless of system fonts
+import "../../assets/fonts/Inter-Regular.ttf";
+import "../../assets/fonts/Inter-Medium.ttf";
+import "../../assets/fonts/Inter-SemiBold.ttf";
+import "../../assets/fonts/Inter-Bold.ttf";
+
 export global Typography {
-    // Font family
-    out property <string> font-family: "Inter, Noto Sans, sans-serif";
+    // Font family — Inter is bundled, Noto Sans / sans-serif as system fallbacks
+    out property <string> font-family: "Inter";
 
     // Font sizes
     out property <length> xs: 12px;
