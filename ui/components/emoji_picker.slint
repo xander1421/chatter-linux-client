@@ -44,8 +44,10 @@ export component EmojiPicker inherits Rectangle {
     opacity: root.show ? 1 : 0;
 
     // Picker container
-    width: 280px;
-    height: 320px;
+    in property <length> max-picker-width: 280px;
+    in property <length> max-picker-height: 320px;
+    width: root.max-picker-width;
+    height: root.max-picker-height;
     background: Colors.surface;
     border-radius: Spacing.radius-lg;
 

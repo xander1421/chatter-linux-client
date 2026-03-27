@@ -44,8 +44,10 @@ export component GifPicker inherits Rectangle {
     opacity: root.show ? 1 : 0;
 
     // Picker container
-    width: 320px;
-    height: 400px;
+    in property <length> max-picker-width: 320px;
+    in property <length> max-picker-height: 400px;
+    width: root.max-picker-width;
+    height: root.max-picker-height;
     background: Colors.surface;
     border-radius: Spacing.radius-lg;
 

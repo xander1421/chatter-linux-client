@@ -118,6 +118,7 @@ export component App inherits Rectangle {
     in property <string> user-presence-status: "online";
     in property <string> user-custom-status: "";
     in-out property <bool> sidebar-collapsed: false;
+    in-out property <bool> sidebar-hidden: false;
 
     // Tooltip state removed — sidebar items now use self-contained TooltipArea
 
@@ -661,11 +662,20 @@ export component App inherits Rectangle {
     // ========== Responsive sidebar auto-collapse ==========
     // Auto-collapse sidebar on smaller screens (< 800px width)
     property <bool> is-small-screen: root.width < 800px;
+    // Fully hide sidebar on mobile-sized screens (< 480px width)
+    property <bool> is-mobile-screen: root.width < 480px;
 
-    // Update sidebar collapsed state when screen size changes
+    // Update sidebar collapsed/hidden state when screen size changes
     changed is-small-screen => {
         if (root.is-small-screen && !root.sidebar-collapsed) {
             root.sidebar-collapsed = true;
+        }
+    }
+    changed is-mobile-screen => {
+        if (root.is-mobile-screen) {
+            root.sidebar-hidden = true;
+        } else {
+            root.sidebar-hidden = false;
         }
     }
 
@@ -814,6 +824,7 @@ export component App inherits Rectangle {
                 user-presence-status: root.user-presence-status;
                 user-custom-status: root.user-custom-status;
                 collapsed <=> root.sidebar-collapsed;
+                hidden <=> root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
 
@@ -974,7 +985,7 @@ export component App inherits Rectangle {
 
                 // Members panel (appears to the right of chat when visible)
                 if root.members-panel-visible: MembersPanel {
-                    width: 280px;
+                    width: root.is-mobile-screen ? 240px : 280px;
                     height: 100%;
                     members: root.members-panel-members;
                     channel-name: root.channel-name;
@@ -989,7 +1000,7 @@ export component App inherits Rectangle {
 
                 // Thread panel (appears to the right of chat when visible)
                 if root.thread-panel-visible: ThreadPanel {
-                    width: 320px;
+                    width: root.is-mobile-screen ? 280px : 320px;
                     height: 100%;
                     root-message-id: root.thread-root-message-id;
                     root-sender-name: root.thread-root-sender-name;
@@ -1019,9 +1030,9 @@ export component App inherits Rectangle {
     // ========== Jarvis AI floating panel ==========
     // Floating panel that appears on top of chat when toggled
     if root.jarvis-panel-visible: Rectangle {
-        x: parent.width - 380px;
+        x: parent.width - min(380px, parent.width - 16px);
         y: 60px;
-        width: 360px;
+        width: min(360px, parent.width - 32px);
         height: parent.height - 120px;
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
@@ -1995,7 +2006,7 @@ export component App inherits Rectangle {
         suggestions: root.mention-suggestions;
         selected-index: root.mention-selected-index;
         // Position above the composer
-        x: root.sidebar-collapsed ? 80px : 280px;
+        x: root.sidebar-hidden ? 16px : (root.sidebar-collapsed ? 80px : 280px);
         y: root.height - 80px - (Math.min(root.mention-suggestions.length, 8) * 40px + 16px);
 
         suggestion-selected(id, display) => {
@@ -2063,7 +2074,9 @@ export component App inherits Rectangle {
         emoji-list: root.composer-emoji-list;
         selected-category <=> root.composer-emoji-category;
         search-query <=> root.composer-emoji-search;
-        
+        max-picker-width: min(280px, root.width - 32px);
+        max-picker-height: min(320px, root.height - 128px);
+
         // Position above the composer buttons (right side)
         x: root.width - self.width - Spacing.md;
         y: root.height - self.height - 80px;
@@ -2089,6 +2102,8 @@ export component App inherits Rectangle {
         loading: root.composer-gif-picker-loading;
         results: root.composer-gif-picker-results;
         search-query <=> root.composer-gif-picker-search;
+        max-picker-width: min(320px, root.width - 32px);
+        max-picker-height: min(400px, root.height - 128px);
 
         // Position above the composer buttons (right side)
         x: root.width - self.width - Spacing.md;

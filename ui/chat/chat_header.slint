@@ -18,22 +18,22 @@ export struct ChatHeaderData {
     typing-indicator: string,
 }
 
-// Reusable icon button component
+// Reusable icon button component — 44px minimum touch target for mobile
 component IconButton inherits Rectangle {
     in property <image> icon;
     in property <color> icon-color: Colors.text-secondary;
     in property <color> hover-color: Colors.text-primary;
     callback clicked();
 
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
 
     Image {
         source: icon;
-        width: 18px;
-        height: 18px;
+        width: 20px;
+        height: 20px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         colorize: touch.has-hover ? hover-color : icon-color;
@@ -115,9 +115,9 @@ export component ChatHeader inherits Rectangle {
             }
         }
 
-        padding-left: Spacing.lg;
-        padding-right: Spacing.lg;
-        spacing: Spacing.md;
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
 
         // Left section: Channel icon and name
         HorizontalLayout {
@@ -189,14 +189,14 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            // Channel/conversation name (constrained width so typing indicator has space)
+            // Channel/conversation name (constrained to leave room for action buttons)
             Text {
                 text: root.channel-name;
                 color: Colors.text-primary;
                 font-size: Typography.base;
                 font-weight: Typography.semibold;
                 vertical-alignment: center;
-                max-width: 250px;
+                horizontal-stretch: 1;
                 overflow: elide;
             }
 
@@ -295,24 +295,24 @@ export component ChatHeader inherits Rectangle {
             alignment: center;
 
             HorizontalLayout {
-                spacing: Spacing.xs;
+                spacing: 2px;
                 alignment: end;
 
                 // Call buttons group (hidden for saved messages)
                 if root.show-calls: HorizontalLayout {
-                    spacing: Spacing.xs;
+                    spacing: 2px;
 
-                    // Phone icon slightly smaller
+                    // Phone icon — 44px touch target
                     Rectangle {
-                        width: 32px;
-                        height: 32px;
+                        width: 44px;
+                        height: 44px;
                         background: phone-touch.has-hover ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
 
                         Image {
                             source: Icons.phone;
-                            width: 16px;
-                            height: 16px;
+                            width: 20px;
+                            height: 20px;
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             colorize: phone-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
@@ -339,7 +339,7 @@ export component ChatHeader inherits Rectangle {
 
                 // Utility buttons group
                 HorizontalLayout {
-                    spacing: Spacing.xs;
+                    spacing: 2px;
 
                     // Invite button (channels and private groups)
                     if root.show-settings: IconButton {

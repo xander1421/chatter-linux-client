@@ -38,6 +38,8 @@ export component Sidebar inherits Rectangle {
 
     // Properties - Collapsed state
     in-out property <bool> collapsed: false;
+    // Fully hidden on mobile (0px width, no content rendered)
+    in-out property <bool> hidden: false;
 
     // Callbacks - Navigation
     callback channel-selected(string);
@@ -64,7 +66,9 @@ export component Sidebar inherits Rectangle {
     callback toggle-collapsed();
 
     // Layout - animated width transition
-    width: root.collapsed ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
+    // Mobile: fully hidden (0px). Tablet: collapsed icon bar (60px). Desktop: full (240px).
+    width: root.hidden ? Spacing.sidebar-width-hidden : (root.collapsed ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width);
+    visible: !root.hidden;
     background: Colors.surface;
 
     animate width {

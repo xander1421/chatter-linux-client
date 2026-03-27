@@ -24,7 +24,8 @@ export component Toast inherits Rectangle {
     animate opacity { duration: 200ms; }
 
     // Toast container
-    width: 320px;
+    in property <length> max-toast-width: 320px;
+    width: root.max-toast-width;
     height: content-layout.preferred-height + Spacing.md * 2;
     background: Colors.surface;
     border-radius: Spacing.radius-md;

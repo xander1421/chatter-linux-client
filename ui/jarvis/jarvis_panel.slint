@@ -19,7 +19,8 @@ export component JarvisPanel inherits Rectangle {
     callback send(string);
     callback clear();
 
-    width: 360px;
+    in property <length> max-panel-width: 360px;
+    width: root.max-panel-width;
     background: Colors.surface;
     border-radius: Spacing.radius-md;
     clip: true;

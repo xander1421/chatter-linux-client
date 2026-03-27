@@ -54,7 +54,7 @@ export component Modal inherits Rectangle {
             // Header row
             HorizontalLayout {
                 spacing: Spacing.md;
-                height: 24px;
+                height: 40px;
 
                 // Title
                 Text {
@@ -66,10 +66,10 @@ export component Modal inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
-                // Close button
+                // Close button — 40px touch target for mobile
                 Rectangle {
-                    width: 24px;
-                    height: 24px;
+                    width: 40px;
+                    height: 40px;
                     border-radius: Spacing.radius-sm;
                     background: close-area.has-hover ? Colors.surface-hover : transparent;
                     accessible-role: button;

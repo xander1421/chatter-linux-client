@@ -59,8 +59,8 @@ export component ReactionPicker inherits Rectangle {
     Rectangle {
         x: root.position-x;
         y: root.position-y;
-        width: 280px;
-        height: 352px; // 320px EmojiPicker + 32px quick bar
+        width: min(280px, parent.width - 32px);
+        height: min(352px, parent.height - 48px); // 320px EmojiPicker + 32px quick bar
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
         border-width: 1px;
