@@ -254,14 +254,3 @@ fn sign_challenge_nonce(nonce: &[u8]) -> Vec<u8> {
     signature
 }
 
-/// Utility function to print test results in a nice format
-#[allow(dead_code)]
-fn print_test_result(test_name: &str, success: bool, details: &str) {
-    let status = if success { "✓" } else { "✗" };
-    let status_text = if success { "PASSED" } else { "FAILED" };
-    
-    println!("{} {} {}", status, test_name, status_text);
-    if !details.is_empty() {
-        println!("  {}", details);
-    }
-}

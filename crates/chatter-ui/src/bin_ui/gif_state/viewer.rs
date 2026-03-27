@@ -56,10 +56,6 @@ impl ViewerGifState {
         }
     }
 
-    #[allow(dead_code)]
-    fn frame_count(&self) -> usize {
-        self.frames.len()
-    }
 }
 
 /// Start GIF animation in viewer AND register for inline animation.

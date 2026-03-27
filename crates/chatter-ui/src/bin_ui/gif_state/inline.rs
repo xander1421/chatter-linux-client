@@ -96,12 +96,6 @@ pub(super) fn get_inline_gif(attachment_id: &str) -> Option<InlineGifState> {
     })
 }
 
-/// Check if an inline GIF is registered.
-#[allow(dead_code)]
-pub(super) fn has_inline_gif(attachment_id: &str) -> bool {
-    INLINE_GIFS.with(|gifs| gifs.borrow().contains_key(attachment_id))
-}
-
 /// Initialize inline GIF animation system.
 /// Call this once during window setup.
 pub fn init_inline_animations(window: Weak<MainWindow>) {
@@ -205,7 +199,6 @@ pub fn register_inline_gif_from_images(
 }
 
 /// Unregister an inline GIF (when message is removed from view).
-#[allow(dead_code)]
 pub fn unregister_inline_gif(attachment_id: &str) {
     INLINE_GIFS.with(|gifs| {
         gifs.borrow_mut().remove(attachment_id);
