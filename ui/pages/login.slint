@@ -76,12 +76,23 @@ export component LoginPage inherits Rectangle {
                         disabled: root.loading;
                     }
 
-                    // PIN (optional)
-                    Input {
-                        placeholder: "PIN (optional, for key recovery)";
-                        password: true;
-                        text <=> root.pin;
-                        disabled: root.loading;
+                    // PIN (optional) with explanation
+                    VerticalLayout {
+                        spacing: 2px;
+
+                        Input {
+                            placeholder: "PIN (optional)";
+                            password: true;
+                            text <=> root.pin;
+                            disabled: root.loading;
+                        }
+
+                        Text {
+                            text: "Enter your PIN to restore encryption keys on this device";
+                            color: Colors.text-muted;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
                     }
 
                     // Advanced settings toggle

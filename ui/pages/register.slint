@@ -14,6 +14,7 @@ export component RegisterPage inherits Rectangle {
     in-out property <string> password: "";
     in-out property <string> confirm-password: "";
     in-out property <string> pin: "";
+    in-out property <string> confirm-pin: "";
     in-out property <string> server-url;
     in property <bool> loading: false;
     in property <string> error: "";
@@ -23,6 +24,11 @@ export component RegisterPage inherits Rectangle {
 
     property <bool> submitted: false;
     property <bool> passwords-match: password == confirm-password;
+    property <bool> pins-match: pin == confirm-pin;
+    property <int> pin-length: pin.character-count;
+    property <bool> pin-is-weak: pin-length > 0 && pin-length < 4;
+    property <bool> pin-is-medium: pin-length >= 4 && pin-length < 6;
+    property <bool> pin-is-strong: pin-length >= 6;
     property <bool> show-advanced: false;
 
     callback register(string, string, string, string, string);
@@ -154,11 +160,80 @@ export component RegisterPage inherits Rectangle {
                         disabled: root.loading;
                     }
 
-                    // PIN
-                    Input {
-                        placeholder: "6-digit PIN (for account recovery)";
-                        text <=> root.pin;
-                        disabled: root.loading;
+                    // PIN section with explanation
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        // Explanation of what PIN protects
+                        HorizontalLayout {
+                            spacing: 4px;
+                            alignment: start;
+
+                            Text {
+                                text: "\u{1F512}";
+                                font-size: Typography.xs;
+                                vertical-alignment: center;
+                            }
+
+                            Text {
+                                text: "Your PIN protects your encryption key backup. If you lose your device, you'll need this PIN to recover your messages.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        Input {
+                            placeholder: "Create a PIN (at least 4 digits)";
+                            password: true;
+                            text <=> root.pin;
+                            disabled: root.loading;
+                        }
+
+                        // PIN strength indicator
+                        if root.pin-length > 0: HorizontalLayout {
+                            spacing: Spacing.xs;
+                            height: 8px;
+
+                            // Strength bar
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                height: 4px;
+                                border-radius: 2px;
+                                background: root.pin-is-weak ? Colors.error : (root.pin-is-medium ? Colors.warning : Colors.success);
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                height: 4px;
+                                border-radius: 2px;
+                                background: root.pin-is-medium || root.pin-is-strong ? (root.pin-is-strong ? Colors.success : Colors.warning) : Colors.surface-hover;
+                            }
+
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                height: 4px;
+                                border-radius: 2px;
+                                background: root.pin-is-strong ? Colors.success : Colors.surface-hover;
+                            }
+
+                            Text {
+                                text: root.pin-is-weak ? "Weak" : (root.pin-is-medium ? "Good" : "Strong");
+                                color: root.pin-is-weak ? Colors.error : (root.pin-is-medium ? Colors.warning : Colors.success);
+                                font-size: 10px;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // Confirm PIN
+                        Input {
+                            placeholder: "Confirm PIN";
+                            password: true;
+                            text <=> root.confirm-pin;
+                            disabled: root.loading;
+                            error: root.submitted && root.confirm-pin != "" && !root.pins-match;
+                            error-message: "PINs do not match";
+                        }
                     }
 
                     // Advanced settings toggle
@@ -233,6 +308,18 @@ export component RegisterPage inherits Rectangle {
                         font-size: Typography.sm;
                     }
 
+                    if submitted && !pins-match && confirm-pin != "": Text {
+                        text: "PINs do not match";
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                    }
+
+                    if submitted && pin-is-weak: Text {
+                        text: "PIN must be at least 4 digits";
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                    }
+
                     if error != "": Text {
                         text: root.error;
                         color: Colors.error;
@@ -249,7 +336,7 @@ export component RegisterPage inherits Rectangle {
 
                         clicked => {
                             submitted = true;
-                            if display-name != "" && username != "" && password != "" && confirm-password != "" && pin != "" && server-url != "" && passwords-match {
+                            if display-name != "" && username != "" && password != "" && confirm-password != "" && pin != "" && confirm-pin != "" && server-url != "" && passwords-match && pins-match && !pin-is-weak {
                                 root.register(root.username, root.password, root.display-name, root.pin, root.server-url);
                             }
                         }

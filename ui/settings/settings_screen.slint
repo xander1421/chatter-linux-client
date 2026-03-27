@@ -453,7 +453,8 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         Input {
-                                            placeholder: "Current PIN (6 digits)";
+                                            placeholder: "Current PIN";
+                                            password: true;
                                             text <=> root.change-pin-current;
                                         }
 
@@ -461,16 +462,18 @@ export component SettingsScreen inherits Rectangle {
                                             spacing: Spacing.md;
 
                                             Input {
-                                                placeholder: "New PIN (6 digits)";
+                                                placeholder: "New PIN (at least 4 digits)";
+                                                password: true;
                                                 text <=> root.change-pin-new;
                                                 horizontal-stretch: 1;
                                             }
 
                                             Input {
                                                 placeholder: "Confirm new PIN";
+                                                password: true;
                                                 text <=> root.change-pin-confirm;
-                                                error: root.change-pin-error != "";
-                                                error-message: root.change-pin-error;
+                                                error: root.change-pin-error != "" || (root.change-pin-confirm != "" && root.change-pin-new != root.change-pin-confirm);
+                                                error-message: root.change-pin-error != "" ? root.change-pin-error : "PINs do not match";
                                                 horizontal-stretch: 1;
                                             }
                                         }
