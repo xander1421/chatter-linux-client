@@ -134,20 +134,20 @@ export component MessageList inherits Rectangle {
 
             HorizontalLayout {
                 alignment: center;
-                spacing: 4px;
+                spacing: 6px;
 
                 Image {
                     source: Icons.lock;
-                    width: 12px;
-                    height: 12px;
+                    width: 14px;
+                    height: 14px;
                     colorize: Colors.success;
-                    y: (parent.height - self.height) / 2;
+                    vertical-alignment: center;
                 }
 
                 Text {
                     text: "Messages are end-to-end encrypted";
                     color: Colors.success;
-                    font-size: Typography.xs;
+                    font-size: Typography.sm;
                     vertical-alignment: center;
                 }
             }
