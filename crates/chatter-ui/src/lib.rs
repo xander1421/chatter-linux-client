@@ -65,7 +65,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
 }
 
 /// State produced by async init, consumed by the sync event loop.
-struct AppState {
+pub struct AppState {
     window: MainWindow,
     ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
     shutdown_token: CancellationToken,
@@ -257,35 +257,29 @@ fn app_run(state: AppState) {
     state.shutdown_token.cancel();
     tracing::info!("Shutting down services...");
 
-    // Use block_on for async shutdown (we're back in control of the thread)
-    rt_handle().block_on(async {
-        if state.ui_ctx.auth_state().is_logged_in() {
+    // Spawn async shutdown on the runtime and wait via sync channel.
+    // We can't use block_on here because desktop's #[tokio::main] already
+    // has an active block_on on this thread — nesting would panic.
+    let ui_ctx = state.ui_ctx;
+    let (tx, rx) = std::sync::mpsc::channel();
+    rt_handle().spawn(async move {
+        if ui_ctx.auth_state().is_logged_in() {
             tracing::info!("Sending offline presence before shutdown...");
-            bin_ui::features::auth::presence_integration::shutdown_presence(&state.ui_ctx).await;
+            bin_ui::features::auth::presence_integration::shutdown_presence(&ui_ctx).await;
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
-        state.ui_ctx.shutdown().await;
+        ui_ctx.shutdown().await;
+        let _ = tx.send(());
     });
+    let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
 
     tracing::info!("Shutdown complete, exiting...");
     std::process::exit(0);
 }
 
-/// Desktop entry point calls this. Kept for backwards compatibility.
+/// Desktop entry point. Runs init then event loop inside tokio::main's block_on.
+/// On desktop, tokio worker threads keep the reactor alive while window.run() blocks.
 pub async fn app_main() {
     let state = app_init().await;
-    // On desktop, we're inside block_on from #[tokio::main].
-    // window.run() blocks but tokio worker threads keep the reactor alive.
-    state.window.run().expect("Failed to run application");
-
-    tracing::info!("Window closed, signaling shutdown...");
-    state.shutdown_token.cancel();
-
-    if state.ui_ctx.auth_state().is_logged_in() {
-        bin_ui::features::auth::presence_integration::shutdown_presence(&state.ui_ctx).await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
-    state.ui_ctx.shutdown().await;
-    tracing::info!("Shutdown complete, exiting...");
-    std::process::exit(0);
+    app_run(state);
 }

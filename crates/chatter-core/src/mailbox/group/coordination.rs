@@ -13,6 +13,7 @@
 use std::sync::Arc;
 
 use chrono::{Duration, Utc};
+use tokio::time::sleep;
 
 use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
@@ -114,17 +115,40 @@ impl GroupCoordinator {
         let token = self.ensure_token(mailbox_client).await?;
         tracing::info!(channel_id = %channel_id, "Token obtained");
 
-        // Create ephemeral mailbox on server
+        // Create ephemeral mailbox on server (with retry for transient transport errors)
         tracing::info!(channel_id = %channel_id, "Creating ephemeral mailbox on server...");
-        let response = mailbox_client
-            .create_ephemeral_mailbox(
-                token.public_key.clone(),
-                token.signature.clone(),
-                DEFAULT_GROUP_MAILBOX_TTL_SECONDS,
-                vec![], // Empty randomizer for compatibility
-            )
-            .await
-            .map_err(|e| MailboxError::Network(e.to_string()))?;
+        let response = {
+            const MAX_RETRIES: u32 = 3;
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                match mailbox_client
+                    .create_ephemeral_mailbox(
+                        token.public_key.clone(),
+                        token.signature.clone(),
+                        DEFAULT_GROUP_MAILBOX_TTL_SECONDS,
+                        vec![], // Empty randomizer for compatibility
+                    )
+                    .await
+                {
+                    Ok(resp) => break resp,
+                    Err(e) => {
+                        if e.is_retryable() && attempt < MAX_RETRIES {
+                            let backoff = std::time::Duration::from_millis(200 * u64::from(attempt));
+                            tracing::warn!(
+                                channel_id = %channel_id,
+                                error = %e,
+                                attempt,
+                                "Group mailbox creation failed (retrying)"
+                            );
+                            sleep(backoff).await;
+                        } else {
+                            return Err(MailboxError::Network(e.to_string()));
+                        }
+                    }
+                }
+            }
+        };
         tracing::info!(channel_id = %channel_id, mailbox_id = %response.mailbox_id, "Ephemeral mailbox created");
 
         // Build our mailbox from token + response

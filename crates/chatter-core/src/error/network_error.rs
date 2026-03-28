@@ -79,7 +79,20 @@ impl NetworkError {
         match code {
             Code::Ok => NetworkError::Unknown("unexpected OK status as error".to_string()),
             Code::Cancelled => NetworkError::Unknown(format!("cancelled: {}", message)),
-            Code::Unknown => NetworkError::Unknown(message),
+            Code::Unknown => {
+                // "Service was not ready: transport error" comes from tonic's .ready()
+                // check when the HTTP/2 connection is temporarily down. Treat as Unavailable
+                // so retry logic can recover.
+                if message.contains("transport error") || message.contains("Service was not ready") {
+                    tracing::warn!(
+                        message = %message,
+                        "Transport-level error detected in Code::Unknown — treating as Unavailable"
+                    );
+                    NetworkError::Unavailable
+                } else {
+                    NetworkError::Unknown(message)
+                }
+            }
             Code::InvalidArgument => NetworkError::InvalidRequest(message),
             Code::DeadlineExceeded => NetworkError::Timeout,
             Code::NotFound => NetworkError::NotFound(message),
@@ -193,6 +206,23 @@ mod tests {
         let status = Status::invalid_argument("bad input");
         let err = NetworkError::from_status(&status);
         assert!(matches!(err, NetworkError::InvalidRequest(_)));
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn test_from_status_unknown_transport_error_is_retryable() {
+        // "Service was not ready: transport error" from tonic .ready() check
+        let status = Status::new(Code::Unknown, "Service was not ready: transport error");
+        let err = NetworkError::from_status(&status);
+        assert!(matches!(err, NetworkError::Unavailable));
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn test_from_status_unknown_generic_not_retryable() {
+        let status = Status::new(Code::Unknown, "something else went wrong");
+        let err = NetworkError::from_status(&status);
+        assert!(matches!(err, NetworkError::Unknown(_)));
         assert!(!err.is_retryable());
     }
 

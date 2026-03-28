@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{Duration, Utc};
 use prost::Message;
+use tokio::time::sleep;
 
 use crate::domain::UserId;
 use crate::error::MailboxError;
@@ -232,19 +233,51 @@ impl DmBootstrap {
 
         tracing::info!(peer_id = %peer_id, "DM bootstrap: step 3 - creating ephemeral mailbox");
 
-        // 3. Create ephemeral mailbox on server
-        let response = mailbox_client
-            .create_ephemeral_mailbox(
-                token.public_key.clone(),
-                token.signature.clone(),
-                DEFAULT_MAILBOX_TTL_SECONDS,
-                vec![],  // Empty randomizer for compatibility
-            )
-            .await
-            .map_err(|e| {
-                tracing::error!(peer_id = %peer_id, error = %e, "DM bootstrap: failed to create mailbox");
-                MailboxError::Network(e.to_string())
-            })?;
+        // 3. Create ephemeral mailbox on server (with retry for transient transport errors)
+        let mut retried = false;
+        let response = {
+            const MAX_RETRIES: u32 = 3;
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                match mailbox_client
+                    .create_ephemeral_mailbox(
+                        token.public_key.clone(),
+                        token.signature.clone(),
+                        DEFAULT_MAILBOX_TTL_SECONDS,
+                        vec![],  // Empty randomizer for compatibility
+                    )
+                    .await
+                {
+                    Ok(resp) => break resp,
+                    Err(e) => {
+                        if e.is_retryable() && attempt < MAX_RETRIES {
+                            let backoff = std::time::Duration::from_millis(200 * u64::from(attempt));
+                            tracing::warn!(
+                                peer_id = %peer_id,
+                                error = %e,
+                                attempt,
+                                backoff_ms = backoff.as_millis() as u64,
+                                "DM bootstrap: mailbox creation failed (retrying)"
+                            );
+                            sleep(backoff).await;
+                            retried = true;
+                        } else {
+                            tracing::error!(
+                                peer_id = %peer_id,
+                                error = %e,
+                                attempt,
+                                "DM bootstrap: failed to create mailbox"
+                            );
+                            return Err(MailboxError::Network(e.to_string()));
+                        }
+                    }
+                }
+            }
+        };
+        if retried {
+            tracing::info!(peer_id = %peer_id, "DM bootstrap: mailbox created after retry");
+        }
         tracing::debug!(peer_id = %peer_id, mailbox_id = %response.mailbox_id, "DM bootstrap: mailbox created");
 
         // 4. Build our mailbox from token + response
@@ -441,15 +474,38 @@ impl DmBootstrap {
             .unwrap_or(true)
         {
             let token = self.ensure_token(mailbox_client).await?;
-            let response = mailbox_client
-                .create_ephemeral_mailbox(
-                    token.public_key.clone(),
-                    token.signature.clone(),
-                    DEFAULT_MAILBOX_TTL_SECONDS,
-                    vec![],  // Empty randomizer for legacy tokens
-                )
-                .await
-                .map_err(|e| MailboxError::Network(e.to_string()))?;
+            let response = {
+                const MAX_RETRIES: u32 = 3;
+                let mut attempt = 0;
+                loop {
+                    attempt += 1;
+                    match mailbox_client
+                        .create_ephemeral_mailbox(
+                            token.public_key.clone(),
+                            token.signature.clone(),
+                            DEFAULT_MAILBOX_TTL_SECONDS,
+                            vec![],  // Empty randomizer for legacy tokens
+                        )
+                        .await
+                    {
+                        Ok(resp) => break resp,
+                        Err(e) => {
+                            if e.is_retryable() && attempt < MAX_RETRIES {
+                                let backoff = std::time::Duration::from_millis(200 * u64::from(attempt));
+                                tracing::warn!(
+                                    peer_id = %sender_id,
+                                    error = %e,
+                                    attempt,
+                                    "Incoming bootstrap: mailbox creation failed (retrying)"
+                                );
+                                sleep(backoff).await;
+                            } else {
+                                return Err(MailboxError::Network(e.to_string()));
+                            }
+                        }
+                    }
+                }
+            };
 
             let mailbox = self.build_mailbox_from_token(&token, &response)?;
             self.conversation_manager
