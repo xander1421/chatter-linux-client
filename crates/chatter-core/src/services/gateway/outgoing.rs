@@ -592,6 +592,9 @@ async fn route_anon_dm(
     attachment_pointers: Vec<AttachmentPointer>,
     quote: Option<AnonQuoteIntent>,
 ) -> Result<SendResult, SendError> {
+    // Extract attachment IDs before pointers are moved into the service call
+    let attachment_ids = super::shared::extract_attachment_ids(&attachment_pointers);
+
     let (message_id, sent_at) = if let Some(q) = quote {
         anon_dm_service
             .send_reply(conversation_id, text, attachment_pointers, &q.author_id, q.timestamp)
@@ -605,7 +608,7 @@ async fn route_anon_dm(
     Ok(SendResult {
         sent_at,
         message: None, // Anon DM uses its own message type, not domain::Message
-        attachment_ids: vec![],
+        attachment_ids,
         gif_attachment_ids: vec![],
         bootstrap_initiated: false,
         anon_message_id: Some(message_id.as_str().to_string()),
@@ -624,6 +627,9 @@ async fn route_anon_group(
     attachment_pointers: Vec<AttachmentPointer>,
     quote: Option<AnonQuoteIntent>,
 ) -> Result<SendResult, SendError> {
+    // Extract attachment IDs before pointers are moved into the service call
+    let attachment_ids = super::shared::extract_attachment_ids(&attachment_pointers);
+
     let (message_id, sent_at) = if let Some(q) = quote {
         anon_group_service
             .send_reply(group_id, text, attachment_pointers, &q.author_id, q.timestamp)
@@ -641,7 +647,7 @@ async fn route_anon_group(
     Ok(SendResult {
         sent_at,
         message: None, // Anon group uses its own message type, not domain::Message
-        attachment_ids: vec![],
+        attachment_ids,
         gif_attachment_ids: vec![],
         bootstrap_initiated: false,
         anon_message_id: Some(message_id.as_str().to_string()),
