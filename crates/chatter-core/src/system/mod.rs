@@ -19,6 +19,8 @@ pub mod open;
 
 // Android-only modules
 #[cfg(target_os = "android")]
+pub mod android_keyboard;
+#[cfg(target_os = "android")]
 pub mod android_notifications;
 
 // Linux-only modules
@@ -40,6 +42,8 @@ pub use keyring::Keyring;
 pub use notifications::DesktopNotifications;
 #[cfg(not(target_os = "android"))]
 pub use open::ExternalOpener;
+#[cfg(target_os = "android")]
+pub use android_keyboard::{DisplayInsets, query_display_insets};
 #[cfg(target_os = "android")]
 pub use android_notifications::AndroidNotifications;
 
