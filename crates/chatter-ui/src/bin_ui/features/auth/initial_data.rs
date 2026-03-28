@@ -1015,34 +1015,6 @@ pub fn update_dm_typing_indicator(window: &MainWindow, user_id: &str, is_typing:
     }
 }
 
-/// Update typing indicator for a user in a group.
-pub fn update_group_typing_indicator(window: &MainWindow, group_id: &str, _user_id: &str, is_typing: bool) {
-    // Regular channels don't have typing indicator in the UI currently
-    // Only private groups have is_typing field
-    
-    // Check private groups
-    let private_group_list = window.get_private_groups();
-    let group_count = private_group_list.iter().count();
-    for i in 0..group_count {
-        if let Some(group) = private_group_list.iter().nth(i) {
-            if group.group_id.to_string() == group_id {
-                // Need to recreate the model to update
-                let mut all_groups = Vec::new();
-                for j in 0..group_count {
-                    if let Some(mut item) = private_group_list.iter().nth(j) {
-                        if j == i {
-                            item.is_typing = is_typing;
-                        }
-                        all_groups.push(item);
-                    }
-                }
-                window.set_private_groups(ModelRc::new(VecModel::from(all_groups)));
-                break;
-            }
-        }
-    }
-}
-
 /// Show incoming call modal with caller information.
 pub fn show_incoming_call(
     window: &MainWindow,

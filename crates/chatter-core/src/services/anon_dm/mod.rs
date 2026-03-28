@@ -124,8 +124,6 @@ pub struct AnonDmService {
     pub(crate) mailbox_manager: Arc<MailboxManager>,
     pub(crate) grpc_pool: Arc<GrpcClientPool>,
     pub(crate) token_manager: Arc<TokenManager>,
-    /// Event bus for emitting DomainEvents (sender-side message display).
-    pub(crate) event_bus: crate::events::EventBus,
 }
 
 impl AnonDmService {
@@ -138,7 +136,6 @@ impl AnonDmService {
         mailbox_manager: Arc<MailboxManager>,
         grpc_pool: Arc<GrpcClientPool>,
         token_manager: Arc<TokenManager>,
-        event_bus: crate::events::EventBus,
     ) -> Self {
         Self {
             settings_repo,
@@ -148,7 +145,6 @@ impl AnonDmService {
             mailbox_manager,
             grpc_pool,
             token_manager,
-            event_bus,
         }
     }
 
