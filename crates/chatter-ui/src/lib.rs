@@ -61,7 +61,60 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // The enter guard keeps tokio's I/O reactor registered on this thread.
     // Worker threads remain alive for rt_handle().spawn() from callbacks.
     let _guard = rt.enter();
+
+    // Start polling Android display insets (keyboard, status bar, nav bar)
+    // and updating Slint safe-area properties so the UI resizes correctly.
+    setup_keyboard_inset_tracking(&app_state.window);
+
     app_run(app_state);
+}
+
+/// Poll Android system bar insets and update Slint safe-area properties.
+///
+/// NativeActivity's GL surface extends behind system bars (status bar, nav bar)
+/// and doesn't resize with `adjustResize`. We poll insets via JNI every 200ms
+/// using WindowInsets API and push changes to the Slint properties that control
+/// content positioning (see `app.slint` lines 771-774).
+#[cfg(target_os = "android")]
+fn setup_keyboard_inset_tracking(window: &MainWindow) {
+    use std::cell::Cell;
+
+    let weak = window.as_weak();
+    let last_top = std::rc::Rc::new(Cell::new(-1.0f32));
+    let last_bottom = std::rc::Rc::new(Cell::new(-1.0f32));
+
+    let timer = slint::Timer::default();
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_millis(200),
+        move || {
+            if let Some(insets) = chatter_core::system::android_keyboard::query_display_insets() {
+                let top_changed = (insets.top - last_top.get()).abs() > 0.5;
+                let bottom_changed = (insets.bottom - last_bottom.get()).abs() > 0.5;
+
+                if top_changed || bottom_changed {
+                    if let Some(window) = weak.upgrade() {
+                        if top_changed {
+                            window.set_safe_area_top(insets.top);
+                            last_top.set(insets.top);
+                        }
+                        if bottom_changed {
+                            window.set_safe_area_bottom(insets.bottom);
+                            last_bottom.set(insets.bottom);
+                        }
+                        tracing::debug!(
+                            top = insets.top,
+                            bottom = insets.bottom,
+                            "Safe area insets updated"
+                        );
+                    }
+                }
+            }
+        },
+    );
+
+    // Timer must live for the app's lifetime — it runs inside the Slint event loop
+    std::mem::forget(timer);
 }
 
 /// State produced by async init, consumed by the sync event loop.
@@ -109,7 +162,12 @@ pub async fn app_init() -> AppState {
         tracing::info!("Slint OpenGL ES backend selected for hardware-accelerated video");
     }
 
-    let client = match chatter_core::client::ChatterClient::builder().build() {
+    let mut builder = chatter_core::client::ChatterClient::builder();
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.data_dir("/data/data/com.chatter.client/files");
+    }
+    let client = match builder.build() {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to initialize application: {}", e);
@@ -208,25 +266,31 @@ pub async fn app_init() -> AppState {
 
     bin_ui::features::wire_all(&window, &ui_ctx);
 
-    // Dev mode auto-register
-    if std::env::var("CHATTER_DEV").is_ok() && !ui_ctx.auth().is_logged_in() && !ui_ctx.auth().has_registered_before() {
+    // Dev mode auto-register (desktop: CHATTER_DEV=1, Android: always in dev builds)
+    let dev_mode = std::env::var("CHATTER_DEV").is_ok() || cfg!(target_os = "android");
+    if dev_mode && !ui_ctx.auth().is_logged_in() && !ui_ctx.auth().has_registered_before() {
         let suffix: u16 = rand::random();
         let username = format!("dev{}", suffix);
         let display_name = format!("Dev User {}", suffix);
         let password = "devpass123";
         let pin = "123456";
+        let server_url = if cfg!(target_os = "android") {
+            "http://192.168.0.7:50051"
+        } else {
+            "http://localhost:50051"
+        };
 
         window.set_register_username(username.clone().into());
         window.set_register_display_name(display_name.clone().into());
         window.set_register_password(password.into());
         window.set_register_confirm_password(password.into());
         window.set_register_pin(pin.into());
-        window.set_register_server_url("http://localhost:50051".into());
+        window.set_register_server_url(server_url.into());
 
         tracing::info!("DEV MODE: Auto-registering as {} ({})", username, display_name);
         window.invoke_register(
             username.into(), password.into(), display_name.into(),
-            pin.into(), "http://localhost:50051".into(),
+            pin.into(), server_url.into(),
         );
     }
 
