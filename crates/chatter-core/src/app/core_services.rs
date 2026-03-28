@@ -171,7 +171,7 @@ impl CoreServices {
             org_state: services.org_state.clone(),
             pinned_state: PinnedState::new(),
             jarvis_state: JarvisState::new(),
-            event_bus: EventBus::new(),
+            event_bus: infra.event_bus.clone(),
 
             // Infrastructure
             grpc_pool: infra.grpc_pool.clone(),
