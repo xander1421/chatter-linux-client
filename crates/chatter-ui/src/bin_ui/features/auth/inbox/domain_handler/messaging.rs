@@ -336,6 +336,34 @@ pub(super) fn handle_reaction_update(
     });
 }
 
+/// Refresh the sidebar preview for the active conversation after a reaction change.
+pub(super) fn refresh_sidebar_for_reaction(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    emoji: &str,
+    remove: bool,
+) {
+    let weak = window.clone();
+    let conversation = ui_ctx.chat_state().active_conversation();
+    let emoji = emoji.to_string();
+
+    if matches!(conversation, chatter_core::state::ActiveConversation::None) {
+        return;
+    }
+
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        if remove {
+            return;
+        }
+        let preview = format!("Reacted {}", emoji);
+        let now = chrono::Local::now().format("%H:%M").to_string();
+        crate::bin_ui::features::sidebar::update_sidebar_preview(
+            &w, conversation, &preview, &now, false,
+        );
+    });
+}
+
 /// Update a message's content after an edit.
 pub(super) fn handle_message_edit(
     window: &Weak<MainWindow>,

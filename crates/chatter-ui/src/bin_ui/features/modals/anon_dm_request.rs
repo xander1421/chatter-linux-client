@@ -409,53 +409,9 @@ pub fn spawn_anon_dm_request_handler(
                 DomainEvent::TypingStopped { channel_id, user_id: _ } => {
                     unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), false);
                 }
-                DomainEvent::ReactionAdded {
-                    emoji,
-                    timestamp,
-                    ..
-                } => {
-                    // Derive channel_id from message context
-                    // Note: For anon DMs, we need the conversation_id
-                    // Since ReactionAdded doesn't include channel_id, we rely on
-                    // the currently selected conversation. The handler checks if
-                    // the selected DM is an anon DM.
-                    let weak = weak_window.clone();
-                    let cs = chat_state.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            let selected_dm = w.get_selected_dm_id().to_string();
-                            if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
-                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_core::domain::ChannelId>() {
-                                    unified_actions::handle_reaction(
-                                        &weak, &cs, EventSource::Channel(channel_id),
-                                        emoji.clone(), false, timestamp,
-                                    );
-                                }
-                            }
-                        }
-                    });
-                }
-                DomainEvent::ReactionRemoved {
-                    emoji,
-                    timestamp,
-                    ..
-                } => {
-                    let weak = weak_window.clone();
-                    let cs = chat_state.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            let selected_dm = w.get_selected_dm_id().to_string();
-                            if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
-                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_core::domain::ChannelId>() {
-                                    unified_actions::handle_reaction(
-                                        &weak, &cs, EventSource::Channel(channel_id),
-                                        emoji.clone(), true, timestamp,
-                                    );
-                                }
-                            }
-                        }
-                    });
-                }
+                // ReactionAdded/ReactionRemoved are handled by domain_handler::handle_reaction_update
+                // (which handles all conversation types). Handling them here too caused double-counting.
+                DomainEvent::ReactionAdded { .. } | DomainEvent::ReactionRemoved { .. } => {}
                 DomainEvent::MessagePinned {
                     message_id,
                     channel_id,

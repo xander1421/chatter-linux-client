@@ -139,12 +139,14 @@ pub async fn handle_domain_event(
             messaging::handle_delivery_status_update(window, message_timestamps, "read");
         }
 
-        // Reaction UI updates: update emoji summary on the message bubble
+        // Reaction UI updates: update emoji summary on the message bubble + sidebar
         DomainEvent::ReactionAdded { message_id, emoji, timestamp, .. } => {
             messaging::handle_reaction_update(window, &message_id.to_string(), &emoji, false, timestamp);
+            messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, false);
         }
         DomainEvent::ReactionRemoved { message_id, emoji, timestamp, .. } => {
             messaging::handle_reaction_update(window, &message_id.to_string(), &emoji, true, timestamp);
+            messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, true);
         }
 
         // Edit UI update: replace message content in-place
@@ -247,7 +249,9 @@ pub async fn handle_domain_event(
         DomainEvent::AnonDmMessageDeleted { .. }
         | DomainEvent::AnonDmMessageEdited { .. }
         | DomainEvent::AnonGroupMessageEdited { .. } => {
-            // Handled by message state
+            // TODO(GRA-273): These need proper real-time UI update.
+            // Currently edits only persist to DB but don't refresh the Slint model.
+            // Fix: add is_edited column, emit unified MessageEdited event, match by timestamp.
         }
 
         // =========================================================================
