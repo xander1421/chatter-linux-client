@@ -236,8 +236,8 @@ pub async fn handle_domain_event(
             anon_dm::handle_request_accepted(window, ui_ctx, conversation_id, peer_id);
         }
 
-        DomainEvent::AnonDmMessageReceived { .. } => {
-            anon_dm::handle_message_received(window, ui_ctx);
+        DomainEvent::AnonDmMessageReceived { conversation_id, sender_id, message_id, sent_at } => {
+            anon_dm::handle_message_received(window, ui_ctx, conversation_id, sender_id, message_id, sent_at);
         }
 
         DomainEvent::AnonDmInitReceived { .. } => {
@@ -371,5 +371,10 @@ pub async fn handle_domain_event(
 
         // Handled by EventHandlers state store (appends to message_state)
         DomainEvent::SavedMessageSynced { .. } => {}
+
+        // Jarvis AI events — UI can subscribe directly for display
+        DomainEvent::JarvisResponse { .. }
+        | DomainEvent::JarvisStats { .. }
+        | DomainEvent::JarvisCleared { .. } => {}
     }
 }
