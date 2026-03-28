@@ -20,6 +20,8 @@ use crate::proto::organization_v1::{
     RemoveMemberRequest,
     UpdateMemberRoleRequest,
     ListMembersRequest, ListMembersResponse,
+    GetOrgSettingsRequest, GetOrgSettingsResponse,
+    GetOrgDashboardRequest, OrgDashboard,
     Organization,
 };
 
@@ -240,6 +242,41 @@ impl OrganizationClient {
             .list_members(request)
             .await
             .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Get organization settings.
+    pub async fn get_org_settings(
+        &mut self,
+        org_id: &str,
+    ) -> Result<GetOrgSettingsResponse, NetworkError> {
+        let request = GetOrgSettingsRequest {
+            org_id: org_id.to_string(),
+        };
+
+        self.inner
+            .get_org_settings(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Get organization dashboard analytics.
+    pub async fn get_org_dashboard(
+        &mut self,
+        org_id: &str,
+    ) -> Result<OrgDashboard, NetworkError> {
+        let request = GetOrgDashboardRequest {
+            org_id: org_id.to_string(),
+        };
+
+        self.inner
+            .get_org_dashboard(request)
+            .await
+            .map(|r| {
+                let resp = r.into_inner();
+                resp.dashboard.unwrap_or_default()
+            })
             .map_err(|s| NetworkError::from_status(&s))
     }
 }

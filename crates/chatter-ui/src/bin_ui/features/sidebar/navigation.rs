@@ -394,11 +394,254 @@ pub(crate) fn wire_org_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     });
 }
 
-/// Wire the manage-org-clicked callback (placeholder — opens settings for now).
-pub(crate) fn wire_manage_org_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+/// Wire the manage-org-clicked callback to open org management modal.
+pub(crate) fn wire_manage_org_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let ui_ctx = ui_ctx.clone();
+    let weak = window.as_weak();
     window.on_manage_org_clicked(move || {
-        tracing::info!("Manage org clicked (org management screen TBD)");
+        let weak = weak.clone();
+        let ui_ctx = ui_ctx.clone();
+
+        // Set current org info on the window
+        let org_data = ui_ctx.org_state().get();
+        if let (Some(org_id), Some(org_name)) = (&org_data.current_org_id, &org_data.current_org_name) {
+            let org_id = org_id.clone();
+            let org_name = org_name.clone();
+            let viewer_role = org_data.organizations.iter()
+                .find(|o| o.id == org_id)
+                .map(|o| match o.viewer_role {
+                    4 => "owner",
+                    3 => "admin",
+                    2 => "member",
+                    1 => "guest",
+                    _ => "member",
+                })
+                .unwrap_or("member")
+                .to_string();
+            let slug = org_data.organizations.iter()
+                .find(|o| o.id == org_id)
+                .map(|o| o.slug.clone())
+                .unwrap_or_default();
+
+            // Clone weak before moving into closures
+            let weak2 = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_current_org_id(org_id.into());
+                    w.set_current_org_name(org_name.into());
+                    w.set_current_org_slug(slug.into());
+                    w.set_current_org_viewer_role(viewer_role.into());
+                    w.set_active_modal("org-management".into());
+                }
+            });
+
+            // Trigger initial member load
+            let ui_ctx2 = ui_ctx.clone();
+            tokio::spawn(async move {
+                load_org_members(&weak2, &ui_ctx2).await;
+            });
+        }
     });
+}
+
+/// Wire org management data-loading callbacks.
+pub(crate) fn wire_org_management_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    // Load members
+    {
+        let ui_ctx = ui_ctx.clone();
+        let weak = window.as_weak();
+        window.on_org_load_members(move || {
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            tokio::spawn(async move { load_org_members(&weak, &ui_ctx).await; });
+        });
+    }
+
+    // Load settings
+    {
+        let ui_ctx = ui_ctx.clone();
+        let weak = window.as_weak();
+        window.on_org_load_settings(move || {
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            tokio::spawn(async move { load_org_settings(&weak, &ui_ctx).await; });
+        });
+    }
+
+    // Load dashboard
+    {
+        let ui_ctx = ui_ctx.clone();
+        let weak = window.as_weak();
+        window.on_org_load_dashboard(move || {
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            tokio::spawn(async move { load_org_dashboard(&weak, &ui_ctx).await; });
+        });
+    }
+
+    // Invite member
+    {
+        let ui_ctx = ui_ctx.clone();
+        let weak = window.as_weak();
+        window.on_org_invite_member(move |email: slint::SharedString, role: slint::SharedString| {
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak.clone();
+            let email = email.to_string();
+            let _role = role.to_string();
+            tokio::spawn(async move {
+                let org_id = ui_ctx.org_state().current_org_id().unwrap_or_default();
+                if org_id.is_empty() { return; }
+
+                let weak_loading = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_loading.upgrade() {
+                        w.set_org_invite_loading(true);
+                        w.set_org_invite_error("".into());
+                        w.set_org_invite_success("".into());
+                    }
+                });
+
+                if let Some(mut org_client) = ui_ctx.try_org_client() {
+                    // Role 2 = MEMBER
+                    match org_client.invite_member(&org_id, &email, 2).await {
+                        Ok(_) => {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_org_invite_loading(false);
+                                    w.set_org_invite_success(format!("Invited {}", email).into());
+                                    w.set_org_invite_email("".into());
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            let err = e.to_string();
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_org_invite_loading(false);
+                                    w.set_org_invite_error(err.into());
+                                }
+                            });
+                        }
+                    }
+                }
+            });
+        });
+    }
+}
+
+/// Load org members from server and update UI.
+async fn load_org_members(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
+    use crate::OrgMemberData;
+
+    let org_id = ui_ctx.org_state().current_org_id().unwrap_or_default();
+    if org_id.is_empty() { return; }
+
+    let weak_loading = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak_loading.upgrade() {
+            w.set_org_members_loading(true);
+        }
+    });
+
+    if let Some(mut org_client) = ui_ctx.try_org_client() {
+        match org_client.list_members(&org_id).await {
+            Ok(response) => {
+                let members: Vec<OrgMemberData> = response.members.iter().map(|m| {
+                    let role_str = match m.role {
+                        4 => "owner",
+                        3 => "admin",
+                        2 => "member",
+                        1 => "guest",
+                        _ => "member",
+                    };
+                    OrgMemberData {
+                        user_id: m.user_id.clone().into(),
+                        display_name: m.display_name.clone().into(),
+                        username: m.username.clone().into(),
+                        avatar_url: m.avatar_url.clone().into(),
+                        role: role_str.into(),
+                        joined_at: String::new().into(),
+                    }
+                }).collect();
+
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        let model = std::rc::Rc::new(slint::VecModel::from(members));
+                        w.set_org_members(model.into());
+                        w.set_org_members_loading(false);
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load org members: {}", e);
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_org_members_loading(false);
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// Load org settings from server and update UI.
+async fn load_org_settings(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
+    let org_id = ui_ctx.org_state().current_org_id().unwrap_or_default();
+    if org_id.is_empty() { return; }
+
+    if let Some(mut org_client) = ui_ctx.try_org_client() {
+        match org_client.get_org_settings(&org_id).await {
+            Ok(response) => {
+                if let Some(settings) = response.settings {
+                    let weak = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_org_max_members(settings.max_members.unwrap_or(0));
+                            w.set_org_retention_days(settings.retention_days.unwrap_or(0));
+                            w.set_org_require_2fa(settings.require_2fa);
+                            w.set_org_allow_guest_access(settings.allow_guest_access);
+                        }
+                    });
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load org settings: {}", e);
+            }
+        }
+    }
+}
+
+/// Load org dashboard from server and update UI.
+async fn load_org_dashboard(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
+    use crate::OrgDashboardData;
+
+    let org_id = ui_ctx.org_state().current_org_id().unwrap_or_default();
+    if org_id.is_empty() { return; }
+
+    if let Some(mut org_client) = ui_ctx.try_org_client() {
+        match org_client.get_org_dashboard(&org_id).await {
+            Ok(dashboard) => {
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_org_dashboard(OrgDashboardData {
+                            total_members: dashboard.total_members,
+                            active_members_30d: dashboard.active_members_30d,
+                            total_channels: dashboard.total_channels,
+                            total_messages_30d: dashboard.total_messages_30d as i32,
+                            storage_used_mb: (dashboard.storage_used_bytes / 1_048_576) as i32,
+                            storage_limit_mb: (dashboard.storage_limit_bytes / 1_048_576) as i32,
+                        });
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load org dashboard: {}", e);
+            }
+        }
+    }
 }
 
 /// Subscribe to OrgState changes and update the sidebar reactively.

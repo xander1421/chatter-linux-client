@@ -521,6 +521,14 @@ impl ChatterClient {
     pub fn runtime_handle(&self) -> &tokio::runtime::Handle { &self.ui.runtime_handle }
     pub fn directories(&self) -> &Directories { &self.ui.directories }
 
+    /// Create an organization client for making gRPC calls.
+    /// Returns None if not connected to server.
+    pub fn try_org_client(&self) -> Option<crate::network::grpc::OrganizationClient> {
+        self.ui.grpc_pool.try_channel().map(|channel| {
+            crate::network::grpc::OrganizationClient::new(channel, self.ui.grpc_pool.auth_clone())
+        })
+    }
+
     /// Post-boot call service handle (OnceLock).
     #[cfg(feature = "desktop-media")]
     pub fn call_service(&self) -> &Arc<std::sync::OnceLock<CallWorkerHandle>> {

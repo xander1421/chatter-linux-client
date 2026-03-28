@@ -1,10 +1,10 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData } from "app.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -81,9 +81,26 @@ export component MainWindow inherits Window {
     in-out property <bool> sidebar-collapsed <=> app.sidebar-collapsed;
 
     // ========== Organization properties ==========
+    in property <string> current-org-id <=> app.current-org-id;
     in property <string> current-org-name <=> app.current-org-name;
+    in property <string> current-org-slug <=> app.current-org-slug;
+    in property <string> current-org-viewer-role <=> app.current-org-viewer-role;
     in property <[OrgListItemData]> organizations <=> app.organizations;
     in property <bool> org-loading <=> app.org-loading;
+
+    // Org management data
+    in property <[OrgMemberData]> org-members <=> app.org-members;
+    in property <bool> org-members-loading <=> app.org-members-loading;
+    in property <int> org-max-members <=> app.org-max-members;
+    in property <int> org-retention-days <=> app.org-retention-days;
+    in property <bool> org-require-2fa <=> app.org-require-2fa;
+    in property <bool> org-allow-guest-access <=> app.org-allow-guest-access;
+    in property <[string]> org-allowed-email-domains <=> app.org-allowed-email-domains;
+    in property <OrgDashboardData> org-dashboard <=> app.org-dashboard;
+    in-out property <string> org-invite-email <=> app.org-invite-email;
+    in property <bool> org-invite-loading <=> app.org-invite-loading;
+    in property <string> org-invite-error <=> app.org-invite-error;
+    in property <string> org-invite-success <=> app.org-invite-success;
 
     // ========== Chat properties ==========
     in property <string> channel-id <=> app.channel-id;
@@ -450,6 +467,7 @@ export component MainWindow inherits Window {
     callback go-to-register <=> app.go-to-register;
     callback go-to-login <=> app.go-to-login;
     callback go-to-recovery <=> app.go-to-recovery;
+    callback sso-login <=> app.sso-login;
 
     // ========== Welcome page callbacks ==========
     callback welcome-add-friends <=> app.welcome-add-friends;
@@ -470,6 +488,12 @@ export component MainWindow inherits Window {
     callback toggle-sidebar <=> app.toggle-sidebar;
     callback org-selected <=> app.org-selected;
     callback manage-org-clicked <=> app.manage-org-clicked;
+    callback org-load-members <=> app.org-load-members;
+    callback org-load-settings <=> app.org-load-settings;
+    callback org-load-dashboard <=> app.org-load-dashboard;
+    callback org-invite-member <=> app.org-invite-member;
+    callback org-remove-member <=> app.org-remove-member;
+    callback org-update-member-role <=> app.org-update-member-role;
 
     // ========== Chat callbacks ==========
     callback search-clicked <=> app.search-clicked;

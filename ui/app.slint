@@ -40,6 +40,9 @@ import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
 
+// Import org management
+import { OrgManagementScreen, OrgMemberData, OrgDashboardData } from "org/org_management.slint";
+
 // Import components
 import { ImageViewer, EmojiData } from "components/mod.slint";
 import { CodePreviewPanel } from "components/mod.slint";
@@ -53,7 +56,7 @@ import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, Acti
 import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -121,7 +124,10 @@ export component App inherits Rectangle {
     in-out property <bool> sidebar-hidden: false;
 
     // Organization properties
+    in property <string> current-org-id: "";
     in property <string> current-org-name: "";
+    in property <string> current-org-slug: "";
+    in property <string> current-org-viewer-role: "member";
     in property <[OrgListItemData]> organizations: [];
     in property <bool> org-loading: false;
 
@@ -511,6 +517,31 @@ export component App inherits Rectangle {
     callback toggle-sidebar();
     callback org-selected(/* org_id */ string);
     callback manage-org-clicked();
+
+    // ========== Org management properties ==========
+    in property <[OrgMemberData]> org-members: [];
+    in property <bool> org-members-loading: false;
+    in property <int> org-max-members: 0;
+    in property <int> org-retention-days: 0;
+    in property <bool> org-require-2fa: false;
+    in property <bool> org-allow-guest-access: false;
+    in property <[string]> org-allowed-email-domains: [];
+    in property <OrgDashboardData> org-dashboard: {
+        total-members: 0, active-members-30d: 0, total-channels: 0,
+        total-messages-30d: 0, storage-used-mb: 0, storage-limit-mb: 0,
+    };
+    in-out property <string> org-invite-email: "";
+    in property <bool> org-invite-loading: false;
+    in property <string> org-invite-error: "";
+    in property <string> org-invite-success: "";
+
+    // Org management callbacks
+    callback org-load-members();
+    callback org-load-settings();
+    callback org-load-dashboard();
+    callback org-invite-member(string, string);
+    callback org-remove-member(string);
+    callback org-update-member-role(string, string);
 
     // ========== Chat callbacks ==========
     callback search-clicked();
@@ -1765,6 +1796,34 @@ export component App inherits Rectangle {
         local-ai-unload-model => {
             root.settings-local-ai-unload-model();
         }
+    }
+
+    // Org management screen (full screen overlay)
+    if active-modal == "org-management": OrgManagementScreen {
+        org-id: root.current-org-id;
+        org-name: root.current-org-name;
+        org-slug: root.current-org-slug;
+        viewer-role: root.current-org-viewer-role;
+        members: root.org-members;
+        members-loading: root.org-members-loading;
+        max-members: root.org-max-members;
+        retention-days: root.org-retention-days;
+        require-2fa: root.org-require-2fa;
+        allow-guest-access: root.org-allow-guest-access;
+        allowed-email-domains: root.org-allowed-email-domains;
+        dashboard: root.org-dashboard;
+        invite-email <=> root.org-invite-email;
+        invite-loading: root.org-invite-loading;
+        invite-error: root.org-invite-error;
+        invite-success: root.org-invite-success;
+
+        close => { root.active-modal = "none"; }
+        load-members => { root.org-load-members(); }
+        load-settings => { root.org-load-settings(); }
+        load-dashboard => { root.org-load-dashboard(); }
+        invite-member(email, role) => { root.org-invite-member(email, role); }
+        remove-member(uid) => { root.org-remove-member(uid); }
+        update-member-role(uid, role) => { root.org-update-member-role(uid, role); }
     }
 
     // ========== Call overlays (rendered above modals) ==========

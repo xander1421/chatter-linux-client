@@ -1,0 +1,463 @@
+// OrgManagementScreen - Organization management with sidebar navigation
+//
+// Sections: Members, Settings, Dashboard
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+import { Avatar } from "../components/avatar.slint";
+
+// Data model for org member list
+export struct OrgMemberData {
+    user-id: string,
+    display-name: string,
+    username: string,
+    avatar-url: string,
+    role: string,        // "owner", "admin", "member", "guest"
+    joined-at: string,
+}
+
+// Data model for org dashboard stats
+export struct OrgDashboardData {
+    total-members: int,
+    active-members-30d: int,
+    total-channels: int,
+    total-messages-30d: int,
+    storage-used-mb: int,
+    storage-limit-mb: int,
+}
+
+export component OrgManagementScreen inherits Rectangle {
+    // Org identity
+    in property <string> org-id: "";
+    in property <string> org-name: "";
+    in property <string> org-slug: "";
+    in property <string> viewer-role: "member";  // Current user's role
+
+    // Members data
+    in property <[OrgMemberData]> members: [];
+    in property <bool> members-loading: false;
+
+    // Settings data
+    in property <int> max-members: 0;
+    in property <int> retention-days: 0;
+    in property <bool> require-2fa: false;
+    in property <bool> allow-guest-access: false;
+    in property <[string]> allowed-email-domains: [];
+
+    // Dashboard data
+    in property <OrgDashboardData> dashboard: {
+        total-members: 0,
+        active-members-30d: 0,
+        total-channels: 0,
+        total-messages-30d: 0,
+        storage-used-mb: 0,
+        storage-limit-mb: 0,
+    };
+
+    // Invite form
+    in-out property <string> invite-email: "";
+    in property <bool> invite-loading: false;
+    in property <string> invite-error: "";
+    in property <string> invite-success: "";
+
+    // Navigation
+    property <string> active-section: "members";
+
+    // Callbacks
+    callback close();
+    callback load-members();
+    callback load-settings();
+    callback load-dashboard();
+    callback invite-member(string, string);  // email, role
+    callback remove-member(string);          // user_id
+    callback update-member-role(string, string);  // user_id, new_role
+
+    background: Colors.background;
+
+    HorizontalLayout {
+        // Left sidebar navigation
+        Rectangle {
+            width: 220px;
+            background: Colors.surface;
+
+            VerticalLayout {
+                padding: Spacing.md;
+                spacing: Spacing.xs;
+
+                // Header
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+                    padding-bottom: Spacing.md;
+
+                    Image {
+                        source: @image-url("../icons/globe.svg");
+                        width: 20px;
+                        height: 20px;
+                        colorize: Colors.primary;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    VerticalLayout {
+                        Text {
+                            text: root.org-name;
+                            color: Colors.text-primary;
+                            font-size: Typography.base;
+                            font-weight: Typography.semibold;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: root.org-slug;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                        }
+                    }
+                }
+
+                Rectangle { height: 1px; background: Colors.border; }
+
+                // Nav items
+                for item in [
+                    { key: "members", label: "Members" },
+                    { key: "settings", label: "Settings" },
+                    { key: "dashboard", label: "Dashboard" },
+                ]: Rectangle {
+                    height: 36px;
+                    border-radius: Spacing.radius-sm;
+                    background: root.active-section == item.key ? Colors.surface-hover : transparent;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        alignment: start;
+
+                        Text {
+                            text: item.label;
+                            color: root.active-section == item.key ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: root.active-section == item.key ? Typography.medium : Typography.normal;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.active-section = item.key;
+                            if item.key == "members" { root.load-members(); }
+                            if item.key == "settings" { root.load-settings(); }
+                            if item.key == "dashboard" { root.load-dashboard(); }
+                        }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; }
+
+                // Close button
+                Button {
+                    text: "Close";
+                    variant: "ghost";
+                    clicked => { root.close(); }
+                }
+            }
+        }
+
+        // Right content area
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Colors.background;
+
+            // Members section
+            if root.active-section == "members": VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.md;
+
+                // Header with invite button
+                HorizontalLayout {
+                    spacing: Spacing.md;
+
+                    Text {
+                        text: "Members";
+                        color: Colors.text-primary;
+                        font-size: Typography.xl;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    if root.viewer-role == "owner" || root.viewer-role == "admin": HorizontalLayout {
+                        spacing: Spacing.sm;
+
+                        Input {
+                            width: 250px;
+                            placeholder: "Email address";
+                            text <=> root.invite-email;
+                            disabled: root.invite-loading;
+                        }
+
+                        Button {
+                            text: root.invite-loading ? "..." : "Invite";
+                            variant: "primary";
+                            disabled: root.invite-loading || root.invite-email == "";
+                            clicked => {
+                                root.invite-member(root.invite-email, "member");
+                            }
+                        }
+                    }
+                }
+
+                if root.invite-error != "": Text {
+                    text: root.invite-error;
+                    color: Colors.error;
+                    font-size: Typography.sm;
+                }
+
+                if root.invite-success != "": Text {
+                    text: root.invite-success;
+                    color: Colors.success;
+                    font-size: Typography.sm;
+                }
+
+                // Member list
+                if root.members-loading: Text {
+                    text: "Loading members...";
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                }
+
+                Flickable {
+                    vertical-stretch: 1;
+                    viewport-height: member-list.preferred-height;
+
+                    member-list := VerticalLayout {
+                        spacing: 1px;
+
+                        for member in root.members: Rectangle {
+                            height: 56px;
+                            background: Colors.surface;
+                            border-radius: Spacing.radius-sm;
+
+                            HorizontalLayout {
+                                padding: Spacing.sm;
+                                spacing: Spacing.sm;
+
+                                // Avatar placeholder
+                                Rectangle {
+                                    width: 36px;
+                                    height: 36px;
+                                    border-radius: 18px;
+                                    background: Colors.primary;
+
+                                    Text {
+                                        text: {
+                                            // First letter of display name
+                                            member.display-name != "" ? member.display-name : "?"
+                                        };
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.semibold;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // Name and role
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+
+                                    Text {
+                                        text: member.display-name != "" ? member.display-name : member.username;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                        overflow: elide;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+
+                                        Text {
+                                            text: "@" + member.username;
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                        }
+                                    }
+                                }
+
+                                // Role badge
+                                Rectangle {
+                                    width: role-text.preferred-width + Spacing.sm * 2;
+                                    height: 24px;
+                                    border-radius: 12px;
+                                    background: member.role == "owner" ? Colors.warning :
+                                               member.role == "admin" ? Colors.primary :
+                                               Colors.surface-hover;
+                                    y: (parent.height - self.height) / 2;
+
+                                    role-text := Text {
+                                        text: member.role;
+                                        color: member.role == "owner" || member.role == "admin" ? Colors.text-primary : Colors.text-secondary;
+                                        font-size: Typography.xs;
+                                        font-weight: Typography.medium;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Settings section
+            if root.active-section == "settings": VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.md;
+
+                Text {
+                    text: "Organization Settings";
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    font-weight: Typography.semibold;
+                }
+
+                // Settings grid
+                Rectangle {
+                    background: Colors.surface;
+                    border-radius: Spacing.radius-md;
+
+                    VerticalLayout {
+                        padding: Spacing.md;
+                        spacing: Spacing.md;
+
+                        // Max members
+                        HorizontalLayout {
+                            Text { text: "Max Members"; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; vertical-alignment: center; }
+                            Text { text: root.max-members > 0 ? root.max-members : "Unlimited"; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; }
+                        }
+
+                        Rectangle { height: 1px; background: Colors.border; }
+
+                        // Retention
+                        HorizontalLayout {
+                            Text { text: "Message Retention"; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; vertical-alignment: center; }
+                            Text { text: root.retention-days > 0 ? root.retention-days + " days" : "Forever"; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; }
+                        }
+
+                        Rectangle { height: 1px; background: Colors.border; }
+
+                        // 2FA required
+                        HorizontalLayout {
+                            Text { text: "Require 2FA"; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; vertical-alignment: center; }
+                            Text { text: root.require-2fa ? "Yes" : "No"; color: root.require-2fa ? Colors.success : Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; }
+                        }
+
+                        Rectangle { height: 1px; background: Colors.border; }
+
+                        // Guest access
+                        HorizontalLayout {
+                            Text { text: "Guest Access"; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; vertical-alignment: center; }
+                            Text { text: root.allow-guest-access ? "Allowed" : "Disabled"; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; }
+                        }
+
+                        Rectangle { height: 1px; background: Colors.border; }
+
+                        // Allowed domains
+                        HorizontalLayout {
+                            Text { text: "Allowed Email Domains"; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; vertical-alignment: center; }
+                            Text {
+                                text: root.allowed-email-domains.length > 0 ? root.allowed-email-domains.length + " domain(s)" : "Any";
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Dashboard section
+            if root.active-section == "dashboard": VerticalLayout {
+                padding: Spacing.lg;
+                spacing: Spacing.md;
+
+                Text {
+                    text: "Dashboard";
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    font-weight: Typography.semibold;
+                }
+
+                // Stats grid (2x3)
+                HorizontalLayout {
+                    spacing: Spacing.md;
+
+                    for stat in [
+                        { label: "Total Members", value: root.dashboard.total-members },
+                        { label: "Active (30d)", value: root.dashboard.active-members-30d },
+                        { label: "Channels", value: root.dashboard.total-channels },
+                    ]: Rectangle {
+                        horizontal-stretch: 1;
+                        height: 90px;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-md;
+
+                        VerticalLayout {
+                            padding: Spacing.md;
+                            alignment: center;
+
+                            Text {
+                                text: stat.value;
+                                color: Colors.text-primary;
+                                font-size: Typography.xxxl;
+                                font-weight: Typography.bold;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: stat.label;
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.md;
+
+                    for stat in [
+                        { label: "Messages (30d)", value: root.dashboard.total-messages-30d },
+                        { label: "Storage (MB)", value: root.dashboard.storage-used-mb },
+                    ]: Rectangle {
+                        horizontal-stretch: 1;
+                        height: 90px;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-md;
+
+                        VerticalLayout {
+                            padding: Spacing.md;
+                            alignment: center;
+
+                            Text {
+                                text: stat.value;
+                                color: Colors.text-primary;
+                                font-size: Typography.xxxl;
+                                font-weight: Typography.bold;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: stat.label;
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                horizontal-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
