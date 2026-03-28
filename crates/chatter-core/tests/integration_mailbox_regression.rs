@@ -20,7 +20,7 @@ use ed25519_dalek::Signer;
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::mailbox::group::{GroupCoordinator, GroupMailboxManager, MemberMailbox};
 use chatter_core::mailbox::TokenManager;
-use chatter_core::network::grpc::{ChannelClient, GrpcClientPool, MailboxClient, MessageClient};
+use chatter_core::network::grpc::{AnonymousMailboxClient, ChannelClient, GrpcClientPool, MailboxClient, MessageClient};
 use chatter_core::proto::chat_v1::{
     message::content::Type as ContentType, message::Content, ChannelType,
 };
@@ -75,6 +75,10 @@ impl MailboxTestContext {
 
     fn mailbox_client(&self) -> MailboxClient {
         MailboxClient::new(self.pool.channel(), self.pool.auth_clone())
+    }
+
+    fn anon_mailbox_client(&self) -> AnonymousMailboxClient {
+        self.pool.anonymous_mailbox_client()
     }
 }
 
@@ -145,9 +149,10 @@ async fn test_stale_mailbox_key_detection() {
     let tokens_acquired = assert_ok(ctx.token_manager.request_tokens(&mut mailbox_client, 3).await);
     assert!(tokens_acquired > 0, "Should acquire at least one token");
 
+    let mut anon_mailbox_client = ctx.anon_mailbox_client();
     let first_setup = assert_ok(
         ctx.group_coordinator
-            .setup_group_mailbox(&channel_id, &mut mailbox_client)
+            .setup_group_mailbox(&channel_id, &mut mailbox_client, &mut anon_mailbox_client)
             .await,
     );
 
@@ -167,7 +172,7 @@ async fn test_stale_mailbox_key_detection() {
 
     let second_setup = assert_ok(
         ctx.group_coordinator
-            .setup_group_mailbox(&channel_id, &mut mailbox_client)
+            .setup_group_mailbox(&channel_id, &mut mailbox_client, &mut anon_mailbox_client)
             .await,
     );
 
@@ -516,9 +521,10 @@ async fn test_concurrent_mailbox_setup() {
         let channel_id_clone = channel_id;
         handles.push(tokio::spawn(async move {
             let mut client = ctx_clone.mailbox_client();
+            let mut anon_client = ctx_clone.anon_mailbox_client();
             let result = ctx_clone
                 .group_coordinator
-                .setup_group_mailbox(&channel_id_clone, &mut client)
+                .setup_group_mailbox(&channel_id_clone, &mut client, &mut anon_client)
                 .await;
             (i, result)
         }));
@@ -608,9 +614,10 @@ async fn test_server_rejects_wrong_credentials() {
     let _ = ctx.token_manager.request_tokens(&mut mailbox_client, 3).await;
 
     let channel_id: ChannelId = uuid::Uuid::new_v4().to_string().parse().expect("Valid UUID");
+    let mut anon_mailbox_client = ctx.anon_mailbox_client();
     let setup = assert_ok(
         ctx.group_coordinator
-            .setup_group_mailbox(&channel_id, &mut mailbox_client)
+            .setup_group_mailbox(&channel_id, &mut mailbox_client, &mut anon_mailbox_client)
             .await,
     );
 
