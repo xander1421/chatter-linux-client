@@ -21,7 +21,7 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 pub use anon_dm_request::spawn_anon_dm_request_handler;
-pub use anon_group_invite::{spawn_anon_group_invite_handler, wire_group_invite_callbacks};
+pub use anon_group_invite::{spawn_anon_group_invite_handler, wire_group_invite_callbacks, pending_group_invite_count};
 pub use channel_settings::open_channel_settings;
 pub use profile::open_user_profile;
 

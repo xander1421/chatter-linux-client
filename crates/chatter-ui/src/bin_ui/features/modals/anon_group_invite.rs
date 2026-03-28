@@ -31,6 +31,24 @@ fn pending_invites() -> &'static Mutex<Vec<PendingGroupInvite>> {
     PENDING_INVITES.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Return the current number of pending group invites.
+///
+/// Used by the sidebar to show a badge count without needing the full invite list.
+pub fn pending_group_invite_count() -> i32 {
+    pending_invites().lock().unwrap().len() as i32
+}
+
+/// Update the sidebar group invites badge count.
+fn refresh_group_invites_badge(weak: &Weak<MainWindow>) {
+    let count = pending_group_invite_count();
+    let weak = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_pending_group_invites(count);
+        }
+    });
+}
+
 /// Send-safe intermediate type for group invite display data.
 struct GroupInviteSendData {
     group_id: String,
@@ -56,6 +74,9 @@ fn refresh_group_invites_ui(weak: &Weak<MainWindow>) {
         })
         .collect();
     drop(invites); // release lock before UI call
+
+    // Also update sidebar badge count
+    refresh_group_invites_badge(weak);
 
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {

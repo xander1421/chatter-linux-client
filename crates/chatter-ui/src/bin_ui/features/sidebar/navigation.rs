@@ -320,6 +320,34 @@ pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &
     }
 }
 
+/// Wire group invites click handler.
+///
+/// Opens the friends modal with the "requests" tab and "groups" sub-tab selected.
+/// Refreshes both the badge count and the group invites list in the modal.
+pub(crate) fn wire_group_invites_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+
+    window.on_group_invites_clicked(move || {
+        let weak = weak_window.clone();
+
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                // Refresh count from the pending invites store
+                let count = crate::bin_ui::features::modals::pending_group_invite_count();
+                tracing::info!(count = count, "Group invites clicked - {} pending", count);
+                w.set_pending_group_invites(count);
+            }
+        });
+    });
+}
+
+/// Load pending group invites count into the sidebar.
+pub(crate) fn load_pending_group_invites_count(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+    let count = crate::bin_ui::features::modals::pending_group_invite_count();
+    tracing::info!(count = count, "Loaded {} pending group invites", count);
+    window.set_pending_group_invites(count);
+}
+
 /// Load organization state into the sidebar.
 ///
 /// Reads OrgState and populates the org switcher with the current org and list.

@@ -382,6 +382,8 @@ export component App inherits Rectangle {
     in property <bool> friends-loading: false;
     // Pending message requests count (for sidebar badge)
     in property <int> pending-message-requests: 0;
+    // Pending group invites count (for sidebar badge)
+    in property <int> pending-group-invites: 0;
     // Friend code (privacy-first discovery)
     in-out property <string> friends-my-code: "";
     in-out property <string> friends-code-input: "";
@@ -634,6 +636,8 @@ export component App inherits Rectangle {
     callback friends-decline-group-invite(string);     // Decline anon group invite
     // Message requests (anon DM)
     callback message-requests-clicked();
+    // Group invites (anon groups)
+    callback group-invites-clicked();
 
     // Forward message
     callback forward-message(string);
@@ -872,6 +876,7 @@ export component App inherits Rectangle {
                 hidden <=> root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
+                pending-group-invites: root.pending-group-invites;
                 current-org-name: root.current-org-name;
                 organizations: root.organizations;
                 org-loading: root.org-loading;
@@ -897,6 +902,13 @@ export component App inherits Rectangle {
                     root.friends-requests-sub-tab = "private";
                     root.active-modal = "friends";
                     root.message-requests-clicked();
+                }
+                group-invites-clicked => {
+                    // Open friends modal with requests tab and groups sub-tab selected
+                    root.friends-modal-tab = "requests";
+                    root.friends-requests-sub-tab = "groups";
+                    root.active-modal = "friends";
+                    root.group-invites-clicked();
                 }
                 profile-clicked => {
                     root.profile-clicked();

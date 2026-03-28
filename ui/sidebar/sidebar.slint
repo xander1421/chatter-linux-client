@@ -69,8 +69,14 @@ export component Sidebar inherits Rectangle {
     // Properties - Message requests badge
     in property <int> pending-message-requests: 0;
 
+    // Properties - Group invites badge
+    in property <int> pending-group-invites: 0;
+
     // Callbacks - Message requests
     callback message-requests-clicked();
+
+    // Callbacks - Group invites
+    callback group-invites-clicked();
 
     // Callback - Toggle collapsed
     callback toggle-collapsed();
@@ -435,6 +441,117 @@ export component Sidebar inherits Rectangle {
         Rectangle {
             height: 1px;
             background: Colors.surface-hover;
+        }
+
+        // Group invites entry (only shown when there are pending invites)
+        if root.pending-group-invites > 0: group-invites := Rectangle {
+            height: 44px;
+            border-radius: Spacing.radius-sm;
+            background: grp-inv-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+            if !root.collapsed: HorizontalLayout {
+                padding-left: Spacing.sm;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+                alignment: start;
+
+                Rectangle {
+                    width: 20px;
+                    height: parent.height;
+
+                    Image {
+                        source: Icons.shield;
+                        width: 16px;
+                        height: 16px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: #9333ea;
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: Spacing.xs;
+                    alignment: start;
+
+                    Text {
+                        text: "Group Invites";
+                        color: #9333ea;
+                        font-size: 14px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: root.pending-group-invites > 9 ? 24px : 20px;
+                        height: 20px;
+                        border-radius: 10px;
+                        background: Colors.error;
+
+                        Text {
+                            text: root.pending-group-invites > 9 ? "9+" : root.pending-group-invites;
+                            color: Colors.text-primary;
+                            font-size: 12px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
+                    }
+                }
+            }
+
+            if root.collapsed: TooltipArea {
+                width: 100%;
+                height: 100%;
+                tooltip-text: "Group Invites (" + root.pending-group-invites + ")";
+                tooltip-enabled: root.collapsed;
+                placement: "right";
+
+                HorizontalLayout {
+                    alignment: center;
+
+                    Rectangle {
+                        width: 20px;
+                        height: parent.height;
+
+                        Image {
+                            source: Icons.shield;
+                            width: 16px;
+                            height: 16px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: #9333ea;
+                        }
+
+                        // Badge showing count (in collapsed mode)
+                        Rectangle {
+                            x: parent.width - 8px;
+                            y: 8px;
+                            width: root.pending-group-invites > 9 ? 18px : 14px;
+                            height: 14px;
+                            border-radius: 7px;
+                            background: Colors.error;
+
+                            Text {
+                                text: root.pending-group-invites > 9 ? "9+" : root.pending-group-invites;
+                                color: Colors.text-primary;
+                                font-size: 10px;
+                                font-weight: 700;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+                        }
+                    }
+                }
+            }
+
+            grp-inv-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.group-invites-clicked(); }
+            }
         }
 
         private-group-list := PrivateGroupList {
