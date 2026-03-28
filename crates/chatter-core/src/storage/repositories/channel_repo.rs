@@ -552,6 +552,58 @@ impl ChannelRepository {
         }
         Ok(())
     }
+
+    /// Update the muted state for a user's membership in a channel.
+    pub fn set_membership_muted(
+        &self,
+        channel_id: &ChannelId,
+        user_id: &UserId,
+        muted: bool,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE memberships SET is_muted = ?1, muted_until = NULL WHERE channel_id = ?2 AND user_id = ?3",
+            params![muted as i32, channel_id.to_string(), user_id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!(
+                "Membership {} in channel {}",
+                user_id, channel_id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Update the default TTL (disappearing timer) for a channel.
+    pub fn set_default_ttl(
+        &self,
+        channel_id: &ChannelId,
+        ttl_seconds: Option<u32>,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE channels SET default_ttl_seconds = ?1 WHERE id = ?2",
+            params![ttl_seconds, channel_id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!("Channel {}", channel_id)));
+        }
+        Ok(())
+    }
+
+    /// Delete a channel and all its memberships locally.
+    pub fn delete_channel_cascade(&self, channel_id: &ChannelId) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "DELETE FROM memberships WHERE channel_id = ?1",
+            params![channel_id.to_string()],
+        )?;
+        conn.execute(
+            "DELETE FROM channels WHERE id = ?1",
+            params![channel_id.to_string()],
+        )?;
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -692,5 +744,174 @@ fn notification_pref_from_i32(value: i32) -> NotificationPreference {
         1 => NotificationPreference::Mentions,
         2 => NotificationPreference::None,
         _ => NotificationPreference::All,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Database;
+    use tempfile::tempdir;
+
+    fn create_test_repo() -> (ChannelRepository, tempfile::TempDir) {
+        let temp_dir = tempdir().expect("Failed to create temp directory");
+        let db_path = temp_dir.path().join("test.db");
+        let db = Database::open(&db_path, "test-passphrase")
+            .expect("Failed to open test database");
+
+        {
+            let conn = db.connection().expect("Failed to get connection");
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS channels (
+                    id TEXT PRIMARY KEY,
+                    channel_type INTEGER NOT NULL DEFAULT 0,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    image_url TEXT,
+                    owner_id TEXT NOT NULL,
+                    persistence INTEGER NOT NULL DEFAULT 0,
+                    max_members INTEGER,
+                    default_ttl_seconds INTEGER,
+                    allow_reactions INTEGER NOT NULL DEFAULT 1,
+                    allow_threads INTEGER NOT NULL DEFAULT 1,
+                    allow_attachments INTEGER NOT NULL DEFAULT 1,
+                    require_encryption INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    archived INTEGER NOT NULL DEFAULT 0,
+                    unread_count INTEGER NOT NULL DEFAULT 0,
+                    last_message_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS memberships (
+                    channel_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role INTEGER NOT NULL DEFAULT 0,
+                    joined_at TEXT NOT NULL,
+                    last_read_message_id TEXT,
+                    is_muted INTEGER NOT NULL DEFAULT 0,
+                    muted_until TEXT,
+                    notification_preference INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (channel_id, user_id)
+                );
+                "#,
+            )
+            .expect("Failed to create tables");
+        }
+
+        let repo = ChannelRepository::new(Arc::new(db));
+        (repo, temp_dir)
+    }
+
+    fn make_channel(id: ChannelId) -> Channel {
+        Channel::new(id, "test-channel".into(), ChannelType::Public, UserId::new())
+    }
+
+    fn make_membership(channel_id: ChannelId, user_id: UserId) -> Membership {
+        Membership {
+            channel_id,
+            user_id,
+            role: MemberRole::Member,
+            joined_at: Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: NotificationPreference::All,
+        }
+    }
+
+    #[test]
+    fn test_set_membership_muted() {
+        let (repo, _dir) = create_test_repo();
+        let channel_id = ChannelId::new();
+        let user_id = UserId::new();
+        let channel = make_channel(channel_id);
+        let membership = make_membership(channel_id, user_id);
+
+        repo.insert(&channel).unwrap();
+        repo.insert_membership(&membership).unwrap();
+
+        // Initially not muted
+        let m = repo.get_membership(&channel_id, &user_id).unwrap().unwrap();
+        assert!(!m.is_muted);
+
+        // Mute
+        repo.set_membership_muted(&channel_id, &user_id, true).unwrap();
+        let m = repo.get_membership(&channel_id, &user_id).unwrap().unwrap();
+        assert!(m.is_muted);
+        assert!(m.muted_until.is_none()); // cleared by set_membership_muted
+
+        // Unmute
+        repo.set_membership_muted(&channel_id, &user_id, false).unwrap();
+        let m = repo.get_membership(&channel_id, &user_id).unwrap().unwrap();
+        assert!(!m.is_muted);
+    }
+
+    #[test]
+    fn test_set_membership_muted_not_found() {
+        let (repo, _dir) = create_test_repo();
+        let result = repo.set_membership_muted(&ChannelId::new(), &UserId::new(), true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_default_ttl() {
+        let (repo, _dir) = create_test_repo();
+        let channel_id = ChannelId::new();
+        let channel = make_channel(channel_id);
+
+        repo.insert(&channel).unwrap();
+
+        // Initially no TTL
+        let ch = repo.get(&channel_id).unwrap().unwrap();
+        assert_eq!(ch.config.default_ttl_seconds, None);
+
+        // Set to 3600
+        repo.set_default_ttl(&channel_id, Some(3600)).unwrap();
+        let ch = repo.get(&channel_id).unwrap().unwrap();
+        assert_eq!(ch.config.default_ttl_seconds, Some(3600));
+
+        // Disable (set to None)
+        repo.set_default_ttl(&channel_id, None).unwrap();
+        let ch = repo.get(&channel_id).unwrap().unwrap();
+        assert_eq!(ch.config.default_ttl_seconds, None);
+    }
+
+    #[test]
+    fn test_set_default_ttl_not_found() {
+        let (repo, _dir) = create_test_repo();
+        let result = repo.set_default_ttl(&ChannelId::new(), Some(300));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_delete_channel_cascade() {
+        let (repo, _dir) = create_test_repo();
+        let channel_id = ChannelId::new();
+        let user_id = UserId::new();
+        let channel = make_channel(channel_id);
+        let membership = make_membership(channel_id, user_id);
+
+        repo.insert(&channel).unwrap();
+        repo.insert_membership(&membership).unwrap();
+
+        // Verify exists
+        assert!(repo.get(&channel_id).unwrap().is_some());
+        assert!(repo.get_membership(&channel_id, &user_id).unwrap().is_some());
+
+        // Cascade delete
+        repo.delete_channel_cascade(&channel_id).unwrap();
+
+        // Both should be gone
+        assert!(repo.get(&channel_id).unwrap().is_none());
+        assert!(repo.get_membership(&channel_id, &user_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_delete_channel_cascade_nonexistent() {
+        let (repo, _dir) = create_test_repo();
+        // Should succeed even if nothing to delete (no error)
+        let result = repo.delete_channel_cascade(&ChannelId::new());
+        assert!(result.is_ok());
     }
 }

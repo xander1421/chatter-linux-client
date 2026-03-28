@@ -600,6 +600,115 @@ impl ConversationHandle {
     }
 
     // ========================================================================
+    // Conversation-level operations
+    // ========================================================================
+
+    /// Pin or unpin this conversation in the conversation list.
+    ///
+    /// This is a local-only preference (not the same as pinning a message).
+    /// The pinned state is stored in the settings repo as a per-conversation key.
+    pub fn pin_conversation(&self, pinned: bool) -> ConversationResult {
+        let channel_id = self.conversation.channel_id()
+            .ok_or(ConversationError::NoConversation)?;
+        let key = format!("conv.pinned.{}", channel_id);
+        self.client.channels().settings_repo
+            .set(&key, &pinned)
+            .map_err(|e| ConversationError::Other(e.to_string()))
+    }
+
+    /// Mute or unmute this conversation's notifications.
+    ///
+    /// For channels and DMs, updates the local membership's `is_muted` flag.
+    /// For anon groups, uses the group status (Muted vs Active).
+    /// For anon DMs, stores in settings (no membership concept).
+    pub fn mute_conversation(&self, muted: bool) -> ConversationResult {
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                let key = format!("conv.muted.anon_dm.{}", id);
+                self.client.channels().settings_repo
+                    .set(&key, &muted)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::AnonGroup(id) => {
+                if muted {
+                    self.client.anon_groups().mute_group(id)?;
+                } else {
+                    self.client.anon_groups().unmute_group(id)?;
+                }
+                Ok(())
+            }
+            ActiveConversation::MailboxDm { channel_id, .. }
+            | ActiveConversation::ServerDm { channel_id, .. }
+            | ActiveConversation::Channel(channel_id) => {
+                let user_id = self.client.auth_state().get().current_user_id
+                    .ok_or_else(|| ConversationError::Other("Not logged in".into()))?;
+                self.client.channels().channel_repo
+                    .set_membership_muted(channel_id, &user_id, muted)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
+    /// Delete this conversation from the local database.
+    ///
+    /// Removes messages, channel/membership data, and associated state.
+    /// This is a local-only operation; the server is not notified.
+    pub fn delete_conversation(&self) -> ConversationResult {
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                self.client.anon_dms().anon_dm_repo()
+                    .delete_conversation(id)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::AnonGroup(id) => {
+                self.client.anon_groups().anon_group_repo
+                    .delete_group(id)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::MailboxDm { channel_id, .. }
+            | ActiveConversation::ServerDm { channel_id, .. }
+            | ActiveConversation::Channel(channel_id) => {
+                self.client.channels().channel_repo
+                    .delete_channel_cascade(channel_id)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
+    /// Set the disappearing message timer for this conversation.
+    ///
+    /// `seconds` of 0 disables the timer. For channels and DMs this updates
+    /// the channel's `default_ttl_seconds`. For anon types it is stored in
+    /// the settings repo.
+    pub fn set_disappearing_timer(&self, seconds: u32) -> ConversationResult {
+        let ttl = if seconds == 0 { None } else { Some(seconds) };
+        match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                let key = format!("conv.disappearing.anon_dm.{}", id);
+                self.client.channels().settings_repo
+                    .set(&key, &ttl)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::AnonGroup(id) => {
+                let key = format!("conv.disappearing.anon_group.{}", id);
+                self.client.channels().settings_repo
+                    .set(&key, &ttl)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::MailboxDm { channel_id, .. }
+            | ActiveConversation::ServerDm { channel_id, .. }
+            | ActiveConversation::Channel(channel_id) => {
+                self.client.channels().channel_repo
+                    .set_default_ttl(channel_id, ttl)
+                    .map_err(|e| ConversationError::Other(e.to_string()))
+            }
+            ActiveConversation::None => Err(ConversationError::NoConversation),
+        }
+    }
+
+    // ========================================================================
     // Internal helpers
     // ========================================================================
 

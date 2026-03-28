@@ -755,6 +755,43 @@ impl ChatterClient {
         ConversationHandle::new(conv, self.clone())
     }
 
+    /// Pin or unpin a conversation in the conversation list.
+    pub fn pin_conversation(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        pinned: bool,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).pin_conversation(pinned)
+    }
+
+    /// Mute or unmute a conversation's notifications.
+    pub fn mute_conversation(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        muted: bool,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).mute_conversation(muted)
+    }
+
+    /// Delete a conversation from local storage.
+    pub fn delete_conversation(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).delete_conversation()
+    }
+
+    /// Set the disappearing message timer for a conversation.
+    ///
+    /// Pass `0` to disable. The value is in seconds.
+    pub fn set_disappearing_timer(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        seconds: u32,
+    ) -> Result<(), crate::services::conversation::ConversationError> {
+        self.conversation(conv).set_disappearing_timer(seconds)
+    }
+
     // ── Auth (high-level) ───────────────────────────────────────────
 
     /// Log in and start all background services.
