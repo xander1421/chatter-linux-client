@@ -71,7 +71,7 @@ impl ChannelClient {
         password: Option<&str>,
         description: Option<&str>,
         img_url: Option<&str>,
-    ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>>, NetworkError> {
+    ) -> Result<impl Stream<Item = Result<ChannelEvent, NetworkError>> + use<>, NetworkError> {
         let request = CreateChannelRequest {
             name: name.to_string(),
             r#type: channel_type.into(),

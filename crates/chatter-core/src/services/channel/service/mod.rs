@@ -134,17 +134,34 @@ impl ChannelService {
         let proto_type = domain_channel_type_to_proto(channel_type);
         let proto_config = config.as_ref().map(domain_config_to_proto);
 
-        let mut channel_client = self.channel_client();
-        let mut stream = channel_client
-            .create_channel(
-                trimmed_name,
-                proto_type,
-                proto_config,
-                initial_members.iter().map(|id| id.to_string()).collect(),
-                password,
-                description,
-                image_url,
-            )
+        // Use call_with_retry to handle stale gRPC connections —
+        // disconnects + reconnects on transport error (same fix as DM mailbox path)
+        let member_ids: Vec<String> = initial_members.iter().map(|id| id.to_string()).collect();
+        let mut stream = self
+            .grpc_pool
+            .call_with_retry("CreateChannel", |pool| {
+                let mut client = pool.channel_client();
+                let name = trimmed_name.to_string();
+                let pt = proto_type;
+                let pc = proto_config.clone();
+                let mids = member_ids.clone();
+                let pw = password.map(str::to_string);
+                let desc = description.map(str::to_string);
+                let img = image_url.map(str::to_string);
+                async move {
+                    client
+                        .create_channel(
+                            &name,
+                            pt,
+                            pc,
+                            mids,
+                            pw.as_deref(),
+                            desc.as_deref(),
+                            img.as_deref(),
+                        )
+                        .await
+                }
+            })
             .await?;
 
         let mut channel_opt: Option<Channel> = None;
@@ -218,6 +235,7 @@ impl ChannelService {
         };
 
         // Sync members (in case initial_members were added by server)
+        let mut channel_client = self.channel_client();
         if let Err(e) = self.sync_channel_members_internal(&mut channel_client, &channel.id).await {
             tracing::debug!(
                 channel_id = %channel.id,
