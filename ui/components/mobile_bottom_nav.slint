@@ -1,0 +1,119 @@
+// Mobile bottom navigation bar
+//
+// Shows tab bar with Chats, Contacts, Settings on mobile screens.
+// Hidden when keyboard is open (safe-area-bottom > nav bar threshold).
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+
+component NavTab inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    in property <int> badge-count: 0;
+    callback clicked();
+
+    height: Spacing.bottom-nav-height;
+    horizontal-stretch: 1;
+    background: transparent;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 2px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+
+        // Icon with optional badge
+        Rectangle {
+            width: 24px;
+            height: 24px;
+            x: (parent.width - self.width) / 2;
+
+            Image {
+                source: root.icon;
+                width: 24px;
+                height: 24px;
+                colorize: root.active ? Colors.primary : Colors.text-muted;
+            }
+
+            // Badge dot
+            if root.badge-count > 0: Rectangle {
+                x: 16px;
+                y: -2px;
+                width: root.badge-count > 9 ? 18px : 16px;
+                height: 16px;
+                border-radius: 8px;
+                background: Colors.error;
+
+                Text {
+                    text: root.badge-count > 99 ? "99+" : root.badge-count;
+                    font-size: 10px;
+                    font-weight: 700;
+                    color: Colors.text-primary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Label
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-weight: root.active ? 600 : 400;
+            color: root.active ? Colors.primary : Colors.text-muted;
+            horizontal-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component MobileBottomNav inherits Rectangle {
+    in property <string> active-tab: "chats";
+    in property <int> contacts-badge: 0;
+    callback tab-selected(/* tab */ string);
+
+    height: Spacing.bottom-nav-height;
+    background: Colors.surface;
+
+    // Top border
+    Rectangle {
+        y: 0;
+        width: 100%;
+        height: 1px;
+        background: Colors.border;
+    }
+
+    HorizontalLayout {
+        y: 1px;
+        height: parent.height - 1px;
+
+        NavTab {
+            icon: Icons.message-circle;
+            label: "Chats";
+            active: root.active-tab == "chats";
+            clicked => { root.tab-selected("chats"); }
+        }
+
+        NavTab {
+            icon: Icons.users;
+            label: "Contacts";
+            active: root.active-tab == "contacts";
+            badge-count: root.contacts-badge;
+            clicked => { root.tab-selected("contacts"); }
+        }
+
+        NavTab {
+            icon: Icons.settings;
+            label: "Settings";
+            active: root.active-tab == "settings";
+            clicked => { root.tab-selected("settings"); }
+        }
+    }
+}

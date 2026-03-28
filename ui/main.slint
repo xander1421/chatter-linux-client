@@ -22,6 +22,9 @@ export component MainWindow inherits Window {
     in property <length> safe-area-top <=> app.safe-area-top;
     in property <length> safe-area-bottom <=> app.safe-area-bottom;
 
+    // ========== Mobile navigation ==========
+    callback mobile-back <=> app.mobile-back;
+
     // ========== View routing ==========
     in-out property <string> current-view <=> app.current-view;
 

@@ -81,10 +81,15 @@ export component Sidebar inherits Rectangle {
     // Callback - Toggle collapsed
     callback toggle-collapsed();
 
+    // Mobile full-width mode (sidebar becomes the main content on phones)
+    in property <bool> mobile-mode: false;
+    // Container width for mobile-mode (set by parent since parent.width is not accessible)
+    in property <length> mobile-width: 360px;
+
     // Layout - animated width transition
-    // Mobile: fully hidden (0px). Tablet: collapsed icon bar (60px). Desktop: full (240px).
-    width: root.hidden ? Spacing.sidebar-width-hidden : (root.collapsed ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width);
-    visible: !root.hidden;
+    // Mobile full-width: explicit width. Mobile hidden: 0px. Tablet: collapsed icon bar (60px). Desktop: full (240px).
+    width: root.mobile-mode ? root.mobile-width : (root.hidden ? Spacing.sidebar-width-hidden : (root.collapsed ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width));
+    visible: root.mobile-mode ? true : !root.hidden;
     background: Colors.surface;
 
     animate width {

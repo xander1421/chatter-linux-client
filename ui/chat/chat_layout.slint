@@ -73,6 +73,10 @@ export component ChatLayout inherits Rectangle {
     in property <int> pinned-current-index: 1;
     in property <int> pinned-total-count: 1;
 
+    // Mobile back button
+    in property <bool> show-back-button: false;
+    callback back-clicked();
+
     // Header callbacks
     callback search-clicked();
     callback settings-clicked();
@@ -148,7 +152,11 @@ export component ChatLayout inherits Rectangle {
             typing-indicator: root.typing-indicator;
             jarvis-thinking: root.jarvis-thinking;
             has-any-pinned: root.pinned-total-count > 0;
+            show-back-button: root.show-back-button;
 
+            back-clicked => {
+                root.back-clicked();
+            }
             search-clicked => {
                 root.search-clicked();
             }

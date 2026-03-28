@@ -48,6 +48,7 @@ import { ImageViewer, EmojiData } from "components/mod.slint";
 import { CodePreviewPanel } from "components/mod.slint";
 import { PdfPreviewPanel } from "components/mod.slint";
 import { VideoPlayer } from "components/mod.slint";
+import { MobileBottomNav } from "components/mobile_bottom_nav.slint";
 
 // Import call UI
 import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData } from "calls/mod.slint";
@@ -62,6 +63,16 @@ export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
     in property <length> safe-area-top: 0px;     // Android status bar (~24dp)
     in property <length> safe-area-bottom: 0px;  // Android nav bar / gesture area
+
+    // ========== Mobile navigation ==========
+    // Active bottom nav tab on mobile: "chats", "contacts", "settings"
+    in-out property <string> mobile-active-tab: "chats";
+    // True when a conversation is open (channel/DM/group selected)
+    property <bool> has-active-conversation: channel-id != "";
+    // Callback when mobile back button is pressed (returns to chat list)
+    callback mobile-back();
+    // Keyboard is considered open when bottom inset exceeds the nav bar threshold
+    property <bool> keyboard-open: safe-area-bottom > 80px;
 
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
@@ -721,7 +732,10 @@ export component App inherits Rectangle {
     }
     changed is-mobile-screen => {
         if (root.is-mobile-screen) {
+            // On mobile, sidebar visibility is controlled by mobile-active-tab
+            // and has-active-conversation, not by sidebar-hidden
             root.sidebar-hidden = true;
+            root.mobile-active-tab = "chats";
         } else {
             root.sidebar-hidden = false;
         }
@@ -855,12 +869,18 @@ export component App inherits Rectangle {
         }
 
         // Main chat layout
-        if current-view == "main": HorizontalLayout {
+        if current-view == "main": VerticalLayout {
             width: 100%;
             height: 100%;
 
-            // Sidebar (width controlled by collapsed state)
+            HorizontalLayout {
+                vertical-stretch: 1;
+
+            // Sidebar (width controlled by collapsed state; mobile-mode for full-width)
             Sidebar {
+                // On mobile: show full-width chat list when Chats tab is active and no conversation open
+                mobile-mode: root.is-mobile-screen && root.mobile-active-tab == "chats" && !root.has-active-conversation;
+                mobile-width: root.width;
                 channels: root.channels;
                 selected-channel-id: root.selected-channel-id;
                 dm-conversations: root.dm-conversations;
@@ -872,8 +892,8 @@ export component App inherits Rectangle {
                 user-initials: root.user-initials;
                 user-presence-status: root.user-presence-status;
                 user-custom-status: root.user-custom-status;
-                collapsed <=> root.sidebar-collapsed;
-                hidden <=> root.sidebar-hidden;
+                collapsed: root.is-mobile-screen ? false : root.sidebar-collapsed;
+                hidden: root.is-mobile-screen ? !(root.mobile-active-tab == "chats" && !root.has-active-conversation) : root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
@@ -933,8 +953,10 @@ export component App inherits Rectangle {
             }
 
             // Right side area (Chat + Panels)
+            // On mobile: hidden when sidebar is showing full-width (chat list view)
             Rectangle {
                 horizontal-stretch: 1;
+                visible: root.is-mobile-screen ? root.has-active-conversation : true;
                 // Clip this area to prevent inner panels from overflowing the whole app
                 clip: true;
 
@@ -945,6 +967,8 @@ export component App inherits Rectangle {
                     // Chat layout (fills remaining space, minus side panels)
                     ChatLayout {
                     horizontal-stretch: 1;
+                    show-back-button: root.is-mobile-screen;
+                    back-clicked => { root.mobile-back(); }
                     channel-id: root.channel-id;
                     channel-name: root.channel-name;
                     channel-type: root.channel-type;
@@ -1091,6 +1115,24 @@ export component App inherits Rectangle {
 
             }
         }
+        } // end HorizontalLayout (chat area)
+
+            // Mobile bottom navigation bar (hidden when keyboard is open)
+            if root.is-mobile-screen && !root.keyboard-open: MobileBottomNav {
+                active-tab: root.mobile-active-tab;
+                contacts-badge: root.friends-received-requests.length;
+
+                tab-selected(tab) => {
+                    root.mobile-active-tab = tab;
+                    if (tab == "contacts") {
+                        root.active-modal = "friends";
+                    }
+                    if (tab == "settings") {
+                        root.active-modal = "settings";
+                        root.settings-clicked();
+                    }
+                }
+            }
     }
 
     // ========== Jarvis AI floating panel ==========
@@ -1125,8 +1167,8 @@ export component App inherits Rectangle {
     }
 
     // ========== Bottom-left floating buttons ==========
-    // Only show in main view
-    if root.current-view == "main": Rectangle {
+    // Only show in main view on desktop (mobile uses bottom nav instead)
+    if root.current-view == "main" && !root.is-mobile-screen: Rectangle {
         // Vertical stack of buttons (bottom-left)
         VerticalLayout {
             x: Spacing.md;

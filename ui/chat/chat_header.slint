@@ -61,6 +61,10 @@ export component ChatHeader inherits Rectangle {
     // Whether there are pinned messages (even if bar is dismissed)
     in property <bool> has-any-pinned: false;
 
+    // Mobile back button (returns to chat list)
+    in property <bool> show-back-button: false;
+    callback back-clicked();
+
     // Callbacks
     callback search-clicked();
     callback settings-clicked();
@@ -85,8 +89,8 @@ export component ChatHeader inherits Rectangle {
     // Show call buttons for everything except saved messages
     property <bool> show-calls: channel-type != "saved";
 
-    // Layout (56px header + 28px encryption banner)
-    height: 84px;
+    // Layout (56px header, no encryption banner)
+    height: 56px;
     background: Colors.surface;
 
     // Main content (constrained to top 56px)
@@ -96,6 +100,13 @@ export component ChatHeader inherits Rectangle {
         height: 56px;
 
     HorizontalLayout {
+        // Mobile back button (returns to chat list)
+        if root.show-back-button: IconButton {
+            icon: Icons.chevron-left;
+            width: Spacing.touch-target-min;
+            clicked => { root.back-clicked(); }
+        }
+
         // Encryption indicator — always visible
         VerticalLayout {
             alignment: center;
@@ -383,28 +394,7 @@ export component ChatHeader inherits Rectangle {
         height: 28px;
         background: Colors.surface;
 
-        HorizontalLayout {
-            alignment: center;
-            spacing: 6px;
-            padding-top: 4px;
-            padding-bottom: 4px;
-
-            Image {
-                source: Icons.lock;
-                width: 12px;
-                height: 12px;
-                colorize: Colors.success;
-                vertical-alignment: center;
-            }
-
-            Text {
-                text: root.is-anon-dm ? "Anonymous · End-to-end encrypted"
-                    : "Messages are end-to-end encrypted";
-                color: Colors.success;
-                font-size: Typography.xs;
-                vertical-alignment: center;
-            }
-        }
+        // Encryption banner removed — unnecessary UI clutter
     }
 
     // Bottom border
