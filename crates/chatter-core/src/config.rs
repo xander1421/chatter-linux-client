@@ -1,8 +1,24 @@
 //! Application configuration.
 //!
 //! Contains hardcoded security-critical values that must be baked into the binary.
+//!
+//! # Trust Root Key Security Model
+//!
+//! Following Signal's security model, the trust root public key is hardcoded in
+//! the binary. This prevents MITM attacks during registration by ensuring clients
+//! only trust sender certificates signed by a known server key.
+//!
+//! - **Debug builds** (`cargo build`): Use the development trust root derived from
+//!   a well-known seed. Safe for local development and testing.
+//! - **Release builds** (`cargo build --release`): Require a production trust root
+//!   to be configured. The binary will panic at startup if no production key is set.
+//!
+//! To configure a production trust root, replace the placeholder bytes in the
+//! `#[cfg(not(debug_assertions))]` section below with your production key.
 
 use libsignal_protocol::PublicKey;
+
+// ─── Development trust root (debug builds only) ────────────────────────────
 
 /// Server trust root public key for sealed sender certificate verification.
 ///
@@ -13,13 +29,11 @@ use libsignal_protocol::PublicKey;
 /// This is the Curve25519 public key (Montgomery u-coordinate) corresponding
 /// to the server's XEdDSA signing key stored in Vault.
 ///
-/// WARNING: For development only! Production builds MUST use a different key
-/// that is generated securely and kept secret.
-///
 /// Development key (matches docker-compose vault-init):
 /// - Seed: "chatter-dev-sealed-sender-trust-root-v1"
 /// - Base64: yknZaqZBfXJLRTHfxsvcjikbUjHKrAiKMJLeUSC+aDM=
 /// - Hex: ca49d96aa6417d724b4531dfc6cbdc8e291b5231caac088a3092de5120be6833
+#[cfg(debug_assertions)]
 pub const TRUST_ROOT_PUBLIC_KEY_BYTES: [u8; 32] = [
     0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72,
     0x4b, 0x45, 0x31, 0xdf, 0xc6, 0xcb, 0xdc, 0x8e,
@@ -29,6 +43,7 @@ pub const TRUST_ROOT_PUBLIC_KEY_BYTES: [u8; 32] = [
 
 /// Trust root key in libsignal's 33-byte format (0x05 prefix + 32-byte key).
 /// The 0x05 byte indicates Curve25519 key type.
+#[cfg(debug_assertions)]
 const TRUST_ROOT_PUBLIC_KEY_SERIALIZED: [u8; 33] = [
     0x05, // Curve25519 key type prefix
     0xca, 0x49, 0xd9, 0x6a, 0xa6, 0x41, 0x7d, 0x72,
@@ -37,11 +52,58 @@ const TRUST_ROOT_PUBLIC_KEY_SERIALIZED: [u8; 33] = [
     0x30, 0x92, 0xde, 0x51, 0x20, 0xbe, 0x68, 0x33,
 ];
 
-/// Parsed trust root public key for use with libsignal.
+/// Parsed trust root public key for use with libsignal (debug builds).
+#[cfg(debug_assertions)]
 pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::LazyLock::new(|| {
     PublicKey::deserialize(&TRUST_ROOT_PUBLIC_KEY_SERIALIZED)
         .expect("Invalid hardcoded trust root key - this is a build error")
 });
+
+// ─── Production trust root (release builds) ────────────────────────────────
+
+/// Production trust root public key bytes.
+///
+/// SECURITY: Replace these zeroed bytes with your production Curve25519 public key
+/// before shipping a release build. Generate the key securely and keep the private
+/// key in Vault/HSM.
+///
+/// If this is left as all-zeros, the `TRUST_ROOT_PUBLIC_KEY` LazyLock will panic
+/// at startup, preventing the release binary from running without a real key.
+#[cfg(not(debug_assertions))]
+pub const TRUST_ROOT_PUBLIC_KEY_BYTES: [u8; 32] = [0u8; 32];
+
+#[cfg(not(debug_assertions))]
+const TRUST_ROOT_PUBLIC_KEY_SERIALIZED: [u8; 33] = [
+    0x05, // Curve25519 key type prefix
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+/// Parsed trust root public key for use with libsignal (release builds).
+///
+/// Panics at startup if the production trust root has not been configured
+/// (i.e., the key bytes are still all-zeros).
+#[cfg(not(debug_assertions))]
+pub static TRUST_ROOT_PUBLIC_KEY: std::sync::LazyLock<PublicKey> = std::sync::LazyLock::new(|| {
+    if TRUST_ROOT_PUBLIC_KEY_BYTES == [0u8; 32] {
+        panic!(
+            "FATAL: No production trust root key configured!\n\
+             \n\
+             The development trust root key is excluded from release builds to prevent\n\
+             sender certificate forgery. You must configure a production trust root key\n\
+             in config.rs before shipping.\n\
+             \n\
+             See: linux-client/crates/chatter-core/src/config.rs\n\
+             Audit: GRA-20 finding C-2"
+        );
+    }
+    PublicKey::deserialize(&TRUST_ROOT_PUBLIC_KEY_SERIALIZED)
+        .expect("Invalid production trust root key - check config.rs")
+});
+
+// ─── Shared constants ──────────────────────────────────────────────────────
 
 /// Trust root key ID (matches server's key_id in Vault).
 /// Used for key rotation coordination.
