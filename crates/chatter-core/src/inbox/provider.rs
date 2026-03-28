@@ -413,13 +413,23 @@ impl DeviceInboxProvider {
             "Starting polling loop with timing obfuscation (NDSS '21)"
         );
 
+        let mut poll_cycle: u64 = 0;
         loop {
+            poll_cycle += 1;
+
             // Apply timing delay before poll cycle (NDSS '21 timing obfuscation)
             timing.delay_before_poll().await;
 
             // 1. Poll device inbox for regular messages
+            tracing::debug!(cycle = poll_cycle, "Polling device inbox...");
             match poller.run_once().await {
                 Ok(Some(messages)) => {
+                    let count = messages.len();
+                    if count > 0 {
+                        tracing::info!(cycle = poll_cycle, count, "Device inbox: received messages");
+                    } else {
+                        tracing::debug!(cycle = poll_cycle, "Device inbox: empty");
+                    }
                     for msg in messages {
                         process_device_message(
                             &msg,
@@ -436,11 +446,11 @@ impl DeviceInboxProvider {
                     }
                 }
                 Ok(None) => {
-                    // Shutdown requested
+                    tracing::info!(cycle = poll_cycle, "Device inbox: shutdown requested");
                     break;
                 }
-                Err(_) => {
-                    // Error already logged/emitted by poller
+                Err(e) => {
+                    tracing::warn!(cycle = poll_cycle, error = %e, "Device inbox: poll failed");
                 }
             }
 

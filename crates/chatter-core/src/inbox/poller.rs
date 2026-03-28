@@ -146,16 +146,28 @@ impl InboxPoller {
     async fn poll_once(&self) -> Result<(Vec<DeviceMessage>, bool), InboxError> {
         // Poll for messages
         let after_id = *self.last_queue_id.read();
-        
+
+        tracing::debug!(after_id, "Acquiring message client lock...");
         let response = {
             let mut client = self.message_client.lock().await;
-            client
-                .get_device_messages(
+            tracing::debug!(after_id, "Calling GetDeviceMessages RPC...");
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                client.get_device_messages(
                     after_id,
                     self.config.max_batch_size as i32,
-                )
-                .await
-                .map_err(|e| InboxError::PollFailed(e.to_string()))?
+                ),
+            )
+            .await
+            .map_err(|_| InboxError::PollFailed("GetDeviceMessages RPC timed out after 15s".into()))?
+            .map_err(|e| InboxError::PollFailed(e.to_string()))?;
+            tracing::debug!(
+                after_id,
+                message_count = result.messages.len(),
+                has_more = result.has_more,
+                "GetDeviceMessages RPC completed"
+            );
+            result
         };
 
         Ok((response.messages, response.has_more))
