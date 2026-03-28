@@ -90,8 +90,10 @@ pub struct OidcTokens {
 struct PendingAuth {
     pkce_verifier: PkceCodeVerifier,
     csrf_token: CsrfToken,
-    #[allow(dead_code)] // Stored for future ID token verification
     nonce: Nonce,
+    /// Kept alive to prevent TOCTOU port races — another process cannot steal
+    /// the port between `start_auth_flow()` and `wait_for_callback()`.
+    listener: TcpListener,
     redirect_port: u16,
 }
 
@@ -102,6 +104,7 @@ pub struct OidcService {
     settings_repo: Arc<SettingsRepository>,
     client: Mutex<Option<OidcClient>>,
     pending_auth: Mutex<Option<PendingAuth>>,
+    refresh_guard: Mutex<()>,
 }
 
 impl OidcService {
@@ -111,6 +114,7 @@ impl OidcService {
             settings_repo,
             client: Mutex::new(None),
             pending_auth: Mutex::new(None),
+            refresh_guard: Mutex::new(()),
         }
     }
 
@@ -194,10 +198,10 @@ impl OidcService {
             pkce_verifier,
             csrf_token: csrf_state,
             nonce: nonce_out,
+            listener,
             redirect_port: port,
         });
 
-        drop(listener);
         Ok((auth_url.into(), port))
     }
 
@@ -206,13 +210,8 @@ impl OidcService {
         let pending = self.pending_auth.lock().await.take()
             .ok_or_else(|| OidcError::AuthFlowFailed("no pending auth flow".into()))?;
 
-        let port = pending.redirect_port;
-        let expected_state = pending.csrf_token.secret().clone();
-
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
-            .map_err(|e| OidcError::CallbackError(format!("failed to bind port {}: {}", port, e)))?;
-        listener.set_nonblocking(false)
-            .map_err(|e| OidcError::CallbackError(format!("set_nonblocking: {}", e)))?;
+        let PendingAuth { pkce_verifier, csrf_token, nonce, listener, redirect_port } = pending;
+        let expected_state = csrf_token.secret().clone();
 
         let (code, state) = tokio::task::spawn_blocking(move || {
             let timeout = std::time::Duration::from_secs(300);
@@ -248,14 +247,18 @@ impl OidcService {
             return Err(OidcError::AuthFlowFailed("CSRF state mismatch".into()));
         }
 
-        self.exchange_code(&code, pending.pkce_verifier, pending.redirect_port).await
+        self.exchange_code(&code, pkce_verifier, nonce, redirect_port).await
     }
 
     /// Exchange authorization code for tokens.
+    ///
+    /// Verifies the ID token nonce claim matches `expected_nonce` per
+    /// OIDC Core spec §3.1.3.7 to prevent ID token replay attacks.
     async fn exchange_code(
         &self,
         code: &str,
         pkce_verifier: PkceCodeVerifier,
+        expected_nonce: Nonce,
         redirect_port: u16,
     ) -> Result<OidcTokens, OidcError> {
         let client_guard = self.client.lock().await;
@@ -276,6 +279,32 @@ impl OidcService {
             .await
             .map_err(|e| OidcError::TokenExchangeFailed(e.to_string()))?;
 
+        // Verify ID token nonce claim matches our stored value (OIDC Core §3.1.3.7).
+        if let Some(id_token_jwt) = token_response.extra_fields().id_token() {
+            let id_token_str = id_token_jwt.to_string();
+            let parts: Vec<&str> = id_token_str.split('.').collect();
+            if parts.len() == 3 {
+                if let Ok(payload) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1]) {
+                    if let Ok(claims) = serde_json::from_slice::<serde_json::Value>(&payload) {
+                        let token_nonce = claims.get("nonce").and_then(|v| v.as_str());
+                        match token_nonce {
+                            Some(n) if n == expected_nonce.secret() => { /* nonce matches */ }
+                            Some(_) => {
+                                return Err(OidcError::TokenExchangeFailed(
+                                    "ID token nonce mismatch — possible replay".into(),
+                                ));
+                            }
+                            None => {
+                                return Err(OidcError::TokenExchangeFailed(
+                                    "ID token missing nonce claim".into(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let access_token = token_response.access_token().secret().clone();
         let refresh_token = token_response.refresh_token().map(|t| t.secret().clone());
         let id_token = token_response.extra_fields().id_token().map(|t| t.to_string());
@@ -290,6 +319,21 @@ impl OidcService {
 
     /// Refresh the access token using the stored refresh token.
     pub async fn refresh_tokens(&self) -> Result<OidcTokens, OidcError> {
+        // Serialize concurrent refresh attempts — only one caller exchanges at a time.
+        let _refresh_lock = self.refresh_guard.lock().await;
+
+        // Re-check after acquiring lock: another caller may have already refreshed.
+        if !self.needs_refresh() {
+            return self.get_access_token().map(|access_token| {
+                OidcTokens {
+                    access_token,
+                    refresh_token: self.settings_repo.get_string(keys::OIDC_REFRESH_TOKEN).ok().flatten(),
+                    id_token: self.settings_repo.get_string(keys::OIDC_ID_TOKEN).ok().flatten(),
+                    expires_at: self.settings_repo.get::<u64>(keys::OIDC_EXPIRES_AT).ok().flatten(),
+                }
+            });
+        }
+
         let client_guard = self.client.lock().await;
         let client = client_guard
             .as_ref()
@@ -335,7 +379,16 @@ impl OidcService {
         } else { false }
     }
 
-    pub fn parse_id_token_claims(&self) -> Option<(String, Option<String>, Option<String>)> {
+    /// Extract display-only claims (sub, email, name) from the stored ID token.
+    ///
+    /// # Safety — Display Only
+    ///
+    /// This performs a raw base64 decode of the JWT payload **without signature
+    /// verification** against the provider's JWKS. The returned claims MUST NOT
+    /// be used for authorization decisions. The server validates the access token
+    /// for all API calls; these claims are only for showing the logged-in user's
+    /// name/email in the local UI.
+    pub fn parse_id_token_display_claims(&self) -> Option<(String, Option<String>, Option<String>)> {
         let id_token = self.settings_repo.get_string(keys::OIDC_ID_TOKEN).ok()??;
         let parts: Vec<&str> = id_token.split('.').collect();
         if parts.len() != 3 { return None; }
