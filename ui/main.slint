@@ -1,10 +1,10 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry } from "app.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -14,7 +14,7 @@ export component MainWindow inherits Window {
     min-height: 480px;
     preferred-width: 800px;
     preferred-height: 600px;
-    default-font-family: "Inter";
+    default-font-family: "sans-serif";
     default-font-size: 14px;
 
     // Expose App properties through MainWindow for Rust binding
@@ -79,6 +79,11 @@ export component MainWindow inherits Window {
     in property <string> user-presence-status <=> app.user-presence-status;
     in property <string> user-custom-status <=> app.user-custom-status;
     in-out property <bool> sidebar-collapsed <=> app.sidebar-collapsed;
+
+    // ========== Organization properties ==========
+    in property <string> current-org-name <=> app.current-org-name;
+    in property <[OrgListItemData]> organizations <=> app.organizations;
+    in property <bool> org-loading <=> app.org-loading;
 
     // ========== Chat properties ==========
     in property <string> channel-id <=> app.channel-id;
@@ -463,6 +468,8 @@ export component MainWindow inherits Window {
     callback open-create-channel <=> app.open-create-channel;
     callback open-join-channel <=> app.open-join-channel;
     callback toggle-sidebar <=> app.toggle-sidebar;
+    callback org-selected <=> app.org-selected;
+    callback manage-org-clicked <=> app.manage-org-clicked;
 
     // ========== Chat callbacks ==========
     callback search-clicked <=> app.search-clicked;

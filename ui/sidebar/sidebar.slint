@@ -10,11 +10,12 @@ import { Icons } from "../theme/icons.slint";
 import { ChannelList, ChannelListItemData } from "channel_list.slint";
 import { DMList, DMListItemData } from "dm_list.slint";
 import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
+import { OrgSwitcher, OrgListItemData } from "org_switcher.slint";
 import { UserProfileBar } from "user_profile_bar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 
 // Re-export types for parent components
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData }
 
 export component Sidebar inherits Rectangle {
     // Properties - Channel list
@@ -36,6 +37,11 @@ export component Sidebar inherits Rectangle {
     in property <string> user-presence-status: "online";
     in property <string> user-custom-status: "";
 
+    // Properties - Organization
+    in property <string> current-org-name: "";
+    in property <[OrgListItemData]> organizations: [];
+    in property <bool> org-loading: false;
+
     // Properties - Collapsed state
     in-out property <bool> collapsed: false;
     // Fully hidden on mobile (0px width, no content rendered)
@@ -52,6 +58,10 @@ export component Sidebar inherits Rectangle {
     // Callbacks - Profile
     callback friends-clicked();
     callback profile-clicked();
+
+    // Callbacks - Organization
+    callback org-selected(/* org_id */ string);
+    callback manage-org-clicked();
 
     // Properties - Friend requests badge
     in property <int> pending-friend-requests: 0;
@@ -89,6 +99,17 @@ export component Sidebar inherits Rectangle {
 
             friends-clicked => { root.friends-clicked(); }
             profile-clicked => { root.profile-clicked(); }
+        }
+
+        // Organization switcher (below profile, above friends)
+        org-switcher := OrgSwitcher {
+            current-org-name: root.current-org-name;
+            organizations: root.organizations;
+            collapsed: root.collapsed;
+            is-loading: root.org-loading;
+
+            org-selected(org-id) => { root.org-selected(org-id); }
+            manage-org-clicked => { root.manage-org-clicked(); }
         }
 
         // Separator

@@ -1,4 +1,4 @@
-//! Navigation callbacks: saved messages, settings, profile, create/join channel, toggle sidebar.
+//! Navigation callbacks: saved messages, settings, profile, create/join channel, toggle sidebar, org switcher.
 
 use std::sync::Arc;
 
@@ -318,4 +318,120 @@ pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &
             window.set_pending_message_requests(0);
         }
     }
+}
+
+/// Load organization state into the sidebar.
+///
+/// Reads OrgState and populates the org switcher with the current org and list.
+pub(crate) fn load_org_state(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let org_data = ui_ctx.org_state().get();
+
+    // Set current org name
+    if let Some(ref name) = org_data.current_org_name {
+        window.set_current_org_name(SharedString::from(name.as_str()));
+    }
+
+    // Set org loading state
+    window.set_org_loading(org_data.is_loading);
+
+    // Build org list for the switcher
+    let org_items: Vec<crate::OrgListItemData> = org_data
+        .organizations
+        .iter()
+        .map(|org| crate::OrgListItemData {
+            id: SharedString::from(org.id.as_str()),
+            name: SharedString::from(org.name.as_str()),
+            slug: SharedString::from(org.slug.as_str()),
+            member_count: org.member_count,
+            is_current: org_data.current_org_id.as_deref() == Some(&org.id),
+        })
+        .collect();
+
+    window.set_organizations(slint::ModelRc::new(slint::VecModel::from(org_items)));
+}
+
+/// Wire the org-selected callback.
+///
+/// When the user picks a different org from the switcher, update the org state.
+pub(crate) fn wire_org_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let org_state = ui_ctx.org_state().clone();
+    let weak_window = window.as_weak();
+
+    window.on_org_selected(move |org_id| {
+        let org_id_str = org_id.to_string();
+        let org_state = org_state.clone();
+        let weak = weak_window.clone();
+
+        // Find org name from current data
+        let org_data = org_state.get();
+        let org_name = org_data
+            .organizations
+            .iter()
+            .find(|o| o.id == org_id_str)
+            .map(|o| o.name.clone())
+            .unwrap_or_default();
+
+        tracing::info!(org_id = %org_id_str, org_name = %org_name, "Organization switched");
+        org_state.set_current_org(&org_id_str, &org_name);
+
+        // Update UI immediately
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_current_org_name(SharedString::from(org_name.as_str()));
+
+                // Update is_current flags in the list
+                let model = w.get_organizations();
+                let updated: Vec<crate::OrgListItemData> = (0..slint::Model::row_count(&model))
+                    .filter_map(|i| slint::Model::row_data(&model, i))
+                    .map(|mut item| {
+                        item.is_current = item.id.as_str() == org_id_str;
+                        item
+                    })
+                    .collect();
+                w.set_organizations(slint::ModelRc::new(slint::VecModel::from(updated)));
+            }
+        });
+    });
+}
+
+/// Wire the manage-org-clicked callback (placeholder — opens settings for now).
+pub(crate) fn wire_manage_org_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+    window.on_manage_org_clicked(move || {
+        tracing::info!("Manage org clicked (org management screen TBD)");
+    });
+}
+
+/// Subscribe to OrgState changes and update the sidebar reactively.
+pub(crate) fn subscribe_org_state(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let mut rx = ui_ctx.org_state().subscribe();
+    let weak = window.as_weak();
+
+    tokio::spawn(async move {
+        while let Ok(data) = rx.recv().await {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    // Update org name
+                    w.set_current_org_name(SharedString::from(
+                        data.current_org_name.as_deref().unwrap_or(""),
+                    ));
+                    w.set_org_loading(data.is_loading);
+
+                    // Update org list
+                    let org_items: Vec<crate::OrgListItemData> = data
+                        .organizations
+                        .iter()
+                        .map(|org| crate::OrgListItemData {
+                            id: SharedString::from(org.id.as_str()),
+                            name: SharedString::from(org.name.as_str()),
+                            slug: SharedString::from(org.slug.as_str()),
+                            member_count: org.member_count,
+                            is_current: data.current_org_id.as_deref() == Some(&org.id),
+                        })
+                        .collect();
+                    w.set_organizations(slint::ModelRc::new(slint::VecModel::from(org_items)));
+                }
+            });
+        }
+    });
 }

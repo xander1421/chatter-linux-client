@@ -18,7 +18,7 @@ use crate::MainWindow;
 pub use channel::load_channel_into_ui;
 pub use private_group::add_private_group_to_sidebar;
 
-/// Wire sidebar callbacks (channel/DM selection, settings, profile).
+/// Wire sidebar callbacks (channel/DM selection, settings, profile, org switcher).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     channel::wire_channel_selected(window, ui_ctx);
     dm::wire_dm_selected(window, ui_ctx);
@@ -31,6 +31,10 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     navigation::load_sidebar_collapsed_state(window, ui_ctx);
     navigation::wire_message_requests_clicked(window, ui_ctx);
     navigation::load_pending_message_requests_count(window, ui_ctx);
+    navigation::wire_org_selected(window, ui_ctx);
+    navigation::wire_manage_org_clicked(window, ui_ctx);
+    navigation::load_org_state(window, ui_ctx);
+    navigation::subscribe_org_state(window, ui_ctx);
 }
 
 /// Apply pinned message state to the UI.

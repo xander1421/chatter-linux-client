@@ -14,7 +14,7 @@ import { LoadingPage } from "pages/loading.slint";
 import { WelcomePage } from "pages/welcome.slint";
 
 // Import main layout components
-import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData } from "sidebar/sidebar.slint";
+import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
 import { MembersPanel } from "chat/members_panel.slint";
@@ -53,7 +53,7 @@ import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, Acti
 import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -120,7 +120,10 @@ export component App inherits Rectangle {
     in-out property <bool> sidebar-collapsed: false;
     in-out property <bool> sidebar-hidden: false;
 
-    // Tooltip state removed — sidebar items now use self-contained TooltipArea
+    // Organization properties
+    in property <string> current-org-name: "";
+    in property <[OrgListItemData]> organizations: [];
+    in property <bool> org-loading: false;
 
     // ========== Chat properties ==========
     in property <string> channel-id: "";
@@ -505,7 +508,8 @@ export component App inherits Rectangle {
     callback open-create-channel();
     callback open-join-channel();
     callback toggle-sidebar();
-    // Tooltip callbacks removed — tooltips are now self-contained in sidebar items
+    callback org-selected(/* org_id */ string);
+    callback manage-org-clicked();
 
     // ========== Chat callbacks ==========
     callback search-clicked();
@@ -832,6 +836,9 @@ export component App inherits Rectangle {
                 hidden <=> root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
+                current-org-name: root.current-org-name;
+                organizations: root.organizations;
+                org-loading: root.org-loading;
 
                 channel-selected(id) => {
                     root.channel-selected(id);
@@ -868,6 +875,12 @@ export component App inherits Rectangle {
                 }
                 toggle-collapsed => {
                     root.toggle-sidebar();
+                }
+                org-selected(org-id) => {
+                    root.org-selected(org-id);
+                }
+                manage-org-clicked => {
+                    root.manage-org-clicked();
                 }
             }
 

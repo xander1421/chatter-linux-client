@@ -51,7 +51,7 @@ use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
 use crate::state::{
     ActiveConversation, AuthState, ChatState, JarvisState, MessageState, OfflineState,
-    PinnedState, PresenceState, PrivacyState, StreamingState, UIState, UserState,
+    OrgState, PinnedState, PresenceState, PrivacyState, StreamingState, UIState, UserState,
 };
 use crate::state::chat_state::PendingAttachment;
 use crate::storage::settings_keys;
@@ -510,6 +510,7 @@ impl ChatterClient {
     pub fn pinned_state(&self) -> &PinnedState { &self.ui.pinned_state }
     pub fn privacy_state(&self) -> &PrivacyState { &self.ui.privacy_state }
     pub fn jarvis_state(&self) -> &JarvisState { &self.ui.jarvis_state }
+    pub fn org_state(&self) -> &OrgState { &self.ui.org_state }
 
     // ── Infrastructure ──────────────────────────────────────────────────
 

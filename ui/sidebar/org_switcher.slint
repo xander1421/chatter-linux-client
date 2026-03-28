@@ -1,0 +1,236 @@
+// Organization switcher component for the sidebar.
+//
+// Shows the current org name with a dropdown arrow. When clicked, shows the
+// org list as a popup for switching. When collapsed, shows just the globe icon
+// with a tooltip.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
+import { TooltipArea } from "../components/tooltip.slint";
+
+// Organization summary for the switcher list.
+export struct OrgListItemData {
+    id: string,
+    name: string,
+    slug: string,
+    member-count: int,
+    is-current: bool,
+}
+
+export component OrgSwitcher inherits Rectangle {
+    // Properties
+    in property <string> current-org-name: "";
+    in property <bool> has-org: current-org-name != "";
+    in property <[OrgListItemData]> organizations: [];
+    in property <bool> collapsed: false;
+    in property <bool> is-loading: false;
+
+    // Callbacks
+    callback org-selected(/* org_id */ string);
+    callback manage-org-clicked();
+
+    // Internal state
+    property <bool> dropdown-open: false;
+
+    // Only show when user has orgs
+    visible: root.has-org || root.organizations.length > 0;
+    height: self.visible ? 40px : 0px;
+
+    if !root.collapsed: expanded-layout := Rectangle {
+        width: 100%;
+        height: 100%;
+        border-radius: Spacing.radius-sm;
+        background: switcher-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+        HorizontalLayout {
+            padding-left: Spacing.sm;
+            padding-right: Spacing.sm;
+            spacing: Spacing.xs;
+            alignment: start;
+
+            // Globe icon
+            Rectangle {
+                width: 20px;
+                height: parent.height;
+
+                Image {
+                    source: Icons.globe;
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.primary;
+                }
+            }
+
+            // Org name
+            Text {
+                text: root.is-loading ? "Loading..." : root.current-org-name;
+                color: root.is-loading ? Colors.text-muted : Colors.text-primary;
+                font-size: 13px;
+                font-weight: 600;
+                vertical-alignment: center;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            // Member count
+            if root.organizations.length > 1: Text {
+                text: root.organizations.length;
+                color: Colors.text-muted;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+
+        switcher-touch := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                if root.organizations.length > 1 {
+                    root.dropdown-open = !root.dropdown-open;
+                } else {
+                    root.manage-org-clicked();
+                }
+            }
+        }
+    }
+
+    if root.collapsed: collapsed-layout := TooltipArea {
+        width: 100%;
+        height: 100%;
+        tooltip-text: root.current-org-name;
+        tooltip-enabled: root.collapsed;
+        placement: "right";
+
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            border-radius: Spacing.radius-sm;
+            background: collapsed-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+            HorizontalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: 20px;
+                    height: parent.height;
+
+                    Image {
+                        source: Icons.globe;
+                        width: 14px;
+                        height: 14px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Colors.primary;
+                    }
+                }
+            }
+
+            collapsed-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.dropdown-open = !root.dropdown-open;
+                }
+            }
+        }
+    }
+
+    // Dropdown org list (shown below the switcher when open)
+    if root.dropdown-open && root.organizations.length > 1: Rectangle {
+        y: root.height + 2px;
+        x: root.collapsed ? 60px : 0px;
+        width: 220px;
+        height: org-list-layout.preferred-height + 2 * Spacing.xs;
+        background: Colors.surface-hover;
+        border-radius: Spacing.radius-md;
+        drop-shadow-blur: 8px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: #000000cc;
+
+        org-list-layout := VerticalLayout {
+            padding: Spacing.xs;
+            spacing: 2px;
+
+            for org[index] in root.organizations: Rectangle {
+                height: 36px;
+                border-radius: Spacing.radius-sm;
+                background: org.is-current ? Colors.primary-active : (org-item-touch.has-hover ? Colors.surface-hover : transparent);
+
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.xs;
+                    alignment: start;
+
+                    // Org initial badge
+                    Rectangle {
+                        width: 24px;
+                        height: 24px;
+                        border-radius: 4px;
+                        background: org.is-current ? Colors.primary : Colors.surface-hover;
+
+                        Text {
+                            text: org.name != "" ? org.name.character-count > 0 ? org.name : "?" : "?";
+                            color: org.is-current ? Colors.text-primary : Colors.text-secondary;
+                            font-size: 11px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                        }
+                    }
+
+                    // Name and member count
+                    VerticalLayout {
+                        alignment: center;
+
+                        Text {
+                            text: org.name;
+                            color: Colors.text-primary;
+                            font-size: 13px;
+                            font-weight: org.is-current ? 600 : 400;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: org.member-count + " members";
+                            color: Colors.text-muted;
+                            font-size: 11px;
+                        }
+                    }
+
+                    // Check mark for current org
+                    if org.is-current: Rectangle {
+                        width: 16px;
+                        height: parent.height;
+                        horizontal-stretch: 0;
+
+                        Image {
+                            source: Icons.check;
+                            width: 14px;
+                            height: 14px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.primary;
+                        }
+                    }
+                }
+
+                org-item-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if !org.is-current {
+                            root.org-selected(org.id);
+                        }
+                        root.dropdown-open = false;
+                    }
+                }
+            }
+        }
+    }
+
+    // Close dropdown when clicking outside (via a scrim layer)
+    // The parent component should handle this via a global click handler.
+}
