@@ -415,6 +415,124 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
     }
 }
 
+/// Incremental MAC verifier for chunk-by-chunk attachment verification.
+///
+/// Verifies per-chunk HMAC-SHA256 digests as ciphertext arrives, allowing
+/// early abort on tampered data without downloading the entire file.
+///
+/// # Signal Spec
+///
+/// - Chunk size: 64KB (65,536 bytes) of ciphertext (IV + encrypted data, before final HMAC)
+/// - Each chunk gets its own HMAC-SHA256 using the same MAC key
+/// - Digests are concatenated in order in the `incremental_mac` field
+///
+/// # Backward Compatibility
+///
+/// If `expected_macs` is empty, all operations are no-ops (legacy messages).
+pub struct IncrementalMacVerifier {
+    mac_key: [u8; 32],
+    expected_macs: Vec<[u8; 32]>,
+    chunk_size: usize,
+    chunk_index: usize,
+    accumulator: Vec<u8>,
+}
+
+impl IncrementalMacVerifier {
+    /// Create a new verifier from the MAC key and concatenated expected digests.
+    ///
+    /// # Arguments
+    ///
+    /// * `mac_key` - 32-byte HMAC-SHA256 key (second half of the 64-byte key set)
+    /// * `incremental_mac` - Concatenated 32-byte digests from AttachmentPointer
+    /// * `chunk_size` - Chunk size in bytes (must be 65536 per Signal spec)
+    ///
+    /// Returns `None` if `incremental_mac` is empty (backward compat).
+    pub fn new(mac_key: &[u8; 32], incremental_mac: &[u8], chunk_size: u32) -> Option<Self> {
+        if incremental_mac.is_empty() || chunk_size == 0 {
+            return None;
+        }
+
+        // Parse concatenated digests into individual 32-byte chunks
+        let num_macs = incremental_mac.len() / 32;
+        let mut expected_macs = Vec::with_capacity(num_macs);
+        for i in 0..num_macs {
+            let mut mac = [0u8; 32];
+            mac.copy_from_slice(&incremental_mac[i * 32..(i + 1) * 32]);
+            expected_macs.push(mac);
+        }
+
+        Some(Self {
+            mac_key: *mac_key,
+            expected_macs,
+            chunk_size: chunk_size as usize,
+            chunk_index: 0,
+            accumulator: Vec::with_capacity(chunk_size as usize),
+        })
+    }
+
+    /// Feed ciphertext bytes for incremental verification.
+    ///
+    /// Accumulates data and verifies complete chunks against expected MACs.
+    /// Returns `Err(IncrementalMacMismatch)` on first bad chunk.
+    pub fn feed(&mut self, data: &[u8]) -> Result<(), CryptoError> {
+        self.accumulator.extend_from_slice(data);
+
+        while self.accumulator.len() >= self.chunk_size {
+            self.verify_chunk(&self.accumulator[..self.chunk_size].to_vec())?;
+            self.accumulator.drain(..self.chunk_size);
+        }
+
+        Ok(())
+    }
+
+    /// Finalize verification — check any remaining partial chunk.
+    ///
+    /// Must be called after all ciphertext (excluding the trailing HMAC) has been fed.
+    pub fn finalize(&mut self) -> Result<(), CryptoError> {
+        if !self.accumulator.is_empty() {
+            let remaining = std::mem::take(&mut self.accumulator);
+            self.verify_chunk(&remaining)?;
+        }
+
+        // Verify we consumed all expected MACs
+        if self.chunk_index != self.expected_macs.len() {
+            return Err(CryptoError::IncrementalMacMismatch {
+                chunk_index: self.chunk_index,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Verify a single chunk against its expected MAC.
+    fn verify_chunk(&mut self, chunk: &[u8]) -> Result<(), CryptoError> {
+        if self.chunk_index >= self.expected_macs.len() {
+            return Err(CryptoError::IncrementalMacMismatch {
+                chunk_index: self.chunk_index,
+            });
+        }
+
+        let pkey = PKey::hmac(&self.mac_key)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC key: {}", e)))?;
+        let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC init: {}", e)))?;
+        signer.update(chunk)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC update: {}", e)))?;
+        let computed = signer.sign_to_vec()
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("HMAC finalize: {}", e)))?;
+
+        // Constant-time comparison
+        if computed.ct_eq(&self.expected_macs[self.chunk_index]).unwrap_u8() != 1 {
+            return Err(CryptoError::IncrementalMacMismatch {
+                chunk_index: self.chunk_index,
+            });
+        }
+
+        self.chunk_index += 1;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,5 +654,179 @@ mod tests {
         result.truncate(encrypted.plaintext_size);
 
         assert_eq!(result, plaintext);
+    }
+
+    // =========================================================================
+    // IncrementalMacVerifier tests
+    // =========================================================================
+
+    #[test]
+    fn test_incremental_mac_verifier_empty_is_none() {
+        let mac_key = [0u8; 32];
+        assert!(IncrementalMacVerifier::new(&mac_key, &[], 0).is_none());
+        assert!(IncrementalMacVerifier::new(&mac_key, &[], 65536).is_none());
+        assert!(IncrementalMacVerifier::new(&mac_key, &[1; 32], 0).is_none());
+    }
+
+    #[test]
+    fn test_incremental_mac_verifier_roundtrip() {
+        use crate::crypto::attachment_crypto::AttachmentCrypto;
+        use tempfile::NamedTempFile;
+        use std::io::Write;
+
+        // Create a file large enough for incremental MAC (>50KB)
+        let mut input_file = NamedTempFile::new().unwrap();
+        let plaintext: Vec<u8> = (0..200_000).map(|i| (i % 256) as u8).collect();
+        input_file.write_all(&plaintext).unwrap();
+        input_file.flush().unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        // Encrypt with incremental MAC
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).unwrap();
+
+        assert!(!result.incremental_mac.is_empty(), "incremental_mac should be populated for >50KB file");
+        assert_eq!(result.incremental_chunk_size, INCREMENTAL_MAC_CHUNK_SIZE as u32);
+        assert_eq!(result.incremental_mac.len() % 32, 0, "incremental_mac length must be multiple of 32");
+
+        // Extract MAC key from the key set
+        let mut mac_key = [0u8; 32];
+        mac_key.copy_from_slice(&result.key[32..]);
+
+        // Verify using IncrementalMacVerifier
+        let mut verifier = IncrementalMacVerifier::new(
+            &mac_key,
+            &result.incremental_mac,
+            result.incremental_chunk_size,
+        ).expect("verifier should be Some for non-empty incremental_mac");
+
+        // Read ciphertext and feed it to the verifier (excluding trailing HMAC)
+        let ciphertext = std::fs::read(output_file.path()).unwrap();
+        let ciphertext_without_hmac = &ciphertext[..ciphertext.len() - 32];
+        verifier.feed(ciphertext_without_hmac).unwrap();
+        verifier.finalize().unwrap();
+    }
+
+    #[test]
+    fn test_incremental_mac_verifier_detects_tamper() {
+        use crate::crypto::attachment_crypto::AttachmentCrypto;
+        use tempfile::NamedTempFile;
+        use std::io::Write;
+
+        // Create a file large enough for multiple incremental MAC chunks
+        let mut input_file = NamedTempFile::new().unwrap();
+        let plaintext: Vec<u8> = (0..200_000).map(|i| (i % 256) as u8).collect();
+        input_file.write_all(&plaintext).unwrap();
+        input_file.flush().unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).unwrap();
+
+        let mut mac_key = [0u8; 32];
+        mac_key.copy_from_slice(&result.key[32..]);
+
+        // Tamper with the ciphertext
+        let mut ciphertext = std::fs::read(output_file.path()).unwrap();
+        let ciphertext_without_hmac_len = ciphertext.len() - 32;
+        // Tamper with a byte in the first chunk (after IV)
+        ciphertext[20] ^= 0xFF;
+
+        let mut verifier = IncrementalMacVerifier::new(
+            &mac_key,
+            &result.incremental_mac,
+            result.incremental_chunk_size,
+        ).unwrap();
+
+        // Feed tampered ciphertext — should fail at first chunk
+        let result = verifier.feed(&ciphertext[..ciphertext_without_hmac_len]);
+        if result.is_ok() {
+            // If first chunk hasn't been verified yet (data < chunk_size), finalize should catch it
+            let finalize_result = verifier.finalize();
+            assert!(
+                finalize_result.is_err(),
+                "finalize should detect tampered data"
+            );
+            match finalize_result.unwrap_err() {
+                CryptoError::IncrementalMacMismatch { chunk_index } => {
+                    assert_eq!(chunk_index, 0, "first chunk should fail");
+                }
+                other => panic!("expected IncrementalMacMismatch, got: {}", other),
+            }
+        } else {
+            match result.unwrap_err() {
+                CryptoError::IncrementalMacMismatch { chunk_index } => {
+                    assert_eq!(chunk_index, 0, "first chunk should fail");
+                }
+                other => panic!("expected IncrementalMacMismatch, got: {}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_incremental_mac_small_file_no_mac() {
+        use crate::crypto::attachment_crypto::AttachmentCrypto;
+        use tempfile::NamedTempFile;
+        use std::io::Write;
+
+        // Create a file smaller than threshold (< 50KB)
+        let mut input_file = NamedTempFile::new().unwrap();
+        let plaintext = vec![42u8; 1024]; // 1KB
+        input_file.write_all(&plaintext).unwrap();
+        input_file.flush().unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).unwrap();
+
+        assert!(result.incremental_mac.is_empty(), "small files should not have incremental MAC");
+        assert_eq!(result.incremental_chunk_size, 0);
+    }
+
+    #[test]
+    fn test_incremental_mac_chunked_feed() {
+        use crate::crypto::attachment_crypto::AttachmentCrypto;
+        use tempfile::NamedTempFile;
+        use std::io::Write;
+
+        // Create a file large enough for multiple chunks
+        let mut input_file = NamedTempFile::new().unwrap();
+        let plaintext: Vec<u8> = (0..300_000).map(|i| (i % 256) as u8).collect();
+        input_file.write_all(&plaintext).unwrap();
+        input_file.flush().unwrap();
+
+        let output_file = NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).unwrap();
+
+        let mut mac_key = [0u8; 32];
+        mac_key.copy_from_slice(&result.key[32..]);
+
+        let mut verifier = IncrementalMacVerifier::new(
+            &mac_key,
+            &result.incremental_mac,
+            result.incremental_chunk_size,
+        ).unwrap();
+
+        // Feed in small chunks (simulating streaming download)
+        let ciphertext = std::fs::read(output_file.path()).unwrap();
+        let ciphertext_without_hmac = &ciphertext[..ciphertext.len() - 32];
+        let feed_chunk_size = 4096; // 4KB at a time
+        for chunk in ciphertext_without_hmac.chunks(feed_chunk_size) {
+            verifier.feed(chunk).unwrap();
+        }
+        verifier.finalize().unwrap();
     }
 }

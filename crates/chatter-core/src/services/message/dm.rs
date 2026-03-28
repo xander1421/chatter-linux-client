@@ -359,9 +359,9 @@ impl MessageService {
                         height: 0,
                         duration_ms: result.duration_ms,
                         voice_note: false,
-                        incremental_mac: vec![],
-                        chunk_size: 0,
-                        ciphertext_size: 0,
+                        incremental_mac: result.incremental_mac,
+                        chunk_size: result.chunk_size,
+                        ciphertext_size: result.ciphertext_size,
                         plaintext_hash: String::new(),
                         waveform: result.waveform,
                     };

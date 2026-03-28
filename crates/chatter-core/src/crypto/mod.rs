@@ -24,7 +24,8 @@ pub mod streaming_decrypt;
 pub mod svr;
 pub mod svr_backup;
 
-pub use attachment_crypto::{AttachmentCrypto, EncryptedAttachment, StreamingEncryptResult, KEY_SET_LENGTH};
+pub use attachment_crypto::{AttachmentCrypto, EncryptedAttachment, StreamingEncryptResult, KEY_SET_LENGTH, INCREMENTAL_MAC_CHUNK_SIZE, max_attachment_size};
+pub use streaming_decrypt::IncrementalMacVerifier;
 pub use call_key_provider::{
     derive_call_key, derive_call_shared_secret, CallKeyState,
     // Ephemeral key exchange (Signal-style PFS for DM calls)

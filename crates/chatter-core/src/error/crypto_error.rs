@@ -101,6 +101,14 @@ pub enum CryptoError {
     #[error("attachment digest mismatch")]
     AttachmentDigestMismatch,
 
+    /// Incremental MAC verification failed at a specific chunk.
+    #[error("incremental MAC mismatch at chunk {chunk_index}")]
+    IncrementalMacMismatch { chunk_index: usize },
+
+    /// Attachment exceeds maximum allowed size.
+    #[error("attachment too large: {size} bytes exceeds {max} byte limit")]
+    AttachmentTooLarge { size: u64, max: u64 },
+
     // =========================================================================
     // Blind Signature Errors (NDSS '21 Ephemeral Mailboxes)
     // =========================================================================

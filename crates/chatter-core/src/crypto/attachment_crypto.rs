@@ -110,7 +110,20 @@ pub struct StreamingEncryptResult {
     /// Original plaintext size in bytes.
     #[zeroize(skip)]
     pub plaintext_size: u64,
+    /// Concatenated per-chunk HMAC-SHA256 digests (32 bytes each) for incremental verification.
+    /// Empty if plaintext <= INCREMENTAL_MAC_THRESHOLD.
+    #[zeroize(skip)]
+    pub incremental_mac: Vec<u8>,
+    /// Chunk size used for incremental MAC (64KB per Signal spec). 0 if no incremental MAC.
+    #[zeroize(skip)]
+    pub incremental_chunk_size: u32,
 }
+
+/// Chunk size for incremental MAC computation (64KB per Signal spec).
+pub const INCREMENTAL_MAC_CHUNK_SIZE: usize = 64 * 1024;
+
+/// Plaintext size threshold for incremental MAC (50KB per Signal spec).
+const INCREMENTAL_MAC_THRESHOLD: u64 = 50 * 1024;
 
 /// Attachment encryption service.
 ///
@@ -243,7 +256,7 @@ impl AttachmentCrypto {
 
     /// Compute HMAC-SHA256 over data using OpenSSL (hardware accelerated).
     #[inline]
-    fn compute_hmac(mac_key: &[u8], data: &[u8]) -> [u8; 32] {
+    pub(crate) fn compute_hmac(mac_key: &[u8], data: &[u8]) -> [u8; 32] {
         let pkey = PKey::hmac(mac_key).expect("HMAC key creation failed");
         let mut signer = Signer::new(MessageDigest::sha256(), &pkey)
             .expect("HMAC signer creation failed");
@@ -424,11 +437,20 @@ impl AttachmentCrypto {
 
         const CHUNK_SIZE: usize = 256 * 1024;
 
-        // Get file size for padding calculation
+        // Get file size for padding calculation and size limit check
         let input_metadata = std::fs::metadata(input_path)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("read metadata: {}", e)))?;
         let plaintext_size = input_metadata.len() as usize;
         let padded_size = Self::padded_size(plaintext_size);
+
+        // Check max attachment size
+        let max_size = max_attachment_size();
+        if (plaintext_size as u64) > max_size {
+            return Err(CryptoError::AttachmentTooLarge {
+                size: plaintext_size as u64,
+                max: max_size,
+            });
+        }
 
         // Generate random key and IV
         let mut key = [0u8; KEY_SET_LENGTH];
@@ -463,6 +485,11 @@ impl AttachmentCrypto {
         let mut digest_hasher = Hasher::new(MessageDigest::sha256())
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("init digest: {}", e)))?;
 
+        // Incremental MAC state: compute per-chunk HMAC-SHA256 for files > threshold
+        let use_incremental_mac = (plaintext_size as u64) > INCREMENTAL_MAC_THRESHOLD;
+        let mut incremental_mac_digests: Vec<u8> = Vec::new();
+        let mut inc_mac_accumulator: Vec<u8> = Vec::new();
+
         // Write IV
         output.write_all(&iv)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("write iv: {}", e)))?;
@@ -470,6 +497,11 @@ impl AttachmentCrypto {
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac iv: {}", e)))?;
         digest_hasher.update(&iv)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest iv: {}", e)))?;
+
+        // IV is part of the ciphertext, so include it in incremental MAC accumulation
+        if use_incremental_mac {
+            inc_mac_accumulator.extend_from_slice(&iv);
+        }
 
         // Encrypt buffer: chunk + one AES block headroom
         let mut encrypt_buf = vec![0u8; CHUNK_SIZE + cipher.block_size()];
@@ -494,6 +526,14 @@ impl AttachmentCrypto {
                     .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac: {}", e)))?;
                 digest_hasher.update(&encrypt_buf[..count])
                     .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest: {}", e)))?;
+
+                // Accumulate ciphertext for incremental MAC
+                if use_incremental_mac {
+                    Self::accumulate_incremental_mac(
+                        mac_key, &encrypt_buf[..count],
+                        &mut inc_mac_accumulator, &mut incremental_mac_digests,
+                    );
+                }
             }
 
             bytes_fed += n;
@@ -515,6 +555,13 @@ impl AttachmentCrypto {
                         .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac pad: {}", e)))?;
                     digest_hasher.update(&encrypt_buf[..count])
                         .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest pad: {}", e)))?;
+
+                    if use_incremental_mac {
+                        Self::accumulate_incremental_mac(
+                            mac_key, &encrypt_buf[..count],
+                            &mut inc_mac_accumulator, &mut incremental_mac_digests,
+                        );
+                    }
                 }
                 padding_remaining -= chunk_len;
             }
@@ -530,6 +577,20 @@ impl AttachmentCrypto {
                 .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("hmac final: {}", e)))?;
             digest_hasher.update(&encrypt_buf[..final_count])
                 .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("digest final: {}", e)))?;
+
+            if use_incremental_mac {
+                Self::accumulate_incremental_mac(
+                    mac_key, &encrypt_buf[..final_count],
+                    &mut inc_mac_accumulator, &mut incremental_mac_digests,
+                );
+            }
+        }
+
+        // Flush any remaining partial chunk for incremental MAC
+        if use_incremental_mac && !inc_mac_accumulator.is_empty() {
+            let hmac = Self::compute_hmac(mac_key, &inc_mac_accumulator);
+            incremental_mac_digests.extend_from_slice(&hmac);
+            inc_mac_accumulator.clear();
         }
 
         // Finalize HMAC and write it
@@ -562,7 +623,27 @@ impl AttachmentCrypto {
             digest,
             ciphertext_size,
             plaintext_size: plaintext_size as u64,
+            incremental_mac: incremental_mac_digests,
+            incremental_chunk_size: if use_incremental_mac { INCREMENTAL_MAC_CHUNK_SIZE as u32 } else { 0 },
         })
+    }
+
+    /// Accumulate ciphertext bytes and compute incremental MAC for complete 64KB chunks.
+    ///
+    /// Appends data to the accumulator. When the accumulator reaches INCREMENTAL_MAC_CHUNK_SIZE,
+    /// computes HMAC-SHA256 of the chunk and appends the 32-byte digest to `digests`.
+    fn accumulate_incremental_mac(
+        mac_key: &[u8],
+        data: &[u8],
+        accumulator: &mut Vec<u8>,
+        digests: &mut Vec<u8>,
+    ) {
+        accumulator.extend_from_slice(data);
+        while accumulator.len() >= INCREMENTAL_MAC_CHUNK_SIZE {
+            let hmac = Self::compute_hmac(mac_key, &accumulator[..INCREMENTAL_MAC_CHUNK_SIZE]);
+            digests.extend_from_slice(&hmac);
+            accumulator.drain(..INCREMENTAL_MAC_CHUNK_SIZE);
+        }
     }
 
     /// Round up to the next multiple of 16 (AES block size).
@@ -570,6 +651,16 @@ impl AttachmentCrypto {
     fn round_to_block_size(size: usize) -> usize {
         (size + 15) & !15
     }
+}
+
+/// Maximum attachment size (100MB default).
+///
+/// Can be overridden via `CHATTER_MAX_ATTACHMENT_SIZE` environment variable.
+pub fn max_attachment_size() -> u64 {
+    std::env::var("CHATTER_MAX_ATTACHMENT_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100 * 1024 * 1024)
 }
 
 #[cfg(test)]
@@ -883,5 +974,110 @@ mod tests {
         ).expect("streaming encryption should succeed");
 
         assert_eq!(result.key.len(), KEY_SET_LENGTH);
+    }
+
+    // =========================================================================
+    // Incremental MAC tests
+    // =========================================================================
+
+    #[test]
+    fn test_streaming_encrypt_small_file_no_incremental_mac() {
+        // Files <= 50KB should NOT have incremental MAC
+        let plaintext = vec![42u8; 1024]; // 1KB
+
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), &plaintext).unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).unwrap();
+
+        assert!(result.incremental_mac.is_empty());
+        assert_eq!(result.incremental_chunk_size, 0);
+    }
+
+    #[test]
+    fn test_streaming_encrypt_large_file_has_incremental_mac() {
+        // Files > 50KB should have incremental MAC
+        let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect(); // 100KB
+
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), &plaintext).unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).unwrap();
+
+        assert!(!result.incremental_mac.is_empty());
+        assert_eq!(result.incremental_chunk_size, INCREMENTAL_MAC_CHUNK_SIZE as u32);
+        // incremental_mac is a concatenation of 32-byte digests
+        assert_eq!(result.incremental_mac.len() % 32, 0);
+
+        // Number of chunks should match ciphertext size divided by chunk size
+        let ciphertext = std::fs::read(output_file.path()).unwrap();
+        let ciphertext_without_hmac = ciphertext.len() - 32; // exclude trailing HMAC
+        let expected_chunks = (ciphertext_without_hmac + INCREMENTAL_MAC_CHUNK_SIZE - 1) / INCREMENTAL_MAC_CHUNK_SIZE;
+        assert_eq!(result.incremental_mac.len() / 32, expected_chunks);
+    }
+
+    #[test]
+    fn test_streaming_encrypt_incremental_mac_deterministic() {
+        // Same plaintext, same key → different ciphertext (random IV/key)
+        // But the relationship between ciphertext and incremental MAC should be consistent
+        let plaintext: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
+
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), &plaintext).unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        ).unwrap();
+
+        // Verify incremental MAC is consistent with the ciphertext by recomputing
+        let ciphertext = std::fs::read(output_file.path()).unwrap();
+        let mac_key = &result.key[32..];
+        let ciphertext_without_hmac = &ciphertext[..ciphertext.len() - 32];
+
+        // Recompute incremental MAC from the ciphertext
+        let mut recomputed_mac = Vec::new();
+        for chunk in ciphertext_without_hmac.chunks(INCREMENTAL_MAC_CHUNK_SIZE) {
+            let hmac = AttachmentCrypto::compute_hmac(mac_key, chunk);
+            recomputed_mac.extend_from_slice(&hmac);
+        }
+
+        assert_eq!(result.incremental_mac, recomputed_mac);
+    }
+
+    #[test]
+    fn test_max_attachment_size_enforcement() {
+        // This test uses env var to set a very small max size
+        // SAFETY: Single-threaded test (--test-threads=1), no concurrent env reads
+        unsafe { std::env::set_var("CHATTER_MAX_ATTACHMENT_SIZE", "100") };
+
+        let plaintext = vec![42u8; 200]; // 200 bytes, exceeds 100 byte limit
+
+        let input_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(input_file.path(), &plaintext).unwrap();
+
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+
+        let result = AttachmentCrypto::encrypt_file_to_file(
+            input_file.path(),
+            output_file.path(),
+        );
+
+        // SAFETY: Single-threaded test, cleaning up before any concurrent access
+        unsafe { std::env::remove_var("CHATTER_MAX_ATTACHMENT_SIZE") };
+
+        assert!(matches!(result, Err(CryptoError::AttachmentTooLarge { .. })));
     }
 }
