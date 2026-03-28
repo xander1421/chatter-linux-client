@@ -377,6 +377,7 @@ export component App inherits Rectangle {
     in property <[FriendRequestData]> friends-received-requests: [];
     in property <[FriendRequestData]> friends-sent-requests: [];
     in property <[FriendRequestData]> friends-private-requests: [];
+    in property <[FriendRequestData]> friends-group-invites: [];
     in property <[BlockedUserData]> friends-blocked-users: [];
     in property <bool> friends-loading: false;
     // Pending message requests count (for sidebar badge)
@@ -629,6 +630,8 @@ export component App inherits Rectangle {
     callback friends-accept-private-request(string);   // Accept anon DM request
     callback friends-decline-private-request(string);  // Decline anon DM request
     callback friends-block-private-request(string);    // Block anon DM request
+    callback friends-accept-group-invite(string);      // Accept anon group invite
+    callback friends-decline-group-invite(string);     // Decline anon group invite
     // Message requests (anon DM)
     callback message-requests-clicked();
 
@@ -1411,6 +1414,7 @@ export component App inherits Rectangle {
         received-requests: root.friends-received-requests;
         sent-requests: root.friends-sent-requests;
         private-requests: root.friends-private-requests;
+        group-invites: root.friends-group-invites;
         blocked-users: root.friends-blocked-users;
         loading: root.friends-loading;
         // Friend code (privacy-first discovery)
@@ -1479,6 +1483,12 @@ export component App inherits Rectangle {
         }
         block-private-request(conversation-id) => {
             root.friends-block-private-request(conversation-id);
+        }
+        accept-group-invite(group-id) => {
+            root.friends-accept-group-invite(group-id);
+        }
+        decline-group-invite(group-id) => {
+            root.friends-decline-group-invite(group-id);
         }
     }
 

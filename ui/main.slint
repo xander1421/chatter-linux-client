@@ -348,6 +348,7 @@ export component MainWindow inherits Window {
     in property <[FriendRequestData]> friends-received-requests <=> app.friends-received-requests;
     in property <[FriendRequestData]> friends-sent-requests <=> app.friends-sent-requests;
     in property <[FriendRequestData]> friends-private-requests <=> app.friends-private-requests;
+    in property <[FriendRequestData]> friends-group-invites <=> app.friends-group-invites;
     in property <[BlockedUserData]> friends-blocked-users <=> app.friends-blocked-users;
     in property <bool> friends-loading <=> app.friends-loading;
     // Pending message requests count (for sidebar badge)
@@ -569,6 +570,8 @@ export component MainWindow inherits Window {
     callback friends-accept-private-request <=> app.friends-accept-private-request;
     callback friends-decline-private-request <=> app.friends-decline-private-request;
     callback friends-block-private-request <=> app.friends-block-private-request;
+    callback friends-accept-group-invite <=> app.friends-accept-group-invite;
+    callback friends-decline-group-invite <=> app.friends-decline-group-invite;
     // Message requests (anon DM)
     callback message-requests-clicked <=> app.message-requests-clicked;
     callback forward-message <=> app.forward-message;

@@ -63,10 +63,11 @@ export component FriendsModal inherits Rectangle {
     in property <bool> search-loading: false;
 
     // Requests tab data
-    in-out property <string> requests-sub-tab: "received";  // "received", "sent", or "private"
+    in-out property <string> requests-sub-tab: "received";  // "received", "sent", "private", or "groups"
     in property <[FriendRequestData]> received-requests: [];
     in property <[FriendRequestData]> sent-requests: [];
     in property <[FriendRequestData]> private-requests: [];  // Anonymous DM requests
+    in property <[FriendRequestData]> group-invites: [];     // Pending anonymous group invites
 
     // Blocked tab data
     in property <[BlockedUserData]> blocked-users: [];
@@ -110,6 +111,10 @@ export component FriendsModal inherits Rectangle {
     callback accept-private-request(string);   // conversation_id
     callback decline-private-request(string);  // conversation_id
     callback block-private-request(string);    // conversation_id
+
+    // Group invite actions
+    callback accept-group-invite(string);      // group_id
+    callback decline-group-invite(string);     // group_id
 
     // Blocked actions
     callback unblock-user(string);    // user_id
@@ -710,6 +715,39 @@ export component FriendsModal inherits Rectangle {
                                 }
                             }
                         }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: groups-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
+
+                            VerticalLayout {
+                                HorizontalLayout {
+                                    alignment: center;
+                                    vertical-stretch: 1;
+
+                                    Text {
+                                        text: "Groups (" + root.group-invites.length + ")";
+                                        color: root.requests-sub-tab == "groups" ? Colors.text-primary : Colors.text-secondary;
+                                        font-size: Typography.xs;
+                                        font-weight: root.requests-sub-tab == "groups" ? Typography.semibold : Typography.normal;
+                                    }
+                                }
+
+                                Rectangle {
+                                    height: 2px;
+                                    background: root.requests-sub-tab == "groups" ? Colors.primary : transparent;
+                                }
+                            }
+
+                            groups-tab-touch := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.requests-sub-tab = "groups";
+                                }
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -1006,6 +1044,138 @@ export component FriendsModal inherits Rectangle {
 
                                                 clicked => {
                                                     root.block-private-request(request.user-id);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Group invites (anonymous group invitations)
+                    if root.requests-sub-tab == "groups": Rectangle {
+                        vertical-stretch: 1;
+
+                        if root.group-invites.length == 0: VerticalLayout {
+                            alignment: center;
+                            spacing: Spacing.sm;
+
+                            Text {
+                                text: "\u{1F6E1}";  // Shield emoji
+                                font-size: 48px;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "No pending group invites";
+                                color: Colors.text-muted;
+                                font-size: Typography.base;
+                                horizontal-alignment: center;
+                            }
+
+                            Text {
+                                text: "Group invites use end-to-end encryption\nwith anonymous mailboxes";
+                                color: Colors.text-muted.with-alpha(0.7);
+                                font-size: Typography.sm;
+                                horizontal-alignment: center;
+                            }
+                        }
+
+                        if root.group-invites.length > 0: Flickable {
+                            viewport-height: group-invite-list.preferred-height;
+
+                            group-invite-list := VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                for invite in root.group-invites: Rectangle {
+                                    height: 72px;
+                                    background: gi-touch.has-hover ? Colors.surface-hover : transparent;
+                                    border-radius: Spacing.radius-md;
+
+                                    gi-touch := TouchArea {}
+
+                                    HorizontalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.sm;
+
+                                        // Shield icon for group
+                                        Rectangle {
+                                            width: 40px;
+                                            height: 40px;
+                                            border-radius: 20px;
+                                            background: #9333ea33;
+
+                                            Text {
+                                                text: "\u{1F6E1}";  // Shield
+                                                font-size: 20px;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                                width: 100%;
+                                                height: 100%;
+                                            }
+                                        }
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            alignment: center;
+                                            spacing: 2px;
+
+                                            HorizontalLayout {
+                                                spacing: Spacing.xs;
+
+                                                Text {
+                                                    text: invite.display-name;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: Typography.medium;
+                                                    overflow: elide;
+                                                }
+
+                                                Rectangle {
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    border-radius: 8px;
+                                                    background: #9333ea33;
+
+                                                    Text {
+                                                        text: "\u{1F6E1}";
+                                                        font-size: 8px;
+                                                        horizontal-alignment: center;
+                                                        vertical-alignment: center;
+                                                        width: 100%;
+                                                        height: 100%;
+                                                    }
+                                                }
+                                            }
+
+                                            // Inviter info (stored in username field)
+                                            if invite.username != "": Text {
+                                                text: "Invited by " + invite.username;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                        }
+
+                                        HorizontalLayout {
+                                            spacing: Spacing.xs;
+                                            alignment: center;
+
+                                            Button {
+                                                text: "Join";
+                                                variant: "primary";
+
+                                                clicked => {
+                                                    root.accept-group-invite(invite.user-id);
+                                                }
+                                            }
+
+                                            Button {
+                                                text: "Decline";
+                                                variant: "ghost";
+
+                                                clicked => {
+                                                    root.decline-group-invite(invite.user-id);
                                                 }
                                             }
                                         }
