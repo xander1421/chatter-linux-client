@@ -487,7 +487,7 @@ export component MessageItem inherits Rectangle {
 
                         // Link preview card
                         if root.has-link-preview: Rectangle {
-                            max-width: 300px;
+                            max-width: min(300px, root.width * 0.7);
                             background: root.is-own ? #00000015 : Colors.surface;
                             border-radius: Spacing.radius-sm;
                             border-width: 1px;
@@ -525,7 +525,7 @@ export component MessageItem inherits Rectangle {
                                         font-size: Typography.sm;
                                         font-weight: Typography.medium;
                                         wrap: word-wrap;
-                                        max-width: root.link-preview.has-image ? 200px : 280px;
+                                        max-width: root.link-preview.has-image ? min(200px, root.width * 0.5) : min(280px, root.width * 0.65);
                                     }
 
                                     // Description
@@ -535,7 +535,7 @@ export component MessageItem inherits Rectangle {
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
                                         overflow: elide;
-                                        max-width: root.link-preview.has-image ? 200px : 280px;
+                                        max-width: root.link-preview.has-image ? min(200px, root.width * 0.5) : min(280px, root.width * 0.65);
                                     }
                                 }
 
@@ -572,7 +572,7 @@ export component MessageItem inherits Rectangle {
                                 // Image attachments
                                 if attachment.is-image: Rectangle {
                                     property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.5;
-                                    property <length> max-w: 280px;
+                                    property <length> max-w: min(280px, root.width * 0.7 - Spacing.md);
                                     property <length> max-h: 380px;
                                     property <length> calc-w: aspect-ratio >= 1 ? min(max-w, attachment.width * 1px) : min(max-h * aspect-ratio, attachment.width * 1px);
                                     property <length> calc-h: aspect-ratio >= 1 ? min(max-h, calc-w / aspect-ratio) : min(max-h, attachment.height * 1px);
@@ -729,7 +729,7 @@ export component MessageItem inherits Rectangle {
                                 // Video attachments
                                 if attachment.category == "video": Rectangle {
                                     property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.6;
-                                    property <length> max-w: 280px;
+                                    property <length> max-w: min(280px, root.width * 0.7 - Spacing.md);
                                     property <length> max-h: 220px;
                                     property <length> calc-w: aspect-ratio >= 1 ? min(max-w, attachment.width * 1px) : min(max-h * aspect-ratio, attachment.width * 1px);
                                     property <length> calc-h: aspect-ratio >= 1 ? min(max-h, calc-w / aspect-ratio) : min(max-h, attachment.height * 1px);
@@ -800,7 +800,7 @@ export component MessageItem inherits Rectangle {
 
                                 // File attachments
                                 if !attachment.is-image && attachment.category != "audio" && attachment.category != "video": Rectangle {
-                                    width: 240px;
+                                    width: min(240px, root.width * 0.7 - Spacing.md);
                                     height: 52px;
                                     background: Colors.surface;
                                     border-radius: Spacing.radius-sm;

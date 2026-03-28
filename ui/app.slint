@@ -2035,6 +2035,7 @@ export component App inherits Rectangle {
         show: root.mention-autocomplete-visible;
         suggestions: root.mention-suggestions;
         selected-index: root.mention-selected-index;
+        max-popup-width: min(240px, root.width - 32px);
         // Position above the composer
         x: root.sidebar-hidden ? 16px : (root.sidebar-collapsed ? 80px : 280px);
         y: root.height - 80px - (Math.min(root.mention-suggestions.length, 8) * 40px + 16px);

@@ -31,8 +31,9 @@ export component MentionAutocomplete inherits Rectangle {
     visible: root.show;
     opacity: root.show ? 1 : 0;
 
-    // Compact popup - width fixed, height based on suggestions
-    width: 240px;
+    // Compact popup - responsive width, height based on suggestions
+    in property <length> max-popup-width: 240px;
+    width: root.max-popup-width;
     height: Math.min(suggestions.length, 8) * 40px + Spacing.sm * 2;
     background: Colors.surface;
     border-radius: Spacing.radius-lg;

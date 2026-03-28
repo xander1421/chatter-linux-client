@@ -184,7 +184,7 @@ export component EmojiPicker inherits Rectangle {
         // Emoji grid
         Flickable {
             vertical-stretch: 1;
-            viewport-height: Math.ceil(root.emoji-list.length / 6) * 36px;
+            viewport-height: Math.ceil(root.emoji-list.length / 6) * 44px;
 
             // Grid container
             Rectangle {
@@ -195,10 +195,10 @@ export component EmojiPicker inherits Rectangle {
                     property <int> grid-row: Math.floor(index / 6);
                     property <int> grid-col: mod(index, 6);
 
-                    x: grid-col * 42px + 3px;
-                    y: grid-row * 36px;
-                    width: 36px;
-                    height: 36px;
+                    x: grid-col * 46px + 1px;
+                    y: grid-row * 44px;
+                    width: 44px;
+                    height: 44px;
                     border-radius: Spacing.radius-sm;
                     background: emoji-area.has-hover ? Colors.surface-hover : transparent;
 
