@@ -167,25 +167,15 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            // Spawn background thread with its own tokio runtime (energy-monitor pattern).
-            // Each async operation gets a fresh runtime that can drive I/O independently.
-            std::thread::spawn(move || {
-                tracing::info!("Register: background thread started, creating runtime...");
-                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-                tracing::info!("Register: runtime created, entering block_on...");
-                rt.block_on(async {
-                    tracing::info!("Register: inside block_on, checking connection...");
-
-                // Test raw TCP first
-                tracing::info!("Register: testing raw TCP to server...");
-                match tokio::net::TcpStream::connect("192.168.0.7:50051").await {
-                    Ok(_) => tracing::info!("Register: raw TCP connect SUCCESS"),
-                    Err(e) => tracing::error!("Register: raw TCP connect FAILED: {}", e),
-                }
-
+            // Spawn on the main tokio runtime so that tasks spawned by client.start()
+            // (inbox provider, channel streams, etc.) live on the long-lived runtime
+            // instead of a temporary one that would be dropped after registration.
+            // Using a temporary Runtime::new() + block_on here was the root cause of
+            // GRA-215: the inbox polling task was silently killed when the temporary
+            // runtime was dropped.
+            crate::rt_handle().spawn(async move {
                 // Connect if needed
                 if !ui_ctx.auth().is_connected() {
-                    tracing::info!("Register: not connected, calling grpc connect()...");
                     if let Err(e) = ui_ctx.auth().connect().await {
                         let error_msg = format!("Failed to connect: {}", e);
                         let _ = slint::invoke_from_event_loop(move || {
@@ -275,8 +265,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         });
                     }
                 }
-                }); // block_on
-            }); // thread::spawn
+                }); // rt_handle().spawn
         },
     );
 }
