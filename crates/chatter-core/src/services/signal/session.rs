@@ -43,13 +43,16 @@ impl SignalService {
         locks.entry(recipient_key.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
     }
 
-    /// Establish a session with a remote recipient if one doesn't exist.
+    /// Establish a session with a remote recipient if one doesn't exist or is unusable.
     ///
-    /// **Important**: This checks if a session already exists before fetching prekeys.
-    /// If we already have a session (e.g., from receiving a message from this peer),
+    /// **Important**: This checks if a usable session already exists before fetching prekeys.
+    /// If we already have a valid session (e.g., from receiving a message from this peer),
     /// we reuse it rather than creating a new one. This is critical for the bootstrap
     /// protocol where one party receives a PreKey message and should use that session
     /// for the response, not fetch new prekeys.
+    ///
+    /// Sessions that are structurally corrupted (fail to serialize) are treated as
+    /// non-existent and trigger fresh prekey bundle fetch.
     pub async fn ensure_session(
         &self,
         auth_client: &mut AuthClient,
@@ -59,22 +62,22 @@ impl SignalService {
         let device_id_struct = DeviceId::try_from(device_id).map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
-        // Check if we already have a session with this peer
-        // This happens when we've received a message from them (e.g., bootstrap MESSAGE)
+        // Check if we already have a usable session with this peer
+        // has_session now validates structural integrity (not just existence)
         if self.actor.has_session(address.clone()).await? {
             tracing::debug!(
                 recipient = %recipient_id,
                 device_id,
-                "Session already exists, skipping prekey fetch"
+                "Usable session already exists, skipping prekey fetch"
             );
             return Ok(());
         }
 
-        // No existing session - fetch prekey bundle from server
+        // No usable session — either doesn't exist or is corrupted
         tracing::debug!(
             recipient = %recipient_id,
             device_id,
-            "No session exists, fetching prekey bundle"
+            "No usable session exists, fetching prekey bundle"
         );
 
         let bundle_response = auth_client
@@ -293,12 +296,12 @@ impl SignalService {
                     };
                     let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
-                    // Check if session already exists
+                    // Check if a usable session already exists
                     if self.actor.has_session(address.clone()).await? {
                         tracing::debug!(
                             recipient = %recipient_id,
                             device_id,
-                            "Session already exists for device"
+                            "Usable session already exists for device"
                         );
                         established_device_ids.push(device_id);
                         continue;
@@ -457,12 +460,12 @@ impl SignalService {
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
-        // Check if we already have a session
+        // Check if we already have a usable session
         if self.actor.has_session(address.clone()).await? {
             tracing::debug!(
                 recipient = %recipient_id,
                 device_id,
-                "Session already exists, skipping bundle processing"
+                "Usable session already exists, skipping bundle processing"
             );
             return Ok(());
         }
@@ -540,10 +543,13 @@ impl SignalService {
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);
 
-        // Verify session exists (should have been established with anonymous bundle)
+        // Verify a usable session exists (should have been established with anonymous bundle)
         if !self.actor.has_session(address.clone()).await? {
-            return Err(ServiceError::Validation(
-                "No session exists - call ensure_session_with_bundle first".into(),
+            return Err(ServiceError::Crypto(
+                crate::error::CryptoError::SessionUnusable {
+                    address: format!("{}:{}", recipient_id, device_id),
+                    reason: "no usable session — call ensure_session_with_bundle first".into(),
+                },
             ));
         }
 

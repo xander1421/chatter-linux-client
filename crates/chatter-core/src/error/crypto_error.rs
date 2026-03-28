@@ -46,6 +46,19 @@ pub enum CryptoError {
     #[error("session not found for {0}")]
     SessionNotFound(String),
 
+    /// Session exists but is not usable (expired, corrupted, or invalid state).
+    #[error("session unusable for {address}: {reason}")]
+    SessionUnusable {
+        /// The remote address.
+        address: String,
+        /// Why the session is unusable.
+        reason: String,
+    },
+
+    /// Session has exceeded MAXSEND age and cannot be used for sending.
+    #[error("session expired (MAXSEND) for {0}")]
+    SessionExpired(String),
+
     /// Encryption operation failed.
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),

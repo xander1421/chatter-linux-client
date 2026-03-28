@@ -410,7 +410,25 @@ impl SignalActorHandle {
                             let session_key = format!("{}:{}", address.name(), address.device_id());
                             let res = store.key_store().load_session(&session_key)
                                 .map_err(ServiceError::Storage)
-                                .map(|s| s.is_some());
+                                .and_then(|s| {
+                                    match s {
+                                        Some(bytes) => {
+                                            // Validate session is structurally intact
+                                            match SessionRecord::deserialize(&bytes) {
+                                                Ok(_) => Ok(true),
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        address = %address,
+                                                        error = %e,
+                                                        "Session exists but is corrupted"
+                                                    );
+                                                    Ok(false)
+                                                }
+                                            }
+                                        }
+                                        None => Ok(false),
+                                    }
+                                });
                             let _ = response.send(res);
                         }
 

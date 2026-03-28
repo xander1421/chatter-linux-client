@@ -536,7 +536,7 @@ impl IncrementalMacVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::attachment_crypto::AttachmentCrypto;
+    use crate::crypto::attachment_crypto::{AttachmentCrypto, INCREMENTAL_MAC_CHUNK_SIZE};
     use std::io::Cursor;
 
     #[test]

@@ -110,6 +110,51 @@ impl SessionManager {
         Ok(exists)
     }
 
+    /// Check if a session exists AND is usable (can be serialized/deserialized).
+    ///
+    /// This goes beyond `has_session()` by validating that the session record
+    /// is structurally intact. A session that exists but fails to serialize
+    /// is considered unusable.
+    pub async fn is_session_usable<S: SessionStore>(
+        store: &S,
+        remote_address: &ProtocolAddress,
+    ) -> Result<bool, CryptoError> {
+        let session = store
+            .load_session(remote_address)
+            .await
+            .map_err(|e| CryptoError::Protocol(e.to_string()))?;
+
+        match session {
+            Some(record) => {
+                // Validate: can the session be round-tripped?
+                match record.serialize() {
+                    Ok(bytes) => {
+                        match SessionRecord::deserialize(&bytes) {
+                            Ok(_) => Ok(true),
+                            Err(e) => {
+                                tracing::warn!(
+                                    address = %remote_address,
+                                    error = %e,
+                                    "SessionManager: session exists but is corrupted (deserialize failed)"
+                                );
+                                Ok(false)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            address = %remote_address,
+                            error = %e,
+                            "SessionManager: session exists but is corrupted (serialize failed)"
+                        );
+                        Ok(false)
+                    }
+                }
+            }
+            None => Ok(false),
+        }
+    }
+
     /// Get the session record for a remote address.
     ///
     /// Returns `None` if no session exists.
