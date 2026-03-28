@@ -69,6 +69,22 @@ pub mod keys {
     /// Default: true (show "New message" without sender)
     pub const NOTIFICATION_SHOW_FOR_SEALED: &str = "notification.show_for_sealed";
 
+    // OIDC authentication
+    /// Whether the current session uses OIDC (vs password-based Signal auth)
+    pub const OIDC_SESSION: &str = "auth.oidc_session";
+    /// OIDC access token (JWT)
+    pub const OIDC_ACCESS_TOKEN: &str = "auth.oidc_access_token";
+    /// OIDC refresh token
+    pub const OIDC_REFRESH_TOKEN: &str = "auth.oidc_refresh_token";
+    /// OIDC ID token (JWT with user claims)
+    pub const OIDC_ID_TOKEN: &str = "auth.oidc_id_token";
+    /// OIDC token expiry (Unix timestamp seconds)
+    pub const OIDC_EXPIRES_AT: &str = "auth.oidc_expires_at";
+    /// OIDC issuer URL
+    pub const OIDC_ISSUER_URL: &str = "auth.oidc_issuer_url";
+    /// OIDC client ID
+    pub const OIDC_CLIENT_ID: &str = "auth.oidc_client_id";
+
     // Local AI settings
     pub const LOCAL_AI_ENABLED: &str = "local_ai.enabled";
     pub const LOCAL_AI_MODEL_ID: &str = "local_ai.model_id";
@@ -104,7 +120,7 @@ impl SettingsRepository {
     ///
     /// Returns `None` if the key doesn't exist.
     pub fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, StorageError> {
-        let conn = self.db.connection()?;
+        let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
 
         let result: Result<String, _> = stmt.query_row(params![key], |row| row.get(0));

@@ -56,6 +56,8 @@ pub mod anon_group;
 pub mod anon_dm;
 pub mod svr_backup_service;
 pub mod jarvis;
+#[cfg(not(target_os = "android"))]
+pub mod oidc_service;
 
 // Re-exports for DM bootstrap service
 pub use dm_bootstrap_service::{DmBootstrapError, DmBootstrapService};

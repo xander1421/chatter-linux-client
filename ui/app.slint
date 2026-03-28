@@ -490,6 +490,7 @@ export component App inherits Rectangle {
     callback go-to-register();
     callback go-to-login();
     callback go-to-recovery();
+    callback sso-login(string, string, string);
 
     // Welcome page callbacks
     callback welcome-add-friends();
@@ -742,6 +743,7 @@ export component App inherits Rectangle {
 
         // Login page
         if current-view == "login": LoginPage {
+        sso-login(server-url, issuer-url, client-id) => { root.sso-login(server-url, issuer-url, client-id); }
             username <=> root.login-username;
             password <=> root.login-password;
             pin <=> root.login-pin;

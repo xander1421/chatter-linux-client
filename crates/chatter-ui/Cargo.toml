@@ -56,6 +56,7 @@ reqwest = { version = "0.12", features = ["rustls-tls", "json", "blocking"] }
 mime_guess = "2"
 # once_cell + lazy_static removed — migrated to std::sync::LazyLock
 zeroize = { version = "1.8", features = ["derive"] }
+open = "5"
 arboard = { version = "3", features = ["wayland-data-control"], optional = true }
 
 # ============================================================================

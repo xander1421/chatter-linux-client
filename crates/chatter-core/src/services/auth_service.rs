@@ -138,10 +138,10 @@ pub struct AuthService {
     identity_manager: Arc<IdentityKeyManager>,
     prekey_manager: Arc<PreKeyManager>,
     user_repo: Arc<UserRepository>,
-    settings_repo: Arc<SettingsRepository>,
+    pub(crate) settings_repo: Arc<SettingsRepository>,
     #[allow(dead_code)] // Reserved for future key management operations
     key_store: Arc<KeyStore>,
-    auth_interceptor: AuthInterceptor,
+    pub(crate) auth_interceptor: AuthInterceptor,
     org_state: OrgState,
 }
 
@@ -299,11 +299,28 @@ impl AuthService {
 
     /// Restore the authentication session from saved credentials.
     ///
-    /// Loads the user ID, device ID, profile key, and auth token from encrypted settings
-    /// and configures the auth interceptor. This must be called on application startup.
+    /// Handles both password-based (Basic auth) and OIDC (Bearer token) sessions.
+    /// Loads credentials from encrypted settings and configures the auth interceptor.
+    /// This must be called on application startup.
     ///
     /// Returns true if a session was successfully restored.
     pub fn restore_session(&self) -> bool {
+        // Check if this is an OIDC session
+        let is_oidc = self.settings_repo
+            .get::<bool>(keys::OIDC_SESSION)
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+
+        if is_oidc {
+            return self.restore_oidc_session();
+        }
+
+        self.restore_password_session()
+    }
+
+    /// Restore a password-based (Basic auth) session.
+    fn restore_password_session(&self) -> bool {
         let user_id_str = match self.settings_repo.get_string(keys::CURRENT_USER_ID) {
             Ok(Some(id)) => id,
             _ => return false,
@@ -352,7 +369,43 @@ impl AuthService {
         tracing::info!(
             user_id = %user_id_str,
             device_id = %device_id,
-            "Restored authentication session"
+            "Restored password authentication session"
+        );
+
+        true
+    }
+
+    /// Restore an OIDC (Bearer token) session.
+    fn restore_oidc_session(&self) -> bool {
+        let user_id_str = match self.settings_repo.get_string(keys::CURRENT_USER_ID) {
+            Ok(Some(id)) => id,
+            _ => return false,
+        };
+
+        let access_token = match self.settings_repo.get_string(keys::OIDC_ACCESS_TOKEN) {
+            Ok(Some(token)) => token,
+            _ => return false,
+        };
+
+        // Check if token is expired
+        if let Ok(Some(expires_at)) = self.settings_repo.get::<u64>(keys::OIDC_EXPIRES_AT) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if now >= expires_at {
+                tracing::warn!("OIDC token expired, cannot restore session (refresh needed)");
+                return false;
+            }
+        }
+
+        // Configure auth interceptor for Bearer auth
+        use crate::network::grpc::interceptors::AuthMode;
+        self.auth_interceptor.set_mode(AuthMode::Bearer(access_token));
+
+        tracing::info!(
+            user_id = %user_id_str,
+            "Restored OIDC authentication session"
         );
 
         true
@@ -367,6 +420,12 @@ impl AuthService {
     /// 4. Server authentication
     /// 5. Local state persistence
     /// 6. Auth interceptor configuration
+    /// Get current identity (for OIDC clients).
+    pub async fn get_my_identity(&self) -> Result<crate::proto::chat_v1::GetMyIdentityResponse, AuthError> {
+        let mut client = self.try_auth_client().ok_or(AuthError::NotLoggedIn)?;
+        client.get_my_identity().await.map_err(AuthError::Network)
+    }
+
     pub async fn login(
         &self,
         auth_client: &mut AuthClient,
