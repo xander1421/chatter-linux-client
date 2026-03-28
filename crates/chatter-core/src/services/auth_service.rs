@@ -990,6 +990,7 @@ impl AuthService {
         // Remove sender certificate if any
         let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE);
         let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE_REFRESH_AFTER);
+        let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE_SERVER_KEY_ID);
 
         // Clear auth interceptor
         self.auth_interceptor.clear();

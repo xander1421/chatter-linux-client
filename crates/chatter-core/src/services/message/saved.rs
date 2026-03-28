@@ -131,7 +131,7 @@ impl MessageService {
 
             let sealed = SealedSenderMessage {
                 sealed_body: ciphertext.clone(),
-                server_key_id: 0,
+                server_key_id: self.signal_service.get_server_key_id(),
                 timestamp: now,
             };
 

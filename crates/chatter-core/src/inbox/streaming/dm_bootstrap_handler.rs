@@ -399,7 +399,7 @@ async fn handle_bootstrap_request_async(
 
     let sealed_msg = SealedSenderMessage {
         sealed_body: sealed_ciphertext,
-        server_key_id: 1,
+        server_key_id: signal_service.get_server_key_id(),
         timestamp: TimestampNanos::now().as_u64(),
     };
 

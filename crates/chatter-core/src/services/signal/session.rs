@@ -205,6 +205,7 @@ impl SignalService {
         let cert_b64 = base64::engine::general_purpose::STANDARD.encode(&proto_cert.certificate);
         let _ = self.settings_repo.set(keys::SENDER_CERTIFICATE, &cert_b64);
         let _ = self.settings_repo.set(keys::SENDER_CERTIFICATE_REFRESH_AFTER, &cert_response.refresh_after);
+        let _ = self.settings_repo.set(keys::SENDER_CERTIFICATE_SERVER_KEY_ID, &proto_cert.server_key_id);
 
         Ok(sender_cert)
     }
@@ -506,6 +507,18 @@ impl SignalService {
         }
 
         Ok(None)
+    }
+
+    /// Get the cached server key ID from the sender certificate.
+    ///
+    /// Returns the server_key_id that was cached when the sender certificate
+    /// was fetched. Falls back to 1 if not yet cached (pre-first-fetch).
+    pub fn get_server_key_id(&self) -> u32 {
+        self.settings_repo
+            .get::<u32>(keys::SENDER_CERTIFICATE_SERVER_KEY_ID)
+            .ok()
+            .flatten()
+            .unwrap_or(1)
     }
 
     /// Encrypt a message anonymously (using cached sender cert, no auth requests).

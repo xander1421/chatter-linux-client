@@ -238,10 +238,15 @@ impl AnonDmService {
             .expect("Time should be after Unix epoch")
             .as_nanos() as u64;
 
+        let server_key_id = self.settings_repo
+            .get::<u32>(crate::storage::repositories::settings_repo::keys::SENDER_CERTIFICATE_SERVER_KEY_ID)
+            .ok()
+            .flatten()
+            .unwrap_or(1);
         let sealed_message = SealedSenderMessage {
             sealed_body: ecies_message.to_bytes(),
             timestamp: timestamp_nanos,
-            server_key_id: 1,
+            server_key_id,
         };
 
         // Use envelope_type=4 (ECIES_INIT) so receiver knows to use HPKE decryption

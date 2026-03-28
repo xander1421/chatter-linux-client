@@ -42,9 +42,19 @@ impl AnonDmService {
         let send_token = self.get_or_request_token().await?;
 
         // Build SealedSenderMessage
+        let server_key_id = self.settings_repo
+            .get::<u32>(crate::storage::repositories::settings_repo::keys::SENDER_CERTIFICATE_SERVER_KEY_ID)
+            .ok()
+            .flatten()
+            .unwrap_or(1);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Time should be after Unix epoch")
+            .as_nanos() as u64;
         let sealed_message = SealedSenderMessage {
             sealed_body: ciphertext,
-            ..Default::default()
+            server_key_id,
+            timestamp,
         };
 
         // Send to device inbox using ANONYMOUS client (no auth headers)

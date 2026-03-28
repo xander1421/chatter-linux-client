@@ -87,7 +87,7 @@ impl MessageService {
                             // Create SealedSenderMessage proto
                             let sealed_message = SealedSenderMessage {
                                 sealed_body: sealed_bytes,
-                                server_key_id: 1,
+                                server_key_id: self.signal_service.get_server_key_id(),
                                 timestamp,
                             };
 
@@ -240,7 +240,7 @@ impl MessageService {
         // Send via sealed sender
         let sealed_message = SealedSenderMessage {
             sealed_body: sealed_bytes,
-            server_key_id: 1,
+            server_key_id: self.signal_service.get_server_key_id(),
             timestamp,
         };
 
@@ -350,7 +350,7 @@ impl MessageService {
                             // Create SealedSenderMessage proto
                             let sealed_message = SealedSenderMessage {
                                 sealed_body: sealed_bytes,
-                                server_key_id: 1,
+                                server_key_id: self.signal_service.get_server_key_id(),
                                 timestamp,
                             };
 
@@ -494,7 +494,7 @@ impl MessageService {
         // Create SealedSenderMessage proto
         let sealed_message = SealedSenderMessage {
             sealed_body: sealed_bytes,
-            server_key_id: 1,
+            server_key_id: self.signal_service.get_server_key_id(),
             timestamp,
         };
 
@@ -587,7 +587,7 @@ impl MessageService {
         // Create SealedSenderMessage proto
         let sealed_message = SealedSenderMessage {
             sealed_body: sealed_bytes,
-            server_key_id: 1,
+            server_key_id: self.signal_service.get_server_key_id(),
             timestamp,
         };
 

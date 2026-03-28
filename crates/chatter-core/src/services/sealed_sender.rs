@@ -98,7 +98,7 @@ impl SealedSenderService {
         // 3. Build sealed sender message
         let sealed_message = SealedSenderMessage {
             sealed_body: sealed_bytes,
-            server_key_id: 1,
+            server_key_id: self.signal_service.get_server_key_id(),
             timestamp,
         };
 
