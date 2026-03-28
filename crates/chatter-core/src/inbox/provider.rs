@@ -421,14 +421,14 @@ impl DeviceInboxProvider {
             timing.delay_before_poll().await;
 
             // 1. Poll device inbox for regular messages
-            tracing::debug!(cycle = poll_cycle, "Polling device inbox...");
+            tracing::info!(cycle = poll_cycle, "Polling device inbox...");
             match poller.run_once().await {
                 Ok(Some(messages)) => {
                     let count = messages.len();
                     if count > 0 {
                         tracing::info!(cycle = poll_cycle, count, "Device inbox: received messages");
                     } else {
-                        tracing::debug!(cycle = poll_cycle, "Device inbox: empty");
+                        tracing::info!(cycle = poll_cycle, "Device inbox: empty");
                     }
                     for msg in messages {
                         process_device_message(

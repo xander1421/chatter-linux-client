@@ -33,6 +33,9 @@ pub struct InboxPoller {
     // For device queue, we use queue_id (int64) for pagination, not string
     last_queue_id: RwLock<i64>,
     last_activity: RwLock<Option<Instant>>,
+    /// Whether the first poll has been performed yet.
+    /// The first poll should be immediate (no interval wait).
+    first_poll_done: RwLock<bool>,
 }
 
 impl InboxPoller {
@@ -63,6 +66,7 @@ impl InboxPoller {
             state,
             last_queue_id: RwLock::new(0),
             last_activity: RwLock::new(None),
+            first_poll_done: RwLock::new(false),
         }
     }
 
@@ -78,24 +82,38 @@ impl InboxPoller {
             return Ok(None);
         }
 
-        // Wait for the appropriate interval
-        let interval = self.current_interval();
-        let mut shutdown_rx = self.shutdown_rx.clone();
+        // First poll is immediate — don't wait for interval.
+        // After registration, messages may already be queued.
+        let is_first = {
+            let mut first = self.first_poll_done.write();
+            if !*first {
+                *first = true;
+                true
+            } else {
+                false
+            }
+        };
 
-        tokio::select! {
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
-                    return Ok(None);
+        if !is_first {
+            // Wait for the appropriate interval
+            let interval = self.current_interval();
+            let mut shutdown_rx = self.shutdown_rx.clone();
+
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        return Ok(None);
+                    }
+                }
+                _ = tokio::time::sleep(interval) => {
+                    // Continue to poll
                 }
             }
-            _ = tokio::time::sleep(interval) => {
-                // Continue to poll
-            }
-        }
 
-        // Check shutdown again after sleep
-        if *self.shutdown_rx.borrow() {
-            return Ok(None);
+            // Check shutdown again after sleep
+            if *self.shutdown_rx.borrow() {
+                return Ok(None);
+            }
         }
 
         // Perform the poll
@@ -147,10 +165,10 @@ impl InboxPoller {
         // Poll for messages
         let after_id = *self.last_queue_id.read();
 
-        tracing::debug!(after_id, "Acquiring message client lock...");
+        tracing::info!(after_id, "Acquiring message client lock...");
         let response = {
             let mut client = self.message_client.lock().await;
-            tracing::debug!(after_id, "Calling GetDeviceMessages RPC...");
+            tracing::info!(after_id, "Calling GetDeviceMessages RPC...");
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(15),
                 client.get_device_messages(
@@ -161,7 +179,7 @@ impl InboxPoller {
             .await
             .map_err(|_| InboxError::PollFailed("GetDeviceMessages RPC timed out after 15s".into()))?
             .map_err(|e| InboxError::PollFailed(e.to_string()))?;
-            tracing::debug!(
+            tracing::info!(
                 after_id,
                 message_count = result.messages.len(),
                 has_more = result.has_more,
