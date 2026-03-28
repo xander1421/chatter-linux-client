@@ -250,7 +250,7 @@ pub fn message_to_display_data_with_replies(
             .iter()
             .map(|r| format!("{} {}", r.emoji, r.count))
             .collect::<Vec<_>>()
-            .join(" "),
+            .join("  "),
         sender_avatar_bytes: None,  // TODO: Add avatar support for anonymous groups
         sender_avatar_decoded: None,  // TODO: Add avatar support for anonymous groups
         reply_count,
@@ -353,7 +353,7 @@ pub fn anon_message_to_display_data(
             .iter()
             .map(|r| format!("{} {}", r.emoji, r.count))
             .collect::<Vec<_>>()
-            .join(" "),
+            .join("  "),
         reply_count: 0,
         reply_count_text: String::new(),
         is_thread_reply: false,
