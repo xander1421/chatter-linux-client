@@ -402,7 +402,10 @@ impl ConversationHandle {
                 }
             }
             ActiveConversation::AnonGroup(id) => {
-                match self.client.anon_groups().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                // Use timestamp-only lookup: the 3-field lookup (group_id + sender_id + sent_at)
+                // fails due to sender_id byte encoding mismatch between storage and lookup paths.
+                // Nanosecond timestamps are unique per group so timestamp-only is safe.
+                match self.client.anon_groups().get_message_by_timestamp(id, target_sent_timestamp) {
                     Ok(Some(msg)) => Ok(msg.as_text()),
                     Ok(None) => Ok(None),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
@@ -431,7 +434,7 @@ impl ConversationHandle {
                 }
             }
             ActiveConversation::AnonGroup(id) => {
-                match self.client.anon_groups().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                match self.client.anon_groups().get_message_by_timestamp(id, target_sent_timestamp) {
                     Ok(Some(msg)) => Ok(msg.attachment_ids()),
                     Ok(None) => Ok(vec![]),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
@@ -461,7 +464,9 @@ impl ConversationHandle {
                 }
             }
             ActiveConversation::AnonGroup(id) => {
-                match self.client.anon_groups().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
+                // Use timestamp-only lookup to avoid sender_id byte mismatch.
+                // Ownership is determined from the stored message's sender_id field.
+                match self.client.anon_groups().get_message_by_timestamp(id, target_sent_timestamp) {
                     Ok(Some(msg)) => Ok(Some(msg.sender_id) == current_user_id),
                     Ok(None) => Err(ConversationError::Other("Message not found".into())),
                     Err(e) => Err(ConversationError::Other(e.to_string())),

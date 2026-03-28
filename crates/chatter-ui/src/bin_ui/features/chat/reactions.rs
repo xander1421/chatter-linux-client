@@ -47,14 +47,20 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             return;
         }
 
-        let handle = ConversationHandle::current(&ui_ctx);
+        let handle = ConversationHandle::new(conversation.clone(), ui_ctx.clone());
         let weak = weak_window.clone();
 
         tokio::spawn(async move {
             if let Err(e) = handle.send_reaction(
                 &emoji_str, &sender_id_str, target_sent_timestamp, false,
             ).await {
-                tracing::error!(error = %e, "Failed to send reaction");
+                tracing::error!(
+                    error = %e,
+                    conversation_type = ?conversation,
+                    sender_id = %sender_id_str,
+                    timestamp = target_sent_timestamp,
+                    "Failed to send reaction"
+                );
                 return;
             }
 

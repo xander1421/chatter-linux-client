@@ -727,6 +727,9 @@ impl AnonGroupRepository {
     ///
     /// This is used for context menu operations, reactions, delete, pin, etc.
     /// Messages are identified by (sender_id, sent_at) tuple per Signal Protocol.
+    ///
+    /// Note: For anon group lookups, prefer `get_message_by_timestamp` which
+    /// avoids sender_id byte encoding mismatches between storage and lookup paths.
     pub fn get_message_by_sender_timestamp(
         &self,
         group_id: &AnonGroupId,
@@ -753,7 +756,25 @@ impl AnonGroupRepository {
 
         match result {
             Ok(msg) => Ok(Some(msg)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                // Diagnostic: check if the message exists without sender_id filter
+                let ts_result = conn.query_row(
+                    "SELECT sender_id FROM anon_group_messages WHERE group_id = ?1 AND sent_at = ?2 AND is_deleted = 0 LIMIT 1",
+                    params![group_id.as_bytes().as_slice(), timestamp_ns as i64],
+                    |row| row.get::<_, Vec<u8>>(0),
+                );
+                if let Ok(stored_sender_bytes) = ts_result {
+                    let query_bytes = sender_id.as_bytes().as_slice();
+                    tracing::warn!(
+                        group_id = %group_id,
+                        query_sender_hex = %hex::encode(query_bytes),
+                        stored_sender_hex = %hex::encode(&stored_sender_bytes),
+                        timestamp_ns,
+                        "get_message_by_sender_timestamp: sender_id mismatch — message exists but sender_id bytes differ"
+                    );
+                }
+                Ok(None)
+            }
             Err(e) => Err(StorageError::Database(e)),
         }
     }
