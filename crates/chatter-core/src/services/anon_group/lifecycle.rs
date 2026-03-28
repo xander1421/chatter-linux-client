@@ -260,22 +260,46 @@ impl AnonGroupService {
             .try_into()
             .map_err(|_| AnonGroupError::InvalidData("Invalid private key length".to_string()))?;
 
-        // Register the mailbox with the server using the blind signature
+        // Register the mailbox with the server using the blind signature (ANONYMOUS - no auth headers)
+        // Retry on transient transport errors with channel disconnect to avoid stale HTTP/2 connections
         let ttl_seconds = 30 * 24 * 60 * 60; // 30 days in seconds
-        let mut mailbox_client =
-            self.grpc_pool.anonymous_mailbox_client();
-
-        let response = mailbox_client
-            .create_ephemeral_mailbox(
-                token.public_key.clone(),
-                token.signature.clone(),
-                ttl_seconds,
-                token.randomizer.clone().unwrap_or_default(),
-            )
-            .await
-            .map_err(|e| {
-                AnonGroupError::MessageError(format!("Failed to create mailbox on server: {}", e))
-            })?;
+        let mut last_err = None;
+        let mut response_result = None;
+        for attempt in 0..3u32 {
+            if attempt > 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(200 * (attempt as u64 + 1))).await;
+                tracing::info!(attempt = attempt + 1, "Retrying create_ephemeral_mailbox for group");
+            }
+            let mut mailbox_client = self.grpc_pool.anonymous_mailbox_client();
+            match mailbox_client
+                .create_ephemeral_mailbox(
+                    token.public_key.clone(),
+                    token.signature.clone(),
+                    ttl_seconds,
+                    token.randomizer.clone().unwrap_or_default(),
+                )
+                .await
+            {
+                Ok(resp) => {
+                    response_result = Some(resp);
+                    break;
+                }
+                Err(e) if e.is_retryable() => {
+                    tracing::warn!(attempt = attempt + 1, error = %e, "create_ephemeral_mailbox transient error, disconnecting stale channel and retrying");
+                    self.grpc_pool.disconnect();
+                    last_err = Some(e);
+                }
+                Err(e) => {
+                    return Err(AnonGroupError::MessageError(format!("Failed to create mailbox on server: {}", e)));
+                }
+            }
+        }
+        let response = response_result.ok_or_else(|| {
+            AnonGroupError::MessageError(format!(
+                "Failed to create mailbox on server after 3 attempts: {}",
+                last_err.map(|e| e.to_string()).unwrap_or_default()
+            ))
+        })?;
 
         tracing::info!(
             group_id = %group_id,
