@@ -1283,19 +1283,60 @@ impl InboxEventProcessor {
                 }
             }
 
-            // Persist ephemeral actions to anon group DB (UI handles display)
+            // Persist ephemeral actions to anon group DB and emit domain events for real-time UI
             Some(content::Content::Reaction(reaction)) => {
-                let svc = self.anon_group_service.clone();
+                let message_id = crate::domain::MessageId::from_timestamp(reaction.target_sent_timestamp);
+                let author_id = reaction.target_author_aci.parse().unwrap_or(peer_id);
+
                 if reaction.remove {
-                    let _ = svc.remove_reaction(&anon_group_id, reaction.target_sent_timestamp, &peer_id, &reaction.emoji);
+                    let _ = self.anon_group_service.remove_reaction(&anon_group_id, reaction.target_sent_timestamp, &peer_id, &reaction.emoji);
+                    self.event_bus.emit_domain(DomainEvent::ReactionRemoved {
+                        message_id,
+                        author_id,
+                        reactor_id: peer_id,
+                        emoji: reaction.emoji.clone(),
+                        timestamp: reaction.target_sent_timestamp,
+                    });
                 } else {
-                    let _ = svc.add_reaction(&anon_group_id, reaction.target_sent_timestamp, &peer_id, &reaction.emoji);
+                    let _ = self.anon_group_service.add_reaction(&anon_group_id, reaction.target_sent_timestamp, &peer_id, &reaction.emoji);
+                    self.event_bus.emit_domain(DomainEvent::ReactionAdded {
+                        message_id,
+                        author_id,
+                        reactor_id: peer_id,
+                        emoji: reaction.emoji.clone(),
+                        timestamp: reaction.target_sent_timestamp,
+                    });
                 }
             }
             Some(content::Content::Pin(pin)) => {
+                let new_pinned = !pin.unpin;
                 let _ = self.anon_group_service.set_message_pinned(
-                    &anon_group_id, pin.target_sent_timestamp, !pin.unpin,
+                    &anon_group_id, pin.target_sent_timestamp, new_pinned,
                 );
+
+                // Look up real message ID from DB for correct UI tracking
+                let message_id = self.anon_group_service
+                    .get_message_by_timestamp(&anon_group_id, pin.target_sent_timestamp)
+                    .ok().flatten()
+                    .and_then(|m| m.id.as_str().parse::<crate::domain::ids::MessageId>().ok())
+                    .unwrap_or_else(|| crate::domain::MessageId::from_timestamp(pin.target_sent_timestamp));
+                let channel_id: crate::domain::ChannelId = anon_group_id.into();
+
+                if pin.unpin {
+                    self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
+                        message_id,
+                        unpinner_id: peer_id,
+                        channel_id,
+                        target_sent_timestamp: pin.target_sent_timestamp,
+                    });
+                } else {
+                    self.event_bus.emit_domain(DomainEvent::MessagePinned {
+                        message_id,
+                        pinner_id: peer_id,
+                        channel_id,
+                        target_sent_timestamp: pin.target_sent_timestamp,
+                    });
+                }
             }
             Some(content::Content::Edit(edit)) => {
                 let new_text = edit.data_message.as_ref().map(|dm| dm.body.clone()).unwrap_or_default();
