@@ -643,14 +643,21 @@ impl CallSignalingService {
 
         let verification_emojis = Self::anon_verification_emojis(&pending.encryption_key, room_name);
 
-        Ok(AnonCallSetupResult {
+        let result = AnonCallSetupResult {
             room_name: room_name.to_string(),
             channel_id,
-            encryption_key: pending.encryption_key,
+            encryption_key: pending.encryption_key.clone(),
             verification_emojis,
             is_video: pending.is_video_call,
-            peer_display_name: pending.display_name,
-        })
+            peer_display_name: pending.display_name.clone(),
+        };
+
+        // Re-store pending call so end_anon_call can find it for hangup/history
+        let mut active_pending = pending;
+        active_pending.started_at = Some(chrono::Utc::now());
+        self.anon_dm_service.store_pending_anon_call(room_name.to_string(), active_pending);
+
+        Ok(result)
     }
 
     /// Handle an anonymous call answer (caller side): acquire token, join room, connect LiveKit.
@@ -664,6 +671,13 @@ impl CallSignalingService {
         callee_display_name: &str,
         call_worker: &CallWorkerHandle,
     ) -> Result<Option<AnonCallSetupResult>, CallSignalingError> {
+        // Skip if already in a call — this handles the callee's own echo coming
+        // back from the group mailbox, or duplicate answer events.
+        if call_worker.is_in_call().await {
+            tracing::debug!("Already in a call, skipping duplicate answer event");
+            return Ok(None);
+        }
+
         // Reconstruct room name from call_room_id
         let room_name = format!(
             "anon-{}",
@@ -762,14 +776,21 @@ impl CallSignalingService {
 
         let verification_emojis = Self::anon_verification_emojis(&pending.encryption_key, &pending.room_name);
 
-        Ok(Some(AnonCallSetupResult {
-            room_name: pending.room_name,
+        let result = AnonCallSetupResult {
+            room_name: pending.room_name.clone(),
             channel_id,
-            encryption_key: pending.encryption_key,
+            encryption_key: pending.encryption_key.clone(),
             verification_emojis,
             is_video: pending.is_video_call,
             peer_display_name: callee_display_name.to_string(),
-        }))
+        };
+
+        // Re-store pending call so end_anon_call can find it for hangup/history
+        let mut active_pending = pending;
+        active_pending.started_at = Some(chrono::Utc::now());
+        self.anon_dm_service.store_pending_anon_call(room_name.clone(), active_pending);
+
+        Ok(Some(result))
     }
 
     /// Decline an incoming anonymous call: send decline answer, store missed call history.
@@ -922,33 +943,58 @@ impl CallSignalingService {
     }
 
     /// End an active anonymous call: send hangup, store history, leave.
+    ///
+    /// Handles both anonymous DM and anonymous group calls.
+    /// Always disconnects from the LiveKit room, even if hangup signaling fails.
     #[cfg(feature = "desktop-media")]
     pub async fn end_anon_call(
         &self,
         call_worker: &CallWorkerHandle,
         duration_secs: i64,
     ) -> Result<Option<crate::domain::anon_dm::AnonDmId>, CallSignalingError> {
-        // Try anon DM pending calls first
-        let room_name = call_worker.active_call().await
-            .map(|c| c.id.to_string())
-            .unwrap_or_default();
+        // Get room name from active call state (not from Call.id which is a random UUID)
+        let room_name = match call_worker.get_room_name().await {
+            Some(name) => name,
+            None => {
+                // No active call — just ensure we're disconnected
+                tracing::warn!("end_anon_call: no active call room name, forcing disconnect");
+                call_worker.disconnect_local().await;
+                return Ok(None);
+            }
+        };
 
-        let pending = self.anon_dm_service
-            .take_pending_anon_call(&room_name)
-            .ok_or(CallSignalingError::NoPendingCall)?;
+        // Take the pending call info (re-stored by accept/answer flow)
+        let pending = self.anon_dm_service.take_pending_anon_call(&room_name);
 
-        let conversation_id = pending.conversation_id;
+        // Send hangup and store history if we have the call context
+        let conversation_id = if let Some(ref pending) = pending {
+            let conversation_id = pending.conversation_id;
 
-        // Send hangup
-        if let Err(e) = self.anon_dm_service.send_call_hangup(
-            &conversation_id, &pending.call_room_id,
-            crate::proto::content_v1::anon_call_hangup::Reason::Normal,
-        ).await {
-            tracing::error!(error = %e, "Failed to send anonymous call hangup");
-        }
+            // Determine if this is a group call
+            let is_group_call = self.anon_dm_service
+                .get_conversation(&conversation_id)
+                .ok().flatten().is_none();
 
-        // Store call history as a message in the anon DM conversation
-        {
+            // Send hangup to the correct channel (DM or group)
+            if is_group_call {
+                if let Some(group_id) = AnonGroupId::try_from_slice(conversation_id.as_bytes()) {
+                    if let Err(e) = self.anon_group_service.send_call_hangup(
+                        &group_id, &pending.call_room_id,
+                        crate::proto::content_v1::anon_call_hangup::Reason::Normal,
+                    ).await {
+                        tracing::error!(error = %e, "Failed to send group call hangup");
+                    }
+                }
+            } else {
+                if let Err(e) = self.anon_dm_service.send_call_hangup(
+                    &conversation_id, &pending.call_room_id,
+                    crate::proto::content_v1::anon_call_hangup::Reason::Normal,
+                ).await {
+                    tracing::error!(error = %e, "Failed to send anonymous call hangup");
+                }
+            }
+
+            // Store call history
             let duration_str = if duration_secs > 0 {
                 format!("{}:{:02}", duration_secs / 60, duration_secs % 60)
             } else {
@@ -964,15 +1010,19 @@ impl CallSignalingService {
             if let Err(e) = self.anon_dm_service.store_message(&conversation_id, &user_id, 1, &content_json, sent_at) {
                 tracing::error!(error = %e, "Failed to store anon call history on hangup");
             }
-        }
 
-        // Leave/disconnect
+            Some(conversation_id)
+        } else {
+            tracing::warn!(room_name = %room_name, "No pending call context for end — hangup signal skipped");
+            None
+        };
+
+        // Always leave/disconnect from the LiveKit room
         if let Err(e) = call_worker.leave_call().await {
-            // Might already be disconnected
             tracing::debug!(error = %e, "leave_call after anon hangup");
         }
 
-        Ok(Some(conversation_id))
+        Ok(conversation_id)
     }
 
     /// Handle remote hangup: store history, disconnect locally.

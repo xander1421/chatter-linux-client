@@ -55,6 +55,10 @@ enum CallCommand {
     GetActiveCall {
         response: oneshot::Sender<Option<Call>>,
     },
+    /// Get the room name of the active call.
+    GetRoomName {
+        response: oneshot::Sender<Option<String>>,
+    },
     /// Check if in a call.
     IsInCall {
         response: oneshot::Sender<bool>,
@@ -300,6 +304,15 @@ impl CallWorkerHandle {
     pub fn active_call_sync(&self) -> Option<Call> {
         // Fire-and-forget query - UI should use events for real-time updates
         None
+    }
+
+    /// Get the room name of the active call (for anonymous call management).
+    pub async fn get_room_name(&self) -> Option<String> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .try_send(CallCommand::GetRoomName { response: tx })
+            .ok()?;
+        rx.await.ok().flatten()
     }
 
     /// Check if currently in a call.
@@ -640,6 +653,11 @@ fn run_call_worker(
                 CallCommand::GetActiveCall { response } => {
                     let call = active_call.read().as_ref().map(|a| a.call.clone());
                     let _ = response.send(call);
+                }
+
+                CallCommand::GetRoomName { response } => {
+                    let name = active_call.read().as_ref().map(|a| a.room_name.clone());
+                    let _ = response.send(name);
                 }
 
                 CallCommand::IsInCall { response } => {
