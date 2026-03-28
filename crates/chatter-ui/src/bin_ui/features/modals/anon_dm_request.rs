@@ -6,11 +6,11 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, ModelRc, VecModel, Weak};
+use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::inbox::DomainEvent;
-use crate::{DMListItemData, FriendRequestData, MainWindow, MessageItemData};
+use crate::{DMListItemData, FriendRequestData, MainWindow};
 use crate::bin_ui::converters::get_initials;
 use crate::bin_ui::features::auth::inbox::unified_actions::{self, EventSource};
 
@@ -26,7 +26,6 @@ pub fn spawn_anon_dm_request_handler(
     ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
     let anon_dm_service = ui_ctx.anon_dms().clone();
-    let attachment_service = ui_ctx.attachments().clone();
     let chat_state = ui_ctx.chat_state().clone();
     let pinned_state = ui_ctx.pinned_state().clone();
     let ui_ctx = ui_ctx.clone();
@@ -259,76 +258,15 @@ pub fn spawn_anon_dm_request_handler(
                 }
                 DomainEvent::AnonDmMessageReceived {
                     conversation_id,
-                    sender_id,
-                    message_id,
+                    sender_id: _,
+                    message_id: _,
                     sent_at,
                 } => {
-                    tracing::info!(
-                        conversation_id = %conversation_id,
-                        sender_id = %sender_id,
-                        message_id = %message_id,
-                        "[ANON_DM_UI] Received message"
-                    );
-
-                    // Fetch stored message from DB (already persisted by core)
-                    let msg = match anon_dm_service.get_message(&message_id) {
-                        Ok(Some(m)) => m,
-                        _ => {
-                            tracing::warn!(message_id = %message_id, "Anon DM message not found in store");
-                            continue;
-                        }
-                    };
-
-                    // Resolve sender display name
-                    let sender_name = match anon_dm_service.get_conversation(&conversation_id) {
-                        Ok(Some(dm)) => dm.peer_display_name.unwrap_or_else(|| {
-                            format!("User {}", &sender_id.to_string()[..8])
-                        }),
-                        _ => format!("User {}", &sender_id.to_string()[..8]),
-                    };
-
-                    // Resolve attachments from service
-                    let attachment_ids = msg.attachment_ids();
-                    let resolved_attachments: Vec<_> = attachment_ids.iter()
-                        .filter_map(|att_id| ui_ctx.attachments().get(att_id).ok().flatten())
-                        .collect();
-
-                    // Convert to display data using existing converter
-                    let mut display_data = crate::bin_ui::converters::anon_dm_message_to_display_data(
-                        &msg, &sender_name, None, &resolved_attachments,
-                    );
-                    display_data.decode_attachment_thumbnails();
-
-                    // If message has attachments but they haven't been resolved yet
-                    // (race: attachment record not yet in DB), show a placeholder
-                    if msg.has_attachments() && resolved_attachments.is_empty() && display_data.content.is_empty() {
-                        let att_count = attachment_ids.len();
-                        display_data.content = format!("\u{1F4CE} {} attachment{}", att_count, if att_count == 1 { "" } else { "s" });
-                        display_data.has_attachments = true;
-                        display_data.attachment_count = att_count as i32;
-                    }
-
-                    let current_user_id = ui_ctx.sessions().current_user_id()
-                        .map(|uid| uid.to_string())
-                        .unwrap_or_default();
-
-                    // Build sidebar preview
-                    let text = msg.as_text().unwrap_or_default();
-                    let att_count = attachment_ids.len();
-                    let preview = if text.is_empty() && att_count > 0 {
-                        format!("\u{1F4CE} {} attachment{}", att_count, if att_count == 1 { "" } else { "s" })
-                    } else if text.chars().count() > 30 {
-                        format!("{}...", text.chars().take(27).collect::<String>())
-                    } else {
-                        text.to_string()
-                    };
-                    let timestamp_display = chrono::Local::now().format("%H:%M").to_string();
+                    // UI insertion and sidebar updates are handled by domain_handler::anon_dm.
+                    // This handler only sends read receipts when the conversation is active.
                     let channel_id_str = format!("anon_dm:{}", conversation_id);
-
-                    // Send read receipt if conversation is currently selected
                     let receipt_conv_id = conversation_id;
                     let receipt_msg_ts = sent_at;
-                    let receipt_channel_id_str = channel_id_str.clone();
                     let receipt_weak = weak_window.clone();
                     let receipt_client = ui_ctx.clone();
 
@@ -336,7 +274,7 @@ pub fn spawn_anon_dm_request_handler(
                         let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
                         let _ = slint::invoke_from_event_loop(move || {
                             let is_selected = if let Some(w) = receipt_weak.upgrade() {
-                                w.get_selected_dm_id().to_string() == receipt_channel_id_str
+                                w.get_selected_dm_id().to_string() == channel_id_str
                             } else {
                                 false
                             };
@@ -359,48 +297,6 @@ pub fn spawn_anon_dm_request_handler(
                             }
                             Err(_) => {
                                 tracing::trace!("[ANON_DM_RECEIPT] UI check channel closed");
-                            }
-                        }
-                    });
-
-                    let weak = weak_window.clone();
-                    let attachment_service_for_gifs = attachment_service.clone();
-
-                    let _ = slint::invoke_from_event_loop(move || {
-                        let Some(w) = weak.upgrade() else { return };
-
-                        // Update sidebar preview (move to top + increment unread)
-                        let conversation = chatter_core::state::ActiveConversation::AnonDm(conversation_id);
-                        crate::bin_ui::features::sidebar::update_sidebar_preview(
-                            &w, conversation, &preview, &timestamp_display, true,
-                        );
-
-                        // If this conversation is selected, insert message into list
-                        let selected_dm = w.get_selected_dm_id().to_string();
-                        if selected_dm == channel_id_str {
-                            let was_at_bottom = w.get_is_at_bottom();
-                            let new_msg = display_data.to_slint_with_user(&current_user_id);
-                            let current_messages = w.get_messages();
-
-                            // Find sorted insert position
-                            let new_ts: u64 = sent_at;
-                            let insert_pos = (0..current_messages.row_count()).find(|&i| {
-                                current_messages.row_data(i).map(|m| {
-                                    m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0) > new_ts
-                                }).unwrap_or(false)
-                            }).unwrap_or(current_messages.row_count());
-
-                            if let Some(model) = current_messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
-                                model.insert(insert_pos, new_msg);
-                            }
-
-                            crate::bin_ui::gif_state::auto_register_gifs_from_messages(
-                                w.as_weak(), attachment_service_for_gifs,
-                            );
-
-                            if was_at_bottom {
-                                w.set_message_scroll_position(-99999.0);
-                                w.set_is_at_bottom(true);
                             }
                         }
                     });

@@ -644,13 +644,13 @@ impl AnonDmService {
         };
 
         self.anon_dm_repo.insert_message(&message)?;
-        tracing::info!(
+        tracing::debug!(
             conversation_id = %conversation_id,
             message_id = %message.id,
             sent_at = sent_at,
             has_text = has_text,
             attachment_count = attachment_ids.len(),
-            "[ANON_DM] Stored message (sender)"
+            "[ANON_DM] store_message_with_attachments completed"
         );
         Ok(message.id)
     }
