@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ed25519_dalek::{Signer, SigningKey};
 use rand::prelude::IndexedRandom;
 use rand::Rng;
 use tokio::sync::{broadcast, RwLock};
@@ -43,6 +44,10 @@ pub struct PollerConfig {
     pub dummy_polling_enabled: bool,
     /// Probability of a poll being a dummy poll (0.0 - 1.0).
     pub dummy_poll_probability: f64,
+    /// Number of dedicated decoy polls per cycle (default: 1).
+    /// These run independently of the per-mailbox dummy probability,
+    /// matching real polling frequency ±20% jitter for traffic analysis resistance.
+    pub decoy_polls_per_cycle: u32,
     /// Timing obfuscation configuration.
     pub timing_config: TimingConfig,
 }
@@ -53,6 +58,7 @@ impl Default for PollerConfig {
             poll_interval: Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS),
             dummy_polling_enabled: true,
             dummy_poll_probability: DEFAULT_DUMMY_POLL_PROBABILITY,
+            decoy_polls_per_cycle: 1,
             timing_config: TimingConfig::default(),
         }
     }
@@ -64,6 +70,7 @@ impl PollerConfig {
         Self {
             poll_interval: Duration::from_secs(5),
             dummy_polling_enabled: false,
+            decoy_polls_per_cycle: 0,
             timing_config: TimingConfig::disabled(),
             ..Default::default()
         }
@@ -111,21 +118,28 @@ pub struct UnifiedPollResult {
 /// Decoy mailbox for dummy polling.
 ///
 /// These are fake mailbox addresses that we poll to hide our real access patterns.
-/// The server cannot distinguish real mailbox polls from decoy polls.
+/// Each decoy holds a full Ed25519 keypair so that decoy polls execute the same
+/// challenge-response flow as real polls, making them indistinguishable to a
+/// network observer.
 #[derive(Clone)]
 struct DecoyMailbox {
-    /// Random Ed25519 public key (not associated with any real mailbox).
+    /// Ed25519 signing key for challenge-response during decoy polls.
+    signing_key: SigningKey,
+    /// Derived public key bytes (cached for convenience).
     public_key: [u8; 32],
     /// When this decoy was created.
     created_at: std::time::Instant,
 }
 
 impl DecoyMailbox {
-    /// Generate a new random decoy mailbox.
+    /// Generate a new random decoy mailbox with a fresh Ed25519 keypair.
     fn new_random() -> Self {
-        let mut public_key = [0u8; 32];
-        rand::fill(&mut public_key[..]);
+        let mut seed = [0u8; 32];
+        rand::fill(&mut seed[..]);
+        let signing_key = SigningKey::from_bytes(&seed);
+        let public_key = signing_key.verifying_key().to_bytes();
         Self {
+            signing_key,
             public_key,
             created_at: std::time::Instant::now(),
         }
@@ -251,27 +265,62 @@ impl MailboxPoller {
 
     /// Perform a dummy poll to a random decoy mailbox.
     ///
-    /// The server will return "mailbox not found" but cannot distinguish
-    /// this from a legitimate poll to an empty mailbox.
+    /// Executes the full challenge-response flow (get challenge → sign → poll)
+    /// so that decoy polls generate the same network request pattern as real polls.
+    /// A network observer cannot distinguish these from legitimate mailbox polls.
     async fn perform_dummy_poll(&self, client: &mut AnonymousMailboxClient) -> Result<(), MailboxError> {
-        let decoys = self.decoys.read().await;
-        if decoys.is_empty() {
-            return Ok(());
-        }
+        let (public_key, signing_key) = {
+            let decoys = self.decoys.read().await;
+            if decoys.is_empty() {
+                return Ok(());
+            }
 
-        // Select random decoy
-        let decoy = decoys
-            .choose(&mut rand::rng())
-            .ok_or(MailboxError::NoTokensAvailable)?;
+            let decoy = decoys
+                .choose(&mut rand::rng())
+                .ok_or(MailboxError::NoTokensAvailable)?;
 
-        // Apply timing delay
+            (decoy.public_key, decoy.signing_key.clone())
+        };
+
+        // Apply timing delay (same as real polls)
         self.timing.delay_before_poll().await;
 
-        // Poll the decoy mailbox (will fail, but that's expected)
-        // We just need to make the request to generate traffic
-        let _ = client
-            .get_mailbox_challenge(decoy.public_key.to_vec())
+        // Step 1: Get challenge (same request as real poll)
+        let challenge_result = client
+            .get_mailbox_challenge(public_key.to_vec())
             .await;
+
+        // Step 2: Sign challenge and poll (same request pattern as real poll)
+        // Even if the challenge fails, we still attempt the poll request
+        // to maintain consistent request count for network observers.
+        if let Ok(resp) = challenge_result {
+            let signature = signing_key.sign(&resp.challenge);
+            let _ = client
+                .poll_ephemeral_mailbox(
+                    public_key.to_vec(),
+                    signature.to_bytes().to_vec(),
+                    resp.challenge,
+                    None,
+                    10,
+                )
+                .await;
+        } else {
+            // Server rejected challenge (mailbox doesn't exist).
+            // Still generate a second request with dummy data to match
+            // the two-request pattern of a real poll.
+            let mut dummy_challenge = [0u8; 32];
+            rand::fill(&mut dummy_challenge[..]);
+            let signature = signing_key.sign(&dummy_challenge);
+            let _ = client
+                .poll_ephemeral_mailbox(
+                    public_key.to_vec(),
+                    signature.to_bytes().to_vec(),
+                    dummy_challenge.to_vec(),
+                    None,
+                    10,
+                )
+                .await;
+        }
 
         // Record dummy poll
         {
@@ -280,7 +329,7 @@ impl MailboxPoller {
             stats.total_polls += 1;
         }
 
-        tracing::trace!("Performed dummy poll to decoy mailbox");
+        tracing::trace!("Performed decoy poll (full challenge-response flow)");
         Ok(())
     }
 
@@ -399,11 +448,11 @@ impl MailboxPoller {
         // Apply timing delay before polling
         self.timing.delay_before_poll().await;
 
-        // Maybe do a dummy poll
+        // Maybe do a dummy poll (poll a decoy mailbox to generate cover traffic)
         if self.should_dummy_poll() {
-            let mut stats = self.stats.write().await;
-            stats.dummy_polls += 1;
-            stats.total_polls += 1;
+            if let Err(e) = self.perform_dummy_poll(client).await {
+                tracing::trace!(error = %e, "Anon DM decoy poll failed (expected)");
+            }
         }
 
         // Poll all anonymous DM mailboxes
@@ -428,6 +477,27 @@ impl MailboxPoller {
         }
     }
 
+    /// Perform dedicated decoy polls for this cycle.
+    ///
+    /// Runs `decoy_polls_per_cycle` independent decoy polls with jittered
+    /// inter-poll delays, matching real polling frequency ±20%.
+    async fn perform_decoy_cycle(&self, client: &mut AnonymousMailboxClient) {
+        if !self.config.dummy_polling_enabled || self.config.decoy_polls_per_cycle == 0 {
+            return;
+        }
+
+        for i in 0..self.config.decoy_polls_per_cycle {
+            if let Err(e) = self.perform_dummy_poll(client).await {
+                tracing::trace!(error = %e, cycle = i, "Decoy cycle poll failed (expected)");
+            }
+
+            // Jittered delay between decoy polls within this cycle
+            if i + 1 < self.config.decoy_polls_per_cycle {
+                self.timing.delay_between_batch_items().await;
+            }
+        }
+    }
+
     /// Perform a unified poll of all mailboxes.
     ///
     /// # Arguments
@@ -443,15 +513,15 @@ impl MailboxPoller {
         // Record initial dummy poll count
         let initial_dummy_polls = self.stats.read().await.dummy_polls;
 
+        // Run dedicated decoy polls for this cycle (configurable count,
+        // defaults to 1 per cycle to match real polling frequency ±20%)
+        self.perform_decoy_cycle(client).await;
+
         // Poll DMs, groups, and anonymous DMs (all anonymous operations)
+        // Per-mailbox dummy polls may also fire probabilistically within each method
         let dm_results = self.poll_dm_mailboxes(client).await?;
         let group_results = self.poll_group_mailboxes(client).await?;
         let anon_dm_results = self.poll_anon_dm_mailboxes(client).await?;
-
-        // Maybe one final dummy poll
-        if self.should_dummy_poll() {
-            let _ = self.perform_dummy_poll(client).await;
-        }
 
         // Calculate dummy polls performed this round
         let final_dummy_polls = self.stats.read().await.dummy_polls;
@@ -569,6 +639,29 @@ mod tests {
 
         // Should be 32 bytes
         assert_eq!(decoy1.public_key.len(), 32);
+
+        // Public key should match the signing key's verifying key
+        assert_eq!(
+            decoy1.public_key,
+            decoy1.signing_key.verifying_key().to_bytes()
+        );
+    }
+
+    #[test]
+    fn test_decoy_mailbox_can_sign() {
+        use ed25519_dalek::Signer;
+
+        let decoy = DecoyMailbox::new_random();
+        let challenge = b"test challenge data for decoy signing";
+
+        // Decoy should produce a valid Ed25519 signature
+        let signature = decoy.signing_key.sign(challenge);
+        assert_eq!(signature.to_bytes().len(), 64);
+
+        // Signature should verify against the decoy's public key
+        use ed25519_dalek::Verifier;
+        let verifying_key = decoy.signing_key.verifying_key();
+        assert!(verifying_key.verify(challenge, &signature).is_ok());
     }
 
     #[test]
@@ -592,6 +685,29 @@ mod tests {
 
         // Test that probability 0 never triggers
         assert!(!config.dummy_polling_enabled);
+    }
+
+    #[test]
+    fn test_default_decoy_polls_per_cycle() {
+        let config = PollerConfig::default();
+        assert_eq!(config.decoy_polls_per_cycle, 1);
+    }
+
+    #[test]
+    fn test_minimal_disables_decoy_cycle() {
+        let config = PollerConfig::minimal();
+        assert_eq!(config.decoy_polls_per_cycle, 0);
+        assert!(!config.dummy_polling_enabled);
+    }
+
+    #[test]
+    fn test_custom_decoy_rate() {
+        let config = PollerConfig {
+            decoy_polls_per_cycle: 3,
+            ..Default::default()
+        };
+        assert_eq!(config.decoy_polls_per_cycle, 3);
+        assert!(config.dummy_polling_enabled);
     }
 
     #[test]
