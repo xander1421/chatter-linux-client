@@ -1476,6 +1476,9 @@ impl ChatterClient {
         let mut msg_client = self.ui.grpc_pool.message_client();
         let event_bus = self.ui.event_bus.clone();
         let channel_id_str = channel_id.to_string();
+        // Capture current user ID to filter out own messages from the stream.
+        // Own messages are already displayed optimistically at send time.
+        let current_user_id = self.ui.auth_state.get().current_user_id.clone();
 
         let handle = tokio::spawn(async move {
             let stream = match msg_client.stream_message_events(&channel_id_str, None).await {
@@ -1502,6 +1505,20 @@ impl ChatterClient {
                                 proto_msg.author_id.parse::<uuid::Uuid>().ok()
                                     .map(crate::domain::ids::UserId::from)
                             };
+
+                            // Skip own messages — already displayed optimistically at send time.
+                            // Without this, the sender sees a duplicate (often as "[Encrypted message]"
+                            // because we can't decrypt our own sender-key ciphertext).
+                            if let (Some(sid), Some(cur)) = (&sender_id, &current_user_id) {
+                                if sid == cur {
+                                    tracing::debug!(
+                                        channel_id = %channel_id_str,
+                                        "Skipping own message from channel stream (already shown optimistically)"
+                                    );
+                                    continue;
+                                }
+                            }
+
                             match proto_to_domain_message_with_sender(proto_msg, sender_id) {
                                 Ok(message) => {
                                     let _ = event_bus.domain_sender().send(

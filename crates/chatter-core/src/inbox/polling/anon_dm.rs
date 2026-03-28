@@ -49,6 +49,7 @@ pub async fn process_anon_dm_results(
     pairwise_service: &Arc<PairwiseService>,
     event_tx: &mpsc::Sender<InboxEvent>,
     deduplicator: &MessageDeduplicator,
+    current_user_id: Option<&UserId>,
 ) -> ProcessedAnonDmMessages {
     let mut processed: ProcessedAnonDmMessages = HashMap::new();
 
@@ -101,6 +102,19 @@ pub async fn process_anon_dm_results(
                     continue;
                 }
             };
+
+            // Skip messages from ourselves — already displayed optimistically at send time.
+            // The server may echo our own message back to our mailbox; processing it would
+            // create a duplicate bubble in the UI.
+            if current_user_id.is_some_and(|uid| *uid == sender_id) {
+                tracing::debug!(
+                    conversation_id = %conversation_id,
+                    message_id = %message_id,
+                    "Skipping own message echoed back from anon DM mailbox poll"
+                );
+                processed.entry(conversation_id).or_default().push(message_id);
+                continue;
+            }
 
             tracing::info!(
                 conversation_id = %conversation_id,

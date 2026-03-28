@@ -399,6 +399,13 @@ impl DeviceInboxProvider {
             }
         }
 
+        // Resolve current user ID for self-message filtering in anon DM polling.
+        let current_user_id: Option<crate::domain::UserId> = settings_repo
+            .get::<String>(crate::storage::settings_keys::CURRENT_USER_ID)
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse().ok());
+
         // Get domain event sender if event_bus is available
         let domain_tx = event_bus.as_ref().map(|bus| bus.domain_sender());
 
@@ -526,7 +533,7 @@ impl DeviceInboxProvider {
                             // Create mpsc channel for events (process_anon_dm_results expects mpsc)
                             let (tx, mut rx) = tokio::sync::mpsc::channel(64);
                             // Use deduplicator to prevent re-decryption when ack fails
-                            let processed = process_anon_dm_results(results, pairwise, &tx, &dm_deduplicator).await;
+                            let processed = process_anon_dm_results(results, pairwise, &tx, &dm_deduplicator, current_user_id.as_ref()).await;
                             drop(tx); // Close sender so receiver knows when done
 
                             // Forward events to broadcast channel
