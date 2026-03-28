@@ -252,6 +252,11 @@ async fn t3_direct_message() {
     client_a.channels().get_channel_with_memberships(&dm_channel_id).await
         .expect("Failed to sync DM channel to client A");
 
+    // Subscribe to the DM channel's message stream so both clients receive
+    // messages published to the channel-specific Redis stream.
+    client_a.subscribe_channel_messages(&dm_channel_id);
+    client_b.subscribe_channel_messages(&dm_channel_id);
+
     // Subscribe to events BEFORE sending
     let mut events_b = client_b.subscribe_events();
 
@@ -453,6 +458,10 @@ async fn t6_group_chat() {
     // Wait for sender key distribution (SKDM)
     tokio::time::sleep(Duration::from_secs(3)).await;
 
+    // B was added as initial member (not via join_channel), so explicitly
+    // subscribe to the group's message stream.
+    client_b.subscribe_channel_messages(&group.id);
+
     // Subscribe to events BEFORE sending
     let mut events_b = client_b.subscribe_events();
 
@@ -528,6 +537,10 @@ async fn t7_file_transfer() {
     // Ensure A has the DM channel in its local DB
     client_a.channels().get_channel_with_memberships(&dm_channel_id).await
         .expect("Failed to sync DM channel to client A");
+
+    // Subscribe to the DM channel's message stream for delivery
+    client_a.subscribe_channel_messages(&dm_channel_id);
+    client_b.subscribe_channel_messages(&dm_channel_id);
 
     // Create a test file to upload
     let test_file_path = dir_a.path().join("test_attachment.txt");
@@ -709,6 +722,8 @@ async fn t3_inner() {
     let dm_cid: ChannelId = resp.dm_channel_id.unwrap().parse().unwrap();
     tokio::time::sleep(Duration::from_secs(3)).await;
     client_a.channels().get_channel_with_memberships(&dm_cid).await.unwrap();
+    client_a.subscribe_channel_messages(&dm_cid);
+    client_b.subscribe_channel_messages(&dm_cid);
     let mut events_b = client_b.subscribe_events();
     let msg = "T3 test message";
     client_a.send_text(ActiveConversation::Channel(dm_cid.clone()), msg).await.unwrap();
@@ -772,6 +787,7 @@ async fn t6_inner() {
     let grp_name = format!("e2e-grp-{}", chrono::Utc::now().timestamp_millis() % 100000);
     let grp = client_a.create_channel(&grp_name, ChannelType::Private, None, Some("test"), None, vec![uid_b]).await.unwrap();
     tokio::time::sleep(Duration::from_secs(3)).await;
+    client_b.subscribe_channel_messages(&grp.id);
     let mut events_b = client_b.subscribe_events();
     let msg = "T6 group message";
     client_a.send_text(ActiveConversation::Channel(grp.id.clone()), msg).await.unwrap();
@@ -796,6 +812,8 @@ async fn t7_inner() {
     let dm_cid: ChannelId = resp.dm_channel_id.unwrap().parse().unwrap();
     tokio::time::sleep(Duration::from_secs(3)).await;
     client_a.channels().get_channel_with_memberships(&dm_cid).await.unwrap();
+    client_a.subscribe_channel_messages(&dm_cid);
+    client_b.subscribe_channel_messages(&dm_cid);
     let test_file = dir_a.path().join("test.txt");
     std::fs::write(&test_file, "E2E file transfer content").unwrap();
     let pending = PendingAttachment::new(

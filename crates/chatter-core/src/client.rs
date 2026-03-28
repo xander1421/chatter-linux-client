@@ -1405,6 +1405,78 @@ impl ChatterClient {
 
     // ── Channel operations ────────────────────────────────────────
 
+    /// Subscribe to real-time message events for a specific channel.
+    ///
+    /// Starts a background task that streams message events from the server
+    /// and emits `DomainEvent::MessageReceived` for each new message.
+    /// This is called automatically by `create_channel` and `join_channel`,
+    /// but can also be called explicitly for channels discovered via other
+    /// means (e.g. DM channels created by friend accept).
+    pub fn subscribe_channel_messages(&self, channel_id: &crate::domain::ids::ChannelId) {
+        use tokio_stream::StreamExt;
+        use crate::proto::chat_v1::message_event::Event as MsgEventType;
+        use crate::services::message::conversion::proto_to_domain_message_with_sender;
+
+        let mut msg_client = self.ui.grpc_pool.message_client();
+        let event_bus = self.ui.event_bus.clone();
+        let channel_id_str = channel_id.to_string();
+
+        let handle = tokio::spawn(async move {
+            let stream = match msg_client.stream_message_events(&channel_id_str, None).await {
+                Ok(s) => s,
+                Err(e) => {
+                    tracing::warn!(
+                        channel_id = %channel_id_str,
+                        error = %e,
+                        "Failed to start channel message stream"
+                    );
+                    return;
+                }
+            };
+
+            tokio::pin!(stream);
+
+            while let Some(result) = stream.next().await {
+                match result {
+                    Ok(event) => {
+                        if let Some(MsgEventType::MessageSent(ref proto_msg)) = event.event {
+                            let sender_id = if proto_msg.author_id.is_empty() {
+                                None
+                            } else {
+                                proto_msg.author_id.parse::<uuid::Uuid>().ok()
+                                    .map(crate::domain::ids::UserId::from)
+                            };
+                            match proto_to_domain_message_with_sender(proto_msg, sender_id) {
+                                Ok(message) => {
+                                    let _ = event_bus.domain_sender().send(
+                                        DomainEvent::MessageReceived { message },
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        channel_id = %channel_id_str,
+                                        error = %e,
+                                        "Failed to convert stream message to domain"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            channel_id = %channel_id_str,
+                            error = %e,
+                            "Channel message stream error"
+                        );
+                        break;
+                    }
+                }
+            }
+        });
+
+        self.tasks.lock().push(handle);
+    }
+
     /// Create a channel and set up group encryption (mailbox + sender keys).
     ///
     /// Handles the full protocol: create on server, announce mailbox,
@@ -1423,6 +1495,7 @@ impl ChatterClient {
             .create_channel(name, channel_type, config, description, None, password, initial_members, true)
             .await?;
         self.finalize_mailbox_setup(&channel.id, mailbox_setup).await;
+        self.subscribe_channel_messages(&channel.id);
         Ok(channel)
     }
 
@@ -1438,6 +1511,7 @@ impl ChatterClient {
             .join_channel(channel_id, password, true)
             .await?;
         self.finalize_mailbox_setup(&channel.id, mailbox_setup).await;
+        self.subscribe_channel_messages(&channel.id);
         Ok(channel)
     }
 
