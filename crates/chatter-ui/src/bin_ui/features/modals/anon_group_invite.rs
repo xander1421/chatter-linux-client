@@ -89,7 +89,15 @@ pub fn spawn_anon_group_invite_handler(
     let mut event_rx = ui_ctx.event_bus().subscribe_domain();
 
     tokio::spawn(async move {
-        while let Ok(event) = event_rx.recv().await {
+        loop {
+            let event = match event_rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped_count = n, "Domain event receiver lagged, continuing");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             match event {
                 DomainEvent::AnonGroupInviteReceived {
                     group_id,

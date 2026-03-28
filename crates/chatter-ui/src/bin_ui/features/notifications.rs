@@ -35,7 +35,15 @@ pub fn wire(_window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let mut domain_rx = event_bus.subscribe_domain();
 
     tokio::spawn(async move {
-        while let Ok(event) = domain_rx.recv().await {
+        loop {
+            let event = match domain_rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped_count = n, "Domain event receiver lagged, continuing");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             let auth_data = auth_state.get();
             let chat_data = chat_state.get();
 

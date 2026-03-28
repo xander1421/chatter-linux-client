@@ -23,7 +23,15 @@ pub fn wire_call_key_answer_handler(window: &MainWindow, ui_ctx: &Arc<ChatterCli
     let weak = window.as_weak();
 
     slint::spawn_local(async move {
-        while let Ok(event) = event_rx.recv().await {
+        loop {
+            let event = match event_rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped_count = n, "Domain event receiver lagged, continuing");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             match event {
                 DomainEvent::CallKeyAnswerReceived {
                     call_id,

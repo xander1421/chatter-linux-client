@@ -650,7 +650,15 @@ pub(crate) fn subscribe_org_state(window: &MainWindow, ui_ctx: &Arc<ChatterClien
     let weak = window.as_weak();
 
     tokio::spawn(async move {
-        while let Ok(data) = rx.recv().await {
+        loop {
+            let data = match rx.recv().await {
+                Ok(data) => data,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped_count = n, "Org state receiver lagged, continuing");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {

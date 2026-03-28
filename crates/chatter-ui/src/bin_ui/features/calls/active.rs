@@ -172,7 +172,15 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     // Spawn a task to handle incoming hangup events
     // Note: This runs in a slint::spawn_local context which keeps CallService on UI thread
     slint::spawn_local(async move {
-        while let Ok(event) = event_rx.recv().await {
+        loop {
+            let event = match event_rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped_count = n, "Domain event receiver lagged, continuing");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             if let DomainEvent::CallHangupReceived { call_id, peer_id, reason } = event {
                 tracing::info!(
                     call_id = %call_id,

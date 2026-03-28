@@ -34,7 +34,15 @@ pub fn spawn_anon_dm_request_handler(
 
     tokio::spawn(async move {
         tracing::info!("[ANON_DM_HANDLER] Started listening for domain events");
-        while let Ok(event) = event_rx.recv().await {
+        loop {
+            let event = match event_rx.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(dropped_count = n, "[ANON_DM_HANDLER] Domain event receiver lagged, continuing");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
             tracing::debug!("[ANON_DM_HANDLER] Received domain event: {:?}", std::mem::discriminant(&event));
             match event {
                 DomainEvent::AnonDmRequestReceived {
