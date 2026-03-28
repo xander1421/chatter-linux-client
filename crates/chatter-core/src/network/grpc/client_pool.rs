@@ -172,14 +172,27 @@ impl GrpcClientPool {
 
     /// Get the shared channel for creating service clients.
     ///
-    /// # Panics
-    ///
-    /// Panics if not connected. Call `connect()` first.
+    /// If the pool has not been connected yet (or a previous `connect()` failed),
+    /// a **lazy channel** is created automatically. The lazy channel defers the
+    /// real TCP handshake to the first gRPC call, so callers get a proper
+    /// transport error instead of a panic when the server is unreachable.
     pub fn channel(&self) -> Channel {
-        self.channel
-            .read()
-            .clone()
-            .expect("GrpcClientPool: not connected - call connect() first")
+        // Fast path: already connected.
+        if let Some(ch) = self.channel.read().clone() {
+            return ch;
+        }
+
+        // Slow path: create a lazy channel so callers never panic.
+        let mut guard = self.channel.write();
+        // Double-check after acquiring write lock.
+        if let Some(ch) = guard.clone() {
+            return ch;
+        }
+        let endpoint = self.endpoint.read().clone();
+        let channel = endpoint.connect_lazy();
+        tracing::warn!("GrpcClientPool: no active connection — created lazy channel (RPCs will attempt on-demand connect)");
+        *guard = Some(channel.clone());
+        channel
     }
 
     /// Try to get the channel, returning None if not connected.
@@ -356,11 +369,12 @@ mod tests {
         }
     }
 
-    #[test]
-    #[should_panic(expected = "not connected")]
-    fn test_channel_panics_when_not_connected() {
+    #[tokio::test]
+    async fn test_channel_returns_lazy_when_not_connected() {
         let pool = GrpcClientPool::new("http://localhost:50051").unwrap();
-        let _ = pool.channel();
+        // Should not panic — returns a lazy channel instead.
+        let _ch = pool.channel();
+        assert!(pool.is_connected(), "lazy channel should mark pool as connected");
     }
 
     #[tokio::test]

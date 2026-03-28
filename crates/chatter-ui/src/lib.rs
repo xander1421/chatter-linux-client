@@ -125,10 +125,18 @@ pub async fn app_init() -> AppState {
     tracing::info!("Typing indicator cleanup task started");
 
     // Connect to server (reactor is active here inside block_on)
-    let _connected = match client.connect().await {
-        Ok(()) => true,
+    let connected = match client.connect().await {
+        Ok(()) => {
+            client.offline_state().set_connection_state(
+                chatter_core::network::connection::ConnectionState::Connected,
+            );
+            true
+        }
         Err(e) => {
             tracing::warn!("Could not connect to server: {} (offline mode)", e);
+            client.offline_state().set_connection_state(
+                chatter_core::network::connection::ConnectionState::Disconnected,
+            );
             false
         }
     };
@@ -150,6 +158,9 @@ pub async fn app_init() -> AppState {
 
         window.set_current_view("main".into());
 
+        if !connected {
+            tracing::info!("Starting in offline mode — gRPC calls will retry when server becomes available");
+        }
         if let Err(e) = client.start().await {
             tracing::warn!("Could not start services: {} (some features may not work)", e);
         }
