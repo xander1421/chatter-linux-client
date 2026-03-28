@@ -127,6 +127,17 @@ impl NetworkError {
         )
     }
 
+    /// Returns true if this error indicates a transport/connection failure.
+    ///
+    /// Transport errors mean the HTTP/2 connection is stale or broken.
+    /// Callers should reconnect the pool before retrying.
+    pub fn is_transport_error(&self) -> bool {
+        matches!(
+            self,
+            NetworkError::Unavailable | NetworkError::ConnectionFailed(_)
+        )
+    }
+
     /// Returns true if this is an authentication-related error.
     ///
     /// Auth errors include:
@@ -224,6 +235,18 @@ mod tests {
         let err = NetworkError::from_status(&status);
         assert!(matches!(err, NetworkError::Unknown(_)));
         assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn test_is_transport_error() {
+        assert!(NetworkError::Unavailable.is_transport_error());
+        assert!(NetworkError::ConnectionFailed("stale".into()).is_transport_error());
+        // Retryable but not transport-specific:
+        assert!(!NetworkError::RateLimited.is_transport_error());
+        assert!(!NetworkError::ServerError("boom".into()).is_transport_error());
+        assert!(!NetworkError::Timeout.is_transport_error());
+        // Non-retryable:
+        assert!(!NetworkError::NotFound("x".into()).is_transport_error());
     }
 
     #[test]

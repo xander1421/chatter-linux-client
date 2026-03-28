@@ -2,6 +2,7 @@
 //!
 //! Connection pool management for gRPC channels with HTTP/2 keepalive.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,6 +12,7 @@ use tonic::transport::{Channel, Endpoint};
 use crate::error::NetworkError;
 
 use super::interceptors::AuthInterceptor;
+use super::retry::{retry_unary, RetryConfig};
 
 /// gRPC connection pool with shared channel and authentication.
 ///
@@ -230,6 +232,54 @@ impl GrpcClientPool {
     /// Returns the complete URL including scheme and port.
     pub fn endpoint(&self) -> String {
         self.endpoint.read().uri().to_string()
+    }
+
+    // ========================================================================
+    // Retry middleware — transport-aware retry for all RPCs
+    // ========================================================================
+
+    /// Execute an RPC with automatic retry on transport errors.
+    ///
+    /// On transport failures the pool disconnects the stale channel so the
+    /// next attempt creates a fresh HTTP/2 connection via the lazy-channel
+    /// path. This fixes the "stale connection pool" problem where HTTP/2
+    /// connections silently die and subsequent RPCs fail with
+    /// `Code::Unknown / transport error`.
+    ///
+    /// The closure receives `&Self` so it can create a fresh client per
+    /// attempt (important — a client holding a stale channel must not be
+    /// reused after disconnect).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let events = pool.call_with_retry("CreateChannel", |p| {
+    ///     let mut client = p.channel_client();
+    ///     async move { client.create_channel("test", ChannelType::ChannelPublic, None, vec![], None, None, None).await }
+    /// }).await?;
+    /// ```
+    pub async fn call_with_retry<F, Fut, T>(
+        &self,
+        operation: &str,
+        mut f: F,
+    ) -> Result<T, NetworkError>
+    where
+        F: FnMut(&Self) -> Fut,
+        Fut: Future<Output = Result<T, NetworkError>>,
+    {
+        let pool = self;
+        retry_unary(
+            &RetryConfig::default(),
+            operation,
+            Some(|| {
+                tracing::warn!(
+                    "Transport error detected — disconnecting stale channel for reconnect"
+                );
+                pool.disconnect();
+            }),
+            || f(pool),
+        )
+        .await
     }
 
     // ========================================================================
