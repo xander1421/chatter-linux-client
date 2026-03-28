@@ -11,7 +11,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use crate::domain::UserId;
 use crate::error::MailboxError;
 use crate::mailbox::dm::{DmConversationManager, DmMailbox};
-use crate::network::grpc::MailboxClient;
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::storage::Database;
 
@@ -86,7 +86,7 @@ impl TwoWayAnonymity {
     pub async fn poll_mailbox(
         &self,
         peer_id: &UserId,
-        mailbox_client: &mut MailboxClient,
+        mailbox_client: &mut AnonymousMailboxClient,
         after_message_id: Option<&str>,
     ) -> Result<PollResult, MailboxError> {
         // Load conversation state
@@ -157,7 +157,7 @@ impl TwoWayAnonymity {
     /// Returns a tuple of (successful results, failed mailbox errors).
     pub async fn poll_all_mailboxes(
         &self,
-        mailbox_client: &mut MailboxClient,
+        mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<(Vec<PollResult>, Vec<(UserId, MailboxError)>), MailboxError> {
         let active_keys = self.conversation_manager.get_active_mailbox_keys()?;
         let mut results = Vec::new();
@@ -185,7 +185,7 @@ impl TwoWayAnonymity {
     /// Each page requires a new challenge since challenges are single-use.
     async fn poll_single_mailbox(
         &self,
-        mailbox_client: &mut MailboxClient,
+        mailbox_client: &mut AnonymousMailboxClient,
         peer_id: &UserId,
         public_key: &[u8; 32],
         private_key: &[u8; 64],
@@ -279,7 +279,7 @@ impl TwoWayAnonymity {
         &self,
         peer_id: &UserId,
         message_ids: Vec<String>,
-        mailbox_client: &mut MailboxClient,
+        mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<(), MailboxError> {
         let conversation = self
             .conversation_manager
@@ -330,7 +330,7 @@ impl TwoWayAnonymity {
         peer_id: &UserId,
         encrypted_envelope: Vec<u8>,
         envelope_type: EnvelopeType,
-        mailbox_client: &mut MailboxClient,
+        mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<SendResult, MailboxError> {
         // Load conversation state
         let conversation = self

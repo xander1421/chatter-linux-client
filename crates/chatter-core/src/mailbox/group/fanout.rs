@@ -14,7 +14,7 @@ use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
 use crate::mailbox::dm::ReceivedMessage;
 use crate::mailbox::group::{GroupMailbox, GroupMailboxManager, MemberMailbox};
-use crate::network::grpc::MailboxClient;
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::mailbox_v1::EnvelopeType;
 
 /// Maximum messages to fetch per poll.
@@ -138,7 +138,7 @@ pub struct GroupFanout {
     /// Manager for group mailbox state persistence.
     mailbox_manager: Arc<GroupMailboxManager>,
     /// gRPC client for mailbox operations.
-    mailbox_client: Arc<Mutex<MailboxClient>>,
+    mailbox_client: Arc<Mutex<AnonymousMailboxClient>>,
 }
 
 impl GroupFanout {
@@ -150,7 +150,7 @@ impl GroupFanout {
     /// * `mailbox_client` - Client for mailbox network operations
     pub fn new(
         mailbox_manager: Arc<GroupMailboxManager>,
-        mailbox_client: Arc<Mutex<MailboxClient>>,
+        mailbox_client: Arc<Mutex<AnonymousMailboxClient>>,
     ) -> Self {
         Self {
             mailbox_manager,
@@ -391,7 +391,7 @@ impl GroupFanout {
 
     /// Internal helper for sending to a member.
     async fn send_to_member_internal(
-        client: Arc<Mutex<MailboxClient>>,
+        client: Arc<Mutex<AnonymousMailboxClient>>,
         member: &MemberMailbox,
         encrypted_envelope: &[u8],
         envelope_type: i32,
@@ -652,7 +652,7 @@ impl GroupFanout {
 
     /// Internal helper for polling a single group mailbox.
     async fn poll_single_group_internal(
-        client: Arc<Mutex<MailboxClient>>,
+        client: Arc<Mutex<AnonymousMailboxClient>>,
         manager: Arc<GroupMailboxManager>,
         group_id: &ChannelId,
         public_key: &[u8; 32],

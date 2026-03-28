@@ -263,7 +263,7 @@ impl AnonGroupService {
         // Register the mailbox with the server using the blind signature
         let ttl_seconds = 30 * 24 * 60 * 60; // 30 days in seconds
         let mut mailbox_client =
-            self.grpc_pool.mailbox_client();
+            self.grpc_pool.anonymous_mailbox_client();
 
         let response = mailbox_client
             .create_ephemeral_mailbox(

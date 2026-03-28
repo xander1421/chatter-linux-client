@@ -258,7 +258,7 @@ impl InfrastructureContainer {
         #[cfg(target_os = "android")]
         {
             let passphrase_file = directories.data_dir().join(".db_key");
-            if let Ok(existing) = std::fs::read_to_string(passphrase_file) {
+            if let Ok(existing) = std::fs::read_to_string(&passphrase_file) {
                 let trimmed = existing.trim().to_string();
                 if !trimmed.is_empty() {
                     tracing::info!("Retrieved existing passphrase from app storage");
@@ -275,14 +275,14 @@ impl InfrastructureContainer {
             if let Some(parent) = passphrase_file.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            std::fs::write(passphrase_file, &passphrase)
+            std::fs::write(&passphrase_file, &passphrase)
                 .map_err(|e| ContextError::System(crate::error::SystemError::DirectoryCreate(e)))?;
 
             // Restrict permissions to owner only
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(passphrase_file, std::fs::Permissions::from_mode(0o600));
+                let _ = std::fs::set_permissions(&passphrase_file, std::fs::Permissions::from_mode(0o600));
             }
 
             tracing::info!("Generated and stored new passphrase in app storage");

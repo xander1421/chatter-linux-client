@@ -109,7 +109,7 @@ impl AppContext {
     pub fn init_device_inbox_provider(&self) {
         self.device_inbox_provider.get_or_init(|| {
             let message_client = self.infrastructure.grpc_pool.message_client();
-            let mailbox_client = self.infrastructure.grpc_pool.mailbox_client();
+            let mailbox_client = self.infrastructure.grpc_pool.anonymous_mailbox_client();
             let pipeline = Arc::new(crate::network::validation::MessageValidationPipeline::new());
 
             // Create anonymous DM poller for stranger messaging
@@ -142,7 +142,7 @@ impl AppContext {
     /// Initialize the group fanout (call after grpc connect).
     pub fn init_group_fanout(&self) {
         self.infrastructure.group_fanout.get_or_init(|| {
-            let mailbox_client = self.infrastructure.grpc_pool.mailbox_client();
+            let mailbox_client = self.infrastructure.grpc_pool.anonymous_mailbox_client();
             Arc::new(GroupFanout::new(
                 self.infrastructure.group_mailbox_manager.clone(),
                 Arc::new(tokio::sync::Mutex::new(mailbox_client)),

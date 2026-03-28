@@ -15,7 +15,7 @@ use crate::error::MailboxError;
 use crate::inbox::events::InboxEvent;
 use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::dm::{ConversationKey, DmConversationManager, PeerMailbox, TwoWayAnonymity};
-use crate::network::grpc::MailboxClient;
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::validation::MessageDeduplicator;
 use crate::services::message_gateway::{DmContent, MessageGateway};
 use crate::services::attachment::AttachmentService;
@@ -39,7 +39,7 @@ use crate::storage::{AttachmentRepository, ChannelRepository, MessageRepository,
 pub async fn poll_dm_mailboxes(
     two_way: &TwoWayAnonymity,
     conversation_manager: &DmConversationManager,
-    mailbox_client: &Arc<tokio::sync::Mutex<MailboxClient>>,
+    mailbox_client: &Arc<tokio::sync::Mutex<AnonymousMailboxClient>>,
     message_gateway: &Arc<MessageGateway>,
     event_tx: &broadcast::Sender<InboxEvent>,
     settings_repo: &Arc<SettingsRepository>,

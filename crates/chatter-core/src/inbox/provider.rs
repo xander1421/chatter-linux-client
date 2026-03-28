@@ -15,7 +15,7 @@ use crate::mailbox::dm::{DmConversationManager, TwoWayAnonymity};
 use crate::mailbox::group::{GroupCoordinator, GroupFanout, GroupMailboxManager};
 use crate::mailbox::timing::{TimingConfig, TimingObfuscation};
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::{AnonymousMailboxClient, MailboxClient, MessageClient};
+use crate::network::grpc::{AnonymousMailboxClient, MessageClient};
 use crate::network::validation::MessageValidationPipeline;
 use crate::services::message_gateway::MessageGateway;
 use crate::services::pairwise::PairwiseService;
@@ -44,7 +44,7 @@ const MAX_DECOY_MAILBOXES: usize = 10;
 /// The server will return "mailbox not found" but cannot distinguish
 /// this from a legitimate poll to an empty mailbox.
 async fn perform_dummy_poll(
-    mailbox_client: &Arc<tokio::sync::Mutex<MailboxClient>>,
+    mailbox_client: &Arc<tokio::sync::Mutex<AnonymousMailboxClient>>,
     decoys: &tokio::sync::RwLock<Vec<[u8; 32]>>,
 ) {
     // Ensure we have decoy addresses
@@ -125,8 +125,8 @@ pub struct DeviceInboxProvider {
     stats: Arc<RwLock<InboxStats>>,
     state: Arc<RwLock<InboxState>>,
     message_gateway: Arc<MessageGateway>,
-    /// Mailbox client for DM polling.
-    mailbox_client: Arc<tokio::sync::Mutex<MailboxClient>>,
+    /// Mailbox client for DM polling (anonymous - no auth headers).
+    mailbox_client: Arc<tokio::sync::Mutex<AnonymousMailboxClient>>,
     /// Database for DM conversation state.
     database: Arc<Database>,
     /// gRPC client pool for friend request polling.
@@ -169,7 +169,7 @@ impl DeviceInboxProvider {
     pub fn new(
         config: InboxConfig,
         message_client: Arc<tokio::sync::Mutex<MessageClient>>,
-        mailbox_client: Arc<tokio::sync::Mutex<MailboxClient>>,
+        mailbox_client: Arc<tokio::sync::Mutex<AnonymousMailboxClient>>,
         pipeline: Arc<MessageValidationPipeline>,
         message_gateway: Arc<MessageGateway>,
         database: Arc<Database>,
@@ -184,7 +184,7 @@ impl DeviceInboxProvider {
     pub fn with_event_bus(
         config: InboxConfig,
         message_client: Arc<tokio::sync::Mutex<MessageClient>>,
-        mailbox_client: Arc<tokio::sync::Mutex<MailboxClient>>,
+        mailbox_client: Arc<tokio::sync::Mutex<AnonymousMailboxClient>>,
         pipeline: Arc<MessageValidationPipeline>,
         message_gateway: Arc<MessageGateway>,
         database: Arc<Database>,
@@ -345,7 +345,7 @@ impl DeviceInboxProvider {
         event_tx: broadcast::Sender<InboxEvent>,
         stats: Arc<RwLock<InboxStats>>,
         message_gateway: Arc<MessageGateway>,
-        mailbox_client: Arc<tokio::sync::Mutex<MailboxClient>>,
+        mailbox_client: Arc<tokio::sync::Mutex<AnonymousMailboxClient>>,
         database: Arc<Database>,
         grpc_pool: Arc<GrpcClientPool>,
         shutdown_rx: watch::Receiver<bool>,
