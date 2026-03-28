@@ -28,6 +28,8 @@ use crate::services::signal_service::SignalService;
 use crate::services::typing_service::TypingService;
 use crate::services::user::UserService;
 
+use crate::state::OrgState;
+
 use super::infrastructure::InfrastructureContainer;
 use super::ContextError;
 
@@ -89,6 +91,8 @@ pub struct ServiceContainer {
     pub local_ai_service: Arc<LocalAIService>,
     /// Jarvis AI assistant service.
     pub jarvis_service: Arc<JarvisService>,
+    /// Organization state (shared with AuthService for org context).
+    pub org_state: OrgState,
 }
 
 impl ServiceContainer {
@@ -140,7 +144,8 @@ impl ServiceContainer {
             infra.database.clone(),
         ));
 
-        // 6. Auth service
+        // 6. Auth service (with org state for post-login org context)
+        let org_state = OrgState::new();
         let auth_service = Arc::new(AuthService::new(
             infra.grpc_pool.clone(),
             infra.identity_manager.clone(),
@@ -149,6 +154,7 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
             infra.key_store.clone(),
             infra.auth_interceptor.clone(),
+            org_state.clone(),
         ));
 
         // 7. User service
@@ -256,6 +262,7 @@ impl ServiceContainer {
             infra.jarvis_memory_repo.clone(),
             infra.jarvis_graph_repo.clone(),
             local_ai.clone(),
+            infra.event_bus.clone(),
         ));
 
         // 21. Typing service for typing indicators
@@ -298,6 +305,7 @@ impl ServiceContainer {
             jarvis_service,
             typing_service,
             channel_bootstrap_service,
+            org_state,
         })
     }
 }

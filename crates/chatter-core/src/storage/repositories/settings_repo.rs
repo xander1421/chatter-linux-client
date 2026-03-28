@@ -31,6 +31,8 @@ pub mod keys {
     pub const DEVICE_AUTH_TOKEN: &str = "auth.device_token";
     /// Current user's plaintext display name
     pub const DISPLAY_NAME: &str = "auth.display_name";
+    /// Currently active organization ID (UUID string)
+    pub const CURRENT_ORG_ID: &str = "auth.current_org_id";
     /// Current user's avatar (raw image bytes, stored locally, encrypted when shared)
     pub const AVATAR: &str = "profile.avatar";
 

@@ -34,8 +34,8 @@ use crate::services::signal_service::SignalService;
 use crate::services::user::UserService;
 use crate::services::typing_service::TypingService;
 use crate::state::{
-    AuthState, ChatState, JarvisState, MessageState, OfflineState, PinnedState, PresenceState,
-    PrivacyState, StreamingState, UIState, UserState,
+    AuthState, ChatState, JarvisState, MessageState, OfflineState, OrgState, PinnedState,
+    PresenceState, PrivacyState, StreamingState, UIState, UserState,
 };
 use crate::storage::Database;
 use crate::system::Directories;
@@ -88,6 +88,7 @@ pub struct CoreServices {
     pub privacy_state: PrivacyState,
     pub offline_state: OfflineState,
     pub streaming_state: StreamingState,
+    pub org_state: OrgState,
     pub pinned_state: PinnedState,
     pub jarvis_state: JarvisState,
 
@@ -167,6 +168,7 @@ impl CoreServices {
             privacy_state: PrivacyState::new(),
             offline_state: OfflineState::new(),
             streaming_state: StreamingState::new(),
+            org_state: services.org_state.clone(),
             pinned_state: PinnedState::new(),
             jarvis_state: JarvisState::new(),
             event_bus: EventBus::new(),

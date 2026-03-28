@@ -34,6 +34,7 @@ pub mod call_state;
 pub mod chat_state;
 pub mod message_state;
 pub mod offline_state;
+pub mod org_state;
 pub mod pinned_state;
 pub mod presence_state;
 pub mod privacy_state;
@@ -53,6 +54,9 @@ pub use privacy_state::{ConversationPrivacySettings, PrivacyState, PrivacyStateD
 pub use store::{StateSnapshot, Store};
 pub use ui_state::{ModalType, Theme, UIState, UIStateData};
 pub use user_state::{UserState, UserStateData};
+
+// Organization state re-exports
+pub use org_state::{OrgState, OrgStateData, OrgSummary};
 
 // Streaming and offline state re-exports
 pub use offline_state::{OfflineState, OfflineStateData};

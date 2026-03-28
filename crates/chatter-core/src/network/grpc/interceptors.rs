@@ -42,10 +42,12 @@ pub enum AuthMode {
 /// Thread-safe authentication interceptor for gRPC requests.
 ///
 /// Injects appropriate authorization headers based on the current auth mode.
+/// Also injects `X-Org-Id` header when an organization context is active.
 /// Designed to be cloned and shared across multiple gRPC clients.
 #[derive(Clone)]
 pub struct AuthInterceptor {
     auth: Arc<RwLock<AuthMode>>,
+    org_id: Arc<RwLock<Option<String>>>,
 }
 
 impl AuthInterceptor {
@@ -53,7 +55,23 @@ impl AuthInterceptor {
     pub fn new() -> Self {
         Self {
             auth: Arc::new(RwLock::new(AuthMode::None)),
+            org_id: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Set the active organization ID for the `X-Org-Id` header.
+    pub fn set_org_id(&self, org_id: String) {
+        *self.org_id.write() = Some(org_id);
+    }
+
+    /// Clear the active organization ID.
+    pub fn clear_org_id(&self) {
+        *self.org_id.write() = None;
+    }
+
+    /// Get the current organization ID, if set.
+    pub fn current_org_id(&self) -> Option<String> {
+        self.org_id.read().clone()
     }
 
     /// Set bearer token authentication (device token).
@@ -207,6 +225,17 @@ impl Interceptor for AuthInterceptor {
             AuthMode::None => {
                 // No authentication header
             }
+        }
+
+        // Inject X-Org-Id header when an organization context is active
+        let org_id = self.org_id.read();
+        if let Some(ref id) = *org_id {
+            request.metadata_mut().insert(
+                "x-org-id",
+                id.parse().map_err(|_| {
+                    Status::internal("invalid org-id header value")
+                })?,
+            );
         }
 
         Ok(request)
