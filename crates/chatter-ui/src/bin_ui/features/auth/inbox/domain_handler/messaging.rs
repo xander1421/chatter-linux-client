@@ -302,7 +302,7 @@ pub(super) fn handle_reaction_update(
     message_id: &str,
     emoji: &str,
     remove: bool,
-    _timestamp: u64,
+    timestamp: u64,
 ) {
     let weak = window.clone();
     let message_id = message_id.to_string();
@@ -314,7 +314,9 @@ pub(super) fn handle_reaction_update(
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.message_id.as_str() == message_id {
+                // Match by message_id (channels/DMs use UUID) OR by timestamp_ns
+                // (anon groups use timestamp-based MessageId which doesn't match the UUID in the model)
+                if msg.message_id.as_str() == message_id || (timestamp > 0 && msg.timestamp_ns.as_str() == timestamp.to_string().as_str()) {
                     let mut updated = msg.clone();
                     let new_summary = super::super::utils::update_reaction_summary(
                         &msg.reaction_summary.to_string(), &emoji, remove,

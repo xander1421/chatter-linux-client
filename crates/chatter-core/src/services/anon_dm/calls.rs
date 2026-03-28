@@ -9,7 +9,6 @@ use uuid::Uuid;
 
 use crate::domain::anon_dm::AnonDmId;
 use crate::mailbox::CallRoomToken;
-use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::content_v1::{
     self, anon_call_answer::DeclineReason, anon_call_offer::CallType, AnonCallAnswer,
     AnonCallHangup, AnonCallOffer, AnonCallToken, Content,
@@ -376,12 +375,8 @@ impl AnonDmService {
         display_name: &str,
         video: bool,
     ) -> Result<AnonCallRoomCredentials, AnonDmError> {
-        // Get channel (no auth interceptor used by AnonymousMailboxClient)
-        let channel = self.grpc_pool.try_channel().ok_or_else(|| {
-            AnonDmError::MessageError("Not connected to server".to_string())
-        })?;
-
-        let mut client = AnonymousMailboxClient::new(channel);
+        // Use anonymous mailbox client from pool (no auth headers, creates lazy channel if needed)
+        let mut client = self.grpc_pool.anonymous_mailbox_client();
 
         let call_type = if video { 2 } else { 1 }; // 1 = voice, 2 = video
 

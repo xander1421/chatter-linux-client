@@ -62,8 +62,6 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // Worker threads remain alive for rt_handle().spawn() from callbacks.
     let _guard = rt.enter();
 
-    // Start polling Android display insets (keyboard, status bar, nav bar)
-    // and updating Slint safe-area properties so the UI resizes correctly.
     setup_keyboard_inset_tracking(&app_state.window);
 
     app_run(app_state);
@@ -162,6 +160,7 @@ pub async fn app_init() -> AppState {
         tracing::info!("Slint OpenGL ES backend selected for hardware-accelerated video");
     }
 
+    #[allow(unused_mut)]
     let mut builder = chatter_core::client::ChatterClient::builder();
     #[cfg(target_os = "android")]
     {
@@ -200,6 +199,15 @@ pub async fn app_init() -> AppState {
     };
 
     let window = MainWindow::new().expect("Failed to create window");
+
+    // Desktop: explicitly zero safe-area insets (only Android sets non-zero values
+    // via JNI inset polling). Prevents any stale or default-mismatch values from
+    // pushing the content area away from window edges.
+    #[cfg(not(target_os = "android"))]
+    {
+        window.set_safe_area_top(0.0);
+        window.set_safe_area_bottom(0.0);
+    }
 
     if bin_ui::video::init_hw_video(&window) {
         tracing::info!("Hardware-accelerated video enabled");
