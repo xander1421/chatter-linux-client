@@ -85,8 +85,10 @@ impl MessageService {
         let dm_bootstrap = DmBootstrap::new(self.database.clone());
         let mut mailbox_client =
             grpc_pool.mailbox_client();
+        let mut anon_mailbox_client =
+            grpc_pool.anonymous_mailbox_client();
 
-        match dm_bootstrap.initiate_dm(*peer_id, &mut mailbox_client).await {
+        match dm_bootstrap.initiate_dm(*peer_id, &mut mailbox_client, &mut anon_mailbox_client).await {
             Ok(bootstrap_result) => {
                 self.send_bootstrap_message(
                     auth_client,

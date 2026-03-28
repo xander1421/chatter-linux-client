@@ -22,7 +22,7 @@ use crate::mailbox::anon_dm::{AnonDmPollResult, AnonDmPoller};
 use crate::mailbox::dm::{DmConversationManager, PollResult, TwoWayAnonymity};
 use crate::mailbox::group::{GroupFanout, GroupPollResult};
 use crate::mailbox::timing::{TimingConfig, TimingObfuscation};
-use crate::network::grpc::{AnonymousMailboxClient, MailboxClient};
+use crate::network::grpc::AnonymousMailboxClient;
 
 /// Default polling interval for DM mailboxes (5 seconds for real-time chat).
 /// NDSS '21 measured Signal delivery at ~1.5s; 5s balances latency vs server load.
@@ -253,7 +253,7 @@ impl MailboxPoller {
     ///
     /// The server will return "mailbox not found" but cannot distinguish
     /// this from a legitimate poll to an empty mailbox.
-    async fn perform_dummy_poll(&self, client: &mut MailboxClient) -> Result<(), MailboxError> {
+    async fn perform_dummy_poll(&self, client: &mut AnonymousMailboxClient) -> Result<(), MailboxError> {
         let decoys = self.decoys.read().await;
         if decoys.is_empty() {
             return Ok(());
@@ -287,7 +287,7 @@ impl MailboxPoller {
     /// Poll all DM mailboxes.
     async fn poll_dm_mailboxes(
         &self,
-        client: &mut MailboxClient,
+        client: &mut AnonymousMailboxClient,
     ) -> Result<Vec<PollResult>, MailboxError> {
         let mut results = Vec::new();
 
@@ -351,7 +351,7 @@ impl MailboxPoller {
     /// Uses GroupFanout for actual polling with timing obfuscation and dummy polls.
     async fn poll_group_mailboxes(
         &self,
-        client: &mut MailboxClient,
+        client: &mut AnonymousMailboxClient,
     ) -> Result<Vec<GroupPollResult>, MailboxError> {
         // Apply timing delay before polling
         self.timing.delay_before_poll().await;
@@ -432,12 +432,10 @@ impl MailboxPoller {
     ///
     /// # Arguments
     ///
-    /// * `client` - Authenticated mailbox client for DM and group polling
-    /// * `anon_client` - Optional anonymous mailbox client for anon DM polling (no JWT auth)
+    /// * `client` - Anonymous mailbox client for all polling operations (no auth headers)
     pub async fn poll_all(
         &self,
-        client: &mut MailboxClient,
-        anon_client: Option<&mut AnonymousMailboxClient>,
+        client: &mut AnonymousMailboxClient,
     ) -> Result<UnifiedPollResult, MailboxError> {
         // Ensure we have decoy mailboxes
         self.ensure_decoys().await;
@@ -445,16 +443,10 @@ impl MailboxPoller {
         // Record initial dummy poll count
         let initial_dummy_polls = self.stats.read().await.dummy_polls;
 
-        // Poll DMs, groups, and anonymous DMs
+        // Poll DMs, groups, and anonymous DMs (all anonymous operations)
         let dm_results = self.poll_dm_mailboxes(client).await?;
         let group_results = self.poll_group_mailboxes(client).await?;
-
-        // Poll anon DMs if client provided
-        let anon_dm_results = if let Some(anon) = anon_client {
-            self.poll_anon_dm_mailboxes(anon).await?
-        } else {
-            Vec::new()
-        };
+        let anon_dm_results = self.poll_anon_dm_mailboxes(client).await?;
 
         // Maybe one final dummy poll
         if self.should_dummy_poll() {
@@ -478,14 +470,14 @@ impl MailboxPoller {
     /// # Arguments
     ///
     /// * `shutdown` - Broadcast receiver for shutdown signal
-    /// * `client_fn` - Function to get a MailboxClient for polling
+    /// * `client_fn` - Function to get an AnonymousMailboxClient for polling
     pub async fn run<F, Fut>(
         &self,
         mut shutdown: broadcast::Receiver<()>,
         client_fn: F,
     ) where
         F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<MailboxClient, MailboxError>>,
+        Fut: std::future::Future<Output = Result<AnonymousMailboxClient, MailboxError>>,
     {
         tracing::info!(
             interval_secs = self.config.poll_interval.as_secs(),
@@ -508,9 +500,7 @@ impl MailboxPoller {
                 _ = tokio::time::sleep(interval) => {
                     match client_fn().await {
                         Ok(mut client) => {
-                            // Note: anon DM polling requires AnonymousMailboxClient
-                            // This run() method doesn't support it; use poll_all() directly
-                            match self.poll_all(&mut client, None).await {
+                            match self.poll_all(&mut client).await {
                                 Ok(result) => {
                                     let total_messages: usize = result.dm_results.iter()
                                         .map(|r| r.messages.len())

@@ -22,7 +22,7 @@ use crate::domain::UserId;
 use crate::error::MailboxError;
 use crate::mailbox::dm::{ConversationKey, DmConversationManager, DmMailbox, PeerMailbox};
 use crate::mailbox::{MailboxToken, TokenManager};
-use crate::network::grpc::MailboxClient;
+use crate::network::grpc::{AnonymousMailboxClient, MailboxClient};
 use crate::proto::content_v1::{content, Content, KeyExchange};
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
@@ -173,6 +173,7 @@ impl DmBootstrap {
         &self,
         peer_id: UserId,
         mailbox_client: &mut MailboxClient,
+        anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<BootstrapResult, MailboxError> {
         // Acquire bootstrap lock for this peer to prevent concurrent operations
         {
@@ -188,7 +189,7 @@ impl DmBootstrap {
         }
 
         // Use a guard to ensure cleanup on all exit paths
-        let result = self.initiate_dm_inner(peer_id, mailbox_client).await;
+        let result = self.initiate_dm_inner(peer_id, mailbox_client, anon_mailbox_client).await;
 
         // Release lock
         {
@@ -204,6 +205,7 @@ impl DmBootstrap {
         &self,
         peer_id: UserId,
         mailbox_client: &mut MailboxClient,
+        anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<BootstrapResult, MailboxError> {
         tracing::info!(peer_id = %peer_id, "DM bootstrap: step 1 - checking existing conversation");
 
@@ -234,13 +236,14 @@ impl DmBootstrap {
         tracing::info!(peer_id = %peer_id, "DM bootstrap: step 3 - creating ephemeral mailbox");
 
         // 3. Create ephemeral mailbox on server (with retry for transient transport errors)
+        //    Uses anonymous client to avoid leaking device identity alongside blind signature
         let mut retried = false;
         let response = {
             const MAX_RETRIES: u32 = 3;
             let mut attempt = 0;
             loop {
                 attempt += 1;
-                match mailbox_client
+                match anon_mailbox_client
                     .create_ephemeral_mailbox(
                         token.public_key.clone(),
                         token.signature.clone(),
@@ -408,6 +411,7 @@ impl DmBootstrap {
         sender_id: UserId,
         ephemeral_pk: &[u8],
         mailbox_client: &mut MailboxClient,
+        anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<Option<BootstrapResponse>, MailboxError> {
         // Validate 64-byte format (bootstrap vs regular key exchange)
         if ephemeral_pk.len() != 64 {
@@ -430,7 +434,7 @@ impl DmBootstrap {
 
         // Use inner function for cleanup
         let result = self
-            .handle_incoming_bootstrap_inner(sender_id, ephemeral_pk, mailbox_client)
+            .handle_incoming_bootstrap_inner(sender_id, ephemeral_pk, mailbox_client, anon_mailbox_client)
             .await;
 
         // Release lock
@@ -448,6 +452,7 @@ impl DmBootstrap {
         sender_id: UserId,
         ephemeral_pk: &[u8],
         mailbox_client: &mut MailboxClient,
+        anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<Option<BootstrapResponse>, MailboxError> {
         // Extract peer's mailbox address and conversation key
         let mut peer_mailbox_pk = [0u8; 32];
@@ -479,7 +484,7 @@ impl DmBootstrap {
                 let mut attempt = 0;
                 loop {
                     attempt += 1;
-                    match mailbox_client
+                    match anon_mailbox_client
                         .create_ephemeral_mailbox(
                             token.public_key.clone(),
                             token.signature.clone(),

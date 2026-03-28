@@ -118,7 +118,8 @@ impl ChannelService {
         // Setup group mailbox for encrypted channels (NDSS '21 paper)
         let mailbox_setup = if setup_mailbox {
             let mut mailbox_client = self.mailbox_client();
-            match self.setup_group_mailbox_internal(channel_id, &mut mailbox_client).await {
+            let mut anon_mailbox_client = self.anonymous_mailbox_client();
+            match self.setup_group_mailbox_internal(channel_id, &mut mailbox_client, &mut anon_mailbox_client).await {
                 Ok(Some(mut setup)) => {
                     // Include the SKDM in the result so caller can distribute it
                     setup.skdm = skdm_opt;
@@ -396,7 +397,8 @@ impl ChannelService {
             // Setup group mailbox for encrypted channels (NDSS '21 paper)
             let mailbox_setup = if setup_mailbox {
                 let mut mailbox_client = self.mailbox_client();
-                match self.setup_group_mailbox_internal(channel_id, &mut mailbox_client).await {
+                let mut anon_mailbox_client = self.anonymous_mailbox_client();
+                match self.setup_group_mailbox_internal(channel_id, &mut mailbox_client, &mut anon_mailbox_client).await {
                     Ok(Some(setup)) => Some(setup),
                     Ok(None) => None,
                     Err(e) => {

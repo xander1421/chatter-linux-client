@@ -32,7 +32,7 @@ use crate::inbox::handlers::DomainEvent;
 use crate::mailbox::dm::{release_bootstrap_lock, BootstrapResponse, DmBootstrap};
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::MailboxClient;
+use crate::network::grpc::{AnonymousMailboxClient, MailboxClient};
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::SignalService;
 use crate::storage::{Database, KeyStore, SettingsRepository};
@@ -330,9 +330,10 @@ async fn handle_bootstrap_request_async(
     // Create DmBootstrap and initiate
     let dm_bootstrap = DmBootstrap::new(database.clone());
     let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
+    let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
 
     let bootstrap_result = dm_bootstrap
-        .initiate_dm(peer_id, &mut mailbox_client)
+        .initiate_dm(peer_id, &mut mailbox_client, &mut anon_mailbox_client)
         .await
         .map_err(|e| format!("Failed to initiate bootstrap: {}", e))?;
 
@@ -456,9 +457,10 @@ async fn handle_bootstrap_async(
     tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Creating DmBootstrap");
     let dm_bootstrap = DmBootstrap::new(database.clone());
 
-    // Create mailbox client
-    tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Creating mailbox client");
+    // Create mailbox clients (authenticated for token requests, anonymous for mailbox creation)
+    tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Creating mailbox clients");
     let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
+    let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
 
     // Release the bootstrap lock that was held since sending REQUEST
     // (Higher UUID holds lock while waiting for MESSAGE - now release it for processing)
@@ -468,7 +470,7 @@ async fn handle_bootstrap_async(
     // Process the incoming bootstrap
     tracing::info!(peer = %peer_id, "BOOTSTRAP[3/4] Calling handle_incoming_bootstrap");
     let response = match dm_bootstrap
-        .handle_incoming_bootstrap(peer_id, ephemeral_public_key, &mut mailbox_client)
+        .handle_incoming_bootstrap(peer_id, ephemeral_public_key, &mut mailbox_client, &mut anon_mailbox_client)
         .await
     {
         Ok(Some(resp)) => {
@@ -499,7 +501,6 @@ async fn handle_bootstrap_async(
         &mut auth_client,
         &key_store,
         channel.clone(),
-        auth_interceptor.clone(),
     )
     .await?;
 
@@ -519,7 +520,6 @@ async fn handle_bootstrap_async(
         &signal_service,
         &mut auth_client,
         channel,
-        auth_interceptor,
     )
     .await;
 
@@ -539,7 +539,6 @@ async fn send_pending_messages_after_bootstrap(
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
     channel: tonic::transport::Channel,
-    auth_interceptor: crate::network::grpc::interceptors::AuthInterceptor,
 ) {
     use prost::Message as ProstMessage;
     use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
@@ -584,7 +583,7 @@ async fn send_pending_messages_after_bootstrap(
 
     // Use shared signal_service (passed in) to keep session counters in sync
     let conversation_manager = DmConversationManager::new(database.clone());
-    let mut mailbox_client = MailboxClient::new(channel.clone(), auth_interceptor.clone());
+    let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
 
     // Get conversation state for sending
     let conversation = match conversation_manager.load_conversation(&peer_id) {
@@ -670,8 +669,8 @@ async fn send_pending_messages_after_bootstrap(
             }
         };
 
-        // Send to peer's mailbox
-        if let Err(e) = mailbox_client
+        // Send to peer's mailbox (anonymous — no auth headers)
+        if let Err(e) = anon_mailbox_client
             .send_to_ephemeral_mailbox(
                 peer_mailbox.public_key.to_vec(),
                 dm_encrypted,
@@ -717,7 +716,6 @@ async fn send_bootstrap_response_with_envelope(
     auth_client: &mut AuthClient,
     key_store: &Arc<KeyStore>,
     channel: tonic::transport::Channel,
-    auth_interceptor: crate::network::grpc::interceptors::AuthInterceptor,
 ) -> Result<(), String> {
     let peer_id = response.peer_id;
 
@@ -761,13 +759,10 @@ async fn send_bootstrap_response_with_envelope(
     );
 
     // Send to peer's ephemeral mailbox (anonymous send, no auth required)
-    // Bootstrap response uses MailboxClient directly because:
-    // - This is part of the bootstrap handshake, not regular messaging
-    // - TwoWayAnonymity is for post-bootstrap message exchange
-    // - We already have peer_mailbox_public_key from handle_incoming_bootstrap
-    let mut mailbox_client = MailboxClient::new(channel, auth_interceptor);
+    // Uses anonymous client to avoid leaking device identity on anonymous endpoint
+    let mut anon_client = AnonymousMailboxClient::new(channel);
 
-    mailbox_client
+    anon_client
         .send_to_ephemeral_mailbox(
             response.peer_mailbox_public_key.to_vec(),
             envelope,

@@ -6,6 +6,7 @@ use crate::domain::channel::ChannelType;
 use crate::domain::ids::ChannelId;
 use crate::mailbox::group::GroupMailboxSetupResult;
 use crate::network::grpc::mailbox_client::MailboxClient;
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::services::current_user::CurrentUserProvider;
 
 use crate::services::channel::error::ChannelError;
@@ -35,14 +36,16 @@ impl ChannelService {
         channel_id: &ChannelId,
     ) -> Result<Option<GroupMailboxSetupResult>, ChannelError> {
         let mut mailbox_client = self.mailbox_client();
-        self.setup_group_mailbox_internal(channel_id, &mut mailbox_client).await
+        let mut anon_mailbox_client = self.anonymous_mailbox_client();
+        self.setup_group_mailbox_internal(channel_id, &mut mailbox_client, &mut anon_mailbox_client).await
     }
 
-    /// Internal: Setup group mailbox using an existing client.
+    /// Internal: Setup group mailbox using existing clients.
     pub(super) async fn setup_group_mailbox_internal(
         &self,
         channel_id: &ChannelId,
         mailbox_client: &mut MailboxClient,
+        anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<Option<GroupMailboxSetupResult>, ChannelError> {
         let _ = self.settings_repo.current_user_id()?;
 
@@ -88,7 +91,7 @@ impl ChannelService {
         );
 
         // Setup the ephemeral mailbox via GroupCoordinator
-        match self.group_coordinator.setup_group_mailbox(channel_id, mailbox_client).await {
+        match self.group_coordinator.setup_group_mailbox(channel_id, mailbox_client, anon_mailbox_client).await {
             Ok(setup_result) => {
                 tracing::info!(
                     channel_id = %channel_id,

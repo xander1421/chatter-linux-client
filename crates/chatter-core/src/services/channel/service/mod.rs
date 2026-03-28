@@ -25,6 +25,7 @@ use crate::mailbox::group::{GroupCoordinator, GroupMailboxSetupResult};
 use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::mailbox_client::MailboxClient;
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::chat_v1::{self, channel_event};
 use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::channel_repo::ChannelRepository;
@@ -77,9 +78,14 @@ impl ChannelService {
         self.grpc_pool.channel_client()
     }
 
-    /// Create a mailbox client for network operations.
+    /// Create an authenticated mailbox client for token requests.
     pub(crate) fn mailbox_client(&self) -> MailboxClient {
         self.grpc_pool.mailbox_client()
+    }
+
+    /// Create an anonymous mailbox client for mailbox creation/polling.
+    pub(crate) fn anonymous_mailbox_client(&self) -> AnonymousMailboxClient {
+        self.grpc_pool.anonymous_mailbox_client()
     }
 
     // ==================== Create Operations ====================
@@ -194,7 +200,8 @@ impl ChannelService {
         tracing::info!(channel_id = %channel.id, setup_mailbox = setup_mailbox, "About to setup group mailbox");
         let mailbox_setup = if setup_mailbox {
             let mut mailbox_client = self.mailbox_client();
-            match self.setup_group_mailbox_internal(&channel.id, &mut mailbox_client).await {
+            let mut anon_mailbox_client = self.anonymous_mailbox_client();
+            match self.setup_group_mailbox_internal(&channel.id, &mut mailbox_client, &mut anon_mailbox_client).await {
                 Ok(Some(setup)) => Some(setup),
                 Ok(None) => None,
                 Err(e) => {

@@ -367,7 +367,7 @@ impl CoreServices {
 
         self.device_inbox_provider.get_or_init(|| {
             let message_client = self.grpc_pool.message_client();
-            let mailbox_client = self.grpc_pool.mailbox_client();
+            let mailbox_client = self.grpc_pool.anonymous_mailbox_client();
             let pipeline = std::sync::Arc::new(crate::network::validation::MessageValidationPipeline::new());
 
             let anon_dm_poller = std::sync::Arc::new(AnonDmPoller::new(

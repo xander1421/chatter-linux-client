@@ -19,7 +19,7 @@ use crate::domain::{ChannelId, UserId};
 use crate::error::MailboxError;
 use crate::mailbox::group::{GroupMailbox, GroupMailboxManager, MemberMailbox};
 use crate::mailbox::{MailboxToken, TokenManager};
-use crate::network::grpc::MailboxClient;
+use crate::network::grpc::{AnonymousMailboxClient, MailboxClient};
 use crate::proto::content_v1::{GroupMailboxAddress, SenderKeyDistribution};
 use crate::storage::Database;
 use crate::util::time::TimestampNanos;
@@ -90,6 +90,7 @@ impl GroupCoordinator {
         &self,
         channel_id: &ChannelId,
         mailbox_client: &mut MailboxClient,
+        anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<GroupMailboxSetupResult, MailboxError> {
         tracing::info!(channel_id = %channel_id, "Starting group mailbox setup");
 
@@ -110,19 +111,20 @@ impl GroupCoordinator {
             }
         }
 
-        // Get available token or request new ones
+        // Get available token or request new ones (authenticated — rate limited per user)
         tracing::info!(channel_id = %channel_id, "Ensuring token...");
         let token = self.ensure_token(mailbox_client).await?;
         tracing::info!(channel_id = %channel_id, "Token obtained");
 
         // Create ephemeral mailbox on server (with retry for transient transport errors)
+        // Uses anonymous client to avoid leaking device identity alongside blind signature
         tracing::info!(channel_id = %channel_id, "Creating ephemeral mailbox on server...");
         let response = {
             const MAX_RETRIES: u32 = 3;
             let mut attempt = 0;
             loop {
                 attempt += 1;
-                match mailbox_client
+                match anon_mailbox_client
                     .create_ephemeral_mailbox(
                         token.public_key.clone(),
                         token.signature.clone(),
