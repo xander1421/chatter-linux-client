@@ -19,6 +19,7 @@ use crate::mailbox::blind_signature::{
     blind_key, unblind, BlindingOperation, BlindingSecret, MessageRandomizer, ServerPublicKey,
 };
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::grpc::mailbox_client::MailboxClient;
 use crate::proto::mailbox_v1::{self, EnvelopeType};
 use crate::storage::repositories::settings_repo::SettingsRepository;
@@ -152,8 +153,8 @@ impl MailboxManager {
             }
         }
 
-        // Fetch from server
-        let mut client = self.create_mailbox_client();
+        // Fetch from server (anonymous — no auth needed for public key retrieval)
+        let mut client = self.create_anonymous_mailbox_client();
         let response = client.get_blind_signature_public_key().await?;
 
         // Parse and cache in memory - use server-provided key_id and valid_until
@@ -327,7 +328,7 @@ impl MailboxManager {
         let signature = token.signature.ok_or(MailboxError::NoTokensAvailable)?;
         let message_randomizer = token.msg_randomizer.as_bytes().map(|b| b.to_vec()).unwrap_or_default();
         
-        let mut client = self.create_mailbox_client();
+        let mut client = self.create_anonymous_mailbox_client();
         let response = client
             .create_ephemeral_mailbox(
                 token.public_key.as_bytes().to_vec(),
@@ -386,8 +387,8 @@ impl MailboxManager {
         encrypted_envelope: Vec<u8>,
         envelope_type: EnvelopeType,
     ) -> Result<(), MailboxError> {
-        let mut client = self.create_mailbox_client();
-        
+        let mut client = self.create_anonymous_mailbox_client();
+
         let _response = client
             .send_to_ephemeral_mailbox(
                 destination_public_key.to_vec(),
@@ -421,8 +422,8 @@ impl MailboxManager {
                 .ok_or_else(|| MailboxError::MailboxNotFound(conversation_id.to_string()))?
         };
 
-        // Get challenge from server
-        let mut client = self.create_mailbox_client();
+        // Get challenge from server (anonymous — no auth headers)
+        let mut client = self.create_anonymous_mailbox_client();
         let challenge_response = client
             .get_mailbox_challenge(mailbox.public_key.as_bytes().to_vec())
             .await?;
@@ -464,8 +465,8 @@ impl MailboxManager {
                 .ok_or_else(|| MailboxError::MailboxNotFound(conversation_id.to_string()))?
         };
 
-        // Get challenge
-        let mut client = self.create_mailbox_client();
+        // Get challenge (anonymous — no auth headers)
+        let mut client = self.create_anonymous_mailbox_client();
         let challenge_response = client
             .get_mailbox_challenge(mailbox.public_key.as_bytes().to_vec())
             .await?;
@@ -487,9 +488,17 @@ impl MailboxManager {
         Ok(())
     }
 
-    /// Helper to create a MailboxClient from the pool.
+    /// Helper to create an authenticated MailboxClient (for `get_mailbox_tokens` only).
     fn create_mailbox_client(&self) -> MailboxClient {
         self.client_pool.mailbox_client()
+    }
+
+    /// Helper to create an anonymous MailboxClient (no auth headers).
+    ///
+    /// Used for all ephemeral mailbox operations that must NOT reveal user identity:
+    /// create, poll, send, acknowledge, get_challenge, get_blind_signature_public_key.
+    fn create_anonymous_mailbox_client(&self) -> AnonymousMailboxClient {
+        self.client_pool.anonymous_mailbox_client()
     }
 
     /// Get the number of tokens currently available in the pool.
