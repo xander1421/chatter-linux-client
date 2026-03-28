@@ -786,9 +786,13 @@ async fn t6_inner() {
     let uid_b = register_and_start(&client_b, &unique_user("t6b"), "Bob").await;
     let grp_name = format!("e2e-grp-{}", chrono::Utc::now().timestamp_millis() % 100000);
     let grp = client_a.create_channel(&grp_name, ChannelType::Private, None, Some("test"), None, vec![uid_b]).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Wait for SKDM propagation — needs longer in suite mode when server is under load
+    tokio::time::sleep(Duration::from_secs(5)).await;
     client_b.subscribe_channel_messages(&grp.id);
+    // Subscribe to events AFTER SKDM wait to avoid stale events from previous tests
     let mut events_b = client_b.subscribe_events();
+    // Brief drain period for any pending events
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let msg = "T6 group message";
     client_a.send_text(ActiveConversation::Channel(grp.id.clone()), msg).await.unwrap();
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
