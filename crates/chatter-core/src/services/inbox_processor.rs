@@ -1266,7 +1266,17 @@ impl InboxEventProcessor {
                         };
 
                         match store_result {
-                            Ok(msg_id) => tracing::debug!(group_id = %anon_group_id, message_id = %msg_id, "Stored anon group message"),
+                            Ok(msg_id) => {
+                                tracing::debug!(group_id = %anon_group_id, message_id = %msg_id, "Stored anon group message");
+                                // Emit domain event so UI updates in real-time
+                                self.event_bus.emit_domain(DomainEvent::AnonGroupMessageReceived {
+                                    group_id: anon_group_id,
+                                    sender_id: peer_id,
+                                    message_id: msg_id,
+                                    inner_content: inner_content.clone(),
+                                    sent_at,
+                                });
+                            }
                             Err(e) => tracing::error!(group_id = %anon_group_id, error = %e, "Failed to store anon group message"),
                         }
                     }
@@ -1289,9 +1299,15 @@ impl InboxEventProcessor {
             }
             Some(content::Content::Edit(edit)) => {
                 let new_text = edit.data_message.as_ref().map(|dm| dm.body.clone()).unwrap_or_default();
-                let _ = self.anon_group_service.update_message_text_by_sender(
+                if let Ok(true) = self.anon_group_service.update_message_text_by_sender(
                     &anon_group_id, &peer_id, edit.target_sent_timestamp, &new_text,
-                );
+                ) {
+                    self.event_bus.emit_domain(DomainEvent::AnonGroupMessageEdited {
+                        group_id: anon_group_id,
+                        message_timestamp: edit.target_sent_timestamp,
+                        new_text,
+                    });
+                }
             }
             // ============================================================
             // Group management messages (arrive as top-level Content, not
