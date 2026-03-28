@@ -518,6 +518,9 @@ mod tests {
             avatar_url: "https://example.com/avatar.png".to_string(),
             status_message: "Hello!".to_string(),
             presence: UserPresence::Online as i32,
+            encrypted_name: Vec::new(),
+            encrypted_about: Vec::new(),
+            profile_key_version: String::new(),
         };
 
         assert_eq!(profile.user_id, "user-123");

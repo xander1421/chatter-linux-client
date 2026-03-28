@@ -5,7 +5,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::domain::ids::UserId;
-    use crate::domain::user::{FriendshipStatus, PresenceStatus, Profile};
+    use crate::domain::user::{FriendshipStatus, PresenceStatus};
     use crate::proto::chat_v1::{friend_requests_filter, UserProfile};
     use crate::storage::repositories::settings_repo::SettingsRepository;
     use crate::storage::repositories::user_repo::UserRepository;
@@ -72,6 +72,9 @@ mod tests {
             avatar_url: "https://example.com/avatar.png".to_string(),
             status_message: "Hello world".to_string(),
             presence: 2,
+            encrypted_name: Vec::new(),
+            encrypted_about: Vec::new(),
+            profile_key_version: String::new(),
         };
 
         let profile = proto_to_domain_profile(&proto).unwrap();
@@ -95,6 +98,9 @@ mod tests {
             avatar_url: "".to_string(),
             status_message: "".to_string(),
             presence: 1,
+            encrypted_name: Vec::new(),
+            encrypted_about: Vec::new(),
+            profile_key_version: String::new(),
         };
 
         let profile = proto_to_domain_profile(&proto).unwrap();
