@@ -49,8 +49,15 @@ pub const MAX_INTRO_LENGTH: usize = 500;
 /// Maximum display name length.
 pub const MAX_DISPLAY_NAME_LENGTH: usize = 64;
 
-/// Maximum avatar size (2MB to match profile_crypto limit).
-pub const MAX_AVATAR_SIZE: usize = 2 * 1024 * 1024;
+/// Maximum avatar size in the anon DM init wire format.
+///
+/// The wire format uses `u16` for `avatar_len`, so this MUST be ≤ 65,535.
+/// We cap at 25,000 bytes to match the documented wire format.
+/// (Profile avatars use a separate 2MB limit in `profile_crypto`.)
+pub const MAX_AVATAR_SIZE: usize = 25_000;
+
+// Compile-time check: MAX_AVATAR_SIZE must fit in u16 wire format.
+const _: () = assert!(MAX_AVATAR_SIZE <= u16::MAX as usize);
 
 /// Anonymous DM initial contact message.
 ///
@@ -190,7 +197,9 @@ impl AnonDmInitMessage {
         bytes.extend_from_slice(intro_bytes);
 
         // Avatar length (2 bytes, big-endian)
-        let avatar_len = avatar_bytes.len() as u16;
+        let avatar_len: u16 = avatar_bytes.len().try_into().map_err(|_| {
+            InitMessageError::AvatarTooLarge(avatar_bytes.len(), u16::MAX as usize)
+        })?;
         bytes.extend_from_slice(&avatar_len.to_be_bytes());
 
         // Avatar bytes
@@ -600,6 +609,83 @@ mod tests {
         );
 
         assert!(msg.to_bytes().is_err());
+    }
+
+    #[test]
+    fn test_avatar_roundtrip() {
+        let mailbox_pk = [0u8; 32];
+        let mut identity_key = [0u8; 33];
+        identity_key[0] = 0x05;
+        let delivery_token = [0u8; 12];
+
+        let avatar = vec![0xAB; 10_000];
+        let msg = AnonDmInitMessage::new(
+            AnonDmId::new(),
+            UserId::new(),
+            mailbox_pk,
+            identity_key,
+            delivery_token,
+            "AvatarUser",
+            "Hi",
+            Some(avatar.clone()),
+        );
+
+        let bytes = msg.to_bytes().unwrap();
+        let parsed = AnonDmInitMessage::from_bytes(&bytes).unwrap();
+        assert_eq!(parsed.sender_avatar.as_deref(), Some(avatar.as_slice()));
+    }
+
+    #[test]
+    fn test_avatar_at_max_size() {
+        let mailbox_pk = [0u8; 32];
+        let mut identity_key = [0u8; 33];
+        identity_key[0] = 0x05;
+        let delivery_token = [0u8; 12];
+
+        let avatar = vec![0u8; MAX_AVATAR_SIZE];
+        let msg = AnonDmInitMessage::new(
+            AnonDmId::new(),
+            UserId::new(),
+            mailbox_pk,
+            identity_key,
+            delivery_token,
+            "",
+            "",
+            Some(avatar),
+        );
+
+        // Should succeed — exactly at the limit
+        assert!(msg.to_bytes().is_ok());
+    }
+
+    #[test]
+    fn test_avatar_too_large() {
+        let mailbox_pk = [0u8; 32];
+        let mut identity_key = [0u8; 33];
+        identity_key[0] = 0x05;
+        let delivery_token = [0u8; 12];
+
+        let avatar = vec![0u8; MAX_AVATAR_SIZE + 1];
+        let msg = AnonDmInitMessage::new(
+            AnonDmId::new(),
+            UserId::new(),
+            mailbox_pk,
+            identity_key,
+            delivery_token,
+            "",
+            "",
+            Some(avatar),
+        );
+
+        assert!(msg.to_bytes().is_err());
+    }
+
+    #[test]
+    fn test_avatar_max_fits_in_u16() {
+        // Compile-time const assertion exists, but verify at runtime too
+        assert!(MAX_AVATAR_SIZE <= u16::MAX as usize,
+            "MAX_AVATAR_SIZE ({}) must fit in u16 wire format (max {})",
+            MAX_AVATAR_SIZE, u16::MAX);
     }
 
     #[test]
