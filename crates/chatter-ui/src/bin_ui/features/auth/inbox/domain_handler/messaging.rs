@@ -394,6 +394,39 @@ pub(super) fn handle_message_edit(
     });
 }
 
+/// Update a message's content after an edit, matching by timestamp.
+///
+/// Used for anonymous DM/group edits where the message_id in the UI model
+/// may not match the domain MessageId. Falls back to timestamp_ns matching.
+pub(super) fn handle_message_edit_by_timestamp(
+    window: &Weak<MainWindow>,
+    timestamp: u64,
+    new_text: &str,
+) {
+    let weak = window.clone();
+    let ts_str = timestamp.to_string();
+    let new_text = new_text.to_string();
+
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        let messages = w.get_messages();
+
+        for i in 0..messages.row_count() {
+            if let Some(msg) = messages.row_data(i) {
+                if msg.timestamp_ns.as_str() == ts_str {
+                    let mut updated = msg.clone();
+                    updated.content = new_text.into();
+                    updated.is_edited = true;
+                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                        model.set_row_data(i, updated);
+                    }
+                    return;
+                }
+            }
+        }
+    });
+}
+
 /// Remove a message from the active message list (delete for everyone).
 pub(super) fn handle_message_delete(
     window: &Weak<MainWindow>,

@@ -41,6 +41,7 @@ pub mod v038_anon_group_owner_id;
 pub mod v039_anon_group_pinned;
 pub mod v040_anon_message_parity;
 pub mod v041_peer_verification;
+pub mod v042_anon_message_is_edited;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -85,6 +86,7 @@ pub use v038_anon_group_owner_id::V038AnonGroupOwnerId;
 pub use v039_anon_group_pinned::V039AnonGroupPinned;
 pub use v040_anon_message_parity::V040AnonMessageParity;
 pub use v041_peer_verification::V041PeerVerification;
+pub use v042_anon_message_is_edited::V042AnonMessageIsEdited;
 
 /// Trait for database migrations.
 ///
@@ -244,4 +246,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V039AnonGroupPinned)
         .register(V040AnonMessageParity)
         .register(V041PeerVerification)
+        .register(V042AnonMessageIsEdited)
 }

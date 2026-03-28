@@ -34,7 +34,7 @@ impl AnonGroupRepository {
     pub fn insert_group(&self, group: &AnonGroup) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO anon_groups (id, name, owner_id, my_role, bootstrap_complete, created_at, updated_at, status)
+            "INSERT OR REPLACE INTO anon_groups (id, name, owner_id, my_role, bootstrap_complete, created_at, updated_at, status)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 group.id.as_bytes().as_slice(),
@@ -155,12 +155,18 @@ impl AnonGroupRepository {
     // Member CRUD
     // ========================================================================
 
-    /// Add a member to a group.
+    /// Add a member to a group. Uses upsert so accept_invite is idempotent on retry.
     pub fn add_member(&self, member: &AnonGroupMember) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
             "INSERT INTO anon_group_members (id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(group_id, user_id) DO UPDATE SET
+                role = excluded.role,
+                mailbox_pk = COALESCE(excluded.mailbox_pk, mailbox_pk),
+                profile_key = COALESCE(excluded.profile_key, profile_key),
+                display_name = COALESCE(excluded.display_name, display_name),
+                avatar = COALESCE(excluded.avatar, avatar)",
             params![
                 member.id,
                 member.group_id.as_bytes().as_slice(),
@@ -440,7 +446,7 @@ impl AnonGroupRepository {
     pub fn insert_mailbox(&self, mailbox: &AnonGroupMailbox) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO anon_group_mailboxes (id, group_id, mailbox_public_key, mailbox_private_key, token_id, created_at, expires_at)
+            "INSERT OR REPLACE INTO anon_group_mailboxes (id, group_id, mailbox_public_key, mailbox_private_key, token_id, created_at, expires_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 mailbox.id,
@@ -603,7 +609,7 @@ impl AnonGroupRepository {
     pub fn get_message(&self, id: &AnonGroupMessageId) -> Result<Option<AnonGroupMessage>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read, is_edited
              FROM anon_group_messages WHERE id = ?1",
         )?;
 
@@ -633,7 +639,7 @@ impl AnonGroupRepository {
 
         let messages = if let Some(before_nanos) = before_ns {
             let mut stmt = conn.prepare(
-                "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
+                "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read, is_edited
                  FROM anon_group_messages
                  WHERE group_id = ?1 AND sent_at < ?2 AND is_deleted = 0
                  ORDER BY sent_at DESC, sender_id DESC
@@ -651,7 +657,7 @@ impl AnonGroupRepository {
             msgs
         } else {
             let mut stmt = conn.prepare(
-                "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
+                "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read, is_edited
                  FROM anon_group_messages
                  WHERE group_id = ?1 AND is_deleted = 0
                  ORDER BY sent_at DESC, sender_id DESC
@@ -701,7 +707,7 @@ impl AnonGroupRepository {
     pub fn get_latest_message(&self, group_id: &AnonGroupId) -> Result<Option<AnonGroupMessage>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read, is_edited
              FROM anon_group_messages
              WHERE group_id = ?1 AND is_deleted = 0
              ORDER BY sent_at DESC, sender_id DESC
@@ -730,7 +736,7 @@ impl AnonGroupRepository {
         let conn = self.db.read_connection()?;
 
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read, is_edited
              FROM anon_group_messages
              WHERE group_id = ?1 AND sender_id = ?2 AND sent_at = ?3 AND is_deleted = 0
              LIMIT 1",
@@ -762,7 +768,7 @@ impl AnonGroupRepository {
     ) -> Result<Option<AnonGroupMessage>, StorageError> {
         let conn = self.db.read_connection()?;
         let result = conn.query_row(
-            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read, is_edited
              FROM anon_group_messages
              WHERE group_id = ?1 AND sent_at = ?2 AND is_deleted = 0
              LIMIT 1",
@@ -800,7 +806,7 @@ impl AnonGroupRepository {
     pub fn list_pinned(&self, group_id: &AnonGroupId) -> Result<Vec<AnonGroupMessage>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read
+            "SELECT id, group_id, sender_id, content_type, content_json, attachments_blob, is_deleted, sent_at, created_at, delivery_status, is_pinned, is_read, is_edited
              FROM anon_group_messages
              WHERE group_id = ?1 AND is_pinned = 1 AND is_deleted = 0
              ORDER BY sent_at DESC",
@@ -860,7 +866,7 @@ impl AnonGroupRepository {
         let content_json = serde_json::json!({ "text": new_text }).to_string();
 
         let rows = conn.execute(
-            "UPDATE anon_group_messages SET content_json = ?1
+            "UPDATE anon_group_messages SET content_json = ?1, is_edited = 1
              WHERE group_id = ?2 AND sent_at = ?3",
             params![
                 content_json,
@@ -889,7 +895,7 @@ impl AnonGroupRepository {
         let content_json = serde_json::json!({ "text": new_text }).to_string();
 
         let rows = conn.execute(
-            "UPDATE anon_group_messages SET content_json = ?1
+            "UPDATE anon_group_messages SET content_json = ?1, is_edited = 1
              WHERE group_id = ?2 AND sender_id = ?3 AND sent_at = ?4",
             params![
                 content_json,
@@ -1332,6 +1338,8 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMessage>
     let is_pinned: bool = row.get::<_, i32>(10).unwrap_or(0) != 0;
     // is_read is column index 11 (added in v040 migration)
     let is_read: bool = row.get::<_, i32>(11).unwrap_or(0) != 0;
+    // is_edited is column index 12 (added in v042 migration)
+    let is_edited: bool = row.get::<_, i32>(12).unwrap_or(0) != 0;
 
     Ok(AnonGroupMessage {
         id: AnonGroupMessageId::from_string(row.get(0)?),
@@ -1348,5 +1356,6 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMessage>
         created_at: parse_datetime(&row.get::<_, String>(8)?),
         is_pinned,
         is_read,
+        is_edited,
     })
 }

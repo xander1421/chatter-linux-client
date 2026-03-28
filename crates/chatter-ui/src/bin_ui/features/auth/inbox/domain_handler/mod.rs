@@ -246,12 +246,15 @@ pub async fn handle_domain_event(
             anon_dm::handle_init_received(window, ui_ctx);
         }
 
-        DomainEvent::AnonDmMessageDeleted { .. }
-        | DomainEvent::AnonDmMessageEdited { .. }
-        | DomainEvent::AnonGroupMessageEdited { .. } => {
-            // TODO(GRA-273): These need proper real-time UI update.
-            // Currently edits only persist to DB but don't refresh the Slint model.
-            // Fix: add is_edited column, emit unified MessageEdited event, match by timestamp.
+        DomainEvent::AnonDmMessageDeleted { .. } => {
+            // TODO: Anon DM delete real-time UI update
+        }
+
+        DomainEvent::AnonDmMessageEdited { message_timestamp, new_text, .. } => {
+            messaging::handle_message_edit_by_timestamp(window, message_timestamp, &new_text);
+        }
+        DomainEvent::AnonGroupMessageEdited { message_timestamp, new_text, .. } => {
+            messaging::handle_message_edit_by_timestamp(window, message_timestamp, &new_text);
         }
 
         // =========================================================================

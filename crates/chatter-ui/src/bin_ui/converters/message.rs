@@ -288,6 +288,7 @@ pub trait AnonMessageFields {
     fn delivery_status(&self) -> &str;
     fn sent_at(&self) -> u64;
     fn created_at(&self) -> &chrono::DateTime<chrono::Utc>;
+    fn is_edited(&self) -> bool;
     fn as_text(&self) -> Option<String>;
 }
 
@@ -301,6 +302,7 @@ impl AnonMessageFields for AnonGroupMessage {
     fn delivery_status(&self) -> &str { &self.delivery_status }
     fn sent_at(&self) -> u64 { self.sent_at }
     fn created_at(&self) -> &chrono::DateTime<chrono::Utc> { &self.created_at }
+    fn is_edited(&self) -> bool { self.is_edited }
     fn as_text(&self) -> Option<String> { AnonGroupMessage::as_text(self) }
 }
 
@@ -314,6 +316,7 @@ impl AnonMessageFields for AnonDmMessage {
     fn delivery_status(&self) -> &str { &self.delivery_status }
     fn sent_at(&self) -> u64 { self.sent_at }
     fn created_at(&self) -> &chrono::DateTime<chrono::Utc> { &self.created_at }
+    fn is_edited(&self) -> bool { self.is_edited }
     fn as_text(&self) -> Option<String> { AnonDmMessage::as_text(self) }
 }
 
@@ -341,7 +344,7 @@ pub fn anon_message_to_display_data(
         content: content.to_string(),
         timestamp: msg.created_at().with_timezone(&Local).format("%H:%M").to_string(),
         timestamp_ns: msg.sent_at().to_string(),
-        is_edited: false,
+        is_edited: msg.is_edited(),
         is_deleted: msg.is_deleted(),
         is_ai: false,
         has_attachments: !attachment_data.is_empty(),

@@ -237,6 +237,8 @@ pub struct AnonDmMessage {
     pub created_at: DateTime<Utc>,
     /// Whether this message is pinned.
     pub is_pinned: bool,
+    /// Whether this message has been edited.
+    pub is_edited: bool,
 }
 
 impl AnonDmMessage {
@@ -265,6 +267,7 @@ impl AnonDmMessage {
             sent_at,
             created_at: Utc::now(),
             is_pinned: false,
+            is_edited: false,
         }
     }
 

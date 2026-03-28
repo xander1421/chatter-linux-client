@@ -136,24 +136,16 @@ impl AnonDmService {
             sent_at,
             created_at: chrono::Utc::now(),
             is_pinned: false,
+            is_edited: false,
         };
         self.anon_dm_repo.insert_message(&message)?;
         let message_id = message.id;
 
-        // Emit DomainEvent so the UI displays the message immediately (optimistic insert).
-        // Without this, the sender's own message would only appear when echoed back.
-        tracing::info!(
-            conversation_id = %conversation_id,
-            message_id = %message_id,
-            attachment_count = attachment_ids.len(),
-            "[ANON_DM] Emitting sender-side AnonDmMessageReceived (optimistic)"
-        );
-        self.event_bus.emit_domain(crate::inbox::DomainEvent::AnonDmMessageReceived {
-            conversation_id: *conversation_id,
-            sender_id: current_user,
-            message_id: message_id.clone(),
-            sent_at,
-        });
+        // NOTE: Do NOT emit AnonDmMessageReceived here.
+        // The UI send handler (send_message.rs) already appends the message to
+        // the Slint model via append_message_to_ui(). Emitting the domain event
+        // here caused a duplicate bubble because the domain_handler/anon_dm.rs
+        // would also push the same message to the UI model.
 
         // NDSS '21 decorrelation: if this message carries attachment pointers,
         // delay the anonymous mailbox send so the server can't trivially

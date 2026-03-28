@@ -484,7 +484,7 @@ impl AnonDmRepository {
     pub fn get_message(&self, id: &AnonDmMessageId) -> Result<Option<AnonDmMessage>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned
+            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned, is_edited
              FROM anon_dm_messages WHERE id = ?1",
         )?;
 
@@ -516,7 +516,7 @@ impl AnonDmRepository {
 
         let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(before_nanos) = before_ns {
             (
-                "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned
+                "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned, is_edited
                  FROM anon_dm_messages
                  WHERE conversation_id = ?1 AND sent_at < ?2 AND is_deleted = 0
                  ORDER BY sent_at DESC, sender_id DESC LIMIT ?3",
@@ -528,7 +528,7 @@ impl AnonDmRepository {
             )
         } else {
             (
-                "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned
+                "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned, is_edited
                  FROM anon_dm_messages
                  WHERE conversation_id = ?1 AND is_deleted = 0
                  ORDER BY sent_at DESC, sender_id DESC LIMIT ?2",
@@ -560,7 +560,7 @@ impl AnonDmRepository {
     ) -> Result<Option<AnonDmMessage>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned
+            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned, is_edited
              FROM anon_dm_messages
              WHERE conversation_id = ?1 AND is_deleted = 0
              ORDER BY sent_at DESC, sender_id DESC LIMIT 1",
@@ -598,7 +598,7 @@ impl AnonDmRepository {
     ) -> Result<Option<AnonDmMessage>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned
+            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned, is_edited
              FROM anon_dm_messages
              WHERE conversation_id = ?1 AND sent_at = ?2 AND is_deleted = 0
              LIMIT 1",
@@ -624,7 +624,7 @@ impl AnonDmRepository {
 
         // Find message by exact sent_at match (now that we store sent_at properly)
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned
+            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned, is_edited
              FROM anon_dm_messages
              WHERE conversation_id = ?1 AND sender_id = ?2 AND sent_at = ?3 AND is_deleted = 0
              LIMIT 1",
@@ -699,7 +699,7 @@ impl AnonDmRepository {
         let content_json = serde_json::json!({ "text": new_text }).to_string();
 
         let rows = conn.execute(
-            "UPDATE anon_dm_messages SET content_json = ?1
+            "UPDATE anon_dm_messages SET content_json = ?1, is_edited = 1
              WHERE conversation_id = ?2 AND sent_at = ?3",
             params![
                 content_json,
@@ -728,7 +728,7 @@ impl AnonDmRepository {
         let content_json = serde_json::json!({ "text": new_text }).to_string();
 
         let rows = conn.execute(
-            "UPDATE anon_dm_messages SET content_json = ?1
+            "UPDATE anon_dm_messages SET content_json = ?1, is_edited = 1
              WHERE conversation_id = ?2 AND sender_id = ?3 AND sent_at = ?4",
             params![
                 content_json,
@@ -769,7 +769,7 @@ impl AnonDmRepository {
     pub fn list_pinned(&self, conversation_id: &AnonDmId) -> Result<Vec<AnonDmMessage>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned
+            "SELECT id, conversation_id, sender_id, content_type, content_json, attachments_blob, is_deleted, is_read, sent_at, created_at, delivery_status, is_pinned, is_edited
              FROM anon_dm_messages
              WHERE conversation_id = ?1 AND is_pinned = 1 AND is_deleted = 0
              ORDER BY sent_at DESC",
@@ -1088,6 +1088,7 @@ fn row_to_message(row: &rusqlite::Row) -> Result<AnonDmMessage, rusqlite::Error>
     let created_at_str: String = row.get(9)?;
     let delivery_status: String = row.get(10)?;
     let is_pinned: bool = row.get::<_, i32>(11).unwrap_or(0) != 0;
+    let is_edited: bool = row.get::<_, i32>(12).unwrap_or(0) != 0;
 
     Ok(AnonDmMessage {
         id: AnonDmMessageId::from_string(id),
@@ -1106,6 +1107,7 @@ fn row_to_message(row: &rusqlite::Row) -> Result<AnonDmMessage, rusqlite::Error>
             .map_err(|_| rusqlite::Error::InvalidQuery)?
             .with_timezone(&Utc),
         is_pinned,
+        is_edited,
     })
 }
 

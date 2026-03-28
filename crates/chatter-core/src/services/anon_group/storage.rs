@@ -39,6 +39,7 @@ impl AnonGroupService {
             created_at: Utc::now(),
             is_pinned: false,
             is_read: false,
+            is_edited: false,
         };
 
         self.anon_group_repo.insert_message(&message)?;
@@ -105,6 +106,7 @@ impl AnonGroupService {
             created_at: Utc::now(),
             is_pinned: false,
             is_read: false,
+            is_edited: false,
         };
 
         self.anon_group_repo.insert_message(&message)?;
@@ -145,6 +147,7 @@ impl AnonGroupService {
             created_at: Utc::now(),
             is_pinned: false,
             is_read: false,
+            is_edited: false,
         };
 
         self.anon_group_repo.insert_message(&message)?;

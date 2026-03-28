@@ -198,6 +198,7 @@ impl AnonDmService {
                             sent_at,
                             created_at: Utc::now(),
                             is_pinned: false,
+                            is_edited: false,
                         };
                         self.anon_dm_repo.insert_message(&message)?;
                         message.id
@@ -569,6 +570,7 @@ impl AnonDmService {
             sent_at,
             created_at: Utc::now(),
             is_pinned: false,
+            is_edited: false,
         };
 
         self.anon_dm_repo.insert_message(&message)?;
@@ -641,6 +643,7 @@ impl AnonDmService {
             sent_at,
             created_at: Utc::now(),
             is_pinned: false,
+            is_edited: false,
         };
 
         self.anon_dm_repo.insert_message(&message)?;

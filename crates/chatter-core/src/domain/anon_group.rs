@@ -447,6 +447,8 @@ pub struct AnonGroupMessage {
     pub is_pinned: bool,
     /// Whether we've read this message.
     pub is_read: bool,
+    /// Whether this message has been edited.
+    pub is_edited: bool,
 }
 
 impl AnonGroupMessage {
@@ -475,6 +477,7 @@ impl AnonGroupMessage {
             created_at: Utc::now(),
             is_pinned: false,
             is_read: false,
+            is_edited: false,
         }
     }
 
