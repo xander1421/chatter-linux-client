@@ -43,10 +43,12 @@ export component MessageComposer inherits Rectangle {
     property <length> max-input-height: 160px;  // ~6-7 lines max
     property <length> padding-vertical: Spacing.sm * 2;
 
-    // Count newlines in text to estimate line count
-    // This is an approximation - word wrap may add more lines
-    property <int> newline-count: count-newlines(root.text);
-    property <int> estimated-lines: max(1, newline-count + 1);
+    // Estimate line count based on character count and available width
+    // ~8px per character at 14px font size; accounts for word-wrap lines
+    // On mobile the sidebar is hidden, so use full width; on desktop subtract sidebar width
+    property <int> chars-per-line: max(20, (root.width - 80px) / 8px);
+    property <int> estimated-wrap-lines: root.text.character-count / max(1, chars-per-line);
+    property <int> estimated-lines: max(1, estimated-wrap-lines + 1);
 
     // Calculate input height based on content
     property <length> content-height: max(min-input-height, min(max-input-height, estimated-lines * line-height + padding-vertical));
@@ -86,15 +88,6 @@ export component MessageComposer inherits Rectangle {
     // Layout - dynamic height based on content
     height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + Spacing.sm * 2 + 1px;  // +1px for top border
     background: Colors.surface;
-
-    // Count newlines in string
-    pure function count-newlines(s: string) -> int {
-        // Slint doesn't have string iteration, so we use a heuristic
-        // based on text length for word-wrap estimation
-        // Every ~50 chars might wrap, plus actual newlines
-        // This is approximate but works reasonably well
-        s.character-count / 50
-    }
 
     // Top border
     Rectangle {
@@ -690,7 +683,7 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Emoji button
+            // Emoji + GIF button (single button, opens emoji picker which includes GIF tab)
             Rectangle {
                 width: 36px;
                 height: 36px;
@@ -698,10 +691,10 @@ export component MessageComposer inherits Rectangle {
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
-                accessible-label: "Emoji picker";
+                accessible-label: "Emoji and GIF picker";
 
                 Text {
-                    text: "\u{1F600}\u{FE0F}";  // Grinning face (with emoji variant selector)
+                    text: "\u{1F600}\u{FE0F}";
                     font-size: Typography.lg;
                     horizontal-alignment: center;
                     vertical-alignment: center;
@@ -712,34 +705,6 @@ export component MessageComposer inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => {
                         root.emoji-clicked();
-                    }
-                }
-            }
-
-            // GIF button
-            Rectangle {
-                width: 36px;
-                height: 36px;
-                background: gif-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-                opacity: root.disabled ? 0.5 : 1.0;
-                accessible-role: button;
-                accessible-label: "GIF picker";
-
-                Text {
-                    text: "GIF";
-                    color: Colors.text-secondary;
-                    font-size: Typography.xs;
-                    font-weight: Typography.bold;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                gif-touch := TouchArea {
-                    enabled: !root.disabled;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.gif-clicked();
                     }
                 }
             }

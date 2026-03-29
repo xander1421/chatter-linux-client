@@ -724,11 +724,18 @@ export component App inherits Rectangle {
     property <bool> is-small-screen: root.width < 800px;
     // Fully hide sidebar on mobile-sized screens (< 480px width)
     property <bool> is-mobile-screen: root.width < 480px;
+    // Track whether the user manually toggled collapse (vs auto-collapse on resize)
+    property <bool> sidebar-user-collapsed: false;
 
     // Update sidebar collapsed/hidden state when screen size changes
     changed is-small-screen => {
         if (root.is-small-screen && !root.sidebar-collapsed) {
+            // Auto-collapse on small screen — don't mark as user choice
             root.sidebar-collapsed = true;
+        }
+        if (!root.is-small-screen && root.sidebar-collapsed && !root.sidebar-user-collapsed) {
+            // Auto-expand when screen grows, unless user explicitly collapsed
+            root.sidebar-collapsed = false;
         }
     }
     changed is-mobile-screen => {
@@ -782,10 +789,10 @@ export component App inherits Rectangle {
 
     // ========== Main content layer ==========
     // Explicit sizing ensures width flows to all child components for text wrapping.
-    // Safe area insets push content below Android status bar and above nav bar.
+    // Safe area: content inset below status bar; bottom nav extends into gesture area.
     Rectangle {
         width: root.width;
-        height: root.height - root.safe-area-top - root.safe-area-bottom;
+        height: root.height - root.safe-area-top;
         y: root.safe-area-top;
 
         // Loading page
@@ -870,10 +877,12 @@ export component App inherits Rectangle {
         }
 
         // Main chat layout
-        // On mobile, leave room for the bottom nav bar so content doesn't extend behind it
+        // On mobile, leave room for the bottom nav + safe area; on desktop, subtract safe-area-bottom
         if current-view == "main": HorizontalLayout {
             width: 100%;
-            height: root.is-mobile-screen && !root.keyboard-open ? parent.height - Spacing.bottom-nav-height : parent.height;
+            height: root.is-mobile-screen && !root.keyboard-open
+                ? parent.height - Spacing.bottom-nav-height - root.safe-area-bottom
+                : parent.height - root.safe-area-bottom;
 
             // Sidebar (width controlled by collapsed state; mobile-mode for full-width)
             Sidebar {
@@ -941,6 +950,8 @@ export component App inherits Rectangle {
                     root.open-join-channel();
                 }
                 toggle-collapsed => {
+                    // Track user's explicit collapse choice for smart auto-expand
+                    root.sidebar-user-collapsed = !root.sidebar-collapsed;
                     root.toggle-sidebar();
                 }
                 org-selected(org-id) => {
@@ -965,9 +976,11 @@ export component App inherits Rectangle {
                     height: 100%;
 
                     // Chat layout (fills remaining space, minus side panels)
+                    // On mobile: hide chat when a panel (members/thread) is open — panel goes full-screen
                     ChatLayout {
                     horizontal-stretch: 1;
                     vertical-stretch: 1;
+                    visible: !(root.is-mobile-screen && (root.members-panel-visible || root.thread-panel-visible));
                     show-back-button: root.is-mobile-screen;
                     back-clicked => { root.mobile-back(); }
                     channel-id: root.channel-id;
@@ -1075,9 +1088,9 @@ export component App inherits Rectangle {
                     scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
                 }
 
-                // Members panel (appears to the right of chat when visible)
+                // Members panel (side panel on desktop, full-screen overlay on mobile)
                 if root.members-panel-visible: MembersPanel {
-                    width: root.is-mobile-screen ? 240px : 280px;
+                    width: root.is-mobile-screen ? root.width : 280px;
                     height: 100%;
                     members: root.members-panel-members;
                     channel-name: root.channel-name;
@@ -1090,9 +1103,9 @@ export component App inherits Rectangle {
                     }
                 }
 
-                // Thread panel (appears to the right of chat when visible)
+                // Thread panel (side panel on desktop, full-screen overlay on mobile)
                 if root.thread-panel-visible: ThreadPanel {
-                    width: root.is-mobile-screen ? 280px : 320px;
+                    width: root.is-mobile-screen ? root.width : 320px;
                     height: 100%;
                     root-message-id: root.thread-root-message-id;
                     root-sender-name: root.thread-root-sender-name;
@@ -1119,12 +1132,13 @@ export component App inherits Rectangle {
         }
         } // end HorizontalLayout (chat area)
 
-    // Mobile bottom navigation bar (absolute positioned, pinned to bottom)
+    // Mobile bottom navigation bar (absolute positioned, pinned to bottom, extends into gesture area)
     if root.current-view == "main" && root.is-mobile-screen && !root.keyboard-open: MobileBottomNav {
         y: parent.height - self.height;
         width: 100%;
         active-tab: root.mobile-active-tab;
         contacts-badge: root.friends-received-requests.length;
+        safe-area-bottom: root.safe-area-bottom;
 
         tab-selected(tab) => {
             root.mobile-active-tab = tab;

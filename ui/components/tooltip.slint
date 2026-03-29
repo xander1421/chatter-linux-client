@@ -28,7 +28,7 @@ export component Tooltip inherits Rectangle {
     animate opacity { duration: 150ms; }
 
     // Tooltip background - slightly darker than surface
-    background: #0a0a1a;
+    background: Colors.tooltip-bg;
     border-radius: Spacing.radius-sm;
     border-color: Colors.surface-hover;
     border-width: 1px;
@@ -86,7 +86,7 @@ export component TooltipArea inherits Rectangle {
         width: Math.min(tt-text.preferred-width + Spacing.sm * 2, 200px);
         height: tt-text.preferred-height + Spacing.sm * 2;
 
-        background: #0a0a1a;
+        background: Colors.tooltip-bg;
         border-radius: Spacing.radius-sm;
         border-color: Colors.surface-hover;
         border-width: 1px;

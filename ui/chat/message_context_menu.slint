@@ -15,20 +15,20 @@ component MenuItem inherits Rectangle {
     in property <bool> destructive: false;
     callback clicked();
 
-    height: 36px;
+    height: 44px;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
 
     HorizontalLayout {
-        padding-left: Spacing.md;
-        padding-right: Spacing.md;
+        padding-left: Spacing.lg;
+        padding-right: Spacing.lg;
         spacing: Spacing.md;
         alignment: start;
 
         Image {
             source: icon;
-            width: 18px;
-            height: 18px;
+            width: 20px;
+            height: 20px;
             y: (parent.height - self.height) / 2;
             colorize: destructive ? Colors.error : Colors.text-secondary;
         }
@@ -93,7 +93,7 @@ export component MessageContextMenu inherits Rectangle {
         // Position at click, but ensure menu stays on screen
         x: min(root.position-x, parent.width - self.width - Spacing.md);
         y: min(root.position-y, parent.height - self.height - Spacing.md);
-        width: 180px;
+        width: 200px;
         height: menu-layout.preferred-height + Spacing.sm * 2;
         background: Colors.surface;
         border-radius: Spacing.radius-md;

@@ -39,7 +39,7 @@ component ControlButton inherits Rectangle {
         height: 22px;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        colorize: (active || danger) ? white : Colors.text-primary;
+        colorize: Colors.text-primary;
     }
 }
 
@@ -125,7 +125,7 @@ export component CallControls inherits Rectangle {
                 height: 24px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                colorize: white;
+                colorize: Colors.text-primary;
             }
         }
     }

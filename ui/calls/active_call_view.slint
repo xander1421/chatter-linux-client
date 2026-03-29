@@ -66,7 +66,7 @@ component ParticipantTile inherits Rectangle {
             height: 14px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            colorize: white;
+            colorize: Colors.text-primary;
         }
     }
 
@@ -295,7 +295,7 @@ export component ActiveCallView inherits Rectangle {
             CallControls {
                 x: (parent.width - self.width) / 2;
                 y: Spacing.sm;
-                width: 340px;
+                width: min(340px, parent.width - 20px);
                 is-muted: is-muted;
                 is-video-enabled: is-video-enabled;
                 is-screen-sharing: is-screen-sharing;

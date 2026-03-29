@@ -190,7 +190,7 @@ export component OrgManagementScreen inherits Rectangle {
                         spacing: Spacing.sm;
 
                         Input {
-                            width: 250px;
+                            horizontal-stretch: 1;
                             placeholder: "Email address";
                             text <=> root.invite-email;
                             disabled: root.invite-loading;

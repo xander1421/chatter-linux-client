@@ -397,11 +397,11 @@ export component ChatLayout inherits Rectangle {
             }
         }
 
-        // Composer at bottom (auto height, min 56px)
-        // Width 100% for consistent layout
+        // Composer at bottom (auto height, no stretch — pins to bottom)
         Rectangle {
             width: 100%;
-            
+            vertical-stretch: 0;
+
             MessageComposer {
                 width: 100%;
                 text <=> root.composer-text;

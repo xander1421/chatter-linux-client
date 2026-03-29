@@ -25,8 +25,8 @@ component IconButton inherits Rectangle {
     in property <color> hover-color: Colors.text-primary;
     callback clicked();
 
-    width: 44px;
-    height: 44px;
+    width: Spacing.touch-target-min;
+    height: Spacing.touch-target-min;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
 
@@ -93,50 +93,42 @@ export component ChatHeader inherits Rectangle {
     height: 56px;
     background: Colors.surface;
 
-    // Main content (constrained to top 56px)
-    Rectangle {
-        y: 0;
-        width: 100%;
-        height: 56px;
-
     HorizontalLayout {
-        // Mobile back button (returns to chat list)
-        if root.show-back-button: IconButton {
-            icon: Icons.chevron-left;
-            width: Spacing.touch-target-min;
-            clicked => { root.back-clicked(); }
-        }
-
-        // Encryption indicator — always visible
-        VerticalLayout {
-            alignment: center;
-
-            Rectangle {
-                width: 20px;
-                height: 20px;
-
-                Image {
-                    source: Icons.shield;
-                    width: 14px;
-                    height: 14px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: Colors.success;
-                }
-            }
-        }
-
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
         spacing: Spacing.sm;
+        alignment: space-between;
 
-        // Left section: Channel icon and name
+        // Left section: Back button + Icon + Name
         HorizontalLayout {
             spacing: Spacing.sm;
             alignment: start;
 
+            // Mobile back button (returns to chat list)
+            if root.show-back-button: IconButton {
+                icon: Icons.chevron-left;
+                width: Spacing.touch-target-min;
+                clicked => { root.back-clicked(); }
+            }
+
+            // Encryption indicator — always visible
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    Image {
+                        source: Icons.shield;
+                        width: 14px;
+                        height: 14px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Colors.success;
+                    }
+                }
+            }
+
             // Channel icon - varies by type
-            // Public channel: #
             if channel-type == "public": Text {
                 text: "#";
                 color: Colors.text-muted;
@@ -144,12 +136,10 @@ export component ChatHeader inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            // Private channel: lock icon
             if is-private: Rectangle {
                 width: 20px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;
-
                 Image {
                     source: Icons.lock;
                     width: 16px;
@@ -160,7 +150,6 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            // Regular DM: @
             if is-dm: Text {
                 text: "@";
                 color: Colors.text-muted;
@@ -168,12 +157,10 @@ export component ChatHeader inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            // Anonymous DM: shield/lock icon to indicate privacy
             if is-anon-dm: Rectangle {
                 width: 20px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;
-
                 Image {
                     source: Icons.lock;
                     width: 16px;
@@ -184,12 +171,10 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            // Private group: users icon
             if is-private-group: Rectangle {
                 width: 20px;
                 height: 20px;
                 y: (parent.height - self.height) / 2;
-
                 Image {
                     source: Icons.users;
                     width: 16px;
@@ -200,44 +185,27 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            // Channel/conversation name (constrained to leave room for action buttons)
+            // Channel/conversation name (stretches to fill, then elides)
             Text {
                 text: root.channel-name;
                 color: Colors.text-primary;
                 font-size: Typography.base;
                 font-weight: Typography.semibold;
                 vertical-alignment: center;
-                horizontal-stretch: 1;
                 overflow: elide;
+                horizontal-stretch: 1;
             }
 
-            // Archived badge
-            if root.is-archived: Rectangle {
-                height: 18px;
-                width: archived-text.preferred-width + 8px;
-                background: Colors.text-muted;
-                border-radius: 4px;
-
-                archived-text := Text {
-                    x: 4px;
-                    text: "Archived";
-                    color: Colors.surface;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                }
-            }
-
-            // Member count (for channels and private groups)
+            // Member count
             if root.show-member-count: HorizontalLayout {
                 spacing: Spacing.xs;
                 alignment: center;
-
                 Rectangle {
                     width: 1px;
                     height: 16px;
                     background: Colors.text-muted;
+                    y: (parent.height - self.height) / 2;
                 }
-
                 Text {
                     text: "\{root.member-count} members";
                     color: Colors.text-muted;
@@ -247,11 +215,10 @@ export component ChatHeader inherits Rectangle {
             }
         }
 
-        // Center section: Topic (flex)
+        // Center section: Topic / Typing
         Rectangle {
             horizontal-stretch: 1;
-
-            // Topic text (truncated) - only show when no typing or Jarvis thinking
+            // Topic text
             if root.topic != "" && root.typing-indicator == "" && !root.jarvis-thinking: Text {
                 width: 100%;
                 text: root.topic;
@@ -259,13 +226,12 @@ export component ChatHeader inherits Rectangle {
                 font-size: Typography.sm;
                 overflow: elide;
                 vertical-alignment: center;
+                horizontal-alignment: center;
             }
 
-            // Typing indicator (takes precedence over topic)
+            // Typing indicator
             if root.typing-indicator != "" && !root.jarvis-thinking: HorizontalLayout {
-                spacing: Spacing.xs;
-                alignment: start;
-
+                alignment: center;
                 Text {
                     text: root.typing-indicator;
                     color: Colors.text-secondary;
@@ -275,22 +241,17 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            // Jarvis thinking indicator (takes precedence over both)
+            // Jarvis thinking
             if root.jarvis-thinking: HorizontalLayout {
                 spacing: 6px;
-                padding-left: 12px;
-                alignment: start;
-
-                // Animated dots with bouncing effect
+                alignment: center;
                 for i in [0, 1, 2]: Rectangle {
                     width: 6px;
                     height: 6px;
                     border-radius: 3px;
                     background: Colors.primary;
-                    // Convert to angle using 1deg multiplier for sin function
-                    y: 2px * Math.sin((animation-tick() / 250ms + i * 0.3) * 360deg);
+                    y: (parent.height - self.height) / 2 + 2px * Math.sin((animation-tick() / 250ms + i * 0.3) * 360deg);
                 }
-
                 Text {
                     text: "Jarvis is thinking...";
                     font-size: Typography.sm;
@@ -301,100 +262,59 @@ export component ChatHeader inherits Rectangle {
             }
         }
 
-        // Right section: Action buttons (wrapped in VerticalLayout for vertical centering)
-        VerticalLayout {
-            alignment: center;
+        // Right section: Action buttons
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: end;
 
-            HorizontalLayout {
+            // Call buttons group
+            if root.show-calls: HorizontalLayout {
                 spacing: 2px;
-                alignment: end;
-
-                // Call buttons group (hidden for saved messages)
-                if root.show-calls: HorizontalLayout {
-                    spacing: 2px;
-
-                    // Phone icon — 44px touch target
-                    Rectangle {
-                        width: 44px;
-                        height: 44px;
-                        background: phone-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        Image {
-                            source: Icons.phone;
-                            width: 20px;
-                            height: 20px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            colorize: phone-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
-                        }
-
-                        phone-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.voice-call-clicked(); }
-                        }
-                    }
-
-                    IconButton {
-                        icon: Icons.video;
-                        clicked => { root.video-call-clicked(); }
-                    }
+                alignment: center;
+                IconButton {
+                    icon: Icons.phone;
+                    clicked => { root.voice-call-clicked(); }
                 }
-
-                // Divider between button groups (hidden when calls are hidden)
-                if root.show-calls: Rectangle {
+                IconButton {
+                    icon: Icons.video;
+                    clicked => { root.video-call-clicked(); }
+                }
+                // Divider
+                Rectangle {
                     width: 1px;
                     height: 20px;
                     background: Colors.text-muted.with-alpha(0.3);
+                    y: (parent.height - self.height) / 2;
                 }
+            }
 
-                // Utility buttons group
-                HorizontalLayout {
-                    spacing: 2px;
-
-                    // Invite button (channels and private groups)
-                    if root.show-settings: IconButton {
-                        icon: Icons.user-plus;
-                        clicked => { root.invite-clicked(); }
-                    }
-
-                    // Members button (channels and private groups only)
-                    if root.show-member-count: IconButton {
-                        icon: Icons.users;
-                        clicked => { root.members-clicked(); }
-                    }
-
-                    // Pin button (shows when there are pinned messages)
-                    if root.has-any-pinned: IconButton {
-                        icon: Icons.pin;
-                        icon-color: Colors.primary;
-                        clicked => { root.pin-clicked(); }
-                    }
-
-                    IconButton {
-                        icon: Icons.search;
-                        clicked => { root.search-clicked(); }
-                    }
-
-                    // Settings button (hidden for anon DMs - no channel settings)
-                    if root.show-settings: IconButton {
-                        icon: Icons.settings;
-                        clicked => { root.settings-clicked(); }
-                    }
+            // Utility buttons group
+            HorizontalLayout {
+                spacing: 2px;
+                alignment: center;
+                if root.show-settings: IconButton {
+                    icon: Icons.user-plus;
+                    clicked => { root.invite-clicked(); }
+                }
+                if root.show-member-count: IconButton {
+                    icon: Icons.users;
+                    clicked => { root.members-clicked(); }
+                }
+                if root.has-any-pinned: IconButton {
+                    icon: Icons.pin;
+                    icon-color: Colors.primary;
+                    clicked => { root.pin-clicked(); }
+                }
+                IconButton {
+                    icon: Icons.search;
+                    clicked => { root.search-clicked(); }
+                }
+                if root.show-settings: IconButton {
+                    icon: Icons.settings;
+                    clicked => { root.settings-clicked(); }
                 }
             }
         }
-    }
-    } // end main content Rectangle
-
-    // Encryption trust banner
-    Rectangle {
-        y: parent.height - 28px;
-        width: 100%;
-        height: 28px;
-        background: Colors.surface;
-
-        // Encryption banner removed — unnecessary UI clutter
     }
 
     // Bottom border

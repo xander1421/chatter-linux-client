@@ -77,9 +77,11 @@ component NavTab inherits Rectangle {
 export component MobileBottomNav inherits Rectangle {
     in property <string> active-tab: "chats";
     in property <int> contacts-badge: 0;
+    // Extra padding at the bottom to extend behind the system gesture area
+    in property <length> safe-area-bottom: 0px;
     callback tab-selected(/* tab */ string);
 
-    height: Spacing.bottom-nav-height;
+    height: Spacing.bottom-nav-height + root.safe-area-bottom;
     background: Colors.surface;
 
     // Top border
@@ -92,7 +94,7 @@ export component MobileBottomNav inherits Rectangle {
 
     HorizontalLayout {
         y: 1px;
-        height: parent.height - 1px;
+        height: Spacing.bottom-nav-height - 1px;
 
         NavTab {
             icon: Icons.message-circle;

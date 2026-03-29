@@ -282,14 +282,14 @@ export component FriendsModal inherits Rectangle {
 
                                         // Message button
                                         Rectangle {
-                                            width: 32px;
-                                            height: 32px;
+                                            width: 44px;
+                                            height: 44px;
                                             border-radius: Spacing.radius-sm;
                                             background: msg-touch.has-hover ? Colors.surface : transparent;
 
                                             Text {
                                                 text: "\u{1F4AC}\u{FE0F}";  // Speech bubble (with emoji variant selector)
-                                                font-size: 16px;
+                                                font-size: 18px;
                                                 horizontal-alignment: center;
                                                 vertical-alignment: center;
                                                 width: 100%;
@@ -306,15 +306,15 @@ export component FriendsModal inherits Rectangle {
 
                                         // More options (remove friend)
                                         Rectangle {
-                                            width: 32px;
-                                            height: 32px;
+                                            width: 44px;
+                                            height: 44px;
                                             border-radius: Spacing.radius-sm;
                                             background: more-touch.has-hover ? Colors.surface : transparent;
 
                                             Text {
                                                 text: "\u{22EE}";  // Vertical ellipsis
                                                 color: Colors.text-secondary;
-                                                font-size: 16px;
+                                                font-size: 18px;
                                                 horizontal-alignment: center;
                                                 vertical-alignment: center;
                                                 width: 100%;
