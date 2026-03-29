@@ -21,7 +21,7 @@ pub(super) fn handle_message_received(
     ui_ctx: &Arc<ChatterClient>,
     message: Message,
 ) {
-    let channel_id = message.channel_id;
+    let channel_id = message.conversation_id;
     let sender_id = message.sender_id;
     let timestamp = message.sent_at;
 

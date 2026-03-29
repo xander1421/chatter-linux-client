@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::crypto::signal::sesame::{SesameManager, SqliteSesameStore};
 use crate::domain::ids::{ChannelId, MessageId, UserId};
-use crate::domain::message::{Message, MessageContent};
+use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::proto::content_v1::DataMessage;
 use crate::services::SignalService;
 use crate::storage::repositories::MessageRepository;
@@ -169,15 +169,19 @@ impl MessageGateway {
         // Create domain message with sender's timestamp for Signal-style dedup
         let message = Message {
             id: message_id,
-            channel_id,
+            conversation_id: channel_id,
+            conversation_type: ConversationType::Channel,
             sender_id,
+            device_id: None,
             content,
+            encrypted_content: None,
             thread_id: None,
             reply_to: None,
             attachments,
             is_pinned: false,
             is_edited: false,
             is_deleted: false,
+            is_read: false,
             sent_at: data_message.timestamp,
             created_at,
             updated_at: created_at,
@@ -198,7 +202,7 @@ impl MessageGateway {
 
         tracing::info!(
             message_id = %message.id,
-            channel_id = %message.channel_id,
+            channel_id = %message.conversation_id,
             attachment_count = message.attachments.len(),
             attachment_ids = ?message.attachments.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
             "Stored incoming message with attachments"

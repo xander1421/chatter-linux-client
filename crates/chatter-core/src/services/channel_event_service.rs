@@ -9,7 +9,7 @@ use chrono::Utc;
 
 use crate::domain::channel::Membership;
 use crate::domain::ids::{ChannelId, MessageId, UserId};
-use crate::domain::message::{Message, MessageContent, SystemMessage};
+use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
 use crate::error::StorageError;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::message_repo::MessageRepository;
@@ -285,15 +285,19 @@ impl ChannelEventService {
         let now = Utc::now();
         Message {
             id: MessageId::new(),
-            channel_id: *channel_id,
+            conversation_id: *channel_id,
+            conversation_type: ConversationType::Channel,
             sender_id: None, // System messages have no sender
+            device_id: None,
             content: MessageContent::System(content),
+            encrypted_content: None,
             thread_id: None,
             reply_to: None,
             attachments: Vec::new(),
             is_pinned: false,
             is_edited: false,
             is_deleted: false,
+            is_read: false,
             sent_at: 0, // System messages don't use sender timestamp
             created_at: now,
             updated_at: now,

@@ -130,14 +130,14 @@ impl MessageService {
         message.attachments = attachment_ids;
 
         // IMPORTANT: Check if server returned a different channel_id
-        if message.channel_id != *channel_id {
+        if message.conversation_id != *channel_id {
             tracing::warn!(
                 input_channel_id = %channel_id,
-                server_channel_id = %message.channel_id,
+                server_channel_id = %message.conversation_id,
                 "[SEND_MESSAGE] CHANNEL_ID MISMATCH! Server returned different channel_id"
             );
             // Fix: Use the input channel_id, not the server's
-            message.channel_id = *channel_id;
+            message.conversation_id = *channel_id;
         }
 
         // For sent messages, store original plaintext locally (not encrypted server response)
@@ -145,7 +145,7 @@ impl MessageService {
 
         // Store locally
         tracing::info!(
-            channel_id = %message.channel_id,
+            channel_id = %message.conversation_id,
             message_id = %message.id,
             text_len = trimmed_text.len(),
             "[SEND_MESSAGE] Storing message locally"
@@ -423,13 +423,13 @@ impl MessageService {
         message.attachments = attachment_ids;
 
         // IMPORTANT: Ensure channel_id matches (server might return different format)
-        if message.channel_id != *channel_id {
+        if message.conversation_id != *channel_id {
             tracing::warn!(
                 input_channel_id = %channel_id,
-                server_channel_id = %message.channel_id,
+                server_channel_id = %message.conversation_id,
                 "[SEND_EPHEMERAL] CHANNEL_ID MISMATCH! Server returned different channel_id"
             );
-            message.channel_id = *channel_id;
+            message.conversation_id = *channel_id;
         }
 
         // Store locally
@@ -605,13 +605,13 @@ impl MessageService {
         message.attachments = attachment_ids;
 
         // IMPORTANT: Ensure channel_id matches (server might return different format)
-        if message.channel_id != *channel_id {
+        if message.conversation_id != *channel_id {
             tracing::warn!(
                 input_channel_id = %channel_id,
-                server_channel_id = %message.channel_id,
+                server_channel_id = %message.conversation_id,
                 "[SEND_REPLY] CHANNEL_ID MISMATCH! Server returned different channel_id"
             );
-            message.channel_id = *channel_id;
+            message.conversation_id = *channel_id;
         }
 
         // For sent messages, store original plaintext locally (not encrypted server response)

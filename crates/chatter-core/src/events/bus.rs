@@ -321,7 +321,7 @@ mod tests {
         let event = rx.recv().await.unwrap();
         if let DomainEvent::MessageReceived { message: m } = event {
             assert_eq!(m.id, msg_id);
-            assert_eq!(m.channel_id, channel_id);
+            assert_eq!(m.conversation_id, channel_id);
         } else {
             panic!("Wrong event type");
         }

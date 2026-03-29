@@ -3,7 +3,7 @@
 //! Data access for message and thread entities.
 
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
-use crate::domain::message::{Message, MessageContent, ReactionCount, Thread};
+use crate::domain::message::{ConversationType, Message, MessageContent, ReactionCount, Thread};
 use crate::error::StorageError;
 use crate::storage::serialization::{db_deserialize, db_serialize};
 use crate::storage::Database;
@@ -32,7 +32,7 @@ impl MessageRepository {
     pub fn insert(&self, message: &Message) -> Result<(), StorageError> {
         tracing::debug!(
             message_id = %message.id,
-            channel_id = %message.channel_id,
+            conversation_id = %message.conversation_id,
             sender_id = ?message.sender_id,
             content_type = ?std::mem::discriminant(&message.content),
             "[MESSAGE_REPO] Inserting message"
@@ -49,16 +49,17 @@ impl MessageRepository {
 
         conn.execute(
             "INSERT INTO messages (
-                id, channel_id, sender_id, content_type, content_json,
+                id, conversation_id, conversation_type, sender_id, content_type, content_json,
                 thread_id, reply_to, attachments_blob,
-                is_pinned, is_edited, is_deleted,
+                is_pinned, is_edited, is_deleted, is_read,
                 sent_at, created_at, updated_at, edited_at,
                 reaction_counts_blob, current_user_reactions_blob,
                 mentioned_integrations_blob, targets_ai_bot, delivery_status
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 message.id.to_string(),
-                message.channel_id.to_string(),
+                message.conversation_id.to_string(),
+                message.conversation_type.as_str(),
                 message.sender_id.map(|id| id.to_string()),
                 content_type_discriminant(&message.content),
                 content_json,
@@ -68,6 +69,7 @@ impl MessageRepository {
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
+                message.is_read as i32,
                 message.sent_at as i64,
                 message.created_at.to_rfc3339(),
                 message.updated_at.to_rfc3339(),
@@ -81,7 +83,7 @@ impl MessageRepository {
         )?;
         tracing::debug!(
             message_id = %message.id,
-            channel_id = %message.channel_id,
+            conversation_id = %message.conversation_id,
             "[MESSAGE_REPO] Message inserted successfully"
         );
         Ok(())
@@ -106,16 +108,17 @@ impl MessageRepository {
 
         let rows = conn.execute(
             "INSERT OR IGNORE INTO messages (
-                id, channel_id, sender_id, content_type, content_json,
+                id, conversation_id, conversation_type, sender_id, content_type, content_json,
                 thread_id, reply_to, attachments_blob,
-                is_pinned, is_edited, is_deleted,
+                is_pinned, is_edited, is_deleted, is_read,
                 sent_at, created_at, updated_at, edited_at,
                 reaction_counts_blob, current_user_reactions_blob,
                 mentioned_integrations_blob, targets_ai_bot
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 message.id.to_string(),
-                message.channel_id.to_string(),
+                message.conversation_id.to_string(),
+                message.conversation_type.as_str(),
                 message.sender_id.map(|id| id.to_string()),
                 content_type_discriminant(&message.content),
                 content_json,
@@ -125,6 +128,7 @@ impl MessageRepository {
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
+                message.is_read as i32,
                 message.sent_at as i64,
                 message.created_at.to_rfc3339(),
                 message.updated_at.to_rfc3339(),
@@ -142,13 +146,7 @@ impl MessageRepository {
     pub fn get(&self, id: &MessageId) -> Result<Option<Message>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, channel_id, sender_id, content_json,
-                    thread_id, reply_to, attachments_blob,
-                    is_pinned, is_edited, is_deleted,
-                    sent_at, created_at, updated_at, edited_at,
-                    reaction_counts_blob, current_user_reactions_blob,
-                    mentioned_integrations_blob, targets_ai_bot, delivery_status
-             FROM messages WHERE id = ?1",
+            &format!("SELECT {} FROM messages WHERE id = ?1", MSG_SELECT_COLS),
         )?;
 
         let result = stmt.query_row(params![id.to_string()], row_to_message);
@@ -172,13 +170,7 @@ impl MessageRepository {
     ) -> Result<Option<Message>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, channel_id, sender_id, content_json,
-                    thread_id, reply_to, attachments_blob,
-                    is_pinned, is_edited, is_deleted,
-                    sent_at, created_at, updated_at, edited_at,
-                    reaction_counts_blob, current_user_reactions_blob,
-                    mentioned_integrations_blob, targets_ai_bot, delivery_status
-             FROM messages WHERE sender_id = ?1 AND sent_at = ?2",
+            &format!("SELECT {} FROM messages WHERE sender_id = ?1 AND sent_at = ?2", MSG_SELECT_COLS),
         )?;
 
         let result = stmt.query_row(params![sender_id.to_string(), sent_at as i64], row_to_message);
@@ -198,14 +190,7 @@ impl MessageRepository {
     ) -> Result<Vec<Message>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, channel_id, sender_id, content_json,
-                    thread_id, reply_to, attachments_blob,
-                    is_pinned, is_edited, is_deleted,
-                    sent_at, created_at, updated_at, edited_at,
-                    reaction_counts_blob, current_user_reactions_blob,
-                    mentioned_integrations_blob, targets_ai_bot, delivery_status
-             FROM messages WHERE sender_id = ?1
-             ORDER BY sent_at DESC LIMIT ?2",
+            &format!("SELECT {} FROM messages WHERE sender_id = ?1 ORDER BY sent_at DESC LIMIT ?2", MSG_SELECT_COLS),
         )?;
 
         let rows = stmt.query_map(params![sender_id.to_string(), limit], row_to_message)?;
@@ -233,11 +218,11 @@ impl MessageRepository {
             "UPDATE messages SET
                 content_type = ?1, content_json = ?2,
                 thread_id = ?3, reply_to = ?4, attachments_blob = ?5,
-                is_pinned = ?6, is_edited = ?7, is_deleted = ?8,
-                updated_at = ?9, edited_at = ?10,
-                reaction_counts_blob = ?11, current_user_reactions_blob = ?12,
-                mentioned_integrations_blob = ?13, targets_ai_bot = ?14
-             WHERE id = ?15",
+                is_pinned = ?6, is_edited = ?7, is_deleted = ?8, is_read = ?9,
+                updated_at = ?10, edited_at = ?11,
+                reaction_counts_blob = ?12, current_user_reactions_blob = ?13,
+                mentioned_integrations_blob = ?14, targets_ai_bot = ?15
+             WHERE id = ?16",
             params![
                 content_type_discriminant(&message.content),
                 content_json,
@@ -247,6 +232,7 @@ impl MessageRepository {
                 message.is_pinned as i32,
                 message.is_edited as i32,
                 message.is_deleted as i32,
+                message.is_read as i32,
                 message.updated_at.to_rfc3339(),
                 message.edited_at.map(|dt| dt.to_rfc3339()),
                 reaction_counts_blob,
@@ -331,17 +317,14 @@ impl MessageRepository {
             // Cursor-based pagination using (sent_at, id) tuple for proper ordering
             // sent_at is nanosecond timestamp, ensuring correct order for rapid messages
             let mut stmt = conn.prepare(
-                "SELECT m.id, m.channel_id, m.sender_id, m.content_json,
-                        m.thread_id, m.reply_to, m.attachments_blob,
-                        m.is_pinned, m.is_edited, m.is_deleted,
-                        m.sent_at, m.created_at, m.updated_at, m.edited_at,
-                        m.reaction_counts_blob, m.current_user_reactions_blob,
-                        m.mentioned_integrations_blob, m.targets_ai_bot, m.delivery_status
-                 FROM messages m
-                 WHERE m.channel_id = ?1
-                   AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2)
-                 ORDER BY m.sent_at DESC, m.sender_id DESC
-                 LIMIT ?3",
+                &format!(
+                    "SELECT m.{} FROM messages m \
+                     WHERE m.conversation_id = ?1 \
+                       AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2) \
+                     ORDER BY m.sent_at DESC, m.sender_id DESC \
+                     LIMIT ?3",
+                    MSG_SELECT_COLS.replace(", ", ", m."),
+                ),
             )?;
             let mut rows = stmt.query(params![channel_id.to_string(), before_id.to_string(), limit])?;
             collect_messages(&mut rows)?
@@ -349,16 +332,13 @@ impl MessageRepository {
             // First page - no cursor
             // Use sent_at (nanosecond timestamp) for ordering to handle rapid messages
             let mut stmt = conn.prepare(
-                "SELECT id, channel_id, sender_id, content_json,
-                        thread_id, reply_to, attachments_blob,
-                        is_pinned, is_edited, is_deleted,
-                        sent_at, created_at, updated_at, edited_at,
-                        reaction_counts_blob, current_user_reactions_blob,
-                        mentioned_integrations_blob, targets_ai_bot, delivery_status
-                 FROM messages
-                 WHERE channel_id = ?1
-                 ORDER BY sent_at DESC, sender_id DESC
-                 LIMIT ?2",
+                &format!(
+                    "SELECT {} FROM messages \
+                     WHERE conversation_id = ?1 \
+                     ORDER BY sent_at DESC, sender_id DESC \
+                     LIMIT ?2",
+                    MSG_SELECT_COLS,
+                ),
             )?;
             let mut rows = stmt.query(params![channel_id.to_string(), limit])?;
             collect_messages(&mut rows)?
@@ -383,33 +363,28 @@ impl MessageRepository {
         let conn = self.db.read_connection()?;
 
         let messages = if let Some(before_id) = before {
+            let aliased = format!("m.{}", MSG_SELECT_COLS.replace(", ", ", m."));
             let mut stmt = conn.prepare(
-                "SELECT m.id, m.channel_id, m.sender_id, m.content_json,
-                        m.thread_id, m.reply_to, m.attachments_blob,
-                        m.is_pinned, m.is_edited, m.is_deleted,
-                        m.sent_at, m.created_at, m.updated_at, m.edited_at,
-                        m.reaction_counts_blob, m.current_user_reactions_blob,
-                        m.mentioned_integrations_blob, m.targets_ai_bot, m.delivery_status
-                 FROM messages m
-                 WHERE m.thread_id = ?1
-                   AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2)
-                 ORDER BY m.sent_at DESC, m.sender_id DESC
-                 LIMIT ?3",
+                &format!(
+                    "SELECT {} FROM messages m \
+                     WHERE m.thread_id = ?1 \
+                       AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2) \
+                     ORDER BY m.sent_at DESC, m.sender_id DESC \
+                     LIMIT ?3",
+                    aliased,
+                ),
             )?;
             let mut rows = stmt.query(params![thread_id.to_string(), before_id.to_string(), limit])?;
             collect_messages(&mut rows)?
         } else {
             let mut stmt = conn.prepare(
-                "SELECT id, channel_id, sender_id, content_json,
-                        thread_id, reply_to, attachments_blob,
-                        is_pinned, is_edited, is_deleted,
-                        sent_at, created_at, updated_at, edited_at,
-                        reaction_counts_blob, current_user_reactions_blob,
-                        mentioned_integrations_blob, targets_ai_bot, delivery_status
-                 FROM messages
-                 WHERE thread_id = ?1
-                 ORDER BY sent_at DESC, sender_id DESC
-                 LIMIT ?2",
+                &format!(
+                    "SELECT {} FROM messages \
+                     WHERE thread_id = ?1 \
+                     ORDER BY sent_at DESC, sender_id DESC \
+                     LIMIT ?2",
+                    MSG_SELECT_COLS,
+                ),
             )?;
             let mut rows = stmt.query(params![thread_id.to_string(), limit])?;
             collect_messages(&mut rows)?
@@ -422,15 +397,12 @@ impl MessageRepository {
     pub fn list_pinned(&self, channel_id: &ChannelId) -> Result<Vec<Message>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, channel_id, sender_id, content_json,
-                    thread_id, reply_to, attachments_blob,
-                    is_pinned, is_edited, is_deleted,
-                    sent_at, created_at, updated_at, edited_at,
-                    reaction_counts_blob, current_user_reactions_blob,
-                    mentioned_integrations_blob, targets_ai_bot, delivery_status
-             FROM messages
-             WHERE channel_id = ?1 AND is_pinned = 1
-             ORDER BY sent_at DESC",
+            &format!(
+                "SELECT {} FROM messages \
+                 WHERE conversation_id = ?1 AND is_pinned = 1 \
+                 ORDER BY sent_at DESC",
+                MSG_SELECT_COLS,
+            ),
         )?;
         let mut rows = stmt.query(params![channel_id.to_string()])?;
         collect_messages(&mut rows)
@@ -440,7 +412,7 @@ impl MessageRepository {
     pub fn count_in_channel(&self, channel_id: &ChannelId) -> Result<u64, StorageError> {
         let conn = self.db.read_connection()?;
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM messages WHERE channel_id = ?1",
+            "SELECT COUNT(*) FROM messages WHERE conversation_id = ?1",
             params![channel_id.to_string()],
             |row| row.get(0),
         )?;
@@ -455,7 +427,7 @@ impl MessageRepository {
     pub fn get_thread(&self, root_message_id: &MessageId) -> Result<Option<Thread>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT root_message_id, channel_id, reply_count, last_reply_at, participant_ids_blob
+            "SELECT root_message_id, conversation_id, reply_count, last_reply_at, participant_ids_blob
              FROM threads WHERE root_message_id = ?1",
         )?;
 
@@ -482,7 +454,7 @@ impl MessageRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE messages SET delivery_status = ?1, updated_at = ?2
-             WHERE channel_id = ?3 AND sent_at = ?4",
+             WHERE conversation_id = ?3 AND sent_at = ?4",
             params![
                 status,
                 Utc::now().to_rfc3339(),
@@ -513,6 +485,286 @@ impl MessageRepository {
         Ok(rows > 0)
     }
 
+    // ========================================================================
+    // Unified message operations (for anon DM/group messages)
+    // ========================================================================
+
+    /// List messages for a conversation by channel_id and conversation_type.
+    ///
+    /// This is the unified version of the old `anon_dm_repo.get_messages()`
+    /// and `anon_group_repo.get_messages()` methods.
+    pub fn list_for_conversation(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+        before_sent_at: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+
+        let messages = if let Some(before_ns) = before_sent_at {
+            let mut stmt = conn.prepare(
+                &format!(
+                    "SELECT {} FROM messages \
+                     WHERE conversation_id = ?1 AND conversation_type = ?2 \
+                       AND sent_at < ?3 AND is_deleted = 0 \
+                     ORDER BY sent_at DESC, sender_id DESC \
+                     LIMIT ?4",
+                    MSG_SELECT_COLS,
+                ),
+            )?;
+            let mut rows = stmt.query(params![
+                channel_id.to_string(),
+                conversation_type.as_str(),
+                before_ns as i64,
+                limit,
+            ])?;
+            collect_messages(&mut rows)?
+        } else {
+            let mut stmt = conn.prepare(
+                &format!(
+                    "SELECT {} FROM messages \
+                     WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_deleted = 0 \
+                     ORDER BY sent_at DESC, sender_id DESC \
+                     LIMIT ?3",
+                    MSG_SELECT_COLS,
+                ),
+            )?;
+            let mut rows = stmt.query(params![
+                channel_id.to_string(),
+                conversation_type.as_str(),
+                limit,
+            ])?;
+            collect_messages(&mut rows)?
+        };
+
+        Ok(messages)
+    }
+
+    /// Get the latest message in a conversation (for preview).
+    pub fn get_latest_for_conversation(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<Option<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            &format!(
+                "SELECT {} FROM messages \
+                 WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_deleted = 0 \
+                 ORDER BY sent_at DESC, sender_id DESC LIMIT 1",
+                MSG_SELECT_COLS,
+            ),
+        )?;
+        let result = stmt.query_row(
+            params![channel_id.to_string(), conversation_type.as_str()],
+            row_to_message,
+        );
+        match result {
+            Ok(msg) => Ok(Some(msg?)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Get a message by conversation + timestamp (any sender).
+    pub fn get_by_conversation_timestamp(
+        &self,
+        channel_id: &ChannelId,
+        timestamp_ns: u64,
+    ) -> Result<Option<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            &format!(
+                "SELECT {} FROM messages \
+                 WHERE conversation_id = ?1 AND sent_at = ?2 AND is_deleted = 0 \
+                 LIMIT 1",
+                MSG_SELECT_COLS,
+            ),
+        )?;
+        let result = stmt.query_row(
+            params![channel_id.to_string(), timestamp_ns as i64],
+            row_to_message,
+        );
+        match result {
+            Ok(msg) => Ok(Some(msg?)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Get a message by (channel_id, sender_id, sent_at) tuple.
+    pub fn get_by_conversation_sender_timestamp(
+        &self,
+        channel_id: &ChannelId,
+        sender_id: &UserId,
+        timestamp_ns: u64,
+    ) -> Result<Option<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            &format!(
+                "SELECT {} FROM messages \
+                 WHERE conversation_id = ?1 AND sender_id = ?2 AND sent_at = ?3 AND is_deleted = 0 \
+                 LIMIT 1",
+                MSG_SELECT_COLS,
+            ),
+        )?;
+        let result = stmt.query_row(
+            params![
+                channel_id.to_string(),
+                sender_id.to_string(),
+                timestamp_ns as i64,
+            ],
+            row_to_message,
+        );
+        match result {
+            Ok(msg) => Ok(Some(msg?)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Mark all messages in a conversation as read.
+    pub fn mark_conversation_read(&self, channel_id: &ChannelId) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE messages SET is_read = 1 WHERE conversation_id = ?1 AND is_read = 0",
+            params![channel_id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Count messages in a conversation.
+    pub fn count_in_conversation(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<i64, StorageError> {
+        let conn = self.db.read_connection()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_deleted = 0",
+            params![channel_id.to_string(), conversation_type.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    /// Soft delete a message by sender timestamp (for incoming delete-for-everyone).
+    pub fn mark_deleted_by_sender_timestamp(
+        &self,
+        channel_id: &ChannelId,
+        sender_id: &UserId,
+        sent_timestamp: u64,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE messages SET is_deleted = 1, updated_at = ?1
+             WHERE conversation_id = ?2 AND sender_id = ?3 AND sent_at = ?4 AND is_deleted = 0",
+            params![
+                Utc::now().to_rfc3339(),
+                channel_id.to_string(),
+                sender_id.to_string(),
+                sent_timestamp as i64,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Update message text by conversation + timestamp (for edits).
+    pub fn update_text_by_timestamp(
+        &self,
+        channel_id: &ChannelId,
+        sent_timestamp: u64,
+        new_text: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let content = MessageContent::Text(new_text.to_string());
+        let content_json = serde_json::to_string(&content)
+            .map_err(|e| StorageError::InvalidData(format!("Failed to serialize content: {}", e)))?;
+        let rows = conn.execute(
+            "UPDATE messages SET content_json = ?1, is_edited = 1, updated_at = ?2
+             WHERE conversation_id = ?3 AND sent_at = ?4",
+            params![
+                content_json,
+                Utc::now().to_rfc3339(),
+                channel_id.to_string(),
+                sent_timestamp as i64,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Set pinned state by conversation + timestamp.
+    pub fn set_pinned_by_timestamp(
+        &self,
+        channel_id: &ChannelId,
+        sent_timestamp: u64,
+        pinned: bool,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE messages SET is_pinned = ?1
+             WHERE conversation_id = ?2 AND sent_at = ?3 AND is_deleted = 0",
+            params![
+                pinned as i32,
+                channel_id.to_string(),
+                sent_timestamp as i64,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// List all pinned messages for a conversation.
+    pub fn list_pinned_for_conversation(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            &format!(
+                "SELECT {} FROM messages \
+                 WHERE conversation_id = ?1 AND conversation_type = ?2 \
+                   AND is_pinned = 1 AND is_deleted = 0 \
+                 ORDER BY sent_at DESC",
+                MSG_SELECT_COLS,
+            ),
+        )?;
+        let mut rows = stmt.query(params![
+            channel_id.to_string(),
+            conversation_type.as_str(),
+        ])?;
+        collect_messages(&mut rows)
+    }
+
+    /// Update delivery status by conversation + timestamps.
+    pub fn update_delivery_status_by_timestamps(
+        &self,
+        channel_id: &ChannelId,
+        timestamps: &[u64],
+        status: &str,
+    ) -> Result<usize, StorageError> {
+        if timestamps.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.db.connection()?;
+        let now = Utc::now().to_rfc3339();
+        let mut total = 0;
+        for &ts in timestamps {
+            let rows = conn.execute(
+                "UPDATE messages SET delivery_status = ?1, updated_at = ?2
+                 WHERE conversation_id = ?3 AND sent_at = ?4",
+                params![status, now, channel_id.to_string(), ts as i64],
+            )?;
+            total += rows;
+        }
+        Ok(total)
+    }
+
+    // ========================================================================
+    // Thread operations
+    // ========================================================================
+
     /// Insert or update thread metadata.
     pub fn upsert_thread(&self, thread: &Thread) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
@@ -520,7 +772,7 @@ impl MessageRepository {
         let participant_ids_blob = db_serialize(&thread.participant_ids)?;
 
         conn.execute(
-            "INSERT INTO threads (root_message_id, channel_id, reply_count, last_reply_at, participant_ids_blob)
+            "INSERT INTO threads (root_message_id, conversation_id, reply_count, last_reply_at, participant_ids_blob)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(root_message_id) DO UPDATE SET
                 reply_count = excluded.reply_count,
@@ -528,7 +780,7 @@ impl MessageRepository {
                 participant_ids_blob = excluded.participant_ids_blob",
             params![
                 thread.root_message_id.to_string(),
-                thread.channel_id.to_string(),
+                thread.conversation_id.to_string(),
                 thread.reply_count,
                 thread.last_reply_at.map(|dt| dt.to_rfc3339()),
                 participant_ids_blob,
@@ -562,25 +814,36 @@ fn content_type_discriminant(content: &MessageContent) -> i32 {
     }
 }
 
-/// Convert a row to a Message.
-/// Column order: id(0), channel_id(1), sender_id(2), content_json(3),
-///               thread_id(4), reply_to(5), attachments_blob(6),
-///               is_pinned(7), is_edited(8), is_deleted(9),
-///               sent_at(10), created_at(11), updated_at(12), edited_at(13),
-///               reaction_counts_blob(14), current_user_reactions_blob(15),
-///               mentioned_integrations_blob(16), targets_ai_bot(17), delivery_status(18)
-fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, StorageError>> {
-    let content_json: String = row.get(3)?;
-    // Read from BLOB columns (bincode serialized)
-    let attachments_blob: Vec<u8> = row.get(6)?;
-    let reaction_counts_blob: Vec<u8> = row.get(14)?;
-    let current_user_reactions_blob: Vec<u8> = row.get(15)?;
-    let mentioned_integrations_blob: Vec<u8> = row.get(16)?;
+/// Standard SELECT column list for messages.
+/// Used by all message queries for consistency with row_to_message.
+const MSG_SELECT_COLS: &str =
+    "id, conversation_id, conversation_type, sender_id, content_json, \
+     thread_id, reply_to, attachments_blob, \
+     is_pinned, is_edited, is_deleted, is_read, \
+     sent_at, created_at, updated_at, edited_at, \
+     reaction_counts_blob, current_user_reactions_blob, \
+     mentioned_integrations_blob, targets_ai_bot, delivery_status";
 
-    let thread_id: Option<String> = row.get(4)?;
-    let reply_to: Option<String> = row.get(5)?;
-    let sender_id: Option<String> = row.get(2)?;
-    let edited_at: Option<String> = row.get(13)?;
+/// Convert a row to a Message.
+/// Column order: id(0), conversation_id(1), conversation_type(2), sender_id(3),
+///               content_json(4), thread_id(5), reply_to(6), attachments_blob(7),
+///               is_pinned(8), is_edited(9), is_deleted(10), is_read(11),
+///               sent_at(12), created_at(13), updated_at(14), edited_at(15),
+///               reaction_counts_blob(16), current_user_reactions_blob(17),
+///               mentioned_integrations_blob(18), targets_ai_bot(19), delivery_status(20)
+fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, StorageError>> {
+    let content_json: String = row.get(4)?;
+    // Read from BLOB columns (bincode serialized)
+    let attachments_blob: Vec<u8> = row.get(7)?;
+    let reaction_counts_blob: Vec<u8> = row.get(16)?;
+    let current_user_reactions_blob: Vec<u8> = row.get(17)?;
+    let mentioned_integrations_blob: Vec<u8> = row.get(18)?;
+
+    let conversation_type_str: String = row.get(2)?;
+    let thread_id: Option<String> = row.get(5)?;
+    let reply_to: Option<String> = row.get(6)?;
+    let sender_id: Option<String> = row.get(3)?;
+    let edited_at: Option<String> = row.get(15)?;
 
     // Deserialize content from JSON (kept for FTS5 compatibility)
     let content: MessageContent = match serde_json::from_str(&content_json) {
@@ -614,15 +877,18 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
             .get::<_, String>(0)?
             .parse()
             .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
-        channel_id: row
+        conversation_id: row
             .get::<_, String>(1)?
             .parse()
             .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
+        conversation_type: ConversationType::from_str_value(&conversation_type_str),
         sender_id: sender_id
             .map(|s| s.parse())
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
+        device_id: None,
         content,
+        encrypted_content: None,
         thread_id: thread_id
             .map(|s| s.parse())
             .transpose()
@@ -632,18 +898,19 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
         attachments,
-        is_pinned: row.get::<_, i32>(7)? != 0,
-        is_edited: row.get::<_, i32>(8)? != 0,
-        is_deleted: row.get::<_, i32>(9)? != 0,
-        sent_at: row.get::<_, i64>(10)? as u64,
-        created_at: parse_datetime(&row.get::<_, String>(11)?),
-        updated_at: parse_datetime(&row.get::<_, String>(12)?),
+        is_pinned: row.get::<_, i32>(8)? != 0,
+        is_edited: row.get::<_, i32>(9)? != 0,
+        is_deleted: row.get::<_, i32>(10)? != 0,
+        is_read: row.get::<_, i32>(11)? != 0,
+        sent_at: row.get::<_, i64>(12)? as u64,
+        created_at: parse_datetime(&row.get::<_, String>(13)?),
+        updated_at: parse_datetime(&row.get::<_, String>(14)?),
         edited_at: edited_at.map(|s| parse_datetime(&s)),
         reaction_counts,
         current_user_reactions,
         mentioned_integrations,
-        targets_ai_bot: row.get::<_, i32>(17)? != 0,
-        delivery_status: row.get::<_, String>(18).unwrap_or_default(),
+        targets_ai_bot: row.get::<_, i32>(19)? != 0,
+        delivery_status: row.get::<_, String>(20).unwrap_or_default(),
     }))
 }
 
@@ -664,7 +931,7 @@ fn row_to_thread(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Thread, Sto
             .get::<_, String>(0)?
             .parse()
             .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
-        channel_id: row
+        conversation_id: row
             .get::<_, String>(1)?
             .parse()
             .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,

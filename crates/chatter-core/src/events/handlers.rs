@@ -214,7 +214,7 @@ impl EventHandlers {
             // Message Events
             // ================================================================
             DomainEvent::MessageReceived { message } => {
-                let channel_id = message.channel_id;
+                let channel_id = message.conversation_id;
                 trace!(?channel_id, message_id = ?message.id, "Adding message to state");
                 self.message_state.append_message(channel_id, message);
             }
@@ -534,7 +534,7 @@ impl EventHandlers {
             }
 
             DomainEvent::SavedMessageSynced { message } => {
-                let channel_id = message.channel_id;
+                let channel_id = message.conversation_id;
                 trace!(?channel_id, message_id = ?message.id, "SavedMessageSynced: adding to state");
                 self.message_state.append_message(channel_id, message);
             }
@@ -853,6 +853,15 @@ impl EventHandlers {
                 
                 // The profile update is already stored by the inbox handler
                 // This event is just for notifying other components
+            }
+
+            // ================================================================
+            // Jarvis AI Events
+            // ================================================================
+            DomainEvent::JarvisResponse { .. }
+            | DomainEvent::JarvisStats { .. }
+            | DomainEvent::JarvisCleared { .. } => {
+                // Jarvis events are handled by the UI directly
             }
         }
     }

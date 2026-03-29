@@ -389,7 +389,7 @@ mod tests {
         let event = rx.try_recv().unwrap();
         if let DomainEvent::MessageReceived { message } = event {
             assert_eq!(message.as_text(), Some("Hello, world!"));
-            assert_eq!(message.channel_id, channel_id);
+            assert_eq!(message.conversation_id, channel_id);
         } else {
             panic!("Expected MessageReceived event");
         }

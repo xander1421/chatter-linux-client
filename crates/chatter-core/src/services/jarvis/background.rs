@@ -104,7 +104,7 @@ impl JarvisBackground {
     /// Handle a domain event.
     async fn handle_event(jarvis: &JarvisService, event: DomainEvent) {
         if let DomainEvent::MessageReceived { message } = event {
-            let context = JarvisContext::channel(message.channel_id);
+            let context = JarvisContext::channel(message.conversation_id);
             let author_id = message.sender_id;
             let message_id = message.id.to_string();
 

@@ -745,7 +745,7 @@ impl InboxEventProcessor {
                     self.event_bus.emit_domain(DomainEvent::MessageEdited {
                         message_id: msg.id,
                         new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
-                        channel_id: msg.channel_id,
+                        channel_id: msg.conversation_id,
                     });
                 }
                 false
@@ -767,7 +767,7 @@ impl InboxEventProcessor {
                     self.event_bus.emit_domain(DomainEvent::MessageDeleted {
                         message_id: msg.id,
                         author_id: *peer_id,
-                        channel_id: Some(msg.channel_id),
+                        channel_id: Some(msg.conversation_id),
                     });
                 }
                 false
@@ -789,12 +789,12 @@ impl InboxEventProcessor {
                     if *unpin {
                         self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
                             message_id: msg.id, unpinner_id: *peer_id,
-                            channel_id: msg.channel_id, target_sent_timestamp: *target_sent_timestamp,
+                            channel_id: msg.conversation_id, target_sent_timestamp: *target_sent_timestamp,
                         });
                     } else {
                         self.event_bus.emit_domain(DomainEvent::MessagePinned {
                             message_id: msg.id, pinner_id: *peer_id,
-                            channel_id: msg.channel_id, target_sent_timestamp: *target_sent_timestamp,
+                            channel_id: msg.conversation_id, target_sent_timestamp: *target_sent_timestamp,
                         });
                     }
                 }
@@ -1318,7 +1318,7 @@ impl InboxEventProcessor {
                 let message_id = self.anon_group_service
                     .get_message_by_timestamp(&anon_group_id, pin.target_sent_timestamp)
                     .ok().flatten()
-                    .and_then(|m| m.id.as_str().parse::<crate::domain::ids::MessageId>().ok())
+                    .map(|m| m.id)
                     .unwrap_or_else(|| crate::domain::MessageId::from_timestamp(pin.target_sent_timestamp));
                 let channel_id: crate::domain::ChannelId = anon_group_id.into();
 

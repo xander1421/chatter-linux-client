@@ -56,7 +56,7 @@ pub fn wire(_window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     }
                     // Skip if user is viewing this channel
-                    if chat_data.active_channel_id == Some(message.channel_id) {
+                    if chat_data.active_channel_id == Some(message.conversation_id) {
                         continue;
                     }
 

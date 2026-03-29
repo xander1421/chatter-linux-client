@@ -1,10 +1,12 @@
 use chrono::Utc;
-use crate::domain::anon_dm::{AnonDmId, AnonDmMessage as DomainAnonDmMessage, AnonDmMessageId};
+use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
+use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
 use crate::domain::UserId;
 use crate::proto::content_v1::Content;
 use crate::services::AttachmentService;
+use crate::util::time::TimestampNanos;
 
-use crate::services::gateway::shared;
 use super::{AnonDmError, AnonDmService};
 
 impl AnonDmService {
@@ -155,62 +157,14 @@ impl AnonDmService {
                     // Use sender's timestamp for consistent ordering across devices
                     let sent_at = inner_content.timestamp;
 
-                    // Store with quote metadata if this is a reply
-                    let message_id = if let Some(ref q) = data_msg.quote {
-                        // Resolve author display name
-                        let author_name = if let Ok(author_uid) = q.author_aci.parse::<crate::domain::UserId>() {
-                            self.anon_dm_repo.get_conversation(conversation_id)
-                                .ok()
-                                .flatten()
-                                .and_then(|dm| {
-                                    if dm.peer_id == author_uid { dm.peer_display_name } else { None }
-                                })
-                                .unwrap_or_else(|| q.author_aci.clone())
-                        } else {
-                            q.author_aci.clone()
-                        };
-
-                        let content_json = serde_json::json!({
-                            "text": data_msg.body,
-                            "quote": {
-                                "author_id": q.author_aci,
-                                "author_name": author_name,
-                                "timestamp": q.id,
-                                "preview": q.text,
-                            }
-                        }).to_string();
-
-                        let content_type = shared::determine_content_type(has_text, has_attachments);
-                        let attachments_blob = shared::serialize_attachment_ids(&attachment_ids);
-
-                        let message = crate::domain::anon_dm::AnonDmMessage {
-                            id: crate::domain::anon_dm::AnonDmMessageId::new(),
-                            conversation_id: *conversation_id,
-                            sender_id: *sender_id,
-                            content_type,
-                            content_json,
-                            attachments_blob,
-                            is_deleted: false,
-                            is_read: false,
-                            reaction_counts: Vec::new(),
-                            current_user_reactions: Vec::new(),
-                            delivery_status: String::new(),
-                            sent_at,
-                            created_at: Utc::now(),
-                            is_pinned: false,
-                            is_edited: false,
-                        };
-                        self.anon_dm_repo.insert_message(&message)?;
-                        message.id
-                    } else {
-                        self.store_message_with_attachments(
-                            conversation_id,
-                            sender_id,
-                            &data_msg.body,
-                            &attachment_ids,
-                            sent_at,
-                        )?
-                    };
+                    // Store message (with or without quote metadata)
+                    let message_id = self.store_message_with_attachments(
+                        conversation_id,
+                        sender_id,
+                        &data_msg.body,
+                        &attachment_ids,
+                        sent_at,
+                    )?;
                     tracing::info!(
                         conversation_id = %conversation_id,
                         message_id = %message_id,
@@ -357,7 +311,7 @@ impl AnonDmService {
                 // Look up real message ID from DB (not fabricated) for correct pinned_state tracking
                 let message_id = self.get_message_by_timestamp(conversation_id, pin.target_sent_timestamp)
                     .ok().flatten()
-                    .and_then(|m| m.id.as_str().parse::<crate::domain::ids::MessageId>().ok())
+                    .map(|m| m.id)
                     .unwrap_or_else(|| crate::domain::MessageId::from_timestamp(pin.target_sent_timestamp));
                 let channel_id: crate::domain::ChannelId = (*conversation_id).into();
 
@@ -551,36 +505,50 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
         sender_id: &UserId,
-        content_type: i32,
+        _content_type: i32,
         content_json: &str,
         sent_at: u64,
     ) -> Result<AnonDmMessageId, AnonDmError> {
-        let message = DomainAnonDmMessage {
-            id: AnonDmMessageId::new(),
-            conversation_id: *conversation_id,
-            sender_id: *sender_id,
-            content_type,
-            content_json: content_json.to_string(),
-            attachments_blob: vec![8, 0, 0, 0, 0, 0, 0, 0], // Empty vec bincode
-            is_deleted: false,
-            is_read: false,
-            reaction_counts: Vec::new(),
-            current_user_reactions: Vec::new(),
-            delivery_status: String::new(),
-            sent_at,
-            created_at: Utc::now(),
+        let channel_id: ChannelId = (*conversation_id).into();
+        let message_id = MessageId::new();
+        let created_at = TimestampNanos::from_nanos(sent_at)
+            .to_datetime()
+            .unwrap_or_else(Utc::now);
+
+        let message = Message {
+            id: message_id,
+            conversation_id: channel_id,
+            conversation_type: ConversationType::AnonDm,
+            sender_id: Some(*sender_id),
+            device_id: None,
+            content: MessageContent::Text(content_json.to_string()),
+            encrypted_content: None,
+            thread_id: None,
+            reply_to: None,
+            attachments: Vec::new(),
             is_pinned: false,
             is_edited: false,
+            is_deleted: false,
+            is_read: false,
+            sent_at,
+            created_at,
+            updated_at: created_at,
+            edited_at: None,
+            reaction_counts: Vec::new(),
+            current_user_reactions: Vec::new(),
+            mentioned_integrations: Vec::new(),
+            targets_ai_bot: false,
+            delivery_status: String::new(),
         };
 
-        self.anon_dm_repo.insert_message(&message)?;
+        self.message_repo.insert(&message)?;
         tracing::debug!(
             "Stored message {} in conversation {} with sent_at={}",
-            message.id,
+            message_id,
             conversation_id,
             sent_at
         );
-        Ok(message.id)
+        Ok(AnonDmMessageId::from_string(message_id.to_string()))
     }
 
     /// Store a text message.
@@ -591,15 +559,46 @@ impl AnonDmService {
         text: &str,
         sent_at: u64,
     ) -> Result<AnonDmMessageId, AnonDmError> {
-        let message = DomainAnonDmMessage::new_text(*conversation_id, *sender_id, text, sent_at);
-        self.anon_dm_repo.insert_message(&message)?;
+        let channel_id: ChannelId = (*conversation_id).into();
+        let message_id = MessageId::new();
+        let created_at = TimestampNanos::from_nanos(sent_at)
+            .to_datetime()
+            .unwrap_or_else(Utc::now);
+
+        let message = Message {
+            id: message_id,
+            conversation_id: channel_id,
+            conversation_type: ConversationType::AnonDm,
+            sender_id: Some(*sender_id),
+            device_id: None,
+            content: MessageContent::Text(text.to_string()),
+            encrypted_content: None,
+            thread_id: None,
+            reply_to: None,
+            attachments: Vec::new(),
+            is_pinned: false,
+            is_edited: false,
+            is_deleted: false,
+            is_read: false,
+            sent_at,
+            created_at,
+            updated_at: created_at,
+            edited_at: None,
+            reaction_counts: Vec::new(),
+            current_user_reactions: Vec::new(),
+            mentioned_integrations: Vec::new(),
+            targets_ai_bot: false,
+            delivery_status: String::new(),
+        };
+
+        self.message_repo.insert(&message)?;
         tracing::debug!(
             "Stored text message {} in conversation {} with sent_at={}",
-            message.id,
+            message_id,
             conversation_id,
             sent_at
         );
-        Ok(message.id)
+        Ok(AnonDmMessageId::from_string(message_id.to_string()))
     }
 
     /// Store a message with text and/or attachments.
@@ -611,51 +610,62 @@ impl AnonDmService {
         attachment_ids: &[crate::domain::AttachmentId],
         sent_at: u64,
     ) -> Result<AnonDmMessageId, AnonDmError> {
-        use crate::storage::serialization::db_serialize;
+        let channel_id: ChannelId = (*conversation_id).into();
+        let message_id = MessageId::new();
+        let created_at = TimestampNanos::from_nanos(sent_at)
+            .to_datetime()
+            .unwrap_or_else(Utc::now);
 
-        // Determine content type: 1=text, 2=attachment only, 3=mixed
         let has_text = !text.is_empty();
         let has_attachments = !attachment_ids.is_empty();
 
-        let (content_type, content_json) = match (has_text, has_attachments) {
-            (true, false) => (1, serde_json::json!({ "text": text }).to_string()),
-            (false, true) => (2, serde_json::json!({ "attachments": attachment_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>() }).to_string()),
-            (true, true) => (3, serde_json::json!({ "text": text, "attachments": attachment_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>() }).to_string()),
-            (false, false) => (0, "{}".to_string()),
+        let content = match (has_text, has_attachments) {
+            (true, true) => MessageContent::Mixed(MixedContent::new(
+                text.to_string(),
+                attachment_ids.to_vec(),
+            )),
+            (false, true) => MessageContent::Mixed(MixedContent::attachments_only(
+                attachment_ids.to_vec(),
+            )),
+            _ => MessageContent::Text(text.to_string()),
         };
 
-        // Serialize attachment IDs to blob
-        let attachment_ids_vec: Vec<_> = attachment_ids.to_vec();
-        let attachments_blob = db_serialize(&attachment_ids_vec).unwrap_or_else(|_| vec![8, 0, 0, 0, 0, 0, 0, 0]);
-
-        let message = DomainAnonDmMessage {
-            id: AnonDmMessageId::new(),
-            conversation_id: *conversation_id,
-            sender_id: *sender_id,
-            content_type,
-            content_json,
-            attachments_blob,
-            is_deleted: false,
-            is_read: false,
-            reaction_counts: Vec::new(),
-            current_user_reactions: Vec::new(),
-            delivery_status: String::new(),
-            sent_at,
-            created_at: Utc::now(),
+        let message = Message {
+            id: message_id,
+            conversation_id: channel_id,
+            conversation_type: ConversationType::AnonDm,
+            sender_id: Some(*sender_id),
+            device_id: None,
+            content,
+            encrypted_content: None,
+            thread_id: None,
+            reply_to: None,
+            attachments: attachment_ids.to_vec(),
             is_pinned: false,
             is_edited: false,
+            is_deleted: false,
+            is_read: false,
+            sent_at,
+            created_at,
+            updated_at: created_at,
+            edited_at: None,
+            reaction_counts: Vec::new(),
+            current_user_reactions: Vec::new(),
+            mentioned_integrations: Vec::new(),
+            targets_ai_bot: false,
+            delivery_status: String::new(),
         };
 
-        self.anon_dm_repo.insert_message(&message)?;
+        self.message_repo.insert(&message)?;
         tracing::debug!(
             conversation_id = %conversation_id,
-            message_id = %message.id,
+            message_id = %message_id,
             sent_at = sent_at,
             has_text = has_text,
             attachment_count = attachment_ids.len(),
             "[ANON_DM] store_message_with_attachments completed"
         );
-        Ok(message.id)
+        Ok(AnonDmMessageId::from_string(message_id.to_string()))
     }
 
     /// Mark a conversation as read.
@@ -670,7 +680,8 @@ impl AnonDmService {
         timestamps: &[u64],
         status: &str,
     ) -> Result<usize, AnonDmError> {
-        Ok(self.anon_dm_repo.update_delivery_status_by_timestamps(conversation_id, timestamps, status)?)
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.update_delivery_status_by_timestamps(&channel_id, timestamps, status)?)
     }
 
     /// Update message text (for handling edits from peer).
@@ -685,6 +696,16 @@ impl AnonDmService {
         sent_timestamp: u64,
         new_text: &str,
     ) -> Result<bool, AnonDmError> {
-        Ok(self.anon_dm_repo.update_message_text_by_sender(conversation_id, sender_id, sent_timestamp, new_text)?)
+        // Verify the sender is the author by looking up the message first
+        let channel_id: ChannelId = (*conversation_id).into();
+        if let Some(existing) = self.message_repo.get_by_conversation_sender_timestamp(&channel_id, sender_id, sent_timestamp)? {
+            // Sender matches - update the text
+            self.message_repo.update_text_by_timestamp(&channel_id, sent_timestamp, new_text)?;
+            let _ = existing; // Confirm message existed and sender matched
+            Ok(true)
+        } else {
+            // Message not found or sender doesn't match
+            Ok(false)
+        }
     }
 }

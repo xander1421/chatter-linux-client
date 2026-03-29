@@ -1,6 +1,8 @@
-use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
+use crate::domain::anon_dm::AnonDmId;
+use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::domain::UserId;
-use crate::proto::content_v1::{self, AnonDmMessage, AnonDmPresence, AnonDmProfileUpdate, Content, anon_dm_presence};
+use crate::proto::content_v1::{self, AnonDmMessage as ProtoAnonDmMessage, AnonDmPresence, AnonDmProfileUpdate, Content, anon_dm_presence};
 use crate::services::gateway::builders::{
     build_typing_content, build_reaction_content, build_read_receipt_content,
     build_delivery_receipt_content, build_delete_for_everyone_content, build_pin_content, build_edit_content,
@@ -18,7 +20,7 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
         text: &str,
-    ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
+    ) -> Result<(MessageId, u64), AnonDmError> {
         self.send_with_attachments(conversation_id, text, vec![]).await
     }
 
@@ -33,7 +35,7 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
         text: &str,
         attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
-    ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
+    ) -> Result<(MessageId, u64), AnonDmError> {
         self.send_with_attachments_and_quote(conversation_id, text, attachments, None).await
     }
 
@@ -47,7 +49,7 @@ impl AnonDmService {
         attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
         reply_to_sender: &UserId,
         reply_to_timestamp: u64,
-    ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
+    ) -> Result<(MessageId, u64), AnonDmError> {
         // Look up the original message to get preview text
         let preview_text = self.get_message_by_sender_timestamp(
             conversation_id,
@@ -77,7 +79,7 @@ impl AnonDmService {
         text: &str,
         attachments: Vec<crate::proto::content_v1::AttachmentPointer>,
         quote: Option<crate::proto::content_v1::Quote>,
-    ) -> Result<(AnonDmMessageId, u64), AnonDmError> {
+    ) -> Result<(MessageId, u64), AnonDmError> {
         use crate::services::gateway::shared;
 
         let current_user = self.current_user_id()?;
@@ -99,47 +101,48 @@ impl AnonDmService {
         let sent_at = TimestampNanos::now().as_u64();
         let inner_content = build_data_message_content_with_quote(text, attachments, quote.clone(), sent_at);
 
-        // Store message locally with quote metadata in content_json
-        let content_json = if let Some(q) = quote.as_ref() {
-            // Resolve author display name from conversation
-            let author_name = if let Ok(author_uid) = q.author_aci.parse::<crate::domain::UserId>() {
-                self.anon_dm_repo.get_conversation(conversation_id)
-                    .ok()
-                    .flatten()
-                    .and_then(|dm| {
-                        if dm.peer_id == author_uid { dm.peer_display_name } else { None }
-                    })
-                    .unwrap_or_else(|| q.author_aci.clone())
-            } else {
-                q.author_aci.clone()
-            };
-            shared::build_reply_content_json(text, &q.author_aci, &author_name, q.id, &q.text)
+        // Store message locally
+        let channel_id: ChannelId = (*conversation_id).into();
+        let message_id = MessageId::new();
+        let created_at = TimestampNanos::from_nanos(sent_at)
+            .to_datetime()
+            .unwrap_or_else(chrono::Utc::now);
+
+        let content = if attachment_ids.is_empty() {
+            MessageContent::Text(text.to_string())
         } else {
-            shared::build_content_json(text, &attachment_ids)
+            MessageContent::Mixed(crate::domain::message::MixedContent::new(
+                text.to_string(),
+                attachment_ids.clone(),
+            ))
         };
 
-        let content_type = shared::determine_content_type(!text.is_empty(), !attachment_ids.is_empty());
-        let attachments_blob = shared::serialize_attachment_ids(&attachment_ids);
-
-        let message = crate::domain::anon_dm::AnonDmMessage {
-            id: crate::domain::anon_dm::AnonDmMessageId::new(),
-            conversation_id: *conversation_id,
-            sender_id: current_user,
-            content_type,
-            content_json,
-            attachments_blob,
-            is_deleted: false,
-            is_read: false,
-            reaction_counts: Vec::new(),
-            current_user_reactions: Vec::new(),
-            delivery_status: String::new(),
-            sent_at,
-            created_at: chrono::Utc::now(),
+        let message = Message {
+            id: message_id,
+            conversation_id: channel_id,
+            conversation_type: ConversationType::AnonDm,
+            sender_id: Some(current_user),
+            device_id: None,
+            content,
+            encrypted_content: None,
+            thread_id: None,
+            reply_to: None,
+            attachments: attachment_ids.clone(),
             is_pinned: false,
             is_edited: false,
+            is_deleted: false,
+            is_read: false,
+            sent_at,
+            created_at,
+            updated_at: created_at,
+            edited_at: None,
+            reaction_counts: Vec::new(),
+            current_user_reactions: Vec::new(),
+            mentioned_integrations: Vec::new(),
+            targets_ai_bot: false,
+            delivery_status: String::new(),
         };
-        self.anon_dm_repo.insert_message(&message)?;
-        let message_id = message.id;
+        self.message_repo.insert(&message)?;
 
         // NOTE: Do NOT emit AnonDmMessageReceived here.
         // The UI send handler (send_message.rs) already appends the message to
@@ -161,8 +164,9 @@ impl AnonDmService {
         self.send_message(conversation_id, inner_content).await?;
 
         // Mark as "sent" for delivery status indicator
-        let _ = self.anon_dm_repo.update_delivery_status_by_timestamps(
-            conversation_id, &[sent_at], "sent",
+        let channel_id_for_status: ChannelId = (*conversation_id).into();
+        let _ = self.message_repo.update_delivery_status_by_timestamps(
+            &channel_id_for_status, &[sent_at], "sent",
         );
 
         Ok((message_id, sent_at))
@@ -403,7 +407,7 @@ impl AnonDmService {
             "[ANON_DM_EPHEMERAL] Sending ephemeral message"
         );
 
-        let dm_message = AnonDmMessage {
+        let dm_message = ProtoAnonDmMessage {
             conversation_id: conversation_id.to_vec(),
             inner_content: Some(Box::new(inner_content)),
         };
@@ -556,7 +560,8 @@ impl AnonDmService {
         self.send_message(conversation_id, content).await?;
 
         // Update message locally
-        self.anon_dm_repo.update_message_text(conversation_id, target_sent_timestamp, new_text)?;
+        let channel_id: ChannelId = (*conversation_id).into();
+        self.message_repo.update_text_by_timestamp(&channel_id, target_sent_timestamp, new_text)?;
 
         Ok(())
     }
@@ -590,7 +595,7 @@ impl AnonDmService {
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap(); // is_ready() guarantees this
 
         // Wrap in AnonDmMessage
-        let dm_message = AnonDmMessage {
+        let dm_message = ProtoAnonDmMessage {
             conversation_id: conversation_id.to_vec(),
             inner_content: Some(Box::new(inner_content)),
         };

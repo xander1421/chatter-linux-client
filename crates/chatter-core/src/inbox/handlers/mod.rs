@@ -924,13 +924,37 @@ pub enum DomainEvent {
         /// System message created for this event.
         message: Message,
     },
+
+    // ========================================================================
+    // Jarvis AI Events
+    // ========================================================================
+
+    /// Jarvis AI response received.
+    JarvisResponse {
+        /// Response text.
+        text: String,
+        /// Context ID.
+        context_id: String,
+    },
+
+    /// Jarvis AI statistics received.
+    JarvisStats {
+        /// Memory usage stats.
+        stats: String,
+    },
+
+    /// Jarvis memory was cleared.
+    JarvisCleared {
+        /// Context ID.
+        context_id: String,
+    },
 }
 
 impl DomainEvent {
     /// Get the channel ID associated with this event, if any.
     pub fn channel_id(&self) -> Option<ChannelId> {
         match self {
-            DomainEvent::MessageReceived { message } => Some(message.channel_id),
+            DomainEvent::MessageReceived { message } => Some(message.conversation_id),
             DomainEvent::MessageEdited { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageDeleted { channel_id, .. } => *channel_id,
             DomainEvent::AttachmentReady { channel_id, .. } => Some(*channel_id),
@@ -947,7 +971,7 @@ impl DomainEvent {
             DomainEvent::SenderKeyReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::GroupMailboxReceived { channel_id, .. } => Some(*channel_id),
             DomainEvent::DeleteForMeSync { conversation_id, .. } => Some(*conversation_id),
-            DomainEvent::SavedMessageSynced { message } => Some(message.channel_id),
+            DomainEvent::SavedMessageSynced { message } => Some(message.conversation_id),
             DomainEvent::CallHangupReceived { .. } => None, // Calls don't have a channel context here
             DomainEvent::CallKeyAnswerReceived { .. } => None, // Call answer doesn't have channel context
             DomainEvent::GroupCallKeyReceived { channel_id, .. } => Some(*channel_id),
@@ -991,6 +1015,10 @@ impl DomainEvent {
             // User presence events
             DomainEvent::UserPresenceChanged { .. } => None,
             DomainEvent::AnonDmProfileUpdated { .. } => None,
+            // Jarvis events
+            DomainEvent::JarvisResponse { .. } => None,
+            DomainEvent::JarvisStats { .. } => None,
+            DomainEvent::JarvisCleared { .. } => None,
         }
     }
 

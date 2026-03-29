@@ -9,7 +9,7 @@ use chrono::Utc;
 use crate::util::time::TimestampNanos;
 
 use crate::domain::ids::{ChannelId, IntegrationId, MessageId, UserId};
-use crate::domain::message::{Message, MessageContent, MixedContent, ReactionCount};
+use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent, ReactionCount};
 use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
@@ -354,15 +354,19 @@ fn proto_to_domain_message(proto: &chat_v1::Message) -> Result<Message, SearchEr
 
     Ok(Message {
         id,
-        channel_id,
+        conversation_id: channel_id,
+        conversation_type: ConversationType::Channel,
         sender_id,
+        device_id: None,
         content,
+        encrypted_content: None,
         thread_id,
         reply_to: None, // Not exposed in proto yet
         attachments: Vec::new(), // Handled separately via mentioned_file_ids
         is_pinned: proto.pinned,
         is_edited: proto.edited,
         is_deleted: false,
+        is_read: false,
         sent_at: proto.timestamp,
         created_at,
         updated_at,

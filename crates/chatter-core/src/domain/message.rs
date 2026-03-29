@@ -7,17 +7,95 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
+// ConversationType
+// ============================================================================
+
+/// Discriminant for the type of conversation a message belongs to.
+///
+/// Used in the unified `messages` table to distinguish between channel messages,
+/// direct messages, anonymous DMs, anonymous groups, etc.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ConversationType {
+    /// Server-managed channel (public, private, or group).
+    Channel,
+    /// Server-managed direct message (1:1 via server DM channel).
+    ServerDm,
+    /// Client-side mailbox-based DM (sealed sender).
+    MailboxDm,
+    /// Anonymous DM (NDSS'21 style, client-managed).
+    AnonDm,
+    /// Anonymous group (NDSS'21 style, client-managed).
+    AnonGroup,
+    /// Saved messages / personal vault.
+    SavedMessages,
+}
+
+impl ConversationType {
+    /// Convert to database string representation.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Channel => "channel",
+            Self::ServerDm => "server_dm",
+            Self::MailboxDm => "mailbox_dm",
+            Self::AnonDm => "anon_dm",
+            Self::AnonGroup => "anon_group",
+            Self::SavedMessages => "saved_messages",
+        }
+    }
+
+    /// Parse from database string representation.
+    pub fn from_str_value(s: &str) -> Self {
+        match s {
+            "channel" => Self::Channel,
+            "server_dm" => Self::ServerDm,
+            "mailbox_dm" => Self::MailboxDm,
+            "anon_dm" => Self::AnonDm,
+            "anon_group" => Self::AnonGroup,
+            "saved_messages" => Self::SavedMessages,
+            _ => Self::Channel, // Default fallback
+        }
+    }
+}
+
+impl Default for ConversationType {
+    fn default() -> Self {
+        Self::Channel
+    }
+}
+
+impl std::fmt::Display for ConversationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
 // Message
 // ============================================================================
 
-/// Represents a chat message.
+/// Represents a chat message in the unified message pipeline.
+///
+/// All message types (channel, DM, anon DM, anon group) use this struct.
+/// The `conversation_type` field discriminates what kind of conversation
+/// the message belongs to, and `conversation_id` holds the conversation UUID
+/// (a ChannelId for channels, or a converted AnonDmId/AnonGroupId for
+/// anonymous conversations — they share the same UUID representation).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub id: MessageId,
-    pub channel_id: ChannelId,
+    /// The conversation this message belongs to.
+    /// For channels: the channel UUID. For anon DM/group: the AnonDmId/AnonGroupId
+    /// converted to ChannelId (they share the same UUID representation).
+    pub conversation_id: ChannelId,
+    /// What type of conversation this message is in.
+    pub conversation_type: ConversationType,
     /// None for sealed sender messages (server doesn't know sender).
     pub sender_id: Option<UserId>,
+    /// Signal device ID of the sender (for multi-device).
+    pub device_id: Option<u32>,
     pub content: MessageContent,
+    /// Raw encrypted content blob (separate from content_json for efficient storage).
+    pub encrypted_content: Option<Vec<u8>>,
     /// Parent message ID for threads.
     pub thread_id: Option<MessageId>,
     /// Message being replied to (quote).
@@ -26,6 +104,8 @@ pub struct Message {
     pub is_pinned: bool,
     pub is_edited: bool,
     pub is_deleted: bool,
+    /// Whether this message has been read by the local user.
+    pub is_read: bool,
     /// Sender's timestamp (used for Signal-style deduplication with sender_id).
     /// This is when the sender created the message, not when we received it.
     pub sent_at: u64,
@@ -51,7 +131,7 @@ impl Message {
     /// `created_at` is derived from `sent_at` - they represent the same moment.
     #[must_use]
     pub fn new_text(
-        channel_id: ChannelId,
+        conversation_id: ChannelId,
         sender_id: Option<UserId>,
         text: String,
         sent_at: u64,
@@ -67,15 +147,19 @@ impl Message {
         );
         Self {
             id: MessageId::new(),
-            channel_id,
+            conversation_id,
+            conversation_type: ConversationType::Channel,
             sender_id,
+            device_id: None,
             content: MessageContent::Text(text),
+            encrypted_content: None,
             thread_id: None,
             reply_to: None,
             attachments: Vec::new(),
             is_pinned: false,
             is_edited: false,
             is_deleted: false,
+            is_read: false,
             sent_at,
             created_at,
             updated_at: created_at,
@@ -451,7 +535,7 @@ impl MixedContent {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Thread {
     pub root_message_id: MessageId,
-    pub channel_id: ChannelId,
+    pub conversation_id: ChannelId,
     pub reply_count: u32,
     pub last_reply_at: Option<DateTime<Utc>>,
     pub participant_ids: Vec<UserId>,
@@ -460,10 +544,10 @@ pub struct Thread {
 impl Thread {
     /// Create a new thread from a root message.
     #[must_use]
-    pub fn new(root_message_id: MessageId, channel_id: ChannelId) -> Self {
+    pub fn new(root_message_id: MessageId, conversation_id: ChannelId) -> Self {
         Self {
             root_message_id,
-            channel_id,
+            conversation_id,
             reply_count: 0,
             last_reply_at: None,
             participant_ids: Vec::new(),
@@ -492,11 +576,11 @@ mod tests {
 
     #[test]
     fn test_message_new_text() {
-        let channel_id = ChannelId::new();
+        let conversation_id = ChannelId::new();
         let sender_id = Some(UserId::new());
-        let msg = Message::new_text(channel_id, sender_id, "Hello, world!".to_string(), 0);
+        let msg = Message::new_text(conversation_id, sender_id, "Hello, world!".to_string(), 0);
 
-        assert_eq!(msg.channel_id, channel_id);
+        assert_eq!(msg.conversation_id, conversation_id);
         assert_eq!(msg.sender_id, sender_id);
         assert_eq!(msg.as_text(), Some("Hello, world!"));
         assert!(!msg.is_pinned);
@@ -506,19 +590,19 @@ mod tests {
 
     #[test]
     fn test_message_as_text() {
-        let channel_id = ChannelId::new();
+        let conversation_id = ChannelId::new();
 
         // Text content
-        let text_msg = Message::new_text(channel_id, None, "Test".to_string(), 0);
+        let text_msg = Message::new_text(conversation_id, None, "Test".to_string(), 0);
         assert_eq!(text_msg.as_text(), Some("Test"));
 
         // Mixed content
-        let mut mixed_msg = Message::new_text(channel_id, None, "".to_string(), 0);
+        let mut mixed_msg = Message::new_text(conversation_id, None, "".to_string(), 0);
         mixed_msg.content = MessageContent::Mixed(MixedContent::text_only("Mixed text".to_string()));
         assert_eq!(mixed_msg.as_text(), Some("Mixed text"));
 
         // Encrypted content (no text extraction)
-        let mut enc_msg = Message::new_text(channel_id, None, "".to_string(), 0);
+        let mut enc_msg = Message::new_text(conversation_id, None, "".to_string(), 0);
         enc_msg.content = MessageContent::Encrypted(EncryptedContent::new(
             vec![1, 2, 3],
             EncryptedMessageType::Signal,
@@ -529,8 +613,8 @@ mod tests {
     #[test]
     fn test_thread_lifecycle() {
         let root_id = MessageId::new();
-        let channel_id = ChannelId::new();
-        let mut thread = Thread::new(root_id, channel_id);
+        let conversation_id = ChannelId::new();
+        let mut thread = Thread::new(root_id, conversation_id);
 
         assert!(!thread.has_replies());
         assert_eq!(thread.reply_count, 0);
@@ -581,8 +665,8 @@ mod tests {
 
     #[test]
     fn test_reaction_count() {
-        let channel_id = ChannelId::new();
-        let mut msg = Message::new_text(channel_id, None, "Test".to_string(), 0);
+        let conversation_id = ChannelId::new();
+        let mut msg = Message::new_text(conversation_id, None, "Test".to_string(), 0);
         msg.reaction_counts.push(ReactionCount::new("👍".to_string(), 5));
         msg.reaction_counts.push(ReactionCount::new("❤️".to_string(), 3));
 

@@ -5,7 +5,7 @@
 use chrono::Utc;
 
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
-use crate::domain::message::{Message, MessageContent, MixedContent, ReactionCount};
+use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent, ReactionCount};
 use crate::proto::chat_v1;
 use crate::util::time::TimestampNanos;
 
@@ -83,15 +83,19 @@ pub fn proto_to_domain_message_with_sender(
 
     Ok(Message {
         id,
-        channel_id,
+        conversation_id: channel_id,
+        conversation_type: ConversationType::Channel,
         sender_id,
+        device_id: None,
         content,
+        encrypted_content: None,
         thread_id,
         reply_to: None, // Not exposed in proto yet
         attachments,
         is_pinned: proto.pinned,
         is_edited: proto.edited,
         is_deleted: false,
+        is_read: false,
         sent_at: proto.timestamp,
         created_at,
         updated_at,

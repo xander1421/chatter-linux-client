@@ -1,5 +1,7 @@
 use chrono::Utc;
-use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus, AnonDmMessage as DomainAnonDmMessage};
+use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmStatus};
+use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::domain::UserId;
 use crate::proto::content_v1::{self, AnonDmAccept, Content};
 use crate::util::time::TimestampNanos;
@@ -231,8 +233,36 @@ impl AnonDmService {
             if !text.is_empty() {
                 // Use current time as sent_at for intro messages (they don't have a Content timestamp)
                 let sent_at = TimestampNanos::now().as_u64();
-                let msg = DomainAnonDmMessage::new_text(conversation_id, sender_id, text, sent_at);
-                self.anon_dm_repo.insert_message(&msg)?;
+                let channel_id: ChannelId = conversation_id.into();
+                let created_at = TimestampNanos::from_nanos(sent_at)
+                    .to_datetime()
+                    .unwrap_or_else(Utc::now);
+                let msg = Message {
+                    id: MessageId::new(),
+                    conversation_id: channel_id,
+                    conversation_type: ConversationType::AnonDm,
+                    sender_id: Some(sender_id),
+                    device_id: None,
+                    content: MessageContent::Text(text.to_string()),
+                    encrypted_content: None,
+                    thread_id: None,
+                    reply_to: None,
+                    attachments: Vec::new(),
+                    is_pinned: false,
+                    is_edited: false,
+                    is_deleted: false,
+                    is_read: false,
+                    sent_at,
+                    created_at,
+                    updated_at: created_at,
+                    edited_at: None,
+                    reaction_counts: Vec::new(),
+                    current_user_reactions: Vec::new(),
+                    mentioned_integrations: Vec::new(),
+                    targets_ai_bot: false,
+                    delivery_status: String::new(),
+                };
+                self.message_repo.insert(&msg)?;
             }
         }
 
