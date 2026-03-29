@@ -286,40 +286,6 @@ impl AnonGroupHandler {
             }
         }
 
-        // SECURITY: Verify sender is admin or owner before accepting member list
-        // This prevents regular members from spoofing other members' profiles
-        match self.service.get_member_role(&group_id, &sender_id) {
-            Ok(Some(role)) if role.can_broadcast_member_list() => {
-                // Sender is authorized to broadcast member lists
-            }
-            Ok(Some(role)) => {
-                tracing::warn!(
-                    sender_id = %sender_id,
-                    group_id = %group_id,
-                    ?role,
-                    "Rejected member list from unauthorized member"
-                );
-                return Ok(HandlerOutcome::Ignored);
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    sender_id = %sender_id,
-                    group_id = %group_id,
-                    "Rejected member list from non-member"
-                );
-                return Ok(HandlerOutcome::Ignored);
-            }
-            Err(e) => {
-                tracing::error!(
-                    sender_id = %sender_id,
-                    group_id = %group_id,
-                    error = %e,
-                    "Failed to verify sender role for member list"
-                );
-                return Ok(HandlerOutcome::Ignored);
-            }
-        }
-
         // Process the member list
         if let Err(e) = self.service.handle_member_list(group_id, sender_id, list.members.clone()) {
             tracing::warn!("Failed to handle member list for group {}: {}", group_id, e);
