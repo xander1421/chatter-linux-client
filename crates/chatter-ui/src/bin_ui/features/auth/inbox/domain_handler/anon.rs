@@ -86,6 +86,26 @@ fn handle_dm_message_unified(
 
     display_data.decode_attachment_thumbnails();
 
+    // Trigger attachment auto-download in background
+    let downloadable: Vec<_> = resolved_attachments.iter()
+        .filter(|a| a.remote_url.is_some() && a.encryption_key.is_some())
+        .cloned()
+        .collect();
+
+    if !downloadable.is_empty() {
+        let ui_ctx_dl = ui_ctx.clone();
+        let weak_dl = window.clone();
+        let conv_id = conversation_id.to_string();
+        tokio::spawn(async move {
+            super::super::attachment_download::download_attachments(
+                &downloadable,
+                ui_ctx_dl.attachments().clone(),
+                weak_dl,
+                conv_id,
+            ).await;
+        });
+    }
+
     let preview = build_preview(message.as_text(), resolved_attachments.len());
     let timestamp_str = super::super::utils::format_timestamp(message.sent_at);
 
@@ -181,6 +201,26 @@ fn handle_group_message_unified(
     }
 
     display_data.decode_attachment_thumbnails();
+
+    // Trigger attachment auto-download in background
+    let downloadable: Vec<_> = resolved_attachments.iter()
+        .filter(|a| a.remote_url.is_some() && a.encryption_key.is_some())
+        .cloned()
+        .collect();
+
+    if !downloadable.is_empty() {
+        let ui_ctx_dl = ui_ctx.clone();
+        let weak_dl = window.clone();
+        let conv_id = group_id.to_string();
+        tokio::spawn(async move {
+            super::super::attachment_download::download_attachments(
+                &downloadable,
+                ui_ctx_dl.attachments().clone(),
+                weak_dl,
+                conv_id,
+            ).await;
+        });
+    }
 
     let current_user_id = ui_ctx.sessions().current_user_id()
         .map(|uid| uid.to_string())

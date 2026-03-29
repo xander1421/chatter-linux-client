@@ -7,7 +7,7 @@
 
 use std::str::FromStr;
 
-use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::domain::UserId;
 use crate::proto::content_v1::{self, typing_message, receipt_message, Content};
@@ -312,6 +312,36 @@ pub fn build_message_from_content(
         .to_datetime()
         .unwrap_or_else(chrono::Utc::now);
 
+    // Extract quote/reply and attachment fields from DataMessage proto
+    let data_msg = match &inner_content.content {
+        Some(content_v1::content::Content::DataMessage(dm)) => Some(dm),
+        _ => None,
+    };
+
+    let reply_to = data_msg
+        .and_then(|dm| dm.quote.as_ref())
+        .map(|q| MessageId::from_timestamp(q.id));
+
+    let reply_to_author_id = data_msg
+        .and_then(|dm| dm.quote.as_ref())
+        .and_then(|q| {
+            if q.author_aci.is_empty() { None } else { UserId::from_str(&q.author_aci).ok() }
+        });
+
+    let reply_to_text = data_msg
+        .and_then(|dm| dm.quote.as_ref())
+        .map(|q| q.text.clone())
+        .filter(|t| !t.is_empty());
+
+    let attachments: Vec<AttachmentId> = data_msg
+        .map(|dm| {
+            dm.attachments.iter()
+                .filter(|ptr| !ptr.cdn_key.is_empty())
+                .map(|ptr| AttachmentId::from_cdn_key(&ptr.cdn_key))
+                .collect()
+        })
+        .unwrap_or_default();
+
     Message {
         id: msg_id,
         conversation_id,
@@ -321,10 +351,10 @@ pub fn build_message_from_content(
         content,
         encrypted_content: None,
         thread_id: None,
-        reply_to: None,
-        reply_to_author_id: None,
-        reply_to_text: None,
-        attachments: Vec::new(),
+        reply_to,
+        reply_to_author_id,
+        reply_to_text,
+        attachments,
         is_pinned: false,
         is_edited: false,
         is_deleted: false,
