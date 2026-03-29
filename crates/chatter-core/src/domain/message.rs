@@ -100,6 +100,12 @@ pub struct Message {
     pub thread_id: Option<MessageId>,
     /// Message being replied to (quote).
     pub reply_to: Option<MessageId>,
+    /// Quote context: author of the quoted message (transient, not persisted).
+    #[serde(default, skip_serializing)]
+    pub reply_to_author_id: Option<UserId>,
+    /// Quote context: preview text of the quoted message (transient, not persisted).
+    #[serde(default, skip_serializing)]
+    pub reply_to_text: Option<String>,
     pub attachments: Vec<AttachmentId>,
     pub is_pinned: bool,
     pub is_edited: bool,
@@ -155,6 +161,8 @@ impl Message {
             encrypted_content: None,
             thread_id: None,
             reply_to: None,
+            reply_to_author_id: None,
+            reply_to_text: None,
             attachments: Vec::new(),
             is_pinned: false,
             is_edited: false,

@@ -168,7 +168,7 @@ pub async fn handle_domain_event(
         }
 
         // Edit UI update: replace message content in-place
-        DomainEvent::MessageEdited { message_id, new_content, .. } => {
+        DomainEvent::MessageEdited { message_id, new_content, target_sent_timestamp, .. } => {
             use chatter_core::domain::message::MessageContent;
             let new_text = match &new_content {
                 MessageContent::Text(t) => t.clone(),
@@ -176,7 +176,13 @@ pub async fn handle_domain_event(
                 MessageContent::AI(ai) => ai.text.clone(),
                 _ => String::new(),
             };
-            messaging::handle_message_edit(window, &message_id.to_string(), &new_text);
+            // Try message_id match first, then fall back to timestamp match.
+            // The timestamp fallback handles cases where the receiver's message_id
+            // doesn't match the edit event's message_id (e.g. anon conversations,
+            // or when the message was stored before the canonical ID was assigned).
+            messaging::handle_message_edit_with_fallback(
+                window, &message_id.to_string(), target_sent_timestamp, &new_text,
+            );
         }
 
         // Delete UI update: remove message from visible list
@@ -201,9 +207,33 @@ pub async fn handle_domain_event(
         // =========================================================================
         DomainEvent::KeyExchangeReceived { .. }
         | DomainEvent::SenderKeyReceived { .. }
-        | DomainEvent::GroupMailboxReceived { .. }
-        | DomainEvent::AttachmentReady { .. } => {
+        | DomainEvent::GroupMailboxReceived { .. } => {
             // Protocol events - no direct UI action
+        }
+
+        // Attachment ready: trigger download + UI update for the receiver.
+        // When the receiver gets a message with attachments, the attachment metadata
+        // may not be available yet during MessageReceived handling. AttachmentReady
+        // fires after the attachment pointer is processed and stored.
+        DomainEvent::AttachmentReady { attachment, channel_id, .. } => {
+            let downloadable = if attachment.remote_url.is_some() && attachment.encryption_key.is_some() {
+                vec![attachment]
+            } else {
+                vec![]
+            };
+            if !downloadable.is_empty() {
+                let att_svc = ui_ctx.attachments().clone();
+                let weak = window.clone();
+                let conv_id = channel_id.to_string();
+                tokio::spawn(async move {
+                    super::attachment_download::download_attachments(
+                        &downloadable,
+                        att_svc,
+                        weak,
+                        conv_id,
+                    ).await;
+                });
+            }
         }
 
         // =========================================================================

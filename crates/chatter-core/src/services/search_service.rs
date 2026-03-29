@@ -362,6 +362,8 @@ fn proto_to_domain_message(proto: &chat_v1::Message) -> Result<Message, SearchEr
         encrypted_content: None,
         thread_id,
         reply_to: None, // Not exposed in proto yet
+        reply_to_author_id: None,
+        reply_to_text: None,
         attachments: Vec::new(), // Handled separately via mentioned_file_ids
         is_pinned: proto.pinned,
         is_edited: proto.edited,

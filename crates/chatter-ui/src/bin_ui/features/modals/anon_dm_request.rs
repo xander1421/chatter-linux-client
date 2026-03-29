@@ -519,17 +519,11 @@ pub fn spawn_anon_dm_request_handler(
                     });
                 }
                 DomainEvent::MessageEdited {
-                    message_id,
                     new_content,
                     channel_id,
+                    target_sent_timestamp,
                     ..
                 } => {
-                    // Handle message edit for anon DMs
-                    let target_sent_timestamp = message_id.as_bytes()
-                        .get(..8)
-                        .and_then(|b| b.try_into().ok())
-                        .map(u64::from_be_bytes)
-                        .unwrap_or(0);
                     let new_body = match new_content {
                         chatter_core::domain::message::MessageContent::Text(text) => text,
                         _ => "[Unsupported content]".to_string(),

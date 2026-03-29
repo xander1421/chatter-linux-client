@@ -747,6 +747,7 @@ impl InboxEventProcessor {
                         new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
                         channel_id: msg.conversation_id,
                         conversation_type: msg.conversation_type,
+                        target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
                 false
@@ -759,6 +760,7 @@ impl InboxEventProcessor {
                         new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
                         channel_id: *channel_id,
                         conversation_type: crate::domain::message::ConversationType::Channel,
+                        target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
                 false
@@ -1352,6 +1354,7 @@ impl InboxEventProcessor {
                         new_content: crate::domain::message::MessageContent::Text(new_text),
                         channel_id: anon_group_id.into(),
                         conversation_type: crate::domain::message::ConversationType::AnonGroup,
+                        target_sent_timestamp: edit.target_sent_timestamp,
                     });
                 }
             }

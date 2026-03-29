@@ -253,6 +253,8 @@ pub enum DomainEvent {
         channel_id: ChannelId,
         /// Type of conversation (Channel, AnonDm, AnonGroup, etc.).
         conversation_type: ConversationType,
+        /// Sender's original timestamp (fallback for UI matching when message_id doesn't match).
+        target_sent_timestamp: u64,
     },
     /// Message was deleted (delete for everyone).
     MessageDeleted {

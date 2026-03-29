@@ -256,9 +256,9 @@ pub fn message_to_display_data_with_replies(
         reply_count,
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
-        is_reply: false,
-        reply_to_sender_name: String::new(),
-        reply_to_preview: String::new(),
+        is_reply: msg.reply_to.is_some(),
+        reply_to_sender_name: String::new(),  // Resolved by UI handler after conversion
+        reply_to_preview: msg.reply_to_text.clone().unwrap_or_default(),
         delivery_status: msg.delivery_status.clone(),
         is_pinned: msg.is_pinned,
         is_call,

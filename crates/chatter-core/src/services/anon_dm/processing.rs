@@ -358,6 +358,7 @@ impl AnonDmService {
                             new_content: MessageContent::Text(new_text),
                             channel_id: (*conversation_id).into(),
                             conversation_type: ConversationType::AnonDm,
+                            target_sent_timestamp: target_timestamp,
                         });
                     }
                     Ok(false) => {
@@ -531,6 +532,8 @@ impl AnonDmService {
             encrypted_content: None,
             thread_id: None,
             reply_to: None,
+            reply_to_author_id: None,
+            reply_to_text: None,
             attachments: Vec::new(),
             is_pinned: false,
             is_edited: false,
@@ -581,6 +584,8 @@ impl AnonDmService {
             encrypted_content: None,
             thread_id: None,
             reply_to: None,
+            reply_to_author_id: None,
+            reply_to_text: None,
             attachments: Vec::new(),
             is_pinned: false,
             is_edited: false,
@@ -646,6 +651,8 @@ impl AnonDmService {
             encrypted_content: None,
             thread_id: None,
             reply_to: None,
+            reply_to_author_id: None,
+            reply_to_text: None,
             attachments: attachment_ids.to_vec(),
             is_pinned: false,
             is_edited: false,

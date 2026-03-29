@@ -53,6 +53,24 @@ pub(super) fn handle_message_received(
     );
     display_data.decode_attachment_thumbnails();
 
+    // Resolve reply-to sender name if this is a reply/quote
+    if display_data.is_reply {
+        if let Some(ref author_id) = message.reply_to_author_id {
+            let reply_sender = ui_ctx.users()
+                .get_profile_local(author_id).ok().flatten()
+                .map(|p| p.display_name.clone())
+                .filter(|n| !n.is_empty())
+                .or_else(|| {
+                    ui_ctx.users()
+                        .get_user_local(author_id).ok().flatten()
+                        .map(|u| u.username.clone())
+                        .filter(|n| !n.is_empty())
+                })
+                .unwrap_or_else(|| author_id.to_string());
+            display_data.reply_to_sender_name = reply_sender;
+        }
+    }
+
     let current_user_id = ui_ctx.auth_state().get().current_user_id
         .map(|id| id.to_string())
         .unwrap_or_default();
@@ -364,20 +382,27 @@ pub(super) fn refresh_sidebar_for_reaction(
     });
 }
 
-/// Update a message's content after an edit.
-pub(super) fn handle_message_edit(
+/// Update a message's content after an edit, with timestamp fallback.
+///
+/// Tries message_id match first. If no match found, falls back to timestamp_ns
+/// matching. This handles cases where the receiver's UI model message_id doesn't
+/// match the edit event's message_id.
+pub(super) fn handle_message_edit_with_fallback(
     window: &Weak<MainWindow>,
     message_id: &str,
+    target_sent_timestamp: u64,
     new_text: &str,
 ) {
     let weak = window.clone();
     let message_id = message_id.to_string();
+    let ts_str = target_sent_timestamp.to_string();
     let new_text = new_text.to_string();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
         let messages = w.get_messages();
 
+        // First pass: try to match by message_id (preferred)
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
                 if msg.message_id.as_str() == message_id {
@@ -391,36 +416,20 @@ pub(super) fn handle_message_edit(
                 }
             }
         }
-    });
-}
 
-/// Update a message's content after an edit, matching by timestamp.
-///
-/// Used for anonymous DM/group edits where the message_id in the UI model
-/// may not match the domain MessageId. Falls back to timestamp_ns matching.
-pub(super) fn handle_message_edit_by_timestamp(
-    window: &Weak<MainWindow>,
-    timestamp: u64,
-    new_text: &str,
-) {
-    let weak = window.clone();
-    let ts_str = timestamp.to_string();
-    let new_text = new_text.to_string();
-
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(w) = weak.upgrade() else { return };
-        let messages = w.get_messages();
-
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ns.as_str() == ts_str {
-                    let mut updated = msg.clone();
-                    updated.content = new_text.into();
-                    updated.is_edited = true;
-                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
-                        model.set_row_data(i, updated);
+        // Second pass: fallback to timestamp_ns matching
+        if target_sent_timestamp > 0 {
+            for i in 0..messages.row_count() {
+                if let Some(msg) = messages.row_data(i) {
+                    if msg.timestamp_ns.as_str() == ts_str {
+                        let mut updated = msg.clone();
+                        updated.content = new_text.clone().into();
+                        updated.is_edited = true;
+                        if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                            model.set_row_data(i, updated);
+                        }
+                        return;
                     }
-                    return;
                 }
             }
         }

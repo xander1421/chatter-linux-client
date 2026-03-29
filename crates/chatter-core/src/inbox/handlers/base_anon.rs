@@ -236,6 +236,7 @@ pub(super) fn handle_edit<S: AnonContentService>(
                 new_content: MessageContent::Text(new_text),
                 channel_id: id.into(),
                 conversation_type: svc.conversation_type(),
+                target_sent_timestamp: target_timestamp,
             });
         }
         Ok(false) => {
@@ -321,6 +322,8 @@ pub fn build_message_from_content(
         encrypted_content: None,
         thread_id: None,
         reply_to: None,
+        reply_to_author_id: None,
+        reply_to_text: None,
         attachments: Vec::new(),
         is_pinned: false,
         is_edited: false,

@@ -114,11 +114,15 @@ impl ChatHandler {
         // Build message content
         let content = self.build_content(data_message)?;
 
-        // Parse reply_to from quote
+        // Parse reply_to from quote, preserving author and text for UI display
         let reply_to = data_message.quote.as_ref().map(|q| {
             // Signal uses timestamp as message ID, we derive a MessageId from it
             MessageId::from_uuid(uuid_from_timestamp(q.id))
         });
+        let reply_to_author_id = data_message.quote.as_ref().and_then(|q| {
+            if q.author_aci.is_empty() { None } else { UserId::from_str(&q.author_aci).ok() }
+        });
+        let reply_to_text = data_message.quote.as_ref().map(|q| q.text.clone()).filter(|t| !t.is_empty());
 
         // Parse attachment IDs (must match upload path - uses from_cdn_key)
         let attachments: Vec<AttachmentId> = data_message
@@ -139,6 +143,8 @@ impl ChatHandler {
         let mut message = Message::new_text(channel_id, sender_id, String::new(), data_message.timestamp);
         message.content = content;
         message.reply_to = reply_to;
+        message.reply_to_author_id = reply_to_author_id;
+        message.reply_to_text = reply_to_text;
         message.attachments = attachments;
         message.mentioned_integrations = mentioned_integrations;
         message.targets_ai_bot = data_message.targets_ai_bot;

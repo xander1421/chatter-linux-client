@@ -223,7 +223,7 @@ impl EventHandlers {
                 message_id,
                 new_content,
                 channel_id,
-                ..
+                ..  // conversation_type, target_sent_timestamp
             } => {
                 trace!(?channel_id, ?message_id, "Updating message content in state + DB");
                 self.message_state
@@ -962,6 +962,7 @@ mod tests {
             new_content: new_content.clone(),
             channel_id,
             conversation_type: ConversationType::Channel,
+            target_sent_timestamp: 0,
         });
 
         let messages = handlers.message_state.get_messages(&channel_id);

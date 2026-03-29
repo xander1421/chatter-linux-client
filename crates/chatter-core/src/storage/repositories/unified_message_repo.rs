@@ -1136,6 +1136,8 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
             .map(|s| s.parse())
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
+        reply_to_author_id: None,  // Transient field, not persisted in DB
+        reply_to_text: None,       // Transient field, not persisted in DB
         attachments,
         is_pinned: row.get::<_, i32>(10)? != 0,
         is_edited: row.get::<_, i32>(11)? != 0,
