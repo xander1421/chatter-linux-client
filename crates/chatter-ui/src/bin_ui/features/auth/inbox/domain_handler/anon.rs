@@ -5,14 +5,14 @@
 
 use std::sync::Arc;
 
-use slint::{Model, Weak};
+use slint::{Model, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::UserId;
 use chatter_core::domain::message::{ConversationType, Message};
-use crate::MainWindow;
+use crate::{MainWindow, MessageItemData};
 
 // =========================================================================
 // Unified Message Received (from DomainEvent::MessageReceived)
@@ -380,4 +380,46 @@ pub(super) fn handle_group_updated(
     });
 }
 
+// =========================================================================
+// Delivery/Read Receipt Status Updates
+// =========================================================================
 
+/// Handle delivery/read receipt UI update for anonymous conversations.
+///
+/// Updates checkmarks (✓ → ✓✓) on the active message list for own messages
+/// with matching Signal timestamps. Mirrors the logic in
+/// `messaging::handle_delivery_status_update` but is dispatched separately
+/// for anon conversations to keep routing explicit and allow independent
+/// evolution of anon receipt handling.
+pub(super) fn handle_anon_delivery_status_update(
+    window: &Weak<MainWindow>,
+    message_timestamps: Vec<u64>,
+    new_status: &'static str,
+) {
+    let weak = window.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+
+        let messages = w.get_messages();
+        let timestamp_strs: Vec<String> =
+            message_timestamps.iter().map(|ts| ts.to_string()).collect();
+
+        for i in 0..messages.row_count() {
+            if let Some(msg) = messages.row_data(i) {
+                if msg.is_own
+                    && timestamp_strs
+                        .iter()
+                        .any(|ts| msg.timestamp_ns.as_str() == ts.as_str())
+                {
+                    let mut updated = msg.clone();
+                    updated.delivery_status = new_status.into();
+                    if let Some(model) =
+                        messages.as_any().downcast_ref::<VecModel<MessageItemData>>()
+                    {
+                        model.set_row_data(i, updated);
+                    }
+                }
+            }
+        }
+    });
+}

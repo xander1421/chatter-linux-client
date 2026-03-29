@@ -138,13 +138,23 @@ pub async fn handle_domain_event(
             }
         }
 
-        // Receipt events: update checkmarks (✓✓) in the Slint message model
+        // Receipt events: update checkmarks (✓✓) in the Slint message model.
+        // Route to anon handler when the active conversation is anonymous,
+        // mirroring the MessageReceived dispatch pattern.
         DomainEvent::MessagesDelivered { message_timestamps, .. } => {
-            messaging::handle_delivery_status_update(window, message_timestamps, "delivered");
+            if ui_ctx.chat_state().active_conversation().is_anon() {
+                anon::handle_anon_delivery_status_update(window, message_timestamps, "delivered");
+            } else {
+                messaging::handle_delivery_status_update(window, message_timestamps, "delivered");
+            }
         }
 
         DomainEvent::MessagesRead { message_timestamps, .. } => {
-            messaging::handle_delivery_status_update(window, message_timestamps, "read");
+            if ui_ctx.chat_state().active_conversation().is_anon() {
+                anon::handle_anon_delivery_status_update(window, message_timestamps, "read");
+            } else {
+                messaging::handle_delivery_status_update(window, message_timestamps, "read");
+            }
         }
 
         // Reaction UI updates: update emoji summary on the message bubble + sidebar
