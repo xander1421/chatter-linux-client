@@ -93,12 +93,16 @@ pub(super) fn handle_pin_ui_update(
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
 
-        // Check if the pin is for the currently active conversation
+        // Check if the pin is for the currently active conversation.
+        // Anon DMs store selected_dm_id as "anon_dm:{uuid}" while the event
+        // channel_id is the raw UUID, so we strip the prefix for matching.
+        // Anon groups share selected_private_group_id with regular groups.
         let selected_dm = w.get_selected_dm_id().to_string();
         let selected_channel = w.get_selected_channel_id().to_string();
         let selected_group = w.get_selected_private_group_id().to_string();
 
-        let is_active = selected_dm.contains(&channel_id_str)
+        let is_active = selected_dm == channel_id_str
+            || selected_dm.strip_prefix("anon_dm:").map_or(false, |id| id == channel_id_str)
             || selected_channel == channel_id_str
             || selected_group == channel_id_str;
         if !is_active {
