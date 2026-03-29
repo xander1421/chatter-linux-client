@@ -115,6 +115,7 @@ export component ChatLayout inherits Rectangle {
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback process-text(string) -> string;  // Insert word breaks for text wrapping
+    callback format-text(string);  // Apply formatting: "bold", "italic", "code", "strikethrough"
 
     // In-conversation search (Ctrl+F)
     in-out property <bool> inline-search-visible: false;
@@ -140,6 +141,7 @@ export component ChatLayout inherits Rectangle {
     // 100% width enables text wrapping to work throughout the chain
     VerticalLayout {
         width: 100%;
+        height: 100%;
 
         // Header at top (fixed 56px)
         ChatHeader {
@@ -448,6 +450,9 @@ export component ChatLayout inherits Rectangle {
                 }
                 process-text(text) => {
                     return root.process-text(text);
+                }
+                format-text(fmt) => {
+                    root.format-text(fmt);
                 }
             }
         }

@@ -6,6 +6,7 @@ mod attachments;
 #[cfg(not(target_os = "android"))]
 mod drag_drop;
 mod emoji;
+mod format_text;
 mod gif;
 mod mentions;
 mod text;
@@ -37,4 +38,5 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     );
     mentions::wire_mention_selected(window);
     text::wire_process_text(window);
+    format_text::wire_format_text(window);
 }

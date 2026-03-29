@@ -582,6 +582,7 @@ export component App inherits Rectangle {
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback process-text(string) -> string;  // Insert word breaks for text wrapping
+    callback format-text(string);  // Apply formatting: "bold", "italic", "code", "strikethrough"
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
     callback start-voice-call();  // Start voice call in current channel
     callback start-video-call();  // Start video call in current channel
@@ -869,12 +870,10 @@ export component App inherits Rectangle {
         }
 
         // Main chat layout
-        if current-view == "main": VerticalLayout {
+        // On mobile, leave room for the bottom nav bar so content doesn't extend behind it
+        if current-view == "main": HorizontalLayout {
             width: 100%;
-            height: 100%;
-
-            HorizontalLayout {
-                vertical-stretch: 1;
+            height: root.is-mobile-screen && !root.keyboard-open ? parent.height - Spacing.bottom-nav-height : parent.height;
 
             // Sidebar (width controlled by collapsed state; mobile-mode for full-width)
             Sidebar {
@@ -892,8 +891,8 @@ export component App inherits Rectangle {
                 user-initials: root.user-initials;
                 user-presence-status: root.user-presence-status;
                 user-custom-status: root.user-custom-status;
-                collapsed: root.is-mobile-screen ? false : root.sidebar-collapsed;
-                hidden: root.is-mobile-screen ? !(root.mobile-active-tab == "chats" && !root.has-active-conversation) : root.sidebar-hidden;
+                collapsed: root.is-mobile-screen ? true : (root.is-small-screen || root.sidebar-collapsed);
+                hidden: root.is-mobile-screen ? true : root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
@@ -956,6 +955,7 @@ export component App inherits Rectangle {
             // On mobile: hidden when sidebar is showing full-width (chat list view)
             Rectangle {
                 horizontal-stretch: 1;
+                vertical-stretch: 1;
                 visible: root.is-mobile-screen ? root.has-active-conversation : true;
                 // Clip this area to prevent inner panels from overflowing the whole app
                 clip: true;
@@ -967,6 +967,7 @@ export component App inherits Rectangle {
                     // Chat layout (fills remaining space, minus side panels)
                     ChatLayout {
                     horizontal-stretch: 1;
+                    vertical-stretch: 1;
                     show-back-button: root.is-mobile-screen;
                     back-clicked => { root.mobile-back(); }
                     channel-id: root.channel-id;
@@ -1070,6 +1071,7 @@ export component App inherits Rectangle {
                     remove-attachment(id) => { root.remove-attachment(id); }
                     typing-changed(is-typing) => { root.typing-changed(is-typing); }
                     process-text(text) => { return root.process-text(text); }
+                    format-text(fmt) => { root.format-text(fmt); }
                     scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
                 }
 
@@ -1117,22 +1119,23 @@ export component App inherits Rectangle {
         }
         } // end HorizontalLayout (chat area)
 
-            // Mobile bottom navigation bar (hidden when keyboard is open)
-            if root.is-mobile-screen && !root.keyboard-open: MobileBottomNav {
-                active-tab: root.mobile-active-tab;
-                contacts-badge: root.friends-received-requests.length;
+    // Mobile bottom navigation bar (absolute positioned, pinned to bottom)
+    if root.current-view == "main" && root.is-mobile-screen && !root.keyboard-open: MobileBottomNav {
+        y: parent.height - self.height;
+        width: 100%;
+        active-tab: root.mobile-active-tab;
+        contacts-badge: root.friends-received-requests.length;
 
-                tab-selected(tab) => {
-                    root.mobile-active-tab = tab;
-                    if (tab == "contacts") {
-                        root.active-modal = "friends";
-                    }
-                    if (tab == "settings") {
-                        root.active-modal = "settings";
-                        root.settings-clicked();
-                    }
-                }
+        tab-selected(tab) => {
+            root.mobile-active-tab = tab;
+            if (tab == "contacts") {
+                root.active-modal = "friends";
             }
+            if (tab == "settings") {
+                root.active-modal = "settings";
+                root.settings-clicked();
+            }
+        }
     }
 
     // ========== Jarvis AI floating panel ==========
