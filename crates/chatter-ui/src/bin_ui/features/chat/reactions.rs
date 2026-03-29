@@ -20,7 +20,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         let timestamp_ns_str = timestamp_ns.to_string();
         let emoji_str = emoji.to_string();
 
-        // Dedup: check if this emoji already exists on the message, skip if so
+        // Check if user already reacted with this emoji — toggle it off if so
         let already_reacted = weak_window.upgrade().map(|w| {
             let current_model = w.get_messages();
             (0..current_model.row_count())
@@ -32,10 +32,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 })
         }).unwrap_or(false);
 
-        if already_reacted {
-            tracing::debug!(emoji = %emoji_str, "Skipping duplicate reaction");
-            return;
-        }
+        let remove = already_reacted;
 
         let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
             Ok(ts) => ts,
@@ -52,24 +49,23 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
         tokio::spawn(async move {
             if let Err(e) = handle.send_reaction(
-                &emoji_str, &sender_id_str, target_sent_timestamp, false,
+                &emoji_str, &sender_id_str, target_sent_timestamp, remove,
             ).await {
                 tracing::error!(
                     error = %e,
                     conversation_type = ?conversation,
                     sender_id = %sender_id_str,
                     timestamp = target_sent_timestamp,
+                    remove,
                     "Failed to send reaction"
                 );
                 return;
             }
 
-            // Persistence is handled by ConversationHandle::send_reaction()
-
             // Update UI
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    super::helpers::update_reaction_in_ui(&w, &sender_id_str, &timestamp_ns_str, &emoji_str, false);
+                    super::helpers::update_reaction_in_ui(&w, &sender_id_str, &timestamp_ns_str, &emoji_str, remove);
                 }
             });
         });
