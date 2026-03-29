@@ -14,7 +14,7 @@ use crate::error::{NetworkError, StorageError};
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
 use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
-use crate::storage::repositories::message_repo::MessageRepository;
+use crate::storage::repositories::MessageRepository;
 use crate::storage::repositories::search_index::{SearchIndex, SearchResult};
 use crate::storage::repositories::settings_repo::SettingsRepository;
 

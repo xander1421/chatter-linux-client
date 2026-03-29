@@ -38,7 +38,7 @@ use crate::services::signal_service::SignalService;
 use crate::storage::Database;
 use crate::storage::repositories::attachment_repo::AttachmentRepository;
 use crate::storage::repositories::channel_repo::ChannelRepository;
-use crate::storage::repositories::message_repo::MessageRepository;
+use crate::storage::repositories::MessageRepository;
 use crate::storage::repositories::search_index::{SearchIndex, SearchResult};
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::user_repo::UserRepository;
@@ -295,8 +295,16 @@ impl MessageService {
         before: Option<&crate::domain::ids::MessageId>,
         limit: u32,
     ) -> Result<Vec<Message>, MessageError> {
+        // Resolve cursor MessageId to sent_at timestamp for unified repo
+        let before_sent_at = if let Some(before_id) = before {
+            self.message_repo
+                .get(before_id)?
+                .map(|msg| msg.sent_at)
+        } else {
+            None
+        };
         self.message_repo
-            .list_for_thread(thread_root_id, before, limit)
+            .list_for_thread(thread_root_id, before_sent_at, limit)
             .map_err(MessageError::from)
     }
 
@@ -310,7 +318,7 @@ impl MessageService {
         &self,
         channel_id: &ChannelId,
     ) -> Result<Vec<Message>, MessageError> {
-        self.message_repo.list_pinned(channel_id).map_err(MessageError::from)
+        self.message_repo.list_pinned_all(channel_id).map_err(MessageError::from)
     }
 
     /// Set the pinned status of a message in local storage.

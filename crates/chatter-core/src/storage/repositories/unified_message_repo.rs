@@ -739,6 +739,212 @@ impl UnifiedMessageRepository {
     }
 
     // ========================================================================
+    // Compatibility methods (matching MessageRepository API)
+    // ========================================================================
+
+    /// List messages for a channel with cursor-based pagination (no conversation_type filter).
+    ///
+    /// Returns messages in reverse chronological order (newest first).
+    /// Use `before` to paginate - pass the last message's ID to get the next page.
+    pub fn list_for_channel(
+        &self,
+        channel_id: &ChannelId,
+        before: Option<&MessageId>,
+        limit: u32,
+    ) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        if let Some(before_id) = before {
+            let aliased = format!("m.{}", MSG_COLS.replace(", ", ", m."));
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {} FROM messages m \
+                 WHERE m.conversation_id = ?1 \
+                   AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2) \
+                 ORDER BY m.sent_at DESC, m.sender_id DESC \
+                 LIMIT ?3",
+                aliased,
+            ))?;
+            let mut rows = stmt.query(params![channel_id.to_string(), before_id.to_string(), limit])?;
+            collect_messages(&mut rows)
+        } else {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {} FROM messages \
+                 WHERE conversation_id = ?1 \
+                 ORDER BY sent_at DESC, sender_id DESC \
+                 LIMIT ?2",
+                MSG_COLS,
+            ))?;
+            let mut rows = stmt.query(params![channel_id.to_string(), limit])?;
+            collect_messages(&mut rows)
+        }
+    }
+
+    /// List messages for a conversation by channel_id and conversation_type.
+    /// Alias for `list()` matching old MessageRepository API.
+    pub fn list_for_conversation(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+        before_sent_at: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Message>, StorageError> {
+        self.list(channel_id, conversation_type, before_sent_at, limit)
+    }
+
+    /// Get the latest message in a conversation (for preview).
+    /// Alias for `get_latest()` matching old MessageRepository API.
+    pub fn get_latest_for_conversation(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<Option<Message>, StorageError> {
+        self.get_latest(channel_id, conversation_type)
+    }
+
+    /// Get a message by conversation + timestamp (any sender).
+    pub fn get_by_conversation_timestamp(
+        &self,
+        channel_id: &ChannelId,
+        timestamp_ns: u64,
+    ) -> Result<Option<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages \
+             WHERE conversation_id = ?1 AND sent_at = ?2 AND is_deleted = 0 \
+             LIMIT 1",
+            MSG_COLS,
+        ))?;
+        match stmt.query_row(
+            params![channel_id.to_string(), timestamp_ns as i64],
+            row_to_message,
+        ) {
+            Ok(msg) => Ok(Some(msg?)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Get a message by (channel_id, sender_id, sent_at) tuple.
+    pub fn get_by_conversation_sender_timestamp(
+        &self,
+        channel_id: &ChannelId,
+        sender_id: &UserId,
+        timestamp_ns: u64,
+    ) -> Result<Option<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages \
+             WHERE conversation_id = ?1 AND sender_id = ?2 AND sent_at = ?3 AND is_deleted = 0 \
+             LIMIT 1",
+            MSG_COLS,
+        ))?;
+        match stmt.query_row(
+            params![channel_id.to_string(), sender_id.to_string(), timestamp_ns as i64],
+            row_to_message,
+        ) {
+            Ok(msg) => Ok(Some(msg?)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Count messages in a conversation (returns i64 for compat).
+    pub fn count_in_conversation(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<i64, StorageError> {
+        Ok(self.count(channel_id, conversation_type)? as i64)
+    }
+
+    /// Count messages in a channel (no conversation_type filter).
+    pub fn count_in_channel(&self, channel_id: &ChannelId) -> Result<u64, StorageError> {
+        let conn = self.db.read_connection()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id = ?1",
+            params![channel_id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(count as u64)
+    }
+
+    /// Update delivery status by sent_at timestamp only (no channel_id needed).
+    pub fn update_delivery_status_by_timestamp(
+        &self,
+        sent_at: u64,
+        status: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE messages SET delivery_status = ?1, updated_at = ?2
+             WHERE sent_at = ?3",
+            params![status, Utc::now().to_rfc3339(), sent_at as i64],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Update delivery status by conversation + timestamps (batch).
+    pub fn update_delivery_status_by_timestamps(
+        &self,
+        channel_id: &ChannelId,
+        timestamps: &[u64],
+        status: &str,
+    ) -> Result<usize, StorageError> {
+        if timestamps.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.db.connection()?;
+        let now = Utc::now().to_rfc3339();
+        let mut total = 0;
+        for &ts in timestamps {
+            let rows = conn.execute(
+                "UPDATE messages SET delivery_status = ?1, updated_at = ?2
+                 WHERE conversation_id = ?3 AND sent_at = ?4",
+                params![status, now, channel_id.to_string(), ts as i64],
+            )?;
+            total += rows;
+        }
+        Ok(total)
+    }
+
+    /// List all pinned messages for a conversation.
+    /// Alias for `list_pinned()` matching old MessageRepository API.
+    pub fn list_pinned_for_conversation(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<Vec<Message>, StorageError> {
+        self.list_pinned(channel_id, conversation_type)
+    }
+
+    /// List all pinned messages in a channel (no conversation_type filter).
+    pub fn list_pinned_all(&self, channel_id: &ChannelId) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages \
+             WHERE conversation_id = ?1 AND is_pinned = 1 AND is_deleted = 0 \
+             ORDER BY sent_at DESC",
+            MSG_COLS,
+        ))?;
+        let mut rows = stmt.query(params![channel_id.to_string()])?;
+        collect_messages(&mut rows)
+    }
+
+    /// List recent messages by sender.
+    pub fn list_by_sender(
+        &self,
+        sender_id: &UserId,
+        limit: u32,
+    ) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages WHERE sender_id = ?1 ORDER BY sent_at DESC LIMIT ?2",
+            MSG_COLS,
+        ))?;
+        let mut rows = stmt.query(params![sender_id.to_string(), limit])?;
+        collect_messages(&mut rows)
+    }
+
+    // ========================================================================
     // Internal helpers
     // ========================================================================
 

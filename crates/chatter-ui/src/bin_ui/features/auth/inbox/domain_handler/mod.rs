@@ -8,9 +8,8 @@
 //! Polling → InboxEventProcessor (core) → DomainEvent → domain_handler (this module)
 //! ```
 
+mod anon;
 mod anon_calls;
-mod anon_dm;
-mod anon_group;
 mod calls;
 mod helpers;
 mod messaging;
@@ -129,11 +128,8 @@ pub async fn handle_domain_event(
         DomainEvent::MessageReceived { ref message } => {
             use chatter_core::domain::message::ConversationType;
             match message.conversation_type {
-                ConversationType::AnonDm => {
-                    anon_dm::handle_message_received_unified(window, ui_ctx, message.clone());
-                }
-                ConversationType::AnonGroup => {
-                    anon_group::handle_message_received_unified(window, ui_ctx, message.clone());
+                ConversationType::AnonDm | ConversationType::AnonGroup => {
+                    anon::handle_message_received_unified(window, ui_ctx, message.clone());
                 }
                 _ => {
                     messaging::handle_message_received(window, ui_ctx, message.clone());
@@ -203,50 +199,50 @@ pub async fn handle_domain_event(
         // Anonymous Group Events
         // =========================================================================
         DomainEvent::AnonGroupInviteReceived { group_id, group_name, inviter_id, .. } => {
-            anon_group::handle_invite_received(window, ui_ctx, group_id, group_name, inviter_id);
+            anon::handle_group_invite_received(window, ui_ctx, group_id, group_name, inviter_id);
         }
 
         DomainEvent::AnonGroupJoined { group_id } => {
-            anon_group::handle_joined(window, ui_ctx, group_id);
+            anon::handle_group_joined(window, ui_ctx, group_id);
         }
 
         DomainEvent::AnonGroupMemberJoined { group_id, user_id, display_name, .. } => {
-            anon_group::handle_member_joined(group_id, user_id, display_name);
+            anon::handle_group_member_joined(group_id, user_id, display_name);
         }
 
         DomainEvent::AnonGroupMemberLeft { group_id, user_id } => {
-            anon_group::handle_member_left(group_id, user_id);
+            anon::handle_group_member_left(group_id, user_id);
         }
 
         DomainEvent::AnonGroupMemberKicked { group_id, user_id, kicked_by } => {
-            anon_group::handle_member_kicked(group_id, user_id, kicked_by);
+            anon::handle_group_member_kicked(group_id, user_id, kicked_by);
         }
 
         DomainEvent::AnonGroupBootstrapComplete { group_id } => {
-            anon_group::handle_bootstrap_complete(group_id);
+            anon::handle_group_bootstrap_complete(group_id);
         }
 
         DomainEvent::AnonGroupMemberListReceived { group_id, ref members } => {
-            anon_group::handle_member_list_received(window, ui_ctx, group_id, members.len());
+            anon::handle_group_member_list_received(window, ui_ctx, group_id, members.len());
         }
 
         DomainEvent::AnonGroupUpdated { group_id, updated_by, .. } => {
-            anon_group::handle_updated(window, ui_ctx, group_id, updated_by);
+            anon::handle_group_updated(window, ui_ctx, group_id, updated_by);
         }
 
         // =========================================================================
         // Anonymous DM Events
         // =========================================================================
         DomainEvent::AnonDmRequestReceived { .. } => {
-            anon_dm::handle_request_received(window, ui_ctx);
+            anon::handle_dm_request_received(window, ui_ctx);
         }
 
         DomainEvent::AnonDmRequestAccepted { conversation_id, peer_id, .. } => {
-            anon_dm::handle_request_accepted(window, ui_ctx, conversation_id, peer_id);
+            anon::handle_dm_request_accepted(window, ui_ctx, conversation_id, peer_id);
         }
 
         DomainEvent::AnonDmInitReceived { .. } => {
-            anon_dm::handle_init_received(window, ui_ctx);
+            anon::handle_dm_init_received(window, ui_ctx);
         }
 
         // =========================================================================

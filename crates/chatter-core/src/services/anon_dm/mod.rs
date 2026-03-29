@@ -38,6 +38,7 @@ use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::AnonDmRepository;
 use crate::storage::repositories::AttachmentRepository;
 use crate::storage::repositories::SettingsRepository;
+use crate::storage::repositories::MessageRepository;
 
 /// Anonymous DM service errors.
 #[derive(Debug, thiserror::Error)]
@@ -116,6 +117,8 @@ pub struct DecryptedPeerProfile {
 pub struct AnonDmService {
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) anon_dm_repo: Arc<AnonDmRepository>,
+    /// Unified message repository for all message CRUD operations.
+    pub(crate) message_repo: Arc<MessageRepository>,
     /// Attachment storage for incoming file metadata.
     pub(crate) attachment_repo: Arc<AttachmentRepository>,
     /// Reusable Signal Protocol pairwise encryption.
@@ -131,6 +134,7 @@ impl AnonDmService {
     pub fn new(
         settings_repo: Arc<SettingsRepository>,
         anon_dm_repo: Arc<AnonDmRepository>,
+        message_repo: Arc<MessageRepository>,
         attachment_repo: Arc<AttachmentRepository>,
         pairwise_service: Arc<PairwiseService>,
         mailbox_manager: Arc<MailboxManager>,
@@ -140,6 +144,7 @@ impl AnonDmService {
         Self {
             settings_repo,
             anon_dm_repo,
+            message_repo,
             attachment_repo,
             pairwise_service,
             mailbox_manager,

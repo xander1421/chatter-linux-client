@@ -44,7 +44,10 @@ pub use attachment_repo::AttachmentRepository;
 pub use channel_repo::ChannelRepository;
 pub use draft_repo::DraftRepository;
 pub use ephemeral_repo::EphemeralRepository;
-pub use message_repo::MessageRepository;
+/// Re-export `UnifiedMessageRepository` as `MessageRepository` — all code now uses the
+/// unified implementation. The old `message_repo` module is kept for step 5 deletion.
+pub use unified_message_repo::UnifiedMessageRepository as MessageRepository;
+pub use unified_message_repo::UnifiedMessageRepository;
 pub use reaction_repo::ReactionRepository;
 pub use search_index::{SearchIndex, SearchResult};
 pub use settings_repo::{keys as settings_keys, SettingsRepository};
@@ -53,4 +56,3 @@ pub use anon_group_repo::AnonGroupRepository;
 pub use anon_dm_repo::AnonDmRepository;
 pub use jarvis_memory_repo::JarvisMemoryRepository;
 pub use jarvis_graph_repo::JarvisGraphRepository;
-pub use unified_message_repo::UnifiedMessageRepository;

@@ -8,7 +8,7 @@ use crate::domain::ephemeral::{EphemeralMessage, MessageTTL};
 use crate::domain::ids::MessageId;
 use crate::error::StorageError;
 use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
-use crate::storage::repositories::message_repo::MessageRepository;
+use crate::storage::repositories::MessageRepository;
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
 
 /// Ephemeral service errors.

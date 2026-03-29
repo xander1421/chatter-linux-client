@@ -12,7 +12,7 @@ use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
 use crate::error::StorageError;
 use crate::storage::repositories::channel_repo::ChannelRepository;
-use crate::storage::repositories::message_repo::MessageRepository;
+use crate::storage::repositories::MessageRepository;
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::channel_event;
