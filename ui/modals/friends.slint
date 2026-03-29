@@ -1,5 +1,5 @@
 // FriendsModal - Comprehensive friends management
-// Tabs: Friends, Find Users, Requests, Blocked
+// Tabs: Add Friend, Friends, Requests, Blocked
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -56,8 +56,7 @@ export component FriendsModal inherits Rectangle {
     // Friends tab data
     in property <[FriendData]> friends: [];
 
-    // Find users tab data (DEPRECATED - username search disabled for privacy)
-    // Kept for backwards compatibility but no longer used
+    // Legacy search properties (unused — friend code is the discovery method)
     in-out property <string> search-query: "";
     in property <[UserSearchResult]> search-results: [];
     in property <bool> search-loading: false;
@@ -136,7 +135,7 @@ export component FriendsModal inherits Rectangle {
                 height: 44px;
 
                 for tab in [
-                    { id: "find", label: "Find" },
+                    { id: "find", label: "Add Friend" },
                     { id: "friends", label: "Friends" },
                     { id: "requests", label: "Requests" },
                     { id: "blocked", label: "Blocked" }
@@ -221,7 +220,7 @@ export component FriendsModal inherits Rectangle {
                             }
 
                             Text {
-                                text: "Use the Find Users tab to add friends";
+                                text: "Use the Add Friend tab to connect";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
                                 horizontal-alignment: center;
