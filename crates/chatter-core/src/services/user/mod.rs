@@ -264,6 +264,9 @@ impl UserService {
                 .or_else(|| existing.status_message.as_ref().map(|s| s.text.clone()))
                 .unwrap_or_default(),
             presence: domain_presence_to_proto(existing.presence),
+            encrypted_name: Vec::new(),
+            encrypted_about: Vec::new(),
+            profile_key_version: String::new(),
         };
 
         let mut paths = Vec::new();

@@ -1,6 +1,7 @@
 //! Ephemeral message operations (reactions, typing, delete, pin, edit).
 
 use crate::domain::anon_group::AnonGroupId;
+use crate::domain::ids::ChannelId;
 use crate::services::{
     build_delete_for_everyone_content, build_edit_content, build_pin_content,
     build_reaction_content, build_typing_content,
@@ -90,8 +91,10 @@ impl AnonGroupService {
         self.send_message(group_id, content).await?;
 
         // Update message locally
-        self.anon_group_repo
-            .update_message_text(group_id, target_sent_timestamp, new_text)?;
+        let channel_id: ChannelId = (*group_id).into();
+        self.message_service
+            .message_repo
+            .update_text_by_timestamp(&channel_id, target_sent_timestamp, new_text)?;
 
         Ok(())
     }

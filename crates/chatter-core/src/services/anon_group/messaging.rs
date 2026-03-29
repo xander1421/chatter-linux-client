@@ -1,6 +1,7 @@
 //! Core messaging operations for anonymous groups.
 
 use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
+use crate::domain::ids::ChannelId;
 use crate::proto::content_v1::{self, Content};
 use crate::services::gateway::builders::{
     build_text_content, build_data_message_content,
@@ -38,7 +39,7 @@ impl AnonGroupService {
         self.send_message(group_id, inner_content).await?;
 
         // Mark as "sent" for delivery status indicator
-        let _ = self.anon_group_repo.update_delivery_status(&message_id, "sent");
+        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(sent_at, "sent");
 
         Ok((message_id, sent_at))
     }
@@ -83,7 +84,7 @@ impl AnonGroupService {
         self.send_message(group_id, inner_content).await?;
 
         // Mark as "sent" for delivery status indicator
-        let _ = self.anon_group_repo.update_delivery_status(&message_id, "sent");
+        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(sent_at, "sent");
 
         Ok((message_id, sent_at))
     }
@@ -103,10 +104,12 @@ impl AnonGroupService {
         let current_user = self.current_user_id()?;
 
         // Look up the original message to get preview text
+        let channel_id: ChannelId = (*group_id).into();
         let preview_text = self
-            .anon_group_repo
-            .get_message_by_timestamp(group_id, reply_to_timestamp)?
-            .map(|msg| shared::truncate_preview(&msg.as_text().unwrap_or_default()))
+            .message_service
+            .message_repo
+            .get_by_conversation_timestamp(&channel_id, reply_to_timestamp)?
+            .and_then(|msg| msg.as_text().map(|t| shared::truncate_preview(t)))
             .unwrap_or_default();
 
         let quote = shared::build_quote(
@@ -158,7 +161,7 @@ impl AnonGroupService {
         self.send_message(group_id, inner_content).await?;
 
         // Mark as "sent" for delivery status indicator
-        let _ = self.anon_group_repo.update_delivery_status(&message_id, "sent");
+        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(sent_at, "sent");
 
         Ok((message_id, sent_at))
     }

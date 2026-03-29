@@ -611,7 +611,7 @@ async fn route_anon_dm(
         attachment_ids,
         gif_attachment_ids: vec![],
         bootstrap_initiated: false,
-        anon_message_id: Some(message_id.as_str().to_string()),
+        anon_message_id: Some(message_id.to_string()),
         call_result: None,
     })
 }

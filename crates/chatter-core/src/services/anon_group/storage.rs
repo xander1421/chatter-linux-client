@@ -2,12 +2,11 @@
 
 use chrono::Utc;
 
-use crate::domain::anon_group::{
-    AnonGroupId, AnonGroupMessage as DomainAnonGroupMessage, AnonGroupMessageId,
-};
+use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
+use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
 use crate::domain::{AttachmentId, UserId};
 use crate::services::AttachmentService;
-use crate::services::gateway::shared;
 
 use super::{AnonGroupError, AnonGroupService};
 
@@ -24,32 +23,21 @@ impl AnonGroupService {
         content_json: &str,
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
-        let message = DomainAnonGroupMessage {
-            id: AnonGroupMessageId::new(),
-            group_id: *group_id,
-            sender_id: *sender_id,
-            content_type,
-            content_json: content_json.to_string(),
-            attachments_blob: vec![8, 0, 0, 0, 0, 0, 0, 0], // Empty vec bincode
-            is_deleted: false,
-            reaction_counts: Vec::new(),
-            current_user_reactions: Vec::new(),
-            delivery_status: String::new(),
-            sent_at,
-            created_at: Utc::now(),
-            is_pinned: false,
-            is_read: false,
-            is_edited: false,
-        };
+        let channel_id: ChannelId = (*group_id).into();
+        let content = Self::content_from_type_and_json(content_type, content_json);
+        let mut message = Message::new_text(channel_id, Some(*sender_id), String::new(), sent_at);
+        message.conversation_type = ConversationType::AnonGroup;
+        message.content = content;
 
-        self.anon_group_repo.insert_message(&message)?;
+        let msg_id_str = message.id.to_string();
+        self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
             "Stored message {} in group {} with sent_at={}",
-            message.id,
+            msg_id_str,
             group_id,
             sent_at
         );
-        Ok(message.id)
+        Ok(AnonGroupMessageId::from_string(msg_id_str))
     }
 
     /// Store a text message in a group.
@@ -63,15 +51,19 @@ impl AnonGroupService {
         text: &str,
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
-        let message = DomainAnonGroupMessage::new_text(*group_id, *sender_id, text, sent_at);
-        self.anon_group_repo.insert_message(&message)?;
+        let channel_id: ChannelId = (*group_id).into();
+        let mut message = Message::new_text(channel_id, Some(*sender_id), text.to_string(), sent_at);
+        message.conversation_type = ConversationType::AnonGroup;
+
+        let msg_id_str = message.id.to_string();
+        self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
             "Stored text message {} in group {} with sent_at={}",
-            message.id,
+            msg_id_str,
             group_id,
             sent_at
         );
-        Ok(message.id)
+        Ok(AnonGroupMessageId::from_string(msg_id_str))
     }
 
     /// Store a message with text and/or attachments.
@@ -86,38 +78,24 @@ impl AnonGroupService {
         attachment_ids: &[AttachmentId],
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
-        // Determine content type and build JSON
-        let content_type = shared::determine_content_type(!text.is_empty(), !attachment_ids.is_empty());
-        let content_json = shared::build_content_json(text, attachment_ids);
-        let attachments_blob = shared::serialize_attachment_ids(attachment_ids);
+        let channel_id: ChannelId = (*group_id).into();
+        let content = Self::build_message_content(text, attachment_ids);
 
-        let message = DomainAnonGroupMessage {
-            id: AnonGroupMessageId::new(),
-            group_id: *group_id,
-            sender_id: *sender_id,
-            content_type,
-            content_json,
-            attachments_blob,
-            is_deleted: false,
-            reaction_counts: Vec::new(),
-            current_user_reactions: Vec::new(),
-            delivery_status: String::new(),
-            sent_at,
-            created_at: Utc::now(),
-            is_pinned: false,
-            is_read: false,
-            is_edited: false,
-        };
+        let mut message = Message::new_text(channel_id, Some(*sender_id), String::new(), sent_at);
+        message.conversation_type = ConversationType::AnonGroup;
+        message.content = content;
+        message.attachments = attachment_ids.to_vec();
 
-        self.anon_group_repo.insert_message(&message)?;
+        let msg_id_str = message.id.to_string();
+        self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
             "Stored message {} in group {} with sent_at={}, attachments={}",
-            message.id,
+            msg_id_str,
             group_id,
             sent_at,
             attachment_ids.len()
         );
-        Ok(message.id)
+        Ok(AnonGroupMessageId::from_string(msg_id_str))
     }
 
     /// Store a message with explicit content_json (used for replies with quote metadata).
@@ -130,28 +108,17 @@ impl AnonGroupService {
         attachment_ids: &[AttachmentId],
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
-        let attachments_blob = shared::serialize_attachment_ids(attachment_ids);
+        let channel_id: ChannelId = (*group_id).into();
+        let content = Self::content_from_type_and_json(content_type, content_json);
 
-        let message = DomainAnonGroupMessage {
-            id: AnonGroupMessageId::new(),
-            group_id: *group_id,
-            sender_id: *sender_id,
-            content_type,
-            content_json: content_json.to_string(),
-            attachments_blob,
-            is_deleted: false,
-            reaction_counts: Vec::new(),
-            current_user_reactions: Vec::new(),
-            delivery_status: String::new(),
-            sent_at,
-            created_at: Utc::now(),
-            is_pinned: false,
-            is_read: false,
-            is_edited: false,
-        };
+        let mut message = Message::new_text(channel_id, Some(*sender_id), String::new(), sent_at);
+        message.conversation_type = ConversationType::AnonGroup;
+        message.content = content;
+        message.attachments = attachment_ids.to_vec();
 
-        self.anon_group_repo.insert_message(&message)?;
-        Ok(message.id)
+        let msg_id_str = message.id.to_string();
+        self.message_service.message_repo.insert(&message)?;
+        Ok(AnonGroupMessageId::from_string(msg_id_str))
     }
 
     /// Get a message by group_id and sent_at timestamp (any sender).
@@ -159,8 +126,9 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
         sent_timestamp: u64,
-    ) -> Result<Option<DomainAnonGroupMessage>, AnonGroupError> {
-        Ok(self.anon_group_repo.get_message_by_timestamp(group_id, sent_timestamp)?)
+    ) -> Result<Option<Message>, AnonGroupError> {
+        let channel_id: ChannelId = (*group_id).into();
+        Ok(self.message_service.message_repo.get_by_conversation_timestamp(&channel_id, sent_timestamp)?)
     }
 
     /// Create attachment records from pointers.
@@ -183,10 +151,12 @@ impl AnonGroupService {
         group_id: &AnonGroupId,
         sender_id: &UserId,
         timestamp_ns: u64,
-    ) -> Result<Option<DomainAnonGroupMessage>, AnonGroupError> {
+    ) -> Result<Option<Message>, AnonGroupError> {
+        let channel_id: ChannelId = (*group_id).into();
         Ok(self
-            .anon_group_repo
-            .get_message_by_sender_timestamp(group_id, sender_id, timestamp_ns)?)
+            .message_service
+            .message_repo
+            .get_by_conversation_sender_timestamp(&channel_id, sender_id, timestamp_ns)?)
     }
 
     /// Delete a message by sender timestamp (for delete-for-everyone).
@@ -196,42 +166,64 @@ impl AnonGroupService {
         sender_id: &UserId,
         timestamp_ns: u64,
     ) -> Result<bool, AnonGroupError> {
+        let channel_id: ChannelId = (*group_id).into();
         Ok(self
-            .anon_group_repo
-            .mark_message_deleted_by_timestamp(group_id, sender_id, timestamp_ns)?)
+            .message_service
+            .message_repo
+            .mark_deleted_by_sender_timestamp(&channel_id, sender_id, timestamp_ns)?)
     }
 
     /// Get messages for a group with pagination.
     ///
-    /// Returns messages ordered by created_at DESC (newest first).
+    /// Returns messages ordered by sent_at DESC (newest first).
     pub fn get_messages(
         &self,
         group_id: &AnonGroupId,
         before: Option<&chrono::DateTime<Utc>>,
         limit: i32,
-    ) -> Result<Vec<DomainAnonGroupMessage>, AnonGroupError> {
-        Ok(self.anon_group_repo.get_messages(group_id, before, limit)?)
+    ) -> Result<Vec<Message>, AnonGroupError> {
+        let channel_id: ChannelId = (*group_id).into();
+        // Convert DateTime cursor to sent_at nanos for the unified repo
+        let before_sent_at = before.and_then(|dt| {
+            dt.timestamp_nanos_opt().map(|ns| ns as u64)
+        });
+        Ok(self.message_service.message_repo.list_for_conversation(
+            &channel_id,
+            &ConversationType::AnonGroup,
+            before_sent_at,
+            limit as u32,
+        )?)
     }
 
     /// Get a single message by ID.
     pub fn get_message(
         &self,
         id: &AnonGroupMessageId,
-    ) -> Result<Option<DomainAnonGroupMessage>, AnonGroupError> {
-        Ok(self.anon_group_repo.get_message(id)?)
+    ) -> Result<Option<Message>, AnonGroupError> {
+        let msg_id: MessageId = id.as_str().parse()
+            .map_err(|_| AnonGroupError::InvalidData(format!("invalid message id: {}", id)))?;
+        Ok(self.message_service.message_repo.get(&msg_id)?)
     }
 
     /// Get the most recent message in a group (for sidebar preview).
     pub fn get_latest_message(
         &self,
         group_id: &AnonGroupId,
-    ) -> Result<Option<DomainAnonGroupMessage>, AnonGroupError> {
-        Ok(self.anon_group_repo.get_latest_message(group_id)?)
+    ) -> Result<Option<Message>, AnonGroupError> {
+        let channel_id: ChannelId = (*group_id).into();
+        Ok(self.message_service.message_repo.get_latest_for_conversation(
+            &channel_id,
+            &ConversationType::AnonGroup,
+        )?)
     }
 
     /// Get the message count for a group.
     pub fn get_message_count(&self, group_id: &AnonGroupId) -> Result<i64, AnonGroupError> {
-        Ok(self.anon_group_repo.get_message_count(group_id)?)
+        let channel_id: ChannelId = (*group_id).into();
+        Ok(self.message_service.message_repo.count_in_conversation(
+            &channel_id,
+            &ConversationType::AnonGroup,
+        )?)
     }
 
     /// Set pin state for a message by group_id and sent_at timestamp.
@@ -241,23 +233,31 @@ impl AnonGroupService {
         sent_timestamp: u64,
         pinned: bool,
     ) -> Result<bool, AnonGroupError> {
-        Ok(self.anon_group_repo.set_message_pinned_by_timestamp(group_id, sent_timestamp, pinned)?)
+        let channel_id: ChannelId = (*group_id).into();
+        Ok(self.message_service.message_repo.set_pinned_by_timestamp(&channel_id, sent_timestamp, pinned)?)
     }
 
     /// List all pinned messages for a group.
-    pub fn list_pinned(&self, group_id: &AnonGroupId) -> Result<Vec<DomainAnonGroupMessage>, AnonGroupError> {
-        Ok(self.anon_group_repo.list_pinned(group_id)?)
+    pub fn list_pinned(&self, group_id: &AnonGroupId) -> Result<Vec<Message>, AnonGroupError> {
+        let channel_id: ChannelId = (*group_id).into();
+        Ok(self.message_service.message_repo.list_pinned_for_conversation(
+            &channel_id,
+            &ConversationType::AnonGroup,
+        )?)
     }
 
     /// Mark all messages as read for a group.
     pub fn mark_as_read(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
-        self.anon_group_repo.mark_as_read(group_id)?;
+        let channel_id: ChannelId = (*group_id).into();
+        self.message_service.message_repo.mark_conversation_read(&channel_id)?;
         Ok(())
     }
 
     /// Delete a message (soft delete).
     pub fn delete_message(&self, id: &AnonGroupMessageId) -> Result<(), AnonGroupError> {
-        self.anon_group_repo.delete_message(id)?;
+        let msg_id: MessageId = id.as_str().parse()
+            .map_err(|_| AnonGroupError::InvalidData(format!("invalid message id: {}", id)))?;
+        self.message_service.message_repo.delete(&msg_id)?;
         Ok(())
     }
 
@@ -273,38 +273,113 @@ impl AnonGroupService {
         sent_timestamp: u64,
         new_text: &str,
     ) -> Result<bool, AnonGroupError> {
-        Ok(self.anon_group_repo.update_message_text_by_sender(group_id, sender_id, sent_timestamp, new_text)?)
+        let channel_id: ChannelId = (*group_id).into();
+        // Verify sender matches message author before updating
+        if let Some(msg) = self.message_service.message_repo
+            .get_by_conversation_sender_timestamp(&channel_id, sender_id, sent_timestamp)?
+        {
+            if msg.sender_id.as_ref() != Some(sender_id) {
+                return Ok(false);
+            }
+            Ok(self.message_service.message_repo
+                .update_text_by_timestamp(&channel_id, sent_timestamp, new_text)?)
+        } else {
+            Ok(false)
+        }
     }
 
     /// Add a reaction to a message in the DB.
+    // TODO: Migrate to unified MessageRepository reaction support
     pub fn add_reaction(
         &self,
-        group_id: &AnonGroupId,
-        sent_timestamp: u64,
-        user_id: &UserId,
-        emoji: &str,
+        _group_id: &AnonGroupId,
+        _sent_timestamp: u64,
+        _user_id: &UserId,
+        _emoji: &str,
     ) -> Result<bool, AnonGroupError> {
-        Ok(self.anon_group_repo.add_reaction(group_id, sent_timestamp, user_id, emoji)?)
+        tracing::warn!("add_reaction: not yet migrated to unified MessageRepository");
+        Ok(false)
     }
 
     /// Remove a reaction from a message in the DB.
+    // TODO: Migrate to unified MessageRepository reaction support
     pub fn remove_reaction(
         &self,
-        group_id: &AnonGroupId,
-        sent_timestamp: u64,
-        user_id: &UserId,
-        emoji: &str,
+        _group_id: &AnonGroupId,
+        _sent_timestamp: u64,
+        _user_id: &UserId,
+        _emoji: &str,
     ) -> Result<bool, AnonGroupError> {
-        Ok(self.anon_group_repo.remove_reaction(group_id, sent_timestamp, user_id, emoji)?)
+        tracing::warn!("remove_reaction: not yet migrated to unified MessageRepository");
+        Ok(false)
     }
 
     /// Get all reaction counts for a group's messages.
     ///
     /// Returns a map of sent_at -> Vec<(emoji, count)>.
+    // TODO: Migrate to unified MessageRepository reaction support
     pub fn get_all_reaction_counts(
         &self,
-        group_id: &AnonGroupId,
+        _group_id: &AnonGroupId,
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonGroupError> {
-        Ok(self.anon_group_repo.get_all_reaction_counts(group_id)?)
+        tracing::warn!("get_all_reaction_counts: not yet migrated to unified MessageRepository");
+        Ok(std::collections::HashMap::new())
+    }
+
+    // ========================================================================
+    // Helper methods for content conversion
+    // ========================================================================
+
+    /// Build MessageContent from text and attachment IDs.
+    fn build_message_content(text: &str, attachment_ids: &[AttachmentId]) -> MessageContent {
+        match (!text.is_empty(), !attachment_ids.is_empty()) {
+            (true, true) => MessageContent::Mixed(MixedContent::new(
+                text.to_string(),
+                attachment_ids.to_vec(),
+            )),
+            (true, false) => MessageContent::Text(text.to_string()),
+            (false, true) => MessageContent::Mixed(MixedContent::attachments_only(
+                attachment_ids.to_vec(),
+            )),
+            (false, false) => MessageContent::Text(String::new()),
+        }
+    }
+
+    /// Convert a content_type integer and content_json string to MessageContent.
+    ///
+    /// This bridges the old anon_group content format to the unified Message format.
+    fn content_from_type_and_json(content_type: i32, content_json: &str) -> MessageContent {
+        match content_type {
+            // Text
+            1 => {
+                let text = serde_json::from_str::<serde_json::Value>(content_json)
+                    .ok()
+                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(String::from))
+                    .unwrap_or_default();
+                MessageContent::Text(text)
+            }
+            // Mixed (text + attachments) or reply with quote metadata
+            3 => {
+                // For mixed/reply content, store as Mixed with the text extracted
+                let text = serde_json::from_str::<serde_json::Value>(content_json)
+                    .ok()
+                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(String::from));
+                MessageContent::Mixed(MixedContent {
+                    text,
+                    attachment_ids: Vec::new(),
+                })
+            }
+            // Attachment only or unknown - store as Mixed with no text
+            _ => {
+                let text = serde_json::from_str::<serde_json::Value>(content_json)
+                    .ok()
+                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(String::from));
+                if let Some(t) = text {
+                    MessageContent::Text(t)
+                } else {
+                    MessageContent::Text(String::new())
+                }
+            }
+        }
     }
 }

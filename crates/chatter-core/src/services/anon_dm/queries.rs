@@ -1,5 +1,6 @@
-use chrono::{DateTime, Utc};
-use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMessage as DomainAnonDmMessage, AnonDmMessageId};
+use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMessageId};
+use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::message::{ConversationType, Message};
 use crate::domain::UserId;
 
 use super::{AnonDmError, AnonDmService};
@@ -42,20 +43,26 @@ impl AnonDmService {
     pub fn get_messages(
         &self,
         conversation_id: &AnonDmId,
-        before: Option<&DateTime<Utc>>,
+        before_sent_at: Option<u64>,
         limit: i32,
-    ) -> Result<Vec<DomainAnonDmMessage>, AnonDmError> {
-        Ok(self
-            .anon_dm_repo
-            .get_messages(conversation_id, before, limit)?)
+    ) -> Result<Vec<Message>, AnonDmError> {
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.list_for_conversation(
+            &channel_id,
+            &ConversationType::AnonDm,
+            before_sent_at,
+            limit as u32,
+        )?)
     }
 
     /// Get a single message by ID.
     pub fn get_message(
         &self,
         id: &AnonDmMessageId,
-    ) -> Result<Option<DomainAnonDmMessage>, AnonDmError> {
-        Ok(self.anon_dm_repo.get_message(id)?)
+    ) -> Result<Option<Message>, AnonDmError> {
+        let message_id: MessageId = id.as_str().parse()
+            .map_err(|_| AnonDmError::InvalidData(format!("invalid message ID: {}", id)))?;
+        Ok(self.message_repo.get(&message_id)?)
     }
 
     /// Get a message by sender ID and timestamp (Signal-style lookup).
@@ -67,8 +74,9 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
         timestamp_ns: u64,
-    ) -> Result<Option<DomainAnonDmMessage>, AnonDmError> {
-        Ok(self.anon_dm_repo.get_message_by_timestamp(conversation_id, timestamp_ns)?)
+    ) -> Result<Option<Message>, AnonDmError> {
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.get_by_conversation_timestamp(&channel_id, timestamp_ns)?)
     }
 
     pub fn get_message_by_sender_timestamp(
@@ -76,26 +84,31 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
         sender_id: &UserId,
         timestamp_ns: u64,
-    ) -> Result<Option<DomainAnonDmMessage>, AnonDmError> {
-        Ok(self.anon_dm_repo.get_message_by_sender_timestamp(conversation_id, sender_id, timestamp_ns)?)
+    ) -> Result<Option<Message>, AnonDmError> {
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.get_by_conversation_sender_timestamp(&channel_id, sender_id, timestamp_ns)?)
     }
 
     /// Get the most recent message in a conversation.
     pub fn get_latest_message(
         &self,
         conversation_id: &AnonDmId,
-    ) -> Result<Option<DomainAnonDmMessage>, AnonDmError> {
-        Ok(self.anon_dm_repo.get_latest_message(conversation_id)?)
+    ) -> Result<Option<Message>, AnonDmError> {
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.get_latest_for_conversation(&channel_id, &ConversationType::AnonDm)?)
     }
 
     /// Get the message count for a conversation.
     pub fn get_message_count(&self, conversation_id: &AnonDmId) -> Result<i64, AnonDmError> {
-        Ok(self.anon_dm_repo.get_message_count(conversation_id)?)
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.count_in_conversation(&channel_id, &ConversationType::AnonDm)?)
     }
 
     /// Delete a message.
     pub fn delete_message(&self, id: &AnonDmMessageId) -> Result<(), AnonDmError> {
-        self.anon_dm_repo.delete_message(id)?;
+        let message_id: MessageId = id.as_str().parse()
+            .map_err(|_| AnonDmError::InvalidData(format!("invalid message ID: {}", id)))?;
+        self.message_repo.delete(&message_id)?;
         Ok(())
     }
 
@@ -108,8 +121,9 @@ impl AnonDmService {
         sender_id: &UserId,
         sent_timestamp: u64,
     ) -> Result<bool, AnonDmError> {
-        Ok(self.anon_dm_repo.mark_message_deleted_by_timestamp(
-            conversation_id,
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.mark_deleted_by_sender_timestamp(
+            &channel_id,
             sender_id,
             sent_timestamp,
         )?)
@@ -122,43 +136,57 @@ impl AnonDmService {
         sent_timestamp: u64,
         pinned: bool,
     ) -> Result<bool, AnonDmError> {
-        Ok(self.anon_dm_repo.set_message_pinned_by_timestamp(conversation_id, sent_timestamp, pinned)?)
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.set_pinned_by_timestamp(&channel_id, sent_timestamp, pinned)?)
     }
 
     /// List all pinned messages for a conversation.
-    pub fn list_pinned(&self, conversation_id: &AnonDmId) -> Result<Vec<crate::domain::anon_dm::AnonDmMessage>, AnonDmError> {
-        Ok(self.anon_dm_repo.list_pinned(conversation_id)?)
+    pub fn list_pinned(&self, conversation_id: &AnonDmId) -> Result<Vec<Message>, AnonDmError> {
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.list_pinned_for_conversation(&channel_id, &ConversationType::AnonDm)?)
     }
 
     /// Add a reaction to an anon DM message in the DB.
+    ///
+    /// TODO(GRA-xxx): Migrate to unified ReactionRepository. Currently a no-op
+    /// stub because reaction methods were removed from AnonDmRepository.
     pub fn add_reaction(
         &self,
-        conversation_id: &AnonDmId,
-        sent_timestamp: u64,
-        user_id: &UserId,
-        emoji: &str,
+        _conversation_id: &AnonDmId,
+        _sent_timestamp: u64,
+        _user_id: &UserId,
+        _emoji: &str,
     ) -> Result<bool, AnonDmError> {
-        Ok(self.anon_dm_repo.add_reaction(conversation_id, sent_timestamp, user_id, emoji)?)
+        tracing::warn!("[ANON_DM] add_reaction is a stub - reactions not yet migrated to unified repo");
+        Ok(false)
     }
 
     /// Remove a reaction from an anon DM message in the DB.
+    ///
+    /// TODO(GRA-xxx): Migrate to unified ReactionRepository. Currently a no-op
+    /// stub because reaction methods were removed from AnonDmRepository.
     pub fn remove_reaction(
         &self,
-        conversation_id: &AnonDmId,
-        sent_timestamp: u64,
-        user_id: &UserId,
-        emoji: &str,
+        _conversation_id: &AnonDmId,
+        _sent_timestamp: u64,
+        _user_id: &UserId,
+        _emoji: &str,
     ) -> Result<bool, AnonDmError> {
-        Ok(self.anon_dm_repo.remove_reaction(conversation_id, sent_timestamp, user_id, emoji)?)
+        tracing::warn!("[ANON_DM] remove_reaction is a stub - reactions not yet migrated to unified repo");
+        Ok(false)
     }
 
     /// Get all reaction counts for an anon DM conversation's messages.
     ///
     /// Returns a map of sent_at -> Vec<(emoji, count)>.
+    ///
+    /// TODO(GRA-xxx): Migrate to unified ReactionRepository. Currently returns
+    /// empty because reaction methods were removed from AnonDmRepository.
     pub fn get_all_reaction_counts(
         &self,
-        conversation_id: &AnonDmId,
+        _conversation_id: &AnonDmId,
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonDmError> {
-        Ok(self.anon_dm_repo.get_all_reaction_counts(conversation_id)?)
+        tracing::warn!("[ANON_DM] get_all_reaction_counts is a stub - reactions not yet migrated to unified repo");
+        Ok(std::collections::HashMap::new())
     }
 }

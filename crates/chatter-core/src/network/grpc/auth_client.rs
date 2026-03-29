@@ -153,6 +153,19 @@ impl AuthClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
+    /// Get current identity (for OIDC clients).
+    pub async fn get_my_identity(
+        &mut self,
+    ) -> Result<crate::proto::chat_v1::GetMyIdentityResponse, NetworkError> {
+        let request = crate::proto::chat_v1::GetMyIdentityRequest {};
+
+        self.inner
+            .get_my_identity(request)
+            .await
+            .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
     /// Verify email with verification token.
     pub async fn verify_email(&mut self, verification_token: &str) -> Result<(), NetworkError> {
         let request = VerifyEmailRequest {

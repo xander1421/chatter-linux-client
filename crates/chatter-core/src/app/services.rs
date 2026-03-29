@@ -240,6 +240,7 @@ impl ServiceContainer {
         let anon_dm_service = Arc::new(AnonDmService::new(
             infra.settings_repo.clone(),
             infra.anon_dm_repo.clone(),
+            infra.message_repo.clone(),
             infra.attachment_repo.clone(),
             pairwise_service.clone(),
             mailbox_manager.clone(),
@@ -261,7 +262,6 @@ impl ServiceContainer {
             infra.jarvis_memory_repo.clone(),
             infra.jarvis_graph_repo.clone(),
             local_ai.clone(),
-            infra.event_bus.clone(),
         ));
 
         // 21. Typing service for typing indicators

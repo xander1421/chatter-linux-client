@@ -396,7 +396,7 @@ impl ConversationHandle {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 match self.client.anon_dms().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
-                    Ok(Some(msg)) => Ok(msg.as_text()),
+                    Ok(Some(msg)) => Ok(msg.as_text().map(|s| s.to_string())),
                     Ok(None) => Ok(None),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
@@ -406,7 +406,7 @@ impl ConversationHandle {
                 // fails due to sender_id byte encoding mismatch between storage and lookup paths.
                 // Nanosecond timestamps are unique per group so timestamp-only is safe.
                 match self.client.anon_groups().get_message_by_timestamp(id, target_sent_timestamp) {
-                    Ok(Some(msg)) => Ok(msg.as_text()),
+                    Ok(Some(msg)) => Ok(msg.as_text().map(|s| s.to_string())),
                     Ok(None) => Ok(None),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
@@ -428,14 +428,14 @@ impl ConversationHandle {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 match self.client.anon_dms().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
-                    Ok(Some(msg)) => Ok(msg.attachment_ids()),
+                    Ok(Some(msg)) => Ok(msg.attachments),
                     Ok(None) => Ok(vec![]),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
             }
             ActiveConversation::AnonGroup(id) => {
                 match self.client.anon_groups().get_message_by_timestamp(id, target_sent_timestamp) {
-                    Ok(Some(msg)) => Ok(msg.attachment_ids()),
+                    Ok(Some(msg)) => Ok(msg.attachments),
                     Ok(None) => Ok(vec![]),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
@@ -458,7 +458,7 @@ impl ConversationHandle {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 match self.client.anon_dms().get_message_by_sender_timestamp(id, target_author, target_sent_timestamp) {
-                    Ok(Some(msg)) => Ok(Some(msg.sender_id) == current_user_id),
+                    Ok(Some(msg)) => Ok(msg.sender_id == current_user_id),
                     Ok(None) => Err(ConversationError::Other("Message not found".into())),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
@@ -467,7 +467,7 @@ impl ConversationHandle {
                 // Use timestamp-only lookup to avoid sender_id byte mismatch.
                 // Ownership is determined from the stored message's sender_id field.
                 match self.client.anon_groups().get_message_by_timestamp(id, target_sent_timestamp) {
-                    Ok(Some(msg)) => Ok(Some(msg.sender_id) == current_user_id),
+                    Ok(Some(msg)) => Ok(msg.sender_id == current_user_id),
                     Ok(None) => Err(ConversationError::Other("Message not found".into())),
                     Err(e) => Err(ConversationError::Other(e.to_string())),
                 }
@@ -562,7 +562,7 @@ impl ConversationHandle {
                 let current_user = self.client.auth_state().get().current_user_id;
                 if let Ok(messages) = self.client.anon_dms().get_messages(id, None, 50) {
                     let timestamps: Vec<u64> = messages.iter()
-                        .filter(|m| current_user.map(|uid| m.sender_id != uid).unwrap_or(true))
+                        .filter(|m| current_user.map(|uid| m.sender_id != Some(uid)).unwrap_or(true))
                         .map(|m| m.sent_at)
                         .collect();
                     if !timestamps.is_empty() {

@@ -32,8 +32,9 @@ pub use ids::{
 };
 pub use user::{Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
 pub use message::{
-    AIMessage, CallMessage, CallMessageType, EncryptedContent, EncryptedMessageType, Message,
-    MessageContent, MixedContent, ReactionCount, SealedSenderContent, SystemMessage, Thread,
+    AIMessage, CallMessage, CallMessageType, ConversationType, EncryptedContent,
+    EncryptedMessageType, Message, MessageContent, MixedContent, ReactionCount,
+    SealedSenderContent, SystemMessage, Thread,
 };
 pub use channel::{
     Channel, ChannelConfig, ChannelType, MemberRole, Membership, MessagePersistence,

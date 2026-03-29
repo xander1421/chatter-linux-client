@@ -431,6 +431,10 @@ impl MessageProcessor {
                     envelope_type: message.envelope_type,
                 })
             }
+            EnvelopeType::SenderKey => Err(ProcessingError::UnsupportedEnvelope {
+                message_id: message.id.clone(),
+                envelope_type: message.envelope_type,
+            }),
             EnvelopeType::Unspecified => Err(ProcessingError::UnsupportedEnvelope {
                 message_id: message.id.clone(),
                 envelope_type: message.envelope_type,

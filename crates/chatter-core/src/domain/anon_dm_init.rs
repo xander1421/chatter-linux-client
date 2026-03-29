@@ -35,7 +35,8 @@ const INIT_MESSAGE_VERSION_V3: u8 = 3;
 const INIT_MESSAGE_VERSION_V2: u8 = 2;
 
 /// Minimum size of init message v4 (without display_name, intro, or avatar).
-pub const MIN_INIT_SIZE: usize = 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2 + 2; // 115 bytes
+/// avatar_len is u32 (4 bytes) to support up to 1MB avatars.
+pub const MIN_INIT_SIZE: usize = 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2 + 4; // 117 bytes
 
 /// Minimum size of init message v3 (legacy).
 const MIN_INIT_SIZE_V3: usize = 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2; // 113 bytes
@@ -51,13 +52,8 @@ pub const MAX_DISPLAY_NAME_LENGTH: usize = 64;
 
 /// Maximum avatar size in the anon DM init wire format.
 ///
-/// The wire format uses `u16` for `avatar_len`, so this MUST be ≤ 65,535.
-/// We cap at 25,000 bytes to match the documented wire format.
-/// (Profile avatars use a separate 2MB limit in `profile_crypto`.)
-pub const MAX_AVATAR_SIZE: usize = 25_000;
-
-// Compile-time check: MAX_AVATAR_SIZE must fit in u16 wire format.
-const _: () = assert!(MAX_AVATAR_SIZE <= u16::MAX as usize);
+/// Wire format uses u32 for avatar_len, supporting up to 1MB.
+pub const MAX_AVATAR_SIZE: usize = 1_000_000;
 
 /// Anonymous DM initial contact message.
 ///
@@ -196,9 +192,9 @@ impl AnonDmInitMessage {
         // Intro message
         bytes.extend_from_slice(intro_bytes);
 
-        // Avatar length (2 bytes, big-endian)
-        let avatar_len: u16 = avatar_bytes.len().try_into().map_err(|_| {
-            InitMessageError::AvatarTooLarge(avatar_bytes.len(), u16::MAX as usize)
+        // Avatar length (4 bytes, big-endian u32)
+        let avatar_len: u32 = avatar_bytes.len().try_into().map_err(|_| {
+            InitMessageError::AvatarTooLarge(avatar_bytes.len(), MAX_AVATAR_SIZE)
         })?;
         bytes.extend_from_slice(&avatar_len.to_be_bytes());
 
@@ -301,12 +297,12 @@ impl AnonDmInitMessage {
             .map_err(|_| InitMessageError::InvalidData("invalid UTF-8 in intro message".into()))?;
         offset += intro_len;
 
-        // Avatar length (2 bytes)
-        if bytes.len() < offset + 2 {
-            return Err(InitMessageError::TooShort(bytes.len(), offset + 2));
+        // Avatar length (4 bytes, u32)
+        if bytes.len() < offset + 4 {
+            return Err(InitMessageError::TooShort(bytes.len(), offset + 4));
         }
-        let avatar_len = u16::from_be_bytes([bytes[offset], bytes[offset + 1]]) as usize;
-        offset += 2;
+        let avatar_len = u32::from_be_bytes([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]) as usize;
+        offset += 4;
 
         // Avatar
         let sender_avatar = if avatar_len > 0 {
