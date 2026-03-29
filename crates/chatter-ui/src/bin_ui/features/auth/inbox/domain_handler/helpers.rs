@@ -21,6 +21,7 @@ pub(super) fn update_unread_count(window: &MainWindow, channel_id: &str, count: 
                 if let Some(model) = dms.as_any().downcast_ref::<slint::VecModel<crate::DMListItemData>>() {
                     model.set_row_data(i, updated);
                 }
+                recompute_total_unread(window);
                 return;
             }
         }
@@ -36,12 +37,41 @@ pub(super) fn update_unread_count(window: &MainWindow, channel_id: &str, count: 
                 if let Some(model) = channels.as_any().downcast_ref::<slint::VecModel<crate::ChannelListItemData>>() {
                     model.set_row_data(i, updated);
                 }
+                recompute_total_unread(window);
                 return;
             }
         }
     }
 
     tracing::trace!(channel_id, count, "Unread count: no matching sidebar entry");
+}
+
+/// Recompute total unread count across all conversations and update the mobile bottom nav badge.
+pub(crate) fn recompute_total_unread(window: &MainWindow) {
+    let mut total: i32 = 0;
+
+    let dms = window.get_dm_conversations();
+    for i in 0..dms.row_count() {
+        if let Some(dm) = dms.row_data(i) {
+            total = total.saturating_add(dm.unread_count);
+        }
+    }
+
+    let channels = window.get_channels();
+    for i in 0..channels.row_count() {
+        if let Some(ch) = channels.row_data(i) {
+            total = total.saturating_add(ch.unread_count);
+        }
+    }
+
+    let groups = window.get_private_groups();
+    for i in 0..groups.row_count() {
+        if let Some(g) = groups.row_data(i) {
+            total = total.saturating_add(g.unread_count);
+        }
+    }
+
+    window.set_total_unread_count(total);
 }
 
 /// Handle pin/unpin domain events for UI update.

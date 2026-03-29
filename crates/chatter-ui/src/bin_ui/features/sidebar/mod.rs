@@ -139,6 +139,9 @@ pub(crate) fn update_sidebar_preview(
             if let Some(item) = updated {
                 others.insert(0, item);
                 window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(others)));
+                if should_increment {
+                    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window);
+                }
             }
         }
         ActiveConversation::Channel(channel_id) => {
@@ -163,6 +166,9 @@ pub(crate) fn update_sidebar_preview(
             if let Some(item) = updated {
                 others.insert(0, item);
                 window.set_channels(slint::ModelRc::new(slint::VecModel::from(others)));
+                if should_increment {
+                    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window);
+                }
             }
         }
         ActiveConversation::AnonGroup(group_id) => {
@@ -187,6 +193,9 @@ pub(crate) fn update_sidebar_preview(
             if let Some(item) = updated {
                 others.insert(0, item);
                 window.set_private_groups(slint::ModelRc::new(slint::VecModel::from(others)));
+                if should_increment {
+                    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window);
+                }
             }
         }
         ActiveConversation::AnonDm(_) | ActiveConversation::None => {
@@ -233,6 +242,7 @@ pub(crate) fn create_dm_sidebar_entry(
                 .collect();
             items.insert(0, new_dm);
             window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(items)));
+            crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window);
 
             tracing::info!(
                 peer_id = %peer_id_str,

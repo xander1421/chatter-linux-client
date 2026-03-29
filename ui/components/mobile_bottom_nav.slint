@@ -76,6 +76,7 @@ component NavTab inherits Rectangle {
 
 export component MobileBottomNav inherits Rectangle {
     in property <string> active-tab: "chats";
+    in property <int> chats-badge: 0;
     in property <int> contacts-badge: 0;
     // Extra padding at the bottom to extend behind the system gesture area
     in property <length> safe-area-bottom: 0px;
@@ -100,6 +101,7 @@ export component MobileBottomNav inherits Rectangle {
             icon: Icons.message-circle;
             label: "Chats";
             active: root.active-tab == "chats";
+            badge-count: root.chats-badge;
             clicked => { root.tab-selected("chats"); }
         }
 

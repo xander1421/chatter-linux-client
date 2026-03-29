@@ -126,6 +126,7 @@ export component App inherits Rectangle {
     in property <string> selected-dm-id: "";
     in property <[PrivateGroupListItemData]> private-groups: [];
     in property <string> selected-private-group-id: "";
+    in property <int> total-unread-count: 0;
     in property <string> user-display-name: "User";
     in property <image> user-avatar-source;
     in property <string> user-initials: "";
@@ -1138,6 +1139,7 @@ export component App inherits Rectangle {
         y: parent.height - self.height;
         width: 100%;
         active-tab: root.mobile-active-tab;
+        chats-badge: root.total-unread-count;
         contacts-badge: root.friends-received-requests.length;
         safe-area-bottom: root.safe-area-bottom;
 

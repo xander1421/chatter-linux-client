@@ -527,6 +527,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter().map(|d| d.to_slint()).collect();
             w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
             w.set_private_groups(ModelRc::new(VecModel::from(private_groups)));
+
+            // Compute initial total unread count for mobile bottom nav badge
+            crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w);
+
             w.set_user_display_name(user_display_name.into());
             w.set_user_initials(user_initials.into());
             w.set_user_presence_status("online".into());

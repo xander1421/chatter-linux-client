@@ -12,6 +12,7 @@ mod anon;
 mod anon_calls;
 mod calls;
 mod helpers;
+pub(crate) use helpers::recompute_total_unread;
 mod messaging;
 mod social;
 
