@@ -17,10 +17,10 @@
 //! ```text
 //! | version (1) | conversation_id (16) | sender_id (16) | mailbox_pk (32) |
 //! | identity_key (33) | delivery_token (12) | name_len (1) | sender_display_name (variable, max 64) |
-//! | intro_len (2) | intro_message (variable) | avatar_len (2) | sender_avatar (variable, max 25000) |
+//! | intro_len (2) | intro_message (variable) | avatar_len (4) | sender_avatar (variable, max 1000000) |
 //! ```
 //!
-//! Total fixed size: 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2 + 2 = 115 bytes + display_name + intro + avatar
+//! Total fixed size: 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2 + 4 = 117 bytes + display_name + intro + avatar
 
 use super::anon_dm::AnonDmId;
 use super::UserId;
@@ -686,9 +686,10 @@ mod tests {
 
     #[test]
     fn test_invalid_version() {
-        let mut bytes = vec![4u8]; // Version 4 (unsupported)
+        let mut bytes = vec![99u8]; // Version 99 (unsupported)
         bytes.extend_from_slice(&[0u8; MIN_INIT_SIZE - 1]);
 
-        assert!(AnonDmInitMessage::from_bytes(&bytes).is_err());
+        let err = AnonDmInitMessage::from_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, InitMessageError::UnsupportedVersion(99)));
     }
 }
