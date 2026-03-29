@@ -8,7 +8,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 
 use crate::calls::{LiveKitRoomEvent, RoomManager, RoomState, SharedVideoFrames, VideoCaptureConfig};
 #[cfg(not(target_os = "android"))]
@@ -511,7 +511,7 @@ fn run_call_worker(
         // Pass shared_video_frames so UI can access video frames directly
         let (room_manager, mut room_events_rx) = RoomManager::with_shared_frames(Some(shared_video_frames));
         let room_manager = Arc::new(room_manager);
-        let call_client = Arc::new(parking_lot::RwLock::new(call_client));
+        let call_client = Arc::new(TokioMutex::new(call_client));
         let active_call: Arc<parking_lot::RwLock<Option<ActiveCallState>>> =
             Arc::new(parking_lot::RwLock::new(None));
 
@@ -791,11 +791,9 @@ struct ActiveCallState {
     livekit_url: String,
 }
 
-// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
-#[allow(clippy::await_holding_lock)]
 #[allow(clippy::too_many_arguments)]
 async fn initiate_call_impl(
-    call_client: &Arc<parking_lot::RwLock<CallClient>>,
+    call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
     active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
     channel_id: ChannelId,
@@ -818,7 +816,7 @@ async fn initiate_call_impl(
 
     // Create call on server
     let response = {
-        let mut client = call_client.write();
+        let mut client = call_client.lock().await;
         client
             .create_call(&channel_id.to_string(), title, proto_type, None)
             .await
@@ -858,10 +856,8 @@ async fn initiate_call_impl(
     Ok(call)
 }
 
-// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
-#[allow(clippy::await_holding_lock)]
 async fn join_call_impl(
-    call_client: &Arc<parking_lot::RwLock<CallClient>>,
+    call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
     active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
     call_id: CallId,
@@ -875,7 +871,7 @@ async fn join_call_impl(
 
     // Join call on server
     let response = {
-        let mut client = call_client.write();
+        let mut client = call_client.lock().await;
         client
             .join_call(&call_id.to_string())
             .await
@@ -987,10 +983,8 @@ async fn connect_with_token_impl(
     Ok(())
 }
 
-// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
-#[allow(clippy::await_holding_lock)]
 async fn leave_call_impl(
-    call_client: &Arc<parking_lot::RwLock<CallClient>>,
+    call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
     active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
 ) -> Result<(), CallError> {
@@ -1002,7 +996,7 @@ async fn leave_call_impl(
 
     // Skip server leave_call for anonymous calls (no server-side call state)
     if !is_anonymous {
-        let mut client = call_client.write();
+        let mut client = call_client.lock().await;
         match tokio::time::timeout(
             tokio::time::Duration::from_secs(3),
             client.leave_call(&call_id),
@@ -1030,10 +1024,8 @@ async fn leave_call_impl(
     Ok(())
 }
 
-// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
-#[allow(clippy::await_holding_lock)]
 async fn end_call_impl(
-    call_client: &Arc<parking_lot::RwLock<CallClient>>,
+    call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
     active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
     reason: Option<&str>,
@@ -1048,7 +1040,7 @@ async fn end_call_impl(
 
     // End on server
     {
-        let mut client = call_client.write();
+        let mut client = call_client.lock().await;
         client
             .end_call(&call_id, reason.unwrap_or(""))
             .await
@@ -1067,10 +1059,8 @@ async fn end_call_impl(
 /// Reconnect to the current call after a connection drop.
 ///
 /// This gets a new token from the server and reconnects to LiveKit.
-// TODO: Refactor to use tokio::sync::Mutex or drop guard before await
-#[allow(clippy::await_holding_lock)]
 async fn reconnect_impl(
-    call_client: &Arc<parking_lot::RwLock<CallClient>>,
+    call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
     active_call: &Arc<parking_lot::RwLock<Option<ActiveCallState>>>,
 ) -> Result<(), CallError> {
@@ -1092,7 +1082,7 @@ async fn reconnect_impl(
 
     // Get a new token by rejoining the call
     let response = {
-        let mut client = call_client.write();
+        let mut client = call_client.lock().await;
         client
             .join_call(&call_id)
             .await
