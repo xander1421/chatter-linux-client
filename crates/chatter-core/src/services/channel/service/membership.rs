@@ -95,25 +95,24 @@ impl ChannelService {
 
         // Create and prepare our sender key for this channel.
         // The SKDM must be distributed to all channel members via Double Ratchet.
-        let skdm_opt = match self.signal_service.create_sender_key(channel_id).await {
-            Ok(skdm) => {
-                tracing::info!(
-                    channel_id = %channel_id,
-                    skdm_len = skdm.distribution_message.len(),
-                    "Created sender key for joined channel"
-                );
-                Some(skdm)
-            }
-            Err(e) => {
-                // Non-fatal - key will be created on first message
-                tracing::warn!(
+        // This is mandatory — without it, other members cannot decrypt our messages.
+        let skdm = self.signal_service.create_sender_key(channel_id).await
+            .map_err(|e| {
+                tracing::error!(
                     channel_id = %channel_id,
                     error = %e,
-                    "Failed to create sender key on join (will create on first message)"
+                    "Failed to create sender key on join — group encryption unavailable"
                 );
-                None
-            }
-        };
+                ChannelError::SenderKeyRotationFailed(format!(
+                    "failed to create sender key on join: {}", e
+                ))
+            })?;
+
+        tracing::info!(
+            channel_id = %channel_id,
+            skdm_len = skdm.distribution_message.len(),
+            "Created sender key for joined channel"
+        );
 
         // Setup group mailbox for encrypted channels (NDSS '21 paper)
         let mailbox_setup = if setup_mailbox {
@@ -122,7 +121,7 @@ impl ChannelService {
             match self.setup_group_mailbox_internal(channel_id, &mut mailbox_client, &mut anon_mailbox_client).await {
                 Ok(Some(mut setup)) => {
                     // Include the SKDM in the result so caller can distribute it
-                    setup.skdm = skdm_opt;
+                    setup.skdm = Some(skdm);
                     Some(setup)
                 }
                 Ok(None) => None,

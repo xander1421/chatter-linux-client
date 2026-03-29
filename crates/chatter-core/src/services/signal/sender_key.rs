@@ -69,19 +69,32 @@ impl SignalService {
     ///
     /// Automatically rotates sender keys based on Signal best practices:
     /// - Rotate after 24 hours
-    /// - Rotate after 100 messages
+    /// - Rotate after 2000 messages
+    ///
+    /// Returns an error if message sending is blocked due to a pending
+    /// sender key rotation (e.g., during member kick/ban). This prevents
+    /// messages from being encrypted with the old key that the removed
+    /// member still possesses.
     pub async fn encrypt_for_group(
         &self,
         channel_id: &ChannelId,
         plaintext: &[u8],
     ) -> Result<(GroupEncrypted, Option<SenderKeyDistribution>), ServiceError> {
+        // Block if sender key rotation is in progress (member removal).
+        // The old key must not be used — the removed member still has it.
+        if self.is_channel_send_blocked(channel_id)? {
+            return Err(ServiceError::Validation(
+                "sender key rotation in progress — message sending blocked until new key is distributed".into(),
+            ));
+        }
+
         let our_address = self.get_our_address()?;
         let channel_id_str = channel_id.to_string();
 
         // Check if rotation was manually requested
         if self.check_and_clear_rotation_needed(channel_id)? {
             tracing::info!(channel_id = %channel_id, "Manual sender key rotation requested");
-            let _ = self.clear_channel_sender_keys(channel_id).await;
+            self.clear_channel_sender_keys(channel_id).await?;
         }
 
         // Check for automatic rotation based on age or message count
@@ -92,7 +105,7 @@ impl SignalService {
                     reason = reason,
                     "Automatic sender key rotation triggered"
                 );
-                let _ = self.clear_channel_sender_keys(channel_id).await;
+                self.clear_channel_sender_keys(channel_id).await?;
             }
         }
 
@@ -176,5 +189,35 @@ impl SignalService {
         }
 
         Ok(needs_rotation)
+    }
+
+    /// Block message sending on a channel during sender key rotation.
+    ///
+    /// This MUST be set before a member removal (kick/ban) to prevent
+    /// messages from being encrypted with the old key during the rotation
+    /// window. The kicked/banned member still has the old key, so any
+    /// messages encrypted with it would violate forward secrecy.
+    pub fn block_channel_send(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
+        let key = format!("sender_key_send_blocked:{}", channel_id);
+        self.settings_repo.set_string(&key, "1").map_err(ServiceError::Storage)
+    }
+
+    /// Unblock message sending on a channel after rotation + SKDM distribution.
+    ///
+    /// Call this ONLY after the new SKDM has been distributed to all
+    /// remaining members, ensuring they can decrypt messages with the new key.
+    pub fn unblock_channel_send(&self, channel_id: &ChannelId) -> Result<(), ServiceError> {
+        let key = format!("sender_key_send_blocked:{}", channel_id);
+        self.settings_repo.delete(&key).map_err(ServiceError::Storage)?;
+        Ok(())
+    }
+
+    /// Check if message sending is blocked on a channel due to pending rotation.
+    pub fn is_channel_send_blocked(&self, channel_id: &ChannelId) -> Result<bool, ServiceError> {
+        let key = format!("sender_key_send_blocked:{}", channel_id);
+        Ok(self.settings_repo.get_string(&key)
+            .map_err(ServiceError::Storage)?
+            .map(|v| v == "1")
+            .unwrap_or(false))
     }
 }

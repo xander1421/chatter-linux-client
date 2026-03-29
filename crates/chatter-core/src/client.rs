@@ -1574,36 +1574,76 @@ impl ChatterClient {
 
     /// Join a channel and set up group encryption.
     ///
-    /// Handles mailbox announcement and SKDM distribution automatically.
+    /// Handles mailbox announcement, SKDM distribution, and requesting
+    /// existing members' SKDMs automatically. Without receiving existing
+    /// members' SKDMs, the new member cannot decrypt their messages.
     pub async fn join_channel(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         password: Option<&str>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
+        let current_user = self.channels().current_user_id()?;
         let (channel, mailbox_setup) = self.channels()
             .join_channel(channel_id, password, true)
             .await?;
         self.finalize_mailbox_setup(&channel.id, mailbox_setup).await;
         self.subscribe_channel_messages(&channel.id);
+
+        // Request existing members' SKDMs so we can decrypt their messages.
+        // Each member should respond with their current SKDM.
+        let members = self.channels().list_members_local(channel_id).unwrap_or_default();
+        for member in &members {
+            if member.user_id != current_user {
+                if let Err(e) = self.messages()
+                    .send_sender_key_request(channel_id, &member.user_id)
+                    .await
+                {
+                    tracing::warn!(
+                        channel_id = %channel_id,
+                        member_id = %member.user_id,
+                        error = %e,
+                        "Failed to request SKDM from existing member"
+                    );
+                }
+            }
+        }
+
         Ok(channel)
     }
 
     /// Kick a user from a channel and re-distribute sender keys.
     ///
     /// After kicking, a new SKDM is distributed so the kicked user
-    /// can no longer decrypt future messages.
+    /// can no longer decrypt future messages. Message sending is blocked
+    /// during this operation and unblocked only after SKDM distribution.
     pub async fn kick_user(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
         user_id: &crate::domain::ids::UserId,
         reason: Option<&str>,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        let skdm_opt = self.channels().kick_user(channel_id, user_id, reason).await?;
-        if let Some(skdm) = skdm_opt {
-            if let Err(e) = self.messages().distribute_skdm(channel_id, &skdm).await {
-                tracing::error!(channel_id = %channel_id, error = %e, "Failed to distribute SKDM after kick");
-            }
+        // kick_user blocks sending and returns the new SKDM
+        let skdm = self.channels().kick_user(channel_id, user_id, reason).await?;
+
+        // Distribute SKDM to remaining members BEFORE unblocking sends
+        if let Err(e) = self.messages().distribute_skdm(channel_id, &skdm).await {
+            tracing::error!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to distribute SKDM after kick — sending remains blocked"
+            );
+            // Don't unblock — rotation succeeded but distribution failed.
+            // The channel will stay blocked until manual retry.
+            return Err(crate::services::channel::ChannelError::SenderKeyRotationFailed(
+                format!("SKDM distribution failed after kick: {}", e)
+            ));
         }
+
+        // Unblock sending — rotation + distribution complete
+        if let Err(e) = self.signal().unblock_channel_send(channel_id) {
+            tracing::warn!(channel_id = %channel_id, error = %e, "Failed to unblock channel send after kick");
+        }
+
         Ok(())
     }
 

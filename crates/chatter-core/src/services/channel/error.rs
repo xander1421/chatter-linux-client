@@ -30,6 +30,13 @@ pub enum ChannelError {
     /// Storage operation failed.
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+
+    /// Sender key rotation failed after member removal.
+    ///
+    /// This is a security-critical error: the removed member still has
+    /// the old sender key, so we MUST rotate before sending any new messages.
+    #[error("sender key rotation failed: {0}")]
+    SenderKeyRotationFailed(String),
 }
 
 impl From<CurrentUserError> for ChannelError {
