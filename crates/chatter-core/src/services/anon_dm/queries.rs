@@ -147,46 +147,45 @@ impl AnonDmService {
     }
 
     /// Add a reaction to an anon DM message in the DB.
-    ///
-    /// TODO(GRA-xxx): Migrate to unified ReactionRepository. Currently a no-op
-    /// stub because reaction methods were removed from AnonDmRepository.
     pub fn add_reaction(
         &self,
-        _conversation_id: &AnonDmId,
-        _sent_timestamp: u64,
-        _user_id: &UserId,
-        _emoji: &str,
+        conversation_id: &AnonDmId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
     ) -> Result<bool, AnonDmError> {
-        tracing::warn!("[ANON_DM] add_reaction is a stub - reactions not yet migrated to unified repo");
-        Ok(false)
+        let channel_id: ChannelId = (*conversation_id).into();
+        let msg = self.message_repo.get_by_conversation_timestamp(&channel_id, sent_timestamp)?;
+        match msg {
+            Some(m) => Ok(self.message_repo.add_reaction(&m.id, user_id, emoji)?),
+            None => Ok(false),
+        }
     }
 
     /// Remove a reaction from an anon DM message in the DB.
-    ///
-    /// TODO(GRA-xxx): Migrate to unified ReactionRepository. Currently a no-op
-    /// stub because reaction methods were removed from AnonDmRepository.
     pub fn remove_reaction(
         &self,
-        _conversation_id: &AnonDmId,
-        _sent_timestamp: u64,
-        _user_id: &UserId,
-        _emoji: &str,
+        conversation_id: &AnonDmId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
     ) -> Result<bool, AnonDmError> {
-        tracing::warn!("[ANON_DM] remove_reaction is a stub - reactions not yet migrated to unified repo");
-        Ok(false)
+        let channel_id: ChannelId = (*conversation_id).into();
+        let msg = self.message_repo.get_by_conversation_timestamp(&channel_id, sent_timestamp)?;
+        match msg {
+            Some(m) => Ok(self.message_repo.remove_reaction(&m.id, user_id, emoji)?),
+            None => Ok(false),
+        }
     }
 
     /// Get all reaction counts for an anon DM conversation's messages.
     ///
     /// Returns a map of sent_at -> Vec<(emoji, count)>.
-    ///
-    /// TODO(GRA-xxx): Migrate to unified ReactionRepository. Currently returns
-    /// empty because reaction methods were removed from AnonDmRepository.
     pub fn get_all_reaction_counts(
         &self,
-        _conversation_id: &AnonDmId,
+        conversation_id: &AnonDmId,
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonDmError> {
-        tracing::warn!("[ANON_DM] get_all_reaction_counts is a stub - reactions not yet migrated to unified repo");
-        Ok(std::collections::HashMap::new())
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.get_reaction_counts_for_conversation(&channel_id)?)
     }
 }

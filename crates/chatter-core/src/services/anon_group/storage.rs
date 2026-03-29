@@ -289,41 +289,48 @@ impl AnonGroupService {
     }
 
     /// Add a reaction to a message in the DB.
-    // TODO: Migrate to unified MessageRepository reaction support
     pub fn add_reaction(
         &self,
-        _group_id: &AnonGroupId,
-        _sent_timestamp: u64,
-        _user_id: &UserId,
-        _emoji: &str,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
     ) -> Result<bool, AnonGroupError> {
-        tracing::warn!("add_reaction: not yet migrated to unified MessageRepository");
-        Ok(false)
+        let channel_id: ChannelId = (*group_id).into();
+        let msg = self.message_service.message_repo
+            .get_by_conversation_timestamp(&channel_id, sent_timestamp)?;
+        match msg {
+            Some(m) => Ok(self.message_service.message_repo.add_reaction(&m.id, user_id, emoji)?),
+            None => Ok(false),
+        }
     }
 
     /// Remove a reaction from a message in the DB.
-    // TODO: Migrate to unified MessageRepository reaction support
     pub fn remove_reaction(
         &self,
-        _group_id: &AnonGroupId,
-        _sent_timestamp: u64,
-        _user_id: &UserId,
-        _emoji: &str,
+        group_id: &AnonGroupId,
+        sent_timestamp: u64,
+        user_id: &UserId,
+        emoji: &str,
     ) -> Result<bool, AnonGroupError> {
-        tracing::warn!("remove_reaction: not yet migrated to unified MessageRepository");
-        Ok(false)
+        let channel_id: ChannelId = (*group_id).into();
+        let msg = self.message_service.message_repo
+            .get_by_conversation_timestamp(&channel_id, sent_timestamp)?;
+        match msg {
+            Some(m) => Ok(self.message_service.message_repo.remove_reaction(&m.id, user_id, emoji)?),
+            None => Ok(false),
+        }
     }
 
     /// Get all reaction counts for a group's messages.
     ///
     /// Returns a map of sent_at -> Vec<(emoji, count)>.
-    // TODO: Migrate to unified MessageRepository reaction support
     pub fn get_all_reaction_counts(
         &self,
-        _group_id: &AnonGroupId,
+        group_id: &AnonGroupId,
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonGroupError> {
-        tracing::warn!("get_all_reaction_counts: not yet migrated to unified MessageRepository");
-        Ok(std::collections::HashMap::new())
+        let channel_id: ChannelId = (*group_id).into();
+        Ok(self.message_service.message_repo.get_reaction_counts_for_conversation(&channel_id)?)
     }
 
     // ========================================================================

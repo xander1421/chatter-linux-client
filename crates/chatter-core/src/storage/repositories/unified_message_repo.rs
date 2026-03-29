@@ -527,6 +527,34 @@ impl UnifiedMessageRepository {
         Ok(counts)
     }
 
+    /// Get reaction counts for all messages in a conversation.
+    ///
+    /// Returns a map of `sent_at` -> `Vec<(emoji, count)>` for messages that have reactions.
+    pub fn get_reaction_counts_for_conversation(
+        &self,
+        conversation_id: &ChannelId,
+    ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT m.sent_at, r.emoji, COUNT(*) as cnt
+             FROM unified_reactions r
+             INNER JOIN messages m ON r.message_id = m.id
+             WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+             GROUP BY m.sent_at, r.emoji
+             ORDER BY m.sent_at, cnt DESC",
+        )?;
+        let mut rows = stmt.query(params![conversation_id.to_string()])?;
+        let mut map: std::collections::HashMap<u64, Vec<(String, u32)>> =
+            std::collections::HashMap::new();
+        while let Some(row) = rows.next()? {
+            let sent_at: i64 = row.get(0)?;
+            let emoji: String = row.get(1)?;
+            let count: u32 = row.get(2)?;
+            map.entry(sent_at as u64).or_default().push((emoji, count));
+        }
+        Ok(map)
+    }
+
     // ========================================================================
     // Search
     // ========================================================================
