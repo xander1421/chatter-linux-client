@@ -10,6 +10,7 @@ use tempfile::NamedTempFile;
 
 use chatter_core::storage::{Database, KeyStore, SettingsRepository, settings_keys};
 use chatter_core::services::SignalService;
+use libsignal_protocol::SessionRecord;
 
 /// Helper to set up a test database and SignalService.
 async fn setup_test_service() -> (SignalService, Arc<KeyStore>, Arc<SettingsRepository>, NamedTempFile) {
@@ -51,10 +52,10 @@ async fn test_has_session_returns_true_after_session_created() {
     let device_id = 1u32;
     let session_key = format!("{}:{}", peer_id, device_id);
 
-    // Create a minimal session record (in real usage this comes from message decryption)
-    // For testing, we just need some bytes in the session store
-    let fake_session_bytes = vec![0u8; 100]; // Placeholder session data
-    key_store.store_session(&session_key, &fake_session_bytes).unwrap();
+    // Create a valid SessionRecord (has_session validates via SessionRecord::deserialize)
+    let session_record = SessionRecord::new_fresh();
+    let session_bytes = session_record.serialize().unwrap();
+    key_store.store_session(&session_key, &session_bytes).unwrap();
 
     let address = libsignal_protocol::ProtocolAddress::new(
         peer_id.to_string(),
@@ -156,8 +157,10 @@ async fn test_session_reuse_after_message_decrypt() {
 
     // Simulate: we received and decrypted a PreKey message from peer
     // This would normally happen in decrypt_message, which stores the session
-    let fake_session_bytes = vec![1u8; 100];
-    key_store.store_session(&session_key, &fake_session_bytes).unwrap();
+    // Must be a valid SessionRecord because has_session validates via deserialize
+    let session_record = SessionRecord::new_fresh();
+    let session_bytes = session_record.serialize().unwrap();
+    key_store.store_session(&session_key, &session_bytes).unwrap();
 
     // Verify session exists through actor
     let address = libsignal_protocol::ProtocolAddress::new(
@@ -173,7 +176,7 @@ async fn test_session_reuse_after_message_decrypt() {
     assert!(loaded_session.is_some(), "Session should still be stored");
     assert_eq!(
         loaded_session.unwrap(),
-        fake_session_bytes,
+        session_bytes,
         "Session data should not be modified"
     );
 }
