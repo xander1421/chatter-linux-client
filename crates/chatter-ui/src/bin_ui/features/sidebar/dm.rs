@@ -107,10 +107,10 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 // Load pinned messages for this anon DM
                 let (msg_ids, preview) = match anon_dm_service.list_pinned(&anon_dm_id) {
                     Ok(pinned) if !pinned.is_empty() => {
-                        let ids = pinned.iter().filter_map(|m| m.id.as_str().parse().ok()).collect();
+                        let ids = pinned.iter().map(|m| m.id).collect();
                         let preview = pinned[0].as_text()
                             .filter(|t| !t.is_empty())
-                            .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t })
+                            .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
                             .unwrap_or_else(|| "[Pinned message]".to_string());
                         (ids, preview)
                     }
@@ -325,17 +325,21 @@ async fn load_anon_dm_into_ui(
     // Convert messages to display data
     let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
     for msg in &messages {
-        let sender_name = user_service.get_display_name(&msg.sender_id);
-        
+        let sender_name = if let Some(sid) = msg.sender_id {
+            user_service.get_display_name(&sid)
+        } else {
+            "Unknown".to_string()
+        };
+
         // Determine which avatar to use
-        let sender_avatar = if current_user_id.map(|uid| msg.sender_id == uid).unwrap_or(false) {
+        let sender_avatar = if current_user_id.map(|uid| msg.sender_id == Some(uid)).unwrap_or(false) {
             my_avatar.clone()
         } else {
             peer_avatar.clone()
         };
 
         // Resolve attachments from stored IDs
-        let attachment_ids = msg.attachment_ids();
+        let attachment_ids = msg.attachments.clone();
         let resolved_attachments: Vec<chatter_core::domain::Attachment> = attachment_ids
             .iter()
             .filter_map(|att_id| {

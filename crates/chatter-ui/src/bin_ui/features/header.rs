@@ -348,7 +348,7 @@ fn update_pinned_ui_from_loaded_messages(
                 if let Ok(Some(msg)) = anon_group_service.get_message(&chatter_core::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string())) {
                     msg.as_text()
                         .filter(|t| !t.is_empty())
-                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t })
+                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
                         .unwrap_or_else(|| "[Pinned message]".to_string())
                 } else {
                     let _ = group_id; // suppress unused warning

@@ -276,15 +276,14 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 // Get latest message for preview
                 let (last_message, timestamp) = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
                     Ok(Some(msg)) => {
-                        let is_own = current_user_id.map(|id| msg.sender_id == id).unwrap_or(false);
+                        let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
                         let preview = msg.as_text()
                             .map(|text| {
-                                let mut display_text = text.to_string();
+                                let display_text = text.to_string();
                                 if display_text.chars().count() > 50 {
                                     let truncated: String = display_text.chars().take(47).collect();
-                                    display_text = format!("{}...", truncated);
-                                }
-                                if is_own {
+                                    format!("{}...", truncated)
+                                } else if is_own {
                                     format!("You: {}", display_text)
                                 } else {
                                     display_text
@@ -342,7 +341,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
                 // Get intro message if any
                 let last_message = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
-                    Ok(Some(msg)) => msg.as_text().unwrap_or_default(),
+                    Ok(Some(msg)) => msg.as_text().unwrap_or_default().to_string(),
                     _ => "Message request".to_string(),
                 };
 
@@ -458,7 +457,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                                     let truncated: String = text.chars().take(47).collect();
                                     format!("{}...", truncated)
                                 } else {
-                                    text
+                                    text.to_string()
                                 }
                             })
                             .unwrap_or_default();
@@ -933,10 +932,10 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let peer_id_str = dm.peer_id.to_string();
                     
                     let last_message = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
-                        Ok(Some(msg)) => msg.as_text().unwrap_or_default(),
+                        Ok(Some(msg)) => msg.as_text().unwrap_or_default().to_string(),
                         _ => "Message request".to_string(),
                     };
-                    
+
                     let dm_item = DMListItemSendData {
                         channel_id: format!("anon_dm:{}", dm.id),
                         user_id: peer_id_str.clone(),

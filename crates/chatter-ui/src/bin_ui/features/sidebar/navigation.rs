@@ -370,6 +370,9 @@ pub(crate) fn load_org_state(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             id: SharedString::from(org.id.as_str()),
             name: SharedString::from(org.name.as_str()),
             slug: SharedString::from(org.slug.as_str()),
+            initial: SharedString::from(
+                org.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()
+            ),
             member_count: org.member_count,
             is_current: org_data.current_org_id.as_deref() == Some(&org.id),
         })
@@ -704,6 +707,9 @@ pub(crate) fn subscribe_org_state(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                             id: SharedString::from(org.id.as_str()),
                             name: SharedString::from(org.name.as_str()),
                             slug: SharedString::from(org.slug.as_str()),
+                            initial: SharedString::from(
+                                org.name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default()
+                            ),
                             member_count: org.member_count,
                             is_current: data.current_org_id.as_deref() == Some(&org.id),
                         })

@@ -11,6 +11,7 @@ use crate::MainWindow;
 
 pub fn wire_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_password_login(window, ui_ctx);
+    #[cfg(not(target_os = "android"))]
     wire_sso_login(window, ui_ctx);
 }
 
@@ -120,6 +121,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
+#[cfg(not(target_os = "android"))]
 fn wire_sso_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();

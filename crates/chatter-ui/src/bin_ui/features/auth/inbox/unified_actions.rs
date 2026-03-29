@@ -11,7 +11,6 @@ use chatter_core::domain::ids::ChannelId;
 use chatter_core::state::{ActiveConversation, ChatState};
 
 use crate::bin_ui::features::auth::inbox::typing::{clear_typing_for_peer, set_typing_with_timer};
-use crate::bin_ui::features::auth::inbox::utils::update_reaction_summary;
 use crate::{MainWindow, MessageItemData};
 
 /// Event source identifier for typing/reaction routing.
@@ -74,56 +73,6 @@ pub fn handle_typing(
             set_typing_with_timer(&window, &key);
         } else {
             clear_typing_for_peer(&window, &key);
-        }
-    });
-}
-
-// ============================================================================
-// Reaction
-// ============================================================================
-
-/// Handle reaction for any conversation type.
-pub fn handle_reaction(
-    weak_window: &slint::Weak<MainWindow>,
-    chat_state: &ChatState,
-    source: EventSource,
-    emoji: String,
-    remove: bool,
-    target_sent_timestamp: u64,
-) {
-    let chat_state = chat_state.clone();
-    let weak = weak_window.clone();
-
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(window) = weak.upgrade() else { return };
-
-        if !is_active(&chat_state, &source) {
-            return;
-        }
-
-        let messages = window.get_messages();
-        let target_ts_ns = target_sent_timestamp.to_string();
-
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ns.as_str() == target_ts_ns {
-                    let mut updated_msg = msg.clone();
-                    let new_summary =
-                        update_reaction_summary(&msg.reaction_summary.to_string(), &emoji, remove);
-                    updated_msg.reaction_summary = new_summary.clone().into();
-                    updated_msg.has_reactions = !new_summary.is_empty();
-                    updated_msg.reactions = slint::ModelRc::new(VecModel::from(
-                        crate::bin_ui::converters::parse_reaction_summary_to_entries(&new_summary),
-                    ));
-
-                    if let Some(model) =
-                        messages.as_any().downcast_ref::<VecModel<MessageItemData>>()
-                    {
-                        model.set_row_data(i, updated_msg);
-                    }
-                    return;
-                }
-            }
         }
     });
 }

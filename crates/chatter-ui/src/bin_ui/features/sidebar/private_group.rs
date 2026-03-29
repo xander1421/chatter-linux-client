@@ -81,44 +81,48 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         // Convert messages to display data
         let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
         for msg in &messages {
-            let mut sender_name = user_service.get_display_name(&msg.sender_id);
+            let sender_id = msg.sender_id.as_ref();
+            let mut sender_name = sender_id
+                .map(|id| user_service.get_display_name(id))
+                .unwrap_or_default();
             let mut sender_avatar = None;
-            
-            match anon_group_service.get_member(&group_id, &msg.sender_id) {
-                Ok(Some(member)) => {
-                    tracing::debug!(
-                        "Found member {} in group {}: display_name={:?}",
-                        msg.sender_id,
-                        group_id,
-                        member.display_name
-                    );
-                    if let Some(ref name) = member.display_name {
-                        if !name.is_empty() {
-                            sender_name = name.clone();
+
+            if let Some(sid) = sender_id {
+                match anon_group_service.get_member(&group_id, sid) {
+                    Ok(Some(member)) => {
+                        tracing::debug!(
+                            "Found member {} in group {}: display_name={:?}",
+                            sid,
+                            group_id,
+                            member.display_name
+                        );
+                        if let Some(ref name) = member.display_name {
+                            if !name.is_empty() {
+                                sender_name = name.clone();
+                            }
                         }
+                        sender_avatar = member.avatar.clone();
                     }
-                    sender_avatar = member.avatar.clone();
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        "Member {} not found in group {} member list",
-                        msg.sender_id,
-                        group_id
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to get member {} in group {}: {}",
-                        msg.sender_id,
-                        group_id,
-                        e
-                    );
+                    Ok(None) => {
+                        tracing::warn!(
+                            "Member {} not found in group {} member list",
+                            sid,
+                            group_id
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to get member {} in group {}: {}",
+                            sid,
+                            group_id,
+                            e
+                        );
+                    }
                 }
             }
-            
+
             // Resolve attachments from stored IDs
-            let attachment_ids = msg.attachment_ids();
-            let resolved_attachments: Vec<chatter_core::domain::Attachment> = attachment_ids
+            let resolved_attachments: Vec<chatter_core::domain::Attachment> = msg.attachments
                 .iter()
                 .filter_map(|att_id| {
                     match attachment_service.get(att_id) {
@@ -134,7 +138,7 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                     }
                 })
                 .collect();
-            
+
             let display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
                 msg,
                 &sender_name,
@@ -233,10 +237,10 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             // Load pinned messages for this group from DB
             let (msg_ids, preview) = match anon_group_service.list_pinned(&group_id) {
                 Ok(pinned) if !pinned.is_empty() => {
-                    let ids = pinned.iter().filter_map(|m| m.id.as_str().parse().ok()).collect();
+                    let ids = pinned.iter().map(|m| m.id).collect();
                     let preview = pinned[0].as_text()
                         .filter(|t| !t.is_empty())
-                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t })
+                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
                         .unwrap_or_else(|| "[Pinned message]".to_string());
                     (ids, preview)
                 }
@@ -305,44 +309,48 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             // Convert messages to display data
             let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
             for msg in &messages {
-                let mut sender_name = user_service.get_display_name(&msg.sender_id);
+                let sender_id = msg.sender_id.as_ref();
+                let mut sender_name = sender_id
+                    .map(|id| user_service.get_display_name(id))
+                    .unwrap_or_default();
                 let mut sender_avatar = None;
 
-                match anon_group_service.get_member(&group_id, &msg.sender_id) {
-                    Ok(Some(member)) => {
-                        tracing::debug!(
-                            "Found member {} in group {}: display_name={:?}",
-                            msg.sender_id,
-                            group_id,
-                            member.display_name
-                        );
-                        if let Some(ref name) = member.display_name {
-                            if !name.is_empty() {
-                                sender_name = name.clone();
+                if let Some(sid) = sender_id {
+                    match anon_group_service.get_member(&group_id, sid) {
+                        Ok(Some(member)) => {
+                            tracing::debug!(
+                                "Found member {} in group {}: display_name={:?}",
+                                sid,
+                                group_id,
+                                member.display_name
+                            );
+                            if let Some(ref name) = member.display_name {
+                                if !name.is_empty() {
+                                    sender_name = name.clone();
+                                }
                             }
+                            sender_avatar = member.avatar.clone();
                         }
-                        sender_avatar = member.avatar.clone();
-                    }
-                    Ok(None) => {
-                        tracing::warn!(
-                            "Member {} not found in group {} member list",
-                            msg.sender_id,
-                            group_id
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to get member {} in group {}: {}",
-                            msg.sender_id,
-                            group_id,
-                            e
-                        );
+                        Ok(None) => {
+                            tracing::warn!(
+                                "Member {} not found in group {} member list",
+                                sid,
+                                group_id
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Failed to get member {} in group {}: {}",
+                                sid,
+                                group_id,
+                                e
+                            );
+                        }
                     }
                 }
 
                 // Resolve attachments from stored IDs
-                let attachment_ids = msg.attachment_ids();
-                let resolved_attachments: Vec<chatter_core::domain::Attachment> = attachment_ids
+                let resolved_attachments: Vec<chatter_core::domain::Attachment> = msg.attachments
                     .iter()
                     .filter_map(|att_id| {
                         match attachment_service.get(att_id) {

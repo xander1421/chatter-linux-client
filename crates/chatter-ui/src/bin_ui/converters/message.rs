@@ -374,22 +374,69 @@ pub fn anon_message_to_display_data(
     }
 }
 
-/// Convert an AnonGroupMessage to MessageDisplayData.
+/// Convert a unified Message (used for anon group) to MessageDisplayData.
 pub fn anon_group_message_to_display_data(
-    msg: &AnonGroupMessage,
+    msg: &Message,
     sender_name: &str,
     sender_avatar: Option<Vec<u8>>,
     resolved_attachments: &[Attachment],
 ) -> MessageDisplayData {
-    anon_message_to_display_data(msg, sender_name, sender_avatar, resolved_attachments)
+    anon_dm_message_to_display_data(msg, sender_name, sender_avatar, resolved_attachments)
 }
 
-/// Convert an AnonDmMessage to MessageDisplayData.
+/// Convert a unified Message (used for anon DM) to MessageDisplayData.
 pub fn anon_dm_message_to_display_data(
-    msg: &AnonDmMessage,
+    msg: &Message,
     sender_name: &str,
     sender_avatar: Option<Vec<u8>>,
     resolved_attachments: &[Attachment],
 ) -> MessageDisplayData {
-    anon_message_to_display_data(msg, sender_name, sender_avatar, resolved_attachments)
+    use chrono::Local;
+
+    let content = msg.as_text().unwrap_or_default().to_string();
+    let attachment_data: Vec<AttachmentDisplayData> = resolved_attachments
+        .iter()
+        .map(attachment_to_display_data)
+        .collect();
+
+    let sender_id_str = msg.sender_id
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+
+    MessageDisplayData {
+        message_id: msg.id.to_string(),
+        sender_id: sender_id_str,
+        sender_name: sender_name.to_string(),
+        sender_initials: get_initials(sender_name),
+        content: content.to_string(),
+        timestamp: msg.created_at.with_timezone(&Local).format("%H:%M").to_string(),
+        timestamp_ns: msg.sent_at.to_string(),
+        is_edited: msg.is_edited,
+        is_deleted: msg.is_deleted,
+        is_ai: false,
+        has_attachments: !attachment_data.is_empty(),
+        attachment_count: attachment_data.len() as i32,
+        attachments: attachment_data,
+        has_reactions: !msg.reaction_counts.is_empty(),
+        reaction_summary: msg
+            .reaction_counts
+            .iter()
+            .map(|r| format!("{} {}", r.emoji, r.count))
+            .collect::<Vec<_>>()
+            .join("  "),
+        reply_count: 0,
+        reply_count_text: String::new(),
+        is_thread_reply: false,
+        is_reply: false,
+        reply_to_sender_name: String::new(),
+        reply_to_preview: String::new(),
+        delivery_status: msg.delivery_status.clone(),
+        sender_avatar_bytes: sender_avatar,
+        sender_avatar_decoded: None,
+        is_pinned: msg.is_pinned,
+        is_call: false,
+        call_message_type: String::new(),
+        call_initiator_id: String::new(),
+        call_duration: String::new(),
+    }
 }
