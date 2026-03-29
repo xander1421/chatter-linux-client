@@ -242,6 +242,8 @@ pub mod auth_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Password Management
+*/
         pub async fn change_password(
             &mut self,
             request: impl tonic::IntoRequest<super::ChangePasswordRequest>,
@@ -264,6 +266,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ChangePassword"));
             self.inner.unary(req, path, codec).await
         }
+        /** Account Recovery (recovery codes for password-loss scenario)
+*/
         pub async fn use_recovery_code(
             &mut self,
             request: impl tonic::IntoRequest<super::UseRecoveryCodeRequest>,
@@ -289,6 +293,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "UseRecoveryCode"));
             self.inner.unary(req, path, codec).await
         }
+        /** Regenerate recovery codes (requires authentication + password confirmation)
+*/
         pub async fn regenerate_recovery_codes(
             &mut self,
             request: impl tonic::IntoRequest<super::RegenerateRecoveryCodesRequest>,
@@ -311,9 +317,13 @@ pub mod auth_service_client {
             );
             let mut req = request.into_request();
             req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.AuthService", "RegenerateRecoveryCodes"));
+                .insert(
+                    GrpcMethod::new("chat.v1.AuthService", "RegenerateRecoveryCodes"),
+                );
             self.inner.unary(req, path, codec).await
         }
+        /** Account Management
+*/
         pub async fn delete_account(
             &mut self,
             request: impl tonic::IntoRequest<super::DeleteAccountRequest>,
@@ -339,6 +349,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "DeleteAccount"));
             self.inner.server_streaming(req, path, codec).await
         }
+        /** Session Management
+*/
         pub async fn list_sessions(
             &mut self,
             request: impl tonic::IntoRequest<super::GetActiveSessionsRequest>,
@@ -364,6 +376,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ListSessions"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn revoke_session(
             &mut self,
             request: impl tonic::IntoRequest<super::InvalidateSessionRequest>,
@@ -386,6 +399,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RevokeSession"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn revoke_all_sessions(
             &mut self,
             request: impl tonic::IntoRequest<super::InvalidateAllSessionsRequest>,
@@ -408,6 +422,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RevokeAllSessions"));
             self.inner.unary(req, path, codec).await
         }
+        /** Device Management (multi-device Signal Protocol support)
+*/
         pub async fn list_devices(
             &mut self,
             request: impl tonic::IntoRequest<super::ListDevicesRequest>,
@@ -433,6 +449,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ListDevices"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn rename_device(
             &mut self,
             request: impl tonic::IntoRequest<super::RenameDeviceRequest>,
@@ -455,6 +472,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RenameDevice"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn revoke_device(
             &mut self,
             request: impl tonic::IntoRequest<super::RevokeDeviceRequest>,
@@ -477,6 +495,35 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RevokeDevice"));
             self.inner.unary(req, path, codec).await
         }
+        /** Identity (for OIDC clients that need to discover their Chatter user_id)
+*/
+        pub async fn get_my_identity(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetMyIdentityRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetMyIdentityResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.AuthService/GetMyIdentity",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.AuthService", "GetMyIdentity"));
+            self.inner.unary(req, path, codec).await
+        }
+        /** Username Availability
+*/
         pub async fn check_username(
             &mut self,
             request: impl tonic::IntoRequest<super::CheckUsernameRequest>,
@@ -502,6 +549,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "CheckUsername"));
             self.inner.unary(req, path, codec).await
         }
+        /** Signal Protocol Key Management
+*/
         pub async fn upload_pre_key_bundle(
             &mut self,
             request: impl tonic::IntoRequest<super::UploadPreKeyBundleRequest>,
@@ -524,6 +573,9 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "UploadPreKeyBundle"));
             self.inner.unary(req, path, codec).await
         }
+        /** Sealed Sender Certificate Management (metadata privacy)
+ NOTE: No GetServerTrustRoot - trust root is hardcoded in clients per Signal's security model
+*/
         pub async fn request_sender_certificate(
             &mut self,
             request: impl tonic::IntoRequest<super::RequestSenderCertificateRequest>,
@@ -551,6 +603,7 @@ pub mod auth_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_sender_certificate(
             &mut self,
             request: impl tonic::IntoRequest<super::GetSenderCertificateRequest>,
@@ -576,6 +629,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetSenderCertificate"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_pre_key_bundle(
             &mut self,
             request: impl tonic::IntoRequest<super::GetPreKeyBundleRequest>,
@@ -601,6 +655,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetPreKeyBundle"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn refresh_pre_keys(
             &mut self,
             request: impl tonic::IntoRequest<super::RefreshPreKeysRequest>,
@@ -623,6 +678,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RefreshPreKeys"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_pre_key_stats(
             &mut self,
             request: impl tonic::IntoRequest<super::GetPreKeyStatsRequest>,
@@ -3275,6 +3331,41 @@ pub mod message_service_client {
                 .insert(GrpcMethod::new("chat.v1.MessageService", "SendSealedMessage"));
             self.inner.unary(req, path, codec).await
         }
+        /** Multi-Recipient Sealed Sender — single encrypt, server fan-out.
+ Requires Combined-Unidentified-Access-Key header (XOR of all recipients' UAKs).
+*/
+        pub async fn send_multi_recipient_sealed_message(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::SendMultiRecipientSealedMessageRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::SendMultiRecipientSealedMessageResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.MessageService/SendMultiRecipientSealedMessage",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.MessageService",
+                        "SendMultiRecipientSealedMessage",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /** Device Message Queue (Signal-style inbox)
  Requires device authentication (Basic auth with device token)
 */
@@ -3406,8 +3497,6 @@ pub mod message_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /** Read Receipts & Typing Indicators
-*/
         pub async fn send_read_receipt(
             &mut self,
             request: impl tonic::IntoRequest<super::SendReadReceiptRequest>,
@@ -4157,6 +4246,200 @@ pub mod notification_service_client {
     }
 }
 /// Generated client implementations.
+pub mod svr_service_client {
+    #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    /** ---- SVR Service (authenticated — uses existing auth interceptor) ----
+*/
+    #[derive(Debug, Clone)]
+    pub struct SvrServiceClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl SvrServiceClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> SvrServiceClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> SvrServiceClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + Send + Sync,
+        {
+            SvrServiceClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /** Upsert encrypted backup (create or update)
+*/
+        pub async fn store_backup(
+            &mut self,
+            request: impl tonic::IntoRequest<super::StoreBackupRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::StoreBackupResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.SvrService/StoreBackup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.SvrService", "StoreBackup"));
+            self.inner.unary(req, path, codec).await
+        }
+        /** Retrieve encrypted backup with PIN proof (rate-limited)
+*/
+        pub async fn fetch_backup(
+            &mut self,
+            request: impl tonic::IntoRequest<super::FetchBackupRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::FetchBackupResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.SvrService/FetchBackup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.SvrService", "FetchBackup"));
+            self.inner.unary(req, path, codec).await
+        }
+        /** Remove encrypted backup
+*/
+        pub async fn delete_backup(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteBackupRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.SvrService/DeleteBackup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.SvrService", "DeleteBackup"));
+            self.inner.unary(req, path, codec).await
+        }
+        /** Change PIN: re-encrypt backup with new SVR secret, update registration lock
+*/
+        pub async fn change_pin_backup(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ChangePinBackupRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ChangePinBackupResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.SvrService/ChangePinBackup",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.SvrService", "ChangePinBackup"));
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated client implementations.
 pub mod user_service_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
@@ -4893,195 +5176,6 @@ pub mod internal_user_service_client {
                         "InternalDeleteUserProfile",
                     ),
                 );
-            self.inner.unary(req, path, codec).await
-        }
-    }
-}
-/// Generated client implementations.
-pub mod svr_service_client {
-    #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
-    use tonic::codegen::*;
-    use tonic::codegen::http::Uri;
-    ///
-    #[derive(Debug, Clone)]
-    pub struct SvrServiceClient<T> {
-        inner: tonic::client::Grpc<T>,
-    }
-    impl SvrServiceClient<tonic::transport::Channel> {
-        /// Attempt to create a new client by connecting to a given endpoint.
-        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
-        where
-            D: TryInto<tonic::transport::Endpoint>,
-            D::Error: Into<StdError>,
-        {
-            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
-            Ok(Self::new(conn))
-        }
-    }
-    impl<T> SvrServiceClient<T>
-    where
-        T: tonic::client::GrpcService<tonic::body::BoxBody>,
-        T::Error: Into<StdError>,
-        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
-        <T::ResponseBody as Body>::Error: Into<StdError> + Send,
-    {
-        pub fn new(inner: T) -> Self {
-            let inner = tonic::client::Grpc::new(inner);
-            Self { inner }
-        }
-        pub fn with_origin(inner: T, origin: Uri) -> Self {
-            let inner = tonic::client::Grpc::with_origin(inner, origin);
-            Self { inner }
-        }
-        pub fn with_interceptor<F>(
-            inner: T,
-            interceptor: F,
-        ) -> SvrServiceClient<InterceptedService<T, F>>
-        where
-            F: tonic::service::Interceptor,
-            T::ResponseBody: Default,
-            T: tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-                Response = http::Response<
-                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
-                >,
-            >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + Send + Sync,
-        {
-            SvrServiceClient::new(InterceptedService::new(inner, interceptor))
-        }
-        /// Compress requests with the given encoding.
-        ///
-        /// This requires the server to support it otherwise it might respond with an
-        /// error.
-        #[must_use]
-        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.inner = self.inner.send_compressed(encoding);
-            self
-        }
-        /// Enable decompressing responses.
-        #[must_use]
-        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
-            self.inner = self.inner.accept_compressed(encoding);
-            self
-        }
-        /// Limits the maximum size of a decoded message.
-        ///
-        /// Default: `4MB`
-        #[must_use]
-        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
-            self.inner = self.inner.max_decoding_message_size(limit);
-            self
-        }
-        /// Limits the maximum size of an encoded message.
-        ///
-        /// Default: `usize::MAX`
-        #[must_use]
-        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
-            self.inner = self.inner.max_encoding_message_size(limit);
-            self
-        }
-        /// Upsert encrypted backup (create or update)
-        pub async fn store_backup(
-            &mut self,
-            request: impl tonic::IntoRequest<super::StoreBackupRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::StoreBackupResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.SvrService/StoreBackup",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.SvrService", "StoreBackup"));
-            self.inner.unary(req, path, codec).await
-        }
-        /// Retrieve encrypted backup with PIN proof (rate-limited)
-        pub async fn fetch_backup(
-            &mut self,
-            request: impl tonic::IntoRequest<super::FetchBackupRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::FetchBackupResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.SvrService/FetchBackup",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.SvrService", "FetchBackup"));
-            self.inner.unary(req, path, codec).await
-        }
-        /// Remove encrypted backup
-        pub async fn delete_backup(
-            &mut self,
-            request: impl tonic::IntoRequest<super::DeleteBackupRequest>,
-        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.SvrService/DeleteBackup",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.SvrService", "DeleteBackup"));
-            self.inner.unary(req, path, codec).await
-        }
-        /// Change PIN: re-encrypt backup with new SVR secret, update registration lock
-        pub async fn change_pin_backup(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ChangePinBackupRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ChangePinBackupResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.SvrService/ChangePinBackup",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("chat.v1.SvrService", "ChangePinBackup"));
             self.inner.unary(req, path, codec).await
         }
     }

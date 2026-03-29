@@ -242,6 +242,8 @@ pub mod auth_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Password Management
+*/
         pub async fn change_password(
             &mut self,
             request: impl tonic::IntoRequest<super::ChangePasswordRequest>,
@@ -264,6 +266,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ChangePassword"));
             self.inner.unary(req, path, codec).await
         }
+        /** Account Recovery (recovery codes for password-loss scenario)
+*/
         pub async fn use_recovery_code(
             &mut self,
             request: impl tonic::IntoRequest<super::UseRecoveryCodeRequest>,
@@ -289,6 +293,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "UseRecoveryCode"));
             self.inner.unary(req, path, codec).await
         }
+        /** Regenerate recovery codes (requires authentication + password confirmation)
+*/
         pub async fn regenerate_recovery_codes(
             &mut self,
             request: impl tonic::IntoRequest<super::RegenerateRecoveryCodesRequest>,
@@ -316,6 +322,8 @@ pub mod auth_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Account Management
+*/
         pub async fn delete_account(
             &mut self,
             request: impl tonic::IntoRequest<super::DeleteAccountRequest>,
@@ -341,6 +349,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "DeleteAccount"));
             self.inner.server_streaming(req, path, codec).await
         }
+        /** Session Management
+*/
         pub async fn list_sessions(
             &mut self,
             request: impl tonic::IntoRequest<super::GetActiveSessionsRequest>,
@@ -366,6 +376,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ListSessions"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn revoke_session(
             &mut self,
             request: impl tonic::IntoRequest<super::InvalidateSessionRequest>,
@@ -388,6 +399,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RevokeSession"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn revoke_all_sessions(
             &mut self,
             request: impl tonic::IntoRequest<super::InvalidateAllSessionsRequest>,
@@ -410,6 +422,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RevokeAllSessions"));
             self.inner.unary(req, path, codec).await
         }
+        /** Device Management (multi-device Signal Protocol support)
+*/
         pub async fn list_devices(
             &mut self,
             request: impl tonic::IntoRequest<super::ListDevicesRequest>,
@@ -435,6 +449,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "ListDevices"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn rename_device(
             &mut self,
             request: impl tonic::IntoRequest<super::RenameDeviceRequest>,
@@ -457,6 +472,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RenameDevice"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn revoke_device(
             &mut self,
             request: impl tonic::IntoRequest<super::RevokeDeviceRequest>,
@@ -479,6 +495,35 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RevokeDevice"));
             self.inner.unary(req, path, codec).await
         }
+        /** Identity (for OIDC clients that need to discover their Chatter user_id)
+*/
+        pub async fn get_my_identity(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetMyIdentityRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetMyIdentityResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.AuthService/GetMyIdentity",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.AuthService", "GetMyIdentity"));
+            self.inner.unary(req, path, codec).await
+        }
+        /** Username Availability
+*/
         pub async fn check_username(
             &mut self,
             request: impl tonic::IntoRequest<super::CheckUsernameRequest>,
@@ -504,6 +549,8 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "CheckUsername"));
             self.inner.unary(req, path, codec).await
         }
+        /** Signal Protocol Key Management
+*/
         pub async fn upload_pre_key_bundle(
             &mut self,
             request: impl tonic::IntoRequest<super::UploadPreKeyBundleRequest>,
@@ -526,6 +573,9 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "UploadPreKeyBundle"));
             self.inner.unary(req, path, codec).await
         }
+        /** Sealed Sender Certificate Management (metadata privacy)
+ NOTE: No GetServerTrustRoot - trust root is hardcoded in clients per Signal's security model
+*/
         pub async fn request_sender_certificate(
             &mut self,
             request: impl tonic::IntoRequest<super::RequestSenderCertificateRequest>,
@@ -553,6 +603,7 @@ pub mod auth_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_sender_certificate(
             &mut self,
             request: impl tonic::IntoRequest<super::GetSenderCertificateRequest>,
@@ -578,6 +629,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetSenderCertificate"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_pre_key_bundle(
             &mut self,
             request: impl tonic::IntoRequest<super::GetPreKeyBundleRequest>,
@@ -603,6 +655,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetPreKeyBundle"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn refresh_pre_keys(
             &mut self,
             request: impl tonic::IntoRequest<super::RefreshPreKeysRequest>,
@@ -625,6 +678,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "RefreshPreKeys"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_pre_key_stats(
             &mut self,
             request: impl tonic::IntoRequest<super::GetPreKeyStatsRequest>,
