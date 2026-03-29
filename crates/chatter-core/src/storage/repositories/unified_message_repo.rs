@@ -1186,6 +1186,7 @@ fn collect_messages(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<Message>, Stora
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::message::{EncryptedContent, EncryptedMessageType};
 
     #[test]
     fn test_content_type_discriminant_covers_all_variants() {
@@ -1193,7 +1194,11 @@ mod tests {
         let text = MessageContent::Text("hello".to_string());
         assert_eq!(content_type_discriminant(&text), 0);
 
-        let encrypted = MessageContent::Encrypted(vec![1, 2, 3]);
+        let encrypted = MessageContent::Encrypted(EncryptedContent {
+            ciphertext: vec![1, 2, 3],
+            sender_key_id: None,
+            message_type: EncryptedMessageType::Signal,
+        });
         assert_eq!(content_type_discriminant(&encrypted), 1);
     }
 

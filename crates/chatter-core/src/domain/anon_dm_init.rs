@@ -677,11 +677,11 @@ mod tests {
     }
 
     #[test]
-    fn test_avatar_max_fits_in_u16() {
-        // Compile-time const assertion exists, but verify at runtime too
-        assert!(MAX_AVATAR_SIZE <= u16::MAX as usize,
-            "MAX_AVATAR_SIZE ({}) must fit in u16 wire format (max {})",
-            MAX_AVATAR_SIZE, u16::MAX);
+    fn test_avatar_max_fits_in_u32() {
+        // Wire format uses u32 (4 bytes big-endian) for avatar length
+        assert!(MAX_AVATAR_SIZE <= u32::MAX as usize,
+            "MAX_AVATAR_SIZE ({}) must fit in u32 wire format (max {})",
+            MAX_AVATAR_SIZE, u32::MAX);
     }
 
     #[test]

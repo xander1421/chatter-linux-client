@@ -932,6 +932,7 @@ mod tests {
                 EnvelopeType::PrekeyMessage => 2,  // Needs context
                 EnvelopeType::Message => 3,        // Needs context
                 EnvelopeType::EciesInit => 0,      // Handled by device.rs, not processor
+                EnvelopeType::SenderKey => 4,      // Group sender key message
                 EnvelopeType::Unspecified => 255,  // Should not process
             }
         }

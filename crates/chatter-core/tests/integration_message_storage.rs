@@ -15,7 +15,7 @@ use tempfile::TempDir;
 
 use chatter_core::domain::channel::{Channel, ChannelType};
 use chatter_core::domain::ids::{ChannelId, MessageId, UserId};
-use chatter_core::domain::message::{Message, MessageContent};
+use chatter_core::domain::message::{ConversationType, Message, MessageContent};
 use chatter_core::storage::{ChannelRepository, Database, MessageRepository};
 
 // ============================================================================
@@ -88,7 +88,7 @@ fn test_dm_message_storage_roundtrip() {
     let loaded = message_repo.get(&sent_msg.id).unwrap();
     assert!(loaded.is_some());
     let loaded_msg = loaded.unwrap();
-    assert_eq!(loaded_msg.channel_id, dm_channel.id);
+    assert_eq!(loaded_msg.conversation_id, dm_channel.id);
     assert_eq!(loaded_msg.sender_id, Some(alice));
     assert_eq!(loaded_msg.sent_at, sent_at);
     match &loaded_msg.content {
@@ -191,7 +191,7 @@ fn test_channel_message_storage() {
 
     // Verify storage
     let loaded = message_repo.get(&msg.id).unwrap().unwrap();
-    assert_eq!(loaded.channel_id, channel.id);
+    assert_eq!(loaded.conversation_id, channel.id);
     assert_eq!(loaded.sent_at, sent_at);
     match &loaded.content {
         MessageContent::Text(text) => assert_eq!(text, "Hello channel!"),
@@ -240,7 +240,7 @@ fn test_private_channel_message_storage() {
     message_repo.insert(&msg).unwrap();
 
     let loaded = message_repo.get(&msg.id).unwrap().unwrap();
-    assert_eq!(loaded.channel_id, channel.id);
+    assert_eq!(loaded.conversation_id, channel.id);
 }
 
 // ============================================================================
@@ -271,7 +271,7 @@ fn test_saved_messages_storage() {
 
     // Verify storage
     let loaded = message_repo.get(&msg.id).unwrap().unwrap();
-    assert_eq!(loaded.channel_id, channel_id);
+    assert_eq!(loaded.conversation_id, channel_id);
     assert_eq!(loaded.sender_id, Some(user));
 }
 
@@ -294,15 +294,19 @@ fn test_system_message_user_joined() {
     let now = chrono::Utc::now();
     let msg = Message {
         id: MessageId::new(),
-        channel_id: channel.id,
+        conversation_id: channel.id,
+        conversation_type: ConversationType::Channel,
         sender_id: None, // System messages have no sender
+        device_id: None,
         content: MessageContent::System(SystemMessage::UserJoined(joined_user)),
+        encrypted_content: None,
         thread_id: None,
         reply_to: None,
         attachments: Vec::new(),
         is_pinned: false,
         is_edited: false,
         is_deleted: false,
+        is_read: false,
         sent_at: next_timestamp_ns(),
         created_at: now,
         updated_at: now,
@@ -340,15 +344,19 @@ fn test_system_message_user_left() {
     let now = chrono::Utc::now();
     let msg = Message {
         id: MessageId::new(),
-        channel_id: channel.id,
+        conversation_id: channel.id,
+        conversation_type: ConversationType::Channel,
         sender_id: None,
+        device_id: None,
         content: MessageContent::System(SystemMessage::UserLeft(left_user)),
+        encrypted_content: None,
         thread_id: None,
         reply_to: None,
         attachments: Vec::new(),
         is_pinned: false,
         is_edited: false,
         is_deleted: false,
+        is_read: false,
         sent_at: next_timestamp_ns(),
         created_at: now,
         updated_at: now,
@@ -919,6 +927,6 @@ fn test_signal_style_lookup_across_channels() {
     let found1 = message_repo.get_by_sender_timestamp(&sender, ts1).unwrap().unwrap();
     let found2 = message_repo.get_by_sender_timestamp(&sender, ts2).unwrap().unwrap();
 
-    assert_eq!(found1.channel_id, channel1.id);
-    assert_eq!(found2.channel_id, channel2.id);
+    assert_eq!(found1.conversation_id, channel1.id);
+    assert_eq!(found2.conversation_id, channel2.id);
 }

@@ -273,7 +273,7 @@ async fn t3_direct_message() {
 
     // Verify: User B receives the message
     let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |event| {
-        matches!(event, DomainEvent::MessageReceived { message } if message.channel_id == dm_channel_id)
+        matches!(event, DomainEvent::MessageReceived { message } if message.conversation_id == dm_channel_id)
     })
     .await;
 
@@ -355,7 +355,7 @@ async fn t4_channel_create_and_join() {
 
     // Verify: User B receives channel message
     let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |event| {
-        matches!(event, DomainEvent::MessageReceived { message } if message.channel_id == channel.id)
+        matches!(event, DomainEvent::MessageReceived { message } if message.conversation_id == channel.id)
     })
     .await;
 
@@ -478,7 +478,7 @@ async fn t6_group_chat() {
 
     // Verify: User B receives group message via Sender Keys
     let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |event| {
-        matches!(event, DomainEvent::MessageReceived { message } if message.channel_id == group.id)
+        matches!(event, DomainEvent::MessageReceived { message } if message.conversation_id == group.id)
     })
     .await;
 
@@ -577,7 +577,7 @@ async fn t7_file_transfer() {
 
     // Verify: User B receives the message with attachment
     let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |event| {
-        matches!(event, DomainEvent::MessageReceived { message } if message.channel_id == dm_channel_id)
+        matches!(event, DomainEvent::MessageReceived { message } if message.conversation_id == dm_channel_id)
     })
     .await;
 
@@ -728,7 +728,7 @@ async fn t3_inner() {
     let msg = "T3 test message";
     client_a.send_text(ActiveConversation::Channel(dm_cid.clone()), msg).await.unwrap();
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
-        matches!(e, DomainEvent::MessageReceived { message } if message.channel_id == dm_cid)
+        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == dm_cid)
     }).await;
     assert!(ev.is_some(), "B should receive message");
     if let Some(DomainEvent::MessageReceived { message }) = &ev {
@@ -755,7 +755,7 @@ async fn t4_inner() {
     let msg = "T4 channel message";
     client_a.send_text(ActiveConversation::Channel(ch.id.clone()), msg).await.unwrap();
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
-        matches!(e, DomainEvent::MessageReceived { message } if message.channel_id == ch.id)
+        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == ch.id)
     }).await;
     assert!(ev.is_some(), "B should receive channel message");
     client_a.shutdown().await;
@@ -796,7 +796,7 @@ async fn t6_inner() {
     let msg = "T6 group message";
     client_a.send_text(ActiveConversation::Channel(grp.id.clone()), msg).await.unwrap();
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
-        matches!(e, DomainEvent::MessageReceived { message } if message.channel_id == grp.id)
+        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == grp.id)
     }).await;
     assert!(ev.is_some(), "B should receive group message");
     client_a.shutdown().await;
@@ -836,7 +836,7 @@ async fn t7_inner() {
         None,
     ).await.unwrap();
     let ev = wait_for_event(&mut events_b, EVENT_TIMEOUT, |e| {
-        matches!(e, DomainEvent::MessageReceived { message } if message.channel_id == dm_cid)
+        matches!(e, DomainEvent::MessageReceived { message } if message.conversation_id == dm_cid)
     }).await;
     assert!(ev.is_some(), "B should receive message with attachment");
     client_a.shutdown().await;
