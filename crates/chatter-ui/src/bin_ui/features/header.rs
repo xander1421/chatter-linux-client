@@ -344,7 +344,7 @@ fn update_pinned_ui_from_loaded_messages(
     std::thread::spawn(move || {
         let preview = if let Some(msg_id) = current_msg_id {
             if let ActiveConversation::AnonGroup(group_id) = conversation {
-                // Private group: look up from anon_group_messages
+                // Private group: look up from unified messages repo
                 if let Ok(Some(msg)) = anon_group_service.get_message(&chatter_core::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string())) {
                     msg.as_text()
                         .filter(|t| !t.is_empty())

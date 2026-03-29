@@ -77,8 +77,7 @@ pub fn extract_attachment_ids(pointers: &[AttachmentPointer]) -> Vec<AttachmentI
 
 /// Content type constants for message storage.
 ///
-/// These match the `content_type` column in both `anon_dm_messages`
-/// and `anon_group_messages` tables.
+/// These match the `content_type` column in the unified `messages` table.
 pub const CONTENT_TYPE_EMPTY: i32 = 0;
 pub const CONTENT_TYPE_TEXT: i32 = 1;
 pub const CONTENT_TYPE_ATTACHMENT: i32 = 2;

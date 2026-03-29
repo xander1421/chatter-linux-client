@@ -115,10 +115,9 @@ pub(crate) fn generate_padding(boundary: usize) -> Vec<u8> {
 // Message field construction (shared between DM and Group storage)
 // ============================================================================
 
-/// Pre-computed message fields ready for storage in either anon_dm_messages
-/// or anon_group_messages table.
+/// Pre-computed message fields ready for storage in the unified `messages` table.
 ///
-/// Both tables have identical field structure for message content.
+/// The `conversation_type` discriminant distinguishes anon DM vs group messages.
 pub(crate) struct AnonMessageFields {
     pub content_type: i32,
     pub content_json: String,
