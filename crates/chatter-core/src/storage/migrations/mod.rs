@@ -44,6 +44,7 @@ pub mod v041_peer_verification;
 pub mod v042_anon_message_is_edited;
 pub mod v044_unified_reactions;
 pub mod v045_unified_messages;
+pub mod v046_reply_quote_persistence;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -91,6 +92,7 @@ pub use v041_peer_verification::V041PeerVerification;
 pub use v042_anon_message_is_edited::V042AnonMessageIsEdited;
 pub use v044_unified_reactions::V044UnifiedReactions;
 pub use v045_unified_messages::V045UnifiedMessages;
+pub use v046_reply_quote_persistence::V046ReplyQuotePersistence;
 
 /// Trait for database migrations.
 ///
@@ -253,4 +255,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V042AnonMessageIsEdited)
         .register(V044UnifiedReactions)
         .register(V045UnifiedMessages)
+        .register(V046ReplyQuotePersistence)
 }

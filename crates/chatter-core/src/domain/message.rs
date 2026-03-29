@@ -100,11 +100,11 @@ pub struct Message {
     pub thread_id: Option<MessageId>,
     /// Message being replied to (quote).
     pub reply_to: Option<MessageId>,
-    /// Quote context: author of the quoted message (transient, not persisted).
-    #[serde(default, skip_serializing)]
+    /// Quote context: author of the quoted message.
+    #[serde(default)]
     pub reply_to_author_id: Option<UserId>,
-    /// Quote context: preview text of the quoted message (transient, not persisted).
-    #[serde(default, skip_serializing)]
+    /// Quote context: preview text of the quoted message.
+    #[serde(default)]
     pub reply_to_text: Option<String>,
     pub attachments: Vec<AttachmentId>,
     pub is_pinned: bool,

@@ -54,11 +54,12 @@ impl UnifiedMessageRepository {
                 is_pinned, is_edited, is_deleted, is_read,
                 sent_at, created_at, updated_at, edited_at,
                 reaction_counts_blob, current_user_reactions_blob,
-                mentioned_integrations_blob, targets_ai_bot, delivery_status
+                mentioned_integrations_blob, targets_ai_bot, delivery_status,
+                reply_to_author_id, reply_to_text
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26
             )",
             params![
                 message.id.to_string(),
@@ -85,6 +86,8 @@ impl UnifiedMessageRepository {
                 mentioned_integrations_blob,
                 message.targets_ai_bot as i32,
                 &message.delivery_status,
+                message.reply_to_author_id.map(|id| id.to_string()),
+                message.reply_to_text.as_deref(),
             ],
         )?;
         Ok(())
@@ -110,11 +113,12 @@ impl UnifiedMessageRepository {
                 is_pinned, is_edited, is_deleted, is_read,
                 sent_at, created_at, updated_at, edited_at,
                 reaction_counts_blob, current_user_reactions_blob,
-                mentioned_integrations_blob, targets_ai_bot, delivery_status
+                mentioned_integrations_blob, targets_ai_bot, delivery_status,
+                reply_to_author_id, reply_to_text
             ) VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
                 ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                ?20, ?21, ?22, ?23, ?24
+                ?20, ?21, ?22, ?23, ?24, ?25, ?26
             )",
             params![
                 message.id.to_string(),
@@ -141,6 +145,8 @@ impl UnifiedMessageRepository {
                 mentioned_integrations_blob,
                 message.targets_ai_bot as i32,
                 &message.delivery_status,
+                message.reply_to_author_id.map(|id| id.to_string()),
+                message.reply_to_text.as_deref(),
             ],
         )?;
         Ok(rows > 0)
@@ -263,8 +269,9 @@ impl UnifiedMessageRepository {
                 updated_at = ?11, edited_at = ?12,
                 reaction_counts_blob = ?13, current_user_reactions_blob = ?14,
                 mentioned_integrations_blob = ?15, targets_ai_bot = ?16,
-                delivery_status = ?17
-             WHERE id = ?18",
+                delivery_status = ?17,
+                reply_to_author_id = ?18, reply_to_text = ?19
+             WHERE id = ?20",
             params![
                 content_type_discriminant(&message.content),
                 content_json,
@@ -283,6 +290,8 @@ impl UnifiedMessageRepository {
                 mentioned_integrations_blob,
                 message.targets_ai_bot as i32,
                 &message.delivery_status,
+                message.reply_to_author_id.map(|id| id.to_string()),
+                message.reply_to_text.as_deref(),
                 message.id.to_string(),
             ],
         )?;
@@ -1038,7 +1047,8 @@ const MSG_COLS: &str =
      is_pinned, is_edited, is_deleted, is_read, \
      sent_at, created_at, updated_at, edited_at, \
      reaction_counts_blob, current_user_reactions_blob, \
-     mentioned_integrations_blob, targets_ai_bot, delivery_status";
+     mentioned_integrations_blob, targets_ai_bot, delivery_status, \
+     reply_to_author_id, reply_to_text";
 
 /// Parse an RFC3339 datetime, falling back to now.
 fn parse_datetime(s: &str) -> DateTime<Utc> {
@@ -1067,7 +1077,8 @@ fn content_type_discriminant(content: &MessageContent) -> i32 {
 /// attachments_blob(9), is_pinned(10), is_edited(11), is_deleted(12), is_read(13),
 /// sent_at(14), created_at(15), updated_at(16), edited_at(17),
 /// reaction_counts_blob(18), current_user_reactions_blob(19),
-/// mentioned_integrations_blob(20), targets_ai_bot(21), delivery_status(22)
+/// mentioned_integrations_blob(20), targets_ai_bot(21), delivery_status(22),
+/// reply_to_author_id(23), reply_to_text(24)
 fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, StorageError>> {
     let content_json: String = row.get(5)?;
     let attachments_blob: Vec<u8> = row.get(9)?;
@@ -1136,8 +1147,10 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
             .map(|s| s.parse())
             .transpose()
             .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
-        reply_to_author_id: None,  // Transient field, not persisted in DB
-        reply_to_text: None,       // Transient field, not persisted in DB
+        reply_to_author_id: row
+            .get::<_, Option<String>>(23)?
+            .and_then(|s| s.parse().ok()),
+        reply_to_text: row.get::<_, Option<String>>(24)?,
         attachments,
         is_pinned: row.get::<_, i32>(10)? != 0,
         is_edited: row.get::<_, i32>(11)? != 0,
