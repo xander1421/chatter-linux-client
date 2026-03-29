@@ -128,9 +128,10 @@ impl AnonDmService {
                         );
                     }
 
-                    events.push(DomainEvent::AnonDmMessageDeleted {
-                        conversation_id: *conversation_id,
-                        message_timestamp: delete.target_sent_timestamp,
+                    events.push(DomainEvent::MessageDeleted {
+                        message_id: MessageId::from_timestamp(delete.target_sent_timestamp),
+                        author_id: *sender_id,
+                        channel_id: Some((*conversation_id).into()),
                     });
                     return Ok(events);
                 }
@@ -174,12 +175,16 @@ impl AnonDmService {
                         "[ANON_DM] Stored message"
                     );
 
-                    events.push(DomainEvent::AnonDmMessageReceived {
-                        conversation_id: *conversation_id,
-                        sender_id: *sender_id,
-                        message_id,
+                    // Emit unified MessageReceived event
+                    let message = crate::inbox::handlers::base_anon::build_message_from_content(
+                        message_id.as_str(),
+                        (*conversation_id).into(),
+                        ConversationType::AnonDm,
+                        *sender_id,
+                        &inner_content,
                         sent_at,
-                    });
+                    );
+                    events.push(DomainEvent::MessageReceived { message });
                     
                     // Clear typing indicator when message arrives
                     // This prevents stuck typing indicators after message is sent
@@ -348,10 +353,11 @@ impl AnonDmService {
                             target_timestamp = target_timestamp,
                             "[ANON_DM] Updated message text (edit from peer)"
                         );
-                        events.push(DomainEvent::AnonDmMessageEdited {
-                            conversation_id: *conversation_id,
-                            message_timestamp: target_timestamp,
-                            new_text,
+                        events.push(DomainEvent::MessageEdited {
+                            message_id: MessageId::from_timestamp(target_timestamp),
+                            new_content: MessageContent::Text(new_text),
+                            channel_id: (*conversation_id).into(),
+                            conversation_type: ConversationType::AnonDm,
                         });
                     }
                     Ok(false) => {

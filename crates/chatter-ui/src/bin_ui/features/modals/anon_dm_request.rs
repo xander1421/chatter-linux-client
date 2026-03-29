@@ -256,17 +256,17 @@ pub fn spawn_anon_dm_request_handler(
                         }
                     });
                 }
-                DomainEvent::AnonDmMessageReceived {
-                    conversation_id,
-                    sender_id: _,
-                    message_id: _,
-                    sent_at,
-                } => {
+                DomainEvent::MessageReceived { ref message }
+                    if message.conversation_type == chatter_core::domain::message::ConversationType::AnonDm =>
+                {
                     // UI insertion and sidebar updates are handled by domain_handler::anon_dm.
                     // This handler only sends read receipts when the conversation is active.
+                    let conversation_id = chatter_core::domain::anon_dm::AnonDmId::from_uuid(
+                        *message.conversation_id.as_uuid()
+                    );
                     let channel_id_str = format!("anon_dm:{}", conversation_id);
                     let receipt_conv_id = conversation_id;
-                    let receipt_msg_ts = sent_at;
+                    let receipt_msg_ts = message.sent_at;
                     let receipt_weak = weak_window.clone();
                     let receipt_client = ui_ctx.clone();
 
@@ -461,27 +461,6 @@ pub fn spawn_anon_dm_request_handler(
                         target_sent_timestamp,
                     );
                 }
-                DomainEvent::AnonDmMessageDeleted {
-                    conversation_id,
-                    message_timestamp,
-                } => {
-                    unified_actions::handle_delete(
-                        &weak_window, &chat_state,
-                        EventSource::Channel(conversation_id.into()),
-                        message_timestamp,
-                    );
-                }
-                DomainEvent::AnonDmMessageEdited {
-                    conversation_id,
-                    message_timestamp,
-                    new_text,
-                } => {
-                    unified_actions::handle_edit(
-                        &weak_window, &chat_state,
-                        EventSource::Channel(conversation_id.into()),
-                        message_timestamp, new_text,
-                    );
-                }
                 DomainEvent::MessagesRead {
                     message_timestamps,
                     channel_id,
@@ -543,6 +522,7 @@ pub fn spawn_anon_dm_request_handler(
                     message_id,
                     new_content,
                     channel_id,
+                    ..
                 } => {
                     // Handle message edit for anon DMs
                     let target_sent_timestamp = message_id.as_bytes()

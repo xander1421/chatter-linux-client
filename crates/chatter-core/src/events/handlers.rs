@@ -223,6 +223,7 @@ impl EventHandlers {
                 message_id,
                 new_content,
                 channel_id,
+                ..
             } => {
                 trace!(?channel_id, ?message_id, "Updating message content in state + DB");
                 self.message_state
@@ -588,10 +589,6 @@ impl EventHandlers {
                 trace!(?group_id, ?user_id, ?kicked_by, "AnonGroupMemberKicked: handled by UI thread");
             }
 
-            DomainEvent::AnonGroupMessageReceived { group_id, sender_id, .. } => {
-                // Anon group message is handled by UI thread via event bus subscription.
-                trace!(?group_id, ?sender_id, "AnonGroupMessageReceived: handled by UI thread");
-            }
 
             DomainEvent::AnonGroupBootstrapComplete { group_id } => {
                 // Anon group bootstrap complete is handled by UI thread via event bus subscription.
@@ -619,10 +616,6 @@ impl EventHandlers {
                 trace!(?conversation_id, ?peer_id, "AnonDmRequestAccepted: handled by UI thread");
             }
 
-            DomainEvent::AnonDmMessageReceived { conversation_id, sender_id, .. } => {
-                // Anon DM message is handled by UI thread via event bus subscription.
-                trace!(?conversation_id, ?sender_id, "AnonDmMessageReceived: handled by UI thread");
-            }
 
             DomainEvent::AnonDmInitReceived {
                 conversation_id,
@@ -662,20 +655,6 @@ impl EventHandlers {
                 }
             }
 
-            DomainEvent::AnonDmMessageDeleted { conversation_id, message_timestamp } => {
-                // Anon DM message deletion - handled by UI thread.
-                trace!(?conversation_id, ?message_timestamp, "AnonDmMessageDeleted: handled by UI thread");
-            }
-
-            DomainEvent::AnonDmMessageEdited { conversation_id, message_timestamp, .. } => {
-                // Anon DM message edit - handled by UI thread.
-                trace!(?conversation_id, ?message_timestamp, "AnonDmMessageEdited: handled by UI thread");
-            }
-
-            DomainEvent::AnonGroupMessageEdited { group_id, message_timestamp, .. } => {
-                // Anon group message edit - handled by UI thread.
-                trace!(?group_id, ?message_timestamp, "AnonGroupMessageEdited: handled by UI thread");
-            }
 
             DomainEvent::AnonCallOfferReceived {
                 conversation_id, sender_id, call_room_id, room_name,
@@ -915,7 +894,7 @@ impl std::fmt::Debug for EventHandlers {
 mod tests {
     use super::*;
     use crate::domain::ids::{ChannelId, MessageId, UserId};
-    use crate::domain::message::{Message, MessageContent};
+    use crate::domain::message::{ConversationType, Message, MessageContent};
 
     fn create_test_stores() -> (
         MessageState,
@@ -982,6 +961,7 @@ mod tests {
             message_id,
             new_content: new_content.clone(),
             channel_id,
+            conversation_type: ConversationType::Channel,
         });
 
         let messages = handlers.message_state.get_messages(&channel_id);

@@ -7,7 +7,8 @@
 
 use std::str::FromStr;
 
-use crate::domain::ids::ChannelId;
+use crate::domain::ids::{ChannelId, MessageId};
+use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::domain::UserId;
 use crate::proto::content_v1::{self, typing_message, receipt_message, Content};
 
@@ -50,23 +51,8 @@ pub(super) trait AnonContentService {
         sent_at: u64,
     ) -> Result<String, String>;
 
-    /// Build the domain event for a received message.
-    fn message_received_event(
-        &self,
-        id: Self::Id,
-        sender_id: UserId,
-        message_id: String,
-        inner_content: Content,
-        sent_at: u64,
-    ) -> DomainEvent;
-
-    /// Build the domain event for an edited message.
-    fn message_edited_event(
-        &self,
-        id: Self::Id,
-        message_timestamp: u64,
-        new_text: String,
-    ) -> DomainEvent;
+    /// The conversation type for this handler (AnonDm or AnonGroup).
+    fn conversation_type(&self) -> ConversationType;
 
     /// Label for log messages ("anon DM" or "anon group").
     fn label(&self) -> &'static str;
@@ -245,7 +231,12 @@ pub(super) fn handle_edit<S: AnonContentService>(
                 target_timestamp,
                 "Updated message text (edit from peer)"
             );
-            ctx.emit(svc.message_edited_event(id, target_timestamp, new_text));
+            ctx.emit(DomainEvent::MessageEdited {
+                message_id: MessageId::from_timestamp(target_timestamp),
+                new_content: MessageContent::Text(new_text),
+                channel_id: id.into(),
+                conversation_type: svc.conversation_type(),
+            });
         }
         Ok(false) => {
             tracing::debug!(
@@ -280,17 +271,81 @@ pub(super) fn handle_data_message<S: AnonContentService>(
     let (content_type, content_json) = content_to_storage(inner_content);
     let sent_at = inner_content.timestamp;
 
-    let message_id = svc.store_message(&id, &sender_id, content_type, &content_json, sent_at)
+    let message_id_str = svc.store_message(&id, &sender_id, content_type, &content_json, sent_at)
         .map_err(|e| HandlerError::parse_failed(format!("storage error: {}", e)))?;
 
     tracing::debug!(
         "Received and stored {} message {} from {} in {}",
-        svc.label(), message_id, sender_id, id
+        svc.label(), message_id_str, sender_id, id
     );
 
-    ctx.emit(svc.message_received_event(id, sender_id, message_id, inner_content.clone(), sent_at));
+    let message = build_message_from_content(
+        &message_id_str,
+        id.into(),
+        svc.conversation_type(),
+        sender_id,
+        inner_content,
+        sent_at,
+    );
+    ctx.emit(DomainEvent::MessageReceived { message });
 
     Ok(HandlerOutcome::Processed)
+}
+
+/// Build a unified `Message` from anonymous content handler data.
+pub fn build_message_from_content(
+    message_id_str: &str,
+    conversation_id: ChannelId,
+    conversation_type: ConversationType,
+    sender_id: UserId,
+    inner_content: &Content,
+    sent_at: u64,
+) -> Message {
+    let msg_id = message_id_str
+        .parse::<uuid::Uuid>()
+        .map(MessageId::from_uuid)
+        .unwrap_or_else(|_| MessageId::new());
+
+    let content = content_to_message_content(inner_content);
+    let created_at = crate::util::time::TimestampNanos::from_nanos(sent_at)
+        .to_datetime()
+        .unwrap_or_else(chrono::Utc::now);
+
+    Message {
+        id: msg_id,
+        conversation_id,
+        conversation_type,
+        sender_id: Some(sender_id),
+        device_id: None,
+        content,
+        encrypted_content: None,
+        thread_id: None,
+        reply_to: None,
+        attachments: Vec::new(),
+        is_pinned: false,
+        is_edited: false,
+        is_deleted: false,
+        is_read: false,
+        sent_at,
+        created_at,
+        updated_at: created_at,
+        edited_at: None,
+        reaction_counts: Vec::new(),
+        current_user_reactions: Vec::new(),
+        mentioned_integrations: Vec::new(),
+        targets_ai_bot: false,
+        delivery_status: String::new(),
+    }
+}
+
+/// Convert Content proto to MessageContent for the unified Message struct.
+pub fn content_to_message_content(content: &Content) -> MessageContent {
+    match &content.content {
+        Some(content_v1::content::Content::DataMessage(data_msg)) => {
+            MessageContent::Text(data_msg.body.clone())
+        }
+        _ => MessageContent::Text(String::new()),
+    }
 }
 
 /// Convert Content proto to storage format (content_type, content_json).

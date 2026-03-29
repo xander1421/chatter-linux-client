@@ -13,6 +13,7 @@ use prost::Message as ProstMessage;
 
 use crate::crypto::profile_crypto::{decrypt_display_name, decrypt_avatar};
 use crate::domain::anon_dm::AnonDmId;
+use crate::domain::message::ConversationType;
 use crate::domain::UserId;
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 use crate::domain::ids::ChannelId;
@@ -66,22 +67,7 @@ impl AnonContentService for DmContentBridge<'_> {
             .map_err(|e| e.to_string())
     }
 
-    fn message_received_event(&self, id: AnonDmId, sender_id: UserId, message_id: String, _inner_content: Content, sent_at: u64) -> DomainEvent {
-        DomainEvent::AnonDmMessageReceived {
-            conversation_id: id,
-            sender_id,
-            message_id: crate::domain::anon_dm::AnonDmMessageId::from_string(message_id),
-            sent_at,
-        }
-    }
-
-    fn message_edited_event(&self, id: AnonDmId, message_timestamp: u64, new_text: String) -> DomainEvent {
-        DomainEvent::AnonDmMessageEdited {
-            conversation_id: id,
-            message_timestamp,
-            new_text,
-        }
-    }
+    fn conversation_type(&self) -> ConversationType { ConversationType::AnonDm }
 
     fn label(&self) -> &'static str { "anon DM" }
 }

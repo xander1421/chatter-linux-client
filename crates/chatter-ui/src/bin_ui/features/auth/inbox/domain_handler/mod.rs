@@ -126,8 +126,19 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Message Events (handled by EventHandlers state store)
         // =========================================================================
-        DomainEvent::MessageReceived { message } => {
-            messaging::handle_message_received(window, ui_ctx, message);
+        DomainEvent::MessageReceived { ref message } => {
+            use chatter_core::domain::message::ConversationType;
+            match message.conversation_type {
+                ConversationType::AnonDm => {
+                    anon_dm::handle_message_received_unified(window, ui_ctx, message.clone());
+                }
+                ConversationType::AnonGroup => {
+                    anon_group::handle_message_received_unified(window, ui_ctx, message.clone());
+                }
+                _ => {
+                    messaging::handle_message_received(window, ui_ctx, message.clone());
+                }
+            }
         }
 
         // Receipt events: update checkmarks (✓✓) in the Slint message model
@@ -211,10 +222,6 @@ pub async fn handle_domain_event(
             anon_group::handle_member_kicked(group_id, user_id, kicked_by);
         }
 
-        DomainEvent::AnonGroupMessageReceived { group_id, sender_id, message_id, .. } => {
-            anon_group::handle_message_received(window, ui_ctx, group_id, sender_id, message_id);
-        }
-
         DomainEvent::AnonGroupBootstrapComplete { group_id } => {
             anon_group::handle_bootstrap_complete(group_id);
         }
@@ -238,23 +245,8 @@ pub async fn handle_domain_event(
             anon_dm::handle_request_accepted(window, ui_ctx, conversation_id, peer_id);
         }
 
-        DomainEvent::AnonDmMessageReceived { conversation_id, sender_id, message_id, sent_at } => {
-            anon_dm::handle_message_received(window, ui_ctx, conversation_id, sender_id, message_id, sent_at);
-        }
-
         DomainEvent::AnonDmInitReceived { .. } => {
             anon_dm::handle_init_received(window, ui_ctx);
-        }
-
-        DomainEvent::AnonDmMessageDeleted { .. } => {
-            // TODO: Anon DM delete real-time UI update
-        }
-
-        DomainEvent::AnonDmMessageEdited { message_timestamp, new_text, .. } => {
-            messaging::handle_message_edit_by_timestamp(window, message_timestamp, &new_text);
-        }
-        DomainEvent::AnonGroupMessageEdited { message_timestamp, new_text, .. } => {
-            messaging::handle_message_edit_by_timestamp(window, message_timestamp, &new_text);
         }
 
         // =========================================================================

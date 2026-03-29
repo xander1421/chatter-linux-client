@@ -7,6 +7,7 @@ use slint::{Model, Weak};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::domain::anon_group::AnonGroupId;
+use chatter_core::domain::message::Message;
 use crate::MainWindow;
 
 /// Handle anonymous group invite received.
@@ -101,8 +102,7 @@ pub(super) fn handle_message_received(
         .and_then(|m| m.avatar.clone());
 
     // Resolve attachments
-    let attachment_ids = msg.attachment_ids();
-    let resolved_attachments: Vec<chatter_core::domain::Attachment> = attachment_ids
+    let resolved_attachments: Vec<chatter_core::domain::Attachment> = msg.attachments
         .iter()
         .filter_map(|att_id| ui_ctx.attachments().get(att_id).ok().flatten())
         .collect();
@@ -131,6 +131,87 @@ pub(super) fn handle_message_received(
     };
     let timestamp_str = super::super::utils::format_timestamp(msg.sent_at);
 
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(window) = weak.upgrade() else { return };
+
+        // Push to message model if this group is active
+        let selected_group = window.get_selected_private_group_id().to_string();
+        if selected_group == group_id_str {
+            let messages = window.get_messages();
+            if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
+                let msg_item = display_data.to_slint_with_user(&current_user_id);
+                model.push(msg_item);
+            }
+
+            // Auto-scroll if at bottom
+            if window.get_is_at_bottom() {
+                window.set_message_scroll_position(-99999.0);
+                window.set_is_at_bottom(true);
+            }
+        }
+
+        // Always update sidebar preview + unread
+        let conversation = chatter_core::state::ActiveConversation::AnonGroup(group_id);
+        crate::bin_ui::features::sidebar::update_sidebar_preview(
+            &window, conversation, &preview, &timestamp_str, true,
+        );
+    });
+}
+
+/// Handle anonymous group message received via unified MessageReceived event.
+///
+/// Uses the Message struct directly from the event instead of fetching from
+/// the anon group repo. The message carries all needed data via conversation_type.
+pub(super) fn handle_message_received_unified(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    message: Message,
+) {
+    let group_id = AnonGroupId::from_uuid(*message.conversation_id.as_uuid());
+    let sender_id = message.sender_id.unwrap_or_else(UserId::new);
+
+    // Resolve sender display name from group member list
+    let sender_name = super::super::anon_group_handlers::get_anon_member_name(ui_ctx, &group_id, &sender_id);
+    let group_id_str = group_id.to_string();
+
+    // Get sender avatar from member profile
+    let sender_avatar = ui_ctx.anon_groups()
+        .get_member(&group_id, &sender_id)
+        .ok()
+        .flatten()
+        .and_then(|m| m.avatar.clone());
+
+    // Resolve attachments from stored IDs
+    let resolved_attachments: Vec<chatter_core::domain::Attachment> = message.attachments
+        .iter()
+        .filter_map(|att_id| ui_ctx.attachments().get(att_id).ok().flatten())
+        .collect();
+
+    let mut display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
+        &message,
+        &sender_name,
+        sender_avatar,
+        &resolved_attachments,
+    );
+    display_data.decode_attachment_thumbnails();
+
+    let current_user_id = ui_ctx.sessions().current_user_id()
+        .map(|uid| uid.to_string())
+        .unwrap_or_default();
+
+    // Build sidebar preview from the message
+    let msg_text = message.as_text().unwrap_or_default();
+    let preview = if msg_text.is_empty() {
+        "[Message]".to_string()
+    } else if msg_text.chars().count() > 50 {
+        let truncated: String = msg_text.chars().take(47).collect();
+        format!("{}...", truncated)
+    } else {
+        msg_text.to_string()
+    };
+    let timestamp_str = super::super::utils::format_timestamp(message.sent_at);
+
+    let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(window) = weak.upgrade() else { return };
 

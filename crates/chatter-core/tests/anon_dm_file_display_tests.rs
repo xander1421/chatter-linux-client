@@ -8,19 +8,35 @@
 //! 2. `while let Ok(event) = rx.recv().await` silently exited on broadcast lag
 //!
 //! These tests validate both fixes at the event-bus level.
+//!
+//! Updated for GRA-322 step 3/5: uses unified MessageReceived events with
+//! conversation_type instead of the old AnonDmMessageReceived variant.
 
-use chatter_core::domain::anon_dm::{AnonDmId, AnonDmMessageId};
-use chatter_core::domain::ids::UserId;
+use chatter_core::domain::anon_dm::AnonDmId;
+use chatter_core::domain::ids::{ChannelId, MessageId, UserId};
+use chatter_core::domain::message::{ConversationType, Message, MessageContent};
 use chatter_core::events::EventBus;
 use chatter_core::inbox::handlers::DomainEvent;
 
 use tokio::sync::broadcast;
 
+/// Helper to create a unified Message for anon DM tests.
+fn make_anon_dm_message(conversation_id: AnonDmId, sender_id: UserId, sent_at: u64) -> Message {
+    let mut msg = Message::new_text(
+        conversation_id.into(),
+        Some(sender_id),
+        String::new(),
+        sent_at,
+    );
+    msg.conversation_type = ConversationType::AnonDm;
+    msg
+}
+
 // ============================================================================
 // Event Bus Unification — Sender Events Reach UI Subscribers
 // ============================================================================
 
-/// Verify that AnonDmMessageReceived events emitted on a cloned EventBus
+/// Verify that MessageReceived events (AnonDm) emitted on a cloned EventBus
 /// are received by subscribers on the original bus.
 ///
 /// This reproduces the root cause of GRA-216: CoreServices had its own
@@ -41,34 +57,29 @@ async fn test_anon_dm_message_event_reaches_ui_via_cloned_bus() {
     // AnonDmService emits on the infra bus (where the service was constructed)
     let conversation_id = AnonDmId::new();
     let sender_id = UserId::new();
-    let message_id = AnonDmMessageId::new();
     let sent_at = 1_711_612_800_000_000_000_u64; // nanoseconds
 
-    let receivers = infra_bus.emit_domain(DomainEvent::AnonDmMessageReceived {
-        conversation_id,
-        sender_id,
-        message_id: message_id.clone(),
-        sent_at,
+    let message = make_anon_dm_message(conversation_id, sender_id, sent_at);
+    let message_id = message.id;
+
+    let receivers = infra_bus.emit_domain(DomainEvent::MessageReceived {
+        message: message.clone(),
     });
 
     assert!(receivers >= 1, "At least one subscriber should receive the event");
 
     // UI handler receives the event — message displays without navigation
-    let event = ui_rx.try_recv().expect("UI subscriber must receive AnonDmMessageReceived");
+    let event = ui_rx.try_recv().expect("UI subscriber must receive MessageReceived for AnonDm");
     match event {
-        DomainEvent::AnonDmMessageReceived {
-            conversation_id: cid,
-            sender_id: sid,
-            message_id: mid,
-            sent_at: ts,
-        } => {
-            assert_eq!(cid, conversation_id);
-            assert_eq!(sid, sender_id);
-            assert_eq!(mid, message_id);
-            assert_eq!(ts, sent_at);
+        DomainEvent::MessageReceived { message: msg } => {
+            assert_eq!(msg.conversation_id, ChannelId::from(conversation_id));
+            assert_eq!(msg.sender_id, Some(sender_id));
+            assert_eq!(msg.id, message_id);
+            assert_eq!(msg.sent_at, sent_at);
+            assert_eq!(msg.conversation_type, ConversationType::AnonDm);
         }
         other => panic!(
-            "Expected AnonDmMessageReceived, got {:?}",
+            "Expected MessageReceived, got {:?}",
             std::mem::discriminant(&other)
         ),
     }
@@ -90,12 +101,8 @@ async fn test_separate_event_bus_does_not_receive_events() {
     let mut ui_rx = bus_b.subscribe_domain();
 
     // Service emits on bus_a
-    bus_a.emit_domain(DomainEvent::AnonDmMessageReceived {
-        conversation_id: AnonDmId::new(),
-        sender_id: UserId::new(),
-        message_id: AnonDmMessageId::new(),
-        sent_at: 0,
-    });
+    let message = make_anon_dm_message(AnonDmId::new(), UserId::new(), 0);
+    bus_a.emit_domain(DomainEvent::MessageReceived { message });
 
     // UI must NOT receive the event — buses are disconnected
     assert!(
@@ -119,25 +126,21 @@ async fn test_handler_survives_broadcast_lag_and_receives_next_event() {
     let (tx, _) = broadcast::channel::<DomainEvent>(2);
     let mut rx = tx.subscribe();
 
-    let target_user = UserId::new();
     let target_conv = AnonDmId::new();
-    let target_msg = AnonDmMessageId::new();
+    let target_user = UserId::new();
 
     // Fill the buffer beyond capacity to cause lag
     for _ in 0..5 {
         let _ = tx.send(DomainEvent::TypingStarted {
             user_id: UserId::new(),
-            channel_id: chatter_core::domain::ids::ChannelId::new(),
+            channel_id: ChannelId::new(),
         });
     }
 
     // Now send the event we actually care about (the file message)
-    let _ = tx.send(DomainEvent::AnonDmMessageReceived {
-        conversation_id: target_conv,
-        sender_id: target_user,
-        message_id: target_msg.clone(),
-        sent_at: 42,
-    });
+    let message = make_anon_dm_message(target_conv, target_user, 42);
+    let target_msg_id = message.id;
+    let _ = tx.send(DomainEvent::MessageReceived { message });
 
     // Simulate the FIXED handler pattern: match on Lagged and continue
     let mut received_target = false;
@@ -145,8 +148,8 @@ async fn test_handler_survives_broadcast_lag_and_receives_next_event() {
 
     for _ in 0..10 {
         match rx.try_recv() {
-            Ok(DomainEvent::AnonDmMessageReceived { message_id, .. }) => {
-                if message_id == target_msg {
+            Ok(DomainEvent::MessageReceived { message }) => {
+                if message.id == target_msg_id {
                     received_target = true;
                     break;
                 }
@@ -167,7 +170,7 @@ async fn test_handler_survives_broadcast_lag_and_receives_next_event() {
     assert!(lag_count > 0, "Should have experienced at least one lag event");
     assert!(
         received_target,
-        "Handler must receive AnonDmMessageReceived after recovering from lag"
+        "Handler must receive MessageReceived after recovering from lag"
     );
 }
 
@@ -183,18 +186,13 @@ async fn test_while_let_ok_pattern_exits_on_lag() {
     for _ in 0..5 {
         let _ = tx.send(DomainEvent::TypingStarted {
             user_id: UserId::new(),
-            channel_id: chatter_core::domain::ids::ChannelId::new(),
+            channel_id: ChannelId::new(),
         });
     }
 
     // Send target event after overflow
-    let target_msg = AnonDmMessageId::new();
-    let _ = tx.send(DomainEvent::AnonDmMessageReceived {
-        conversation_id: AnonDmId::new(),
-        sender_id: UserId::new(),
-        message_id: target_msg.clone(),
-        sent_at: 0,
-    });
+    let message = make_anon_dm_message(AnonDmId::new(), UserId::new(), 0);
+    let _ = tx.send(DomainEvent::MessageReceived { message });
 
     // Simulate the BROKEN pattern: while let Ok(event)
     // The very first recv() returns Err(Lagged), so the loop body never executes
@@ -218,8 +216,8 @@ async fn test_while_let_ok_pattern_exits_on_lag() {
 /// picks it up, and the message is displayable without waiting for server echo.
 ///
 /// This tests the contract between AnonDmService.send_with_attachments()
-/// and the UI handler: the event fires with message_id and sent_at so the
-/// UI can fetch the message from local DB and display it.
+/// and the UI handler: the event fires with message data so the UI can
+/// display it without fetching from DB.
 #[tokio::test]
 async fn test_optimistic_file_message_event_is_immediately_receivable() {
     let bus = EventBus::new();
@@ -230,18 +228,15 @@ async fn test_optimistic_file_message_event_is_immediately_receivable() {
     // Simulate AnonDmService: persist to DB, then emit event
     let conversation_id = AnonDmId::new();
     let our_user_id = UserId::new();
-    let message_id = AnonDmMessageId::new();
     let sent_at = 1_711_612_800_123_456_789_u64;
+
+    let message = make_anon_dm_message(conversation_id, our_user_id, sent_at);
+    let message_id = message.id;
 
     // Step 1: DB insert would happen here (not tested, DB layer)
 
     // Step 2: Emit domain event (this is what the service does)
-    bus.emit_domain(DomainEvent::AnonDmMessageReceived {
-        conversation_id,
-        sender_id: our_user_id,
-        message_id: message_id.clone(),
-        sent_at,
-    });
+    bus.emit_domain(DomainEvent::MessageReceived { message });
 
     // Step 3 (network send) would happen AFTER this, possibly with
     // timing decorrelation delay for attachments
@@ -253,18 +248,14 @@ async fn test_optimistic_file_message_event_is_immediately_receivable() {
     );
 
     match event {
-        DomainEvent::AnonDmMessageReceived {
-            conversation_id: cid,
-            sender_id: sid,
-            message_id: mid,
-            sent_at: ts,
-        } => {
-            assert_eq!(cid, conversation_id, "Conversation ID must match");
-            assert_eq!(sid, our_user_id, "Sender should be our own user (optimistic)");
-            assert_eq!(mid, message_id, "Message ID for DB lookup must match");
-            assert_eq!(ts, sent_at, "Timestamp must match for ordering");
+        DomainEvent::MessageReceived { message: msg } => {
+            assert_eq!(msg.conversation_id, ChannelId::from(conversation_id), "Conversation ID must match");
+            assert_eq!(msg.sender_id, Some(our_user_id), "Sender should be our own user (optimistic)");
+            assert_eq!(msg.id, message_id, "Message ID must match");
+            assert_eq!(msg.sent_at, sent_at, "Timestamp must match for ordering");
+            assert_eq!(msg.conversation_type, ConversationType::AnonDm);
         }
-        _ => panic!("Expected AnonDmMessageReceived"),
+        _ => panic!("Expected MessageReceived"),
     }
 }
 
@@ -284,22 +275,22 @@ async fn test_rapid_file_sends_all_produce_events() {
 
     // Rapid-fire 10 file messages
     for i in 0..10u64 {
-        let msg_id = AnonDmMessageId::new();
-        sent_message_ids.push(msg_id.clone());
-
-        bus.emit_domain(DomainEvent::AnonDmMessageReceived {
+        let message = make_anon_dm_message(
             conversation_id,
             sender_id,
-            message_id: msg_id,
-            sent_at: 1_711_612_800_000_000_000 + i * 1_000_000,
-        });
+            1_711_612_800_000_000_000 + i * 1_000_000,
+        );
+        sent_message_ids.push(message.id);
+        bus.emit_domain(DomainEvent::MessageReceived { message });
     }
 
     // UI handler should receive all 10
     let mut received_ids = Vec::new();
     while let Ok(event) = ui_rx.try_recv() {
-        if let DomainEvent::AnonDmMessageReceived { message_id, .. } = event {
-            received_ids.push(message_id);
+        if let DomainEvent::MessageReceived { message } = event {
+            if message.conversation_type == ConversationType::AnonDm {
+                received_ids.push(message.id);
+            }
         }
     }
 
@@ -329,18 +320,18 @@ async fn test_file_events_from_multiple_conversations_all_delivered() {
     let conv3 = AnonDmId::new();
 
     for conv in [conv1, conv2, conv3] {
-        bus.emit_domain(DomainEvent::AnonDmMessageReceived {
-            conversation_id: conv,
-            sender_id: sender,
-            message_id: AnonDmMessageId::new(),
-            sent_at: 0,
-        });
+        let message = make_anon_dm_message(conv, sender, 0);
+        bus.emit_domain(DomainEvent::MessageReceived { message });
     }
 
     let mut received_convs = Vec::new();
     while let Ok(event) = ui_rx.try_recv() {
-        if let DomainEvent::AnonDmMessageReceived { conversation_id, .. } = event {
-            received_convs.push(conversation_id);
+        if let DomainEvent::MessageReceived { message } = event {
+            if message.conversation_type == ConversationType::AnonDm {
+                received_convs.push(
+                    AnonDmId::from_uuid(*message.conversation_id.as_uuid())
+                );
+            }
         }
     }
 

@@ -19,7 +19,7 @@
 
 pub mod anon_dm;
 pub mod anon_group;
-mod base_anon;
+pub mod base_anon;
 pub mod attachment;
 pub mod chat;
 pub mod key_exchange;
@@ -38,11 +38,11 @@ use std::fmt;
 use tokio::sync::broadcast;
 
 use crate::domain::{Attachment, ChannelId, Message, MessageContent, MessageId, UserId};
-use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
-use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
+use crate::domain::message::ConversationType;
+use crate::domain::anon_dm::AnonDmId;
+use crate::domain::anon_group::AnonGroupId;
 use crate::inbox::events::FriendRequestInfo;
 use crate::inbox::processor::{ContentType, ProcessedMessage};
-use crate::proto::content_v1::Content;
 
 use std::sync::Arc;
 
@@ -249,8 +249,10 @@ pub enum DomainEvent {
         message_id: MessageId,
         /// New content after edit.
         new_content: MessageContent,
-        /// Channel containing the message.
+        /// Conversation containing the message.
         channel_id: ChannelId,
+        /// Type of conversation (Channel, AnonDm, AnonGroup, etc.).
+        conversation_type: ConversationType,
     },
     /// Message was deleted (delete for everyone).
     MessageDeleted {
@@ -529,19 +531,6 @@ pub enum DomainEvent {
         kicked_by: UserId,
     },
 
-    /// Message received in an anonymous group.
-    AnonGroupMessageReceived {
-        /// The group.
-        group_id: AnonGroupId,
-        /// Sender of the message.
-        sender_id: UserId,
-        /// The stored message ID.
-        message_id: AnonGroupMessageId,
-        /// The inner message content.
-        inner_content: Content,
-        /// The sender's timestamp (nanoseconds) for ordering.
-        sent_at: u64,
-    },
 
     /// Anonymous group bootstrap complete (all members confirmed).
     AnonGroupBootstrapComplete {
@@ -595,20 +584,6 @@ pub enum DomainEvent {
         peer_avatar: Option<Vec<u8>>,
     },
 
-    /// Message received in an anonymous DM conversation.
-    ///
-    /// The message is already stored in the DB by the time this fires.
-    /// Consumers should fetch it via `anon_dms().get_message(&message_id)`.
-    AnonDmMessageReceived {
-        /// The conversation ID.
-        conversation_id: AnonDmId,
-        /// Sender of the message.
-        sender_id: UserId,
-        /// The stored message ID (fetch from DB for display).
-        message_id: AnonDmMessageId,
-        /// The sender's timestamp (nanoseconds) for ordering.
-        sent_at: u64,
-    },
 
     /// User presence changed (online/away/dnd/offline).
     UserPresenceChanged {
@@ -662,33 +637,6 @@ pub enum DomainEvent {
         server_timestamp: u64,
     },
 
-    /// Message deleted in an anonymous DM conversation.
-    AnonDmMessageDeleted {
-        /// The conversation ID.
-        conversation_id: AnonDmId,
-        /// The message timestamp (used as ID in Signal protocol).
-        message_timestamp: u64,
-    },
-
-    /// Message edited in an anonymous DM conversation.
-    AnonDmMessageEdited {
-        /// The conversation ID.
-        conversation_id: AnonDmId,
-        /// The message timestamp (used as ID in Signal protocol).
-        message_timestamp: u64,
-        /// The new message text.
-        new_text: String,
-    },
-
-    /// Message edited in an anonymous group.
-    AnonGroupMessageEdited {
-        /// The group ID.
-        group_id: AnonGroupId,
-        /// The message timestamp (used as ID in Signal protocol).
-        message_timestamp: u64,
-        /// The new message text.
-        new_text: String,
-    },
 
     /// Anonymous call offer received.
     AnonCallOfferReceived {
@@ -981,17 +929,12 @@ impl DomainEvent {
             DomainEvent::AnonGroupMemberJoined { .. } => None,
             DomainEvent::AnonGroupMemberLeft { .. } => None,
             DomainEvent::AnonGroupMemberKicked { .. } => None,
-            DomainEvent::AnonGroupMessageReceived { .. } => None,
             DomainEvent::AnonGroupBootstrapComplete { .. } => None,
             DomainEvent::AnonGroupMemberListReceived { .. } => None,
             // Anon DM events don't have ChannelId (they use AnonDmId)
             DomainEvent::AnonDmRequestReceived { .. } => None,
             DomainEvent::AnonDmRequestAccepted { .. } => None,
-            DomainEvent::AnonDmMessageReceived { .. } => None,
             DomainEvent::AnonDmInitReceived { .. } => None,
-            DomainEvent::AnonDmMessageDeleted { .. } => None,
-            DomainEvent::AnonDmMessageEdited { .. } => None,
-            DomainEvent::AnonGroupMessageEdited { .. } => None,
             // Anonymous call events don't have ChannelId
             DomainEvent::AnonCallOfferReceived { .. } => None,
             DomainEvent::AnonCallAnswerReceived { .. } => None,

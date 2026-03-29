@@ -746,6 +746,7 @@ impl InboxEventProcessor {
                         message_id: msg.id,
                         new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
                         channel_id: msg.conversation_id,
+                        conversation_type: msg.conversation_type,
                     });
                 }
                 false
@@ -757,6 +758,7 @@ impl InboxEventProcessor {
                         message_id: msg.id,
                         new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
                         channel_id: *channel_id,
+                        conversation_type: crate::domain::message::ConversationType::Channel,
                     });
                 }
                 false
@@ -1268,14 +1270,16 @@ impl InboxEventProcessor {
                         match store_result {
                             Ok(msg_id) => {
                                 tracing::debug!(group_id = %anon_group_id, message_id = %msg_id, "Stored anon group message");
-                                // Emit domain event so UI updates in real-time
-                                self.event_bus.emit_domain(DomainEvent::AnonGroupMessageReceived {
-                                    group_id: anon_group_id,
-                                    sender_id: peer_id,
-                                    message_id: msg_id,
-                                    inner_content: inner_content.clone(),
+                                // Emit unified MessageReceived event
+                                let message = crate::inbox::handlers::base_anon::build_message_from_content(
+                                    msg_id.as_str(),
+                                    anon_group_id.into(),
+                                    crate::domain::message::ConversationType::AnonGroup,
+                                    peer_id,
+                                    &inner_content,
                                     sent_at,
-                                });
+                                );
+                                self.event_bus.emit_domain(DomainEvent::MessageReceived { message });
                             }
                             Err(e) => tracing::error!(group_id = %anon_group_id, error = %e, "Failed to store anon group message"),
                         }
@@ -1343,10 +1347,11 @@ impl InboxEventProcessor {
                 if let Ok(true) = self.anon_group_service.update_message_text_by_sender(
                     &anon_group_id, &peer_id, edit.target_sent_timestamp, &new_text,
                 ) {
-                    self.event_bus.emit_domain(DomainEvent::AnonGroupMessageEdited {
-                        group_id: anon_group_id,
-                        message_timestamp: edit.target_sent_timestamp,
-                        new_text,
+                    self.event_bus.emit_domain(DomainEvent::MessageEdited {
+                        message_id: crate::domain::MessageId::from_timestamp(edit.target_sent_timestamp),
+                        new_content: crate::domain::message::MessageContent::Text(new_text),
+                        channel_id: anon_group_id.into(),
+                        conversation_type: crate::domain::message::ConversationType::AnonGroup,
                     });
                 }
             }

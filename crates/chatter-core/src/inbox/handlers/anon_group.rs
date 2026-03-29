@@ -14,6 +14,7 @@ use prost::Message as ProstMessage;
 
 use crate::domain::anon_group::AnonGroupId;
 use crate::domain::ids::ChannelId;
+use crate::domain::message::ConversationType;
 use crate::domain::UserId;
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 use crate::proto::content_v1::{self, Content};
@@ -67,23 +68,7 @@ impl AnonContentService for GroupContentBridge<'_> {
             .map_err(|e| e.to_string())
     }
 
-    fn message_received_event(&self, id: AnonGroupId, sender_id: UserId, message_id: String, inner_content: Content, sent_at: u64) -> DomainEvent {
-        DomainEvent::AnonGroupMessageReceived {
-            group_id: id,
-            sender_id,
-            message_id: crate::domain::anon_group::AnonGroupMessageId::from_string(message_id),
-            inner_content,
-            sent_at,
-        }
-    }
-
-    fn message_edited_event(&self, id: AnonGroupId, message_timestamp: u64, new_text: String) -> DomainEvent {
-        DomainEvent::AnonGroupMessageEdited {
-            group_id: id,
-            message_timestamp,
-            new_text,
-        }
-    }
+    fn conversation_type(&self) -> ConversationType { ConversationType::AnonGroup }
 
     fn label(&self) -> &'static str { "anon group" }
 }
