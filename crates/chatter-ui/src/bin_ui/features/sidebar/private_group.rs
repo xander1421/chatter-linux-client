@@ -139,12 +139,20 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 })
                 .collect();
 
-            let display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
+            let mut display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
                 msg,
                 &sender_name,
                 sender_avatar,
                 &resolved_attachments,
             );
+
+            // Resolve reply-to sender name if this is a reply/quote
+            if display_data.is_reply {
+                if let Some(ref author_id) = msg.reply_to_author_id {
+                    display_data.reply_to_sender_name = user_service.get_display_name(author_id);
+                }
+            }
+
             display_messages.push(display_data);
         }
         
@@ -367,12 +375,20 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                     })
                     .collect();
 
-                let display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
+                let mut display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
                     msg,
                     &sender_name,
                     sender_avatar,
                     &resolved_attachments,
                 );
+
+                // Resolve reply-to sender name if this is a reply/quote
+                if display_data.is_reply {
+                    if let Some(ref author_id) = msg.reply_to_author_id {
+                        display_data.reply_to_sender_name = user_service.get_display_name(author_id);
+                    }
+                }
+
                 display_messages.push(display_data);
             }
 

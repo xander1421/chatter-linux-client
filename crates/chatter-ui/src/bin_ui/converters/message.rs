@@ -427,9 +427,9 @@ pub fn anon_dm_message_to_display_data(
         reply_count: 0,
         reply_count_text: String::new(),
         is_thread_reply: false,
-        is_reply: false,
-        reply_to_sender_name: String::new(),
-        reply_to_preview: String::new(),
+        is_reply: msg.reply_to.is_some(),
+        reply_to_sender_name: String::new(),  // Resolved by caller after conversion
+        reply_to_preview: msg.reply_to_text.clone().unwrap_or_default(),
         delivery_status: msg.delivery_status.clone(),
         sender_avatar_bytes: sender_avatar,
         sender_avatar_decoded: None,

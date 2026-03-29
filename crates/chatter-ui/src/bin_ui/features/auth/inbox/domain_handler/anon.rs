@@ -76,6 +76,14 @@ fn handle_dm_message_unified(
         sender_avatar,
         &resolved_attachments,
     );
+
+    // Resolve reply-to sender name if this is a reply/quote
+    if display_data.is_reply {
+        if let Some(ref author_id) = message.reply_to_author_id {
+            display_data.reply_to_sender_name = ui_ctx.users().get_display_name(author_id);
+        }
+    }
+
     display_data.decode_attachment_thumbnails();
 
     let preview = build_preview(message.as_text(), resolved_attachments.len());
@@ -164,6 +172,14 @@ fn handle_group_message_unified(
         sender_avatar,
         &resolved_attachments,
     );
+
+    // Resolve reply-to sender name if this is a reply/quote
+    if display_data.is_reply {
+        if let Some(ref author_id) = message.reply_to_author_id {
+            display_data.reply_to_sender_name = ui_ctx.users().get_display_name(author_id);
+        }
+    }
+
     display_data.decode_attachment_thumbnails();
 
     let current_user_id = ui_ctx.sessions().current_user_id()
