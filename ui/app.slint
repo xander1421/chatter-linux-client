@@ -65,7 +65,7 @@ export component App inherits Rectangle {
     in property <length> safe-area-bottom: 0px;  // Android nav bar / gesture area
 
     // ========== Mobile navigation ==========
-    // Active bottom nav tab on mobile: "chats", "contacts", "settings"
+    // Active bottom nav tab on mobile: "chats", "calls", "contacts", "settings"
     in-out property <string> mobile-active-tab: "chats";
     // True when a conversation is open (channel/DM/group selected)
     property <bool> has-active-conversation: channel-id != "";
@@ -698,6 +698,7 @@ export component App inherits Rectangle {
     callback channel-settings-delete();
 
     // ========== Call callbacks ==========
+    callback calls-tab-clicked();  // mobile nav "Calls" tab — show call history
     callback accept-incoming-call(string);  // call_id
     callback decline-incoming-call(string); // call_id
     callback call-toggle-mute();
@@ -1142,6 +1143,9 @@ export component App inherits Rectangle {
 
         tab-selected(tab) => {
             root.mobile-active-tab = tab;
+            if (tab == "calls") {
+                root.calls-tab-clicked();
+            }
             if (tab == "contacts") {
                 root.active-modal = "friends";
             }

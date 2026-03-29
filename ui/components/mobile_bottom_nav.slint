@@ -1,6 +1,6 @@
 // Mobile bottom navigation bar
 //
-// Shows tab bar with Chats, Contacts, Settings on mobile screens.
+// Shows tab bar with Chats, Calls, Contacts, Settings on mobile screens.
 // Hidden when keyboard is open (safe-area-bottom > nav bar threshold).
 
 import { Colors } from "../theme/colors.slint";
@@ -101,6 +101,13 @@ export component MobileBottomNav inherits Rectangle {
             label: "Chats";
             active: root.active-tab == "chats";
             clicked => { root.tab-selected("chats"); }
+        }
+
+        NavTab {
+            icon: Icons.phone;
+            label: "Calls";
+            active: root.active-tab == "calls";
+            clicked => { root.tab-selected("calls"); }
         }
 
         NavTab {

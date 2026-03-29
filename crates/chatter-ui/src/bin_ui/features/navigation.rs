@@ -12,6 +12,7 @@ pub fn wire(window: &MainWindow) {
     wire_go_to_login(window);
     wire_go_to_recovery(window);
     wire_mobile_back(window);
+    wire_calls_tab(window);
 }
 
 fn wire_go_to_register(window: &MainWindow) {
@@ -58,6 +59,21 @@ fn wire_go_to_recovery(window: &MainWindow) {
             w.set_recovery_new_pin("".into());
             w.set_recovery_error("".into());
             w.set_recovery_success("".into());
+        }
+    });
+}
+
+/// Mobile "Calls" tab: placeholder until a full call history screen is built.
+fn wire_calls_tab(window: &MainWindow) {
+    let weak_window = window.as_weak();
+
+    window.on_calls_tab_clicked(move || {
+        if let Some(w) = weak_window.upgrade() {
+            // Clear active conversation so the mobile view shows the calls tab state
+            w.set_channel_id("".into());
+            w.set_selected_channel_id("".into());
+            w.set_selected_dm_id("".into());
+            w.set_selected_private_group_id("".into());
         }
     });
 }
