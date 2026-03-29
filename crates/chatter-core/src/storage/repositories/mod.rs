@@ -28,7 +28,7 @@ pub mod call_repo;
 pub mod channel_repo;
 pub mod draft_repo;
 pub mod ephemeral_repo;
-pub mod message_repo;
+// message_repo.rs deleted — all callers now use UnifiedMessageRepository via `MessageRepository` alias.
 pub mod reaction_repo;
 pub mod search_index;
 pub mod settings_repo;
