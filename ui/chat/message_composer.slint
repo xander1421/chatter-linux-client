@@ -580,32 +580,6 @@ export component MessageComposer inherits Rectangle {
             spacing: Spacing.sm;
             alignment: stretch;
 
-            // Attachment button (left side)
-            Rectangle {
-                width: 36px;
-                height: 36px;
-                background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
-                border-radius: Spacing.radius-sm;
-                opacity: root.disabled ? 0.5 : 1.0;
-                accessible-role: button;
-                accessible-label: "Attach file";
-
-                Text {
-                    text: "\u{1F4CE}\u{FE0F}";  // Paperclip (with emoji variant selector)
-                    font-size: Typography.lg;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                attachment-touch := TouchArea {
-                    enabled: !root.disabled;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.attachment-clicked();
-                    }
-                }
-            }
-
             // Text input area
             Rectangle {
                 horizontal-stretch: 1;
@@ -673,7 +647,7 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Emoji button
+            // Emoji & GIF button (unified — pickers toggle via tabs inside)
             Rectangle {
                 width: 36px;
                 height: 36px;
@@ -681,7 +655,7 @@ export component MessageComposer inherits Rectangle {
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
-                accessible-label: "Emoji picker";
+                accessible-label: "Emoji & GIF picker";
 
                 Image {
                     source: Icons.smile;
@@ -701,30 +675,30 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // GIF button
+            // Attachment button
             Rectangle {
                 width: 36px;
                 height: 36px;
-                background: gif-touch.has-hover ? Colors.surface-hover : transparent;
+                background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
-                accessible-label: "GIF picker";
+                accessible-label: "Attach file";
 
-                Text {
-                    text: "GIF";
-                    color: gif-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
-                    font-size: Typography.xs;
-                    font-weight: Typography.bold;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: Icons.paperclip;
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: attachment-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
                 }
 
-                gif-touch := TouchArea {
+                attachment-touch := TouchArea {
                     enabled: !root.disabled;
                     mouse-cursor: pointer;
                     clicked => {
-                        root.gif-clicked();
+                        root.attachment-clicked();
                     }
                 }
             }

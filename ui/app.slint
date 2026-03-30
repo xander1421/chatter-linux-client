@@ -2308,6 +2308,11 @@ export component App inherits Rectangle {
         close => {
             root.composer-emoji-picker-visible = false;
         }
+        gif-mode-requested => {
+            root.composer-emoji-picker-visible = false;
+            root.composer-gif-picker-visible = true;
+            root.gif-clicked();
+        }
     }
 
     // Composer GIF picker overlay (positioned above composer)
@@ -2332,6 +2337,11 @@ export component App inherits Rectangle {
         }
         close => {
             root.composer-gif-picker-visible = false;
+        }
+        emoji-mode-requested => {
+            root.composer-gif-picker-visible = false;
+            root.composer-emoji-picker-visible = true;
+            root.emoji-clicked();
         }
     }
 

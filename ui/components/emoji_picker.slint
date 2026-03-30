@@ -29,6 +29,7 @@ export component EmojiPicker inherits Rectangle {
     callback close();
     callback category-changed(int);
     callback search-changed(string);
+    callback gif-mode-requested();  // Switch to GIF picker
 
     // Internal state
     property <bool> search-focused: search-input.has-focus;
@@ -46,7 +47,7 @@ export component EmojiPicker inherits Rectangle {
     // Picker container — responsive: never exceed parent width
     in property <length> max-picker-width: 280px;
     in property <length> max-picker-height: 320px;
-    width: min(root.max-picker-width, parent.width);
+    width: root.max-picker-width;
     height: root.max-picker-height;
 
     // Dynamic grid columns based on available width
@@ -171,6 +172,31 @@ export component EmojiPicker inherits Rectangle {
                         clicked => {
                             root.selected-category = index;
                             root.category-changed(index);
+                        }
+                    }
+                }
+
+                // GIF tab — switches to GIF picker
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: 28px;
+                    border-radius: Spacing.radius-sm;
+                    background: gif-tab-area.has-hover ? Colors.surface-hover : transparent;
+
+                    Text {
+                        text: "GIF";
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.bold;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    gif-tab-area := TouchArea {
+                        width: 100%;
+                        height: 100%;
+                        clicked => {
+                            root.gif-mode-requested();
                         }
                     }
                 }
