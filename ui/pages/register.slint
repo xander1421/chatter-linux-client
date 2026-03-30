@@ -295,14 +295,6 @@ export component RegisterPage inherits Rectangle {
                             TouchArea { clicked => { root.server-url = "http://192.168.0.7:50051"; } }
                         }
 
-                        Rectangle {
-                            height: 28px;
-                            horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "Tunnel"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = "https://seeker-dance-ignored-clusters.trycloudflare.com"; } }
-                        }
                     }
 
                     // Validation errors
