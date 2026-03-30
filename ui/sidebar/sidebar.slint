@@ -411,12 +411,31 @@ export component Sidebar inherits Rectangle {
                             }
                         }
                         Rectangle {
-                            width: 24px;
-                            height: 24px;
-                            border-radius: Spacing.radius-sm;
-                            background: add-dm-touch.has-hover ? Colors.surface-hover : transparent;
-                            Image { source: Icons.plus; width: 14px; height: 14px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                            add-dm-touch := TouchArea { clicked => { root.friends-clicked(); } }
+                            width: Spacing.touch-target-min;
+                            height: Spacing.touch-target-min;
+
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: Spacing.radius-sm;
+                                background: add-dm-touch.has-hover ? Colors.surface-hover : transparent;
+
+                                Image {
+                                    source: Icons.plus;
+                                    width: 14px;
+                                    height: 14px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: add-dm-touch.has-hover ? Colors.text-primary : Colors.text-muted;
+                                }
+                            }
+
+                            add-dm-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.friends-clicked(); }
+                            }
                         }
                     }
                 }
@@ -485,20 +504,58 @@ export component Sidebar inherits Rectangle {
                             }
                         }
                         Rectangle {
-                            width: 24px;
-                            height: 24px;
-                            border-radius: Spacing.radius-sm;
-                            background: join-ch-touch.has-hover ? Colors.surface-hover : transparent;
-                            Image { source: Icons.search; width: 14px; height: 14px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                            join-ch-touch := TouchArea { clicked => { root.join-channel-clicked(); } }
+                            width: Spacing.touch-target-min;
+                            height: Spacing.touch-target-min;
+
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: Spacing.radius-sm;
+                                background: join-ch-touch.has-hover ? Colors.surface-hover : transparent;
+
+                                Image {
+                                    source: Icons.search;
+                                    width: 14px;
+                                    height: 14px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: join-ch-touch.has-hover ? Colors.text-primary : Colors.text-muted;
+                                }
+                            }
+
+                            join-ch-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.join-channel-clicked(); }
+                            }
                         }
                         Rectangle {
-                            width: 24px;
-                            height: 24px;
-                            border-radius: Spacing.radius-sm;
-                            background: create-ch-touch.has-hover ? Colors.surface-hover : transparent;
-                            Image { source: Icons.plus; width: 14px; height: 14px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                            create-ch-touch := TouchArea { clicked => { root.create-channel-clicked(); } }
+                            width: Spacing.touch-target-min;
+                            height: Spacing.touch-target-min;
+
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: Spacing.radius-sm;
+                                background: create-ch-touch.has-hover ? Colors.surface-hover : transparent;
+
+                                Image {
+                                    source: Icons.plus;
+                                    width: 14px;
+                                    height: 14px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: create-ch-touch.has-hover ? Colors.text-primary : Colors.text-muted;
+                                }
+                            }
+
+                            create-ch-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.create-channel-clicked(); }
+                            }
                         }
                     }
                     if root.collapsed: HorizontalLayout {
