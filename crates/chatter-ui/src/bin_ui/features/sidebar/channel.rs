@@ -186,10 +186,13 @@ pub async fn load_channel_into_ui(
         }
     };
 
-    // Map ChannelType -> ConversationType for unified message queries
+    // Map ChannelType -> ConversationType for unified message queries.
+    // Encrypted channels use the anonymous group mailbox system (NDSS '21),
+    // so their messages are stored with ConversationType::AnonGroup.
     let conversation_type = match channel.channel_type {
         ChannelType::DirectMessage => ConversationType::ServerDm,
         ChannelType::SavedMessages => ConversationType::SavedMessages,
+        _ if channel.config.require_encryption => ConversationType::AnonGroup,
         _ => ConversationType::Channel,
     };
 
