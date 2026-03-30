@@ -76,8 +76,8 @@ export component MessageComposer inherits Rectangle {
     callback process-text(string) -> string;  // Insert word breaks for wrapping
     callback format-text(string);  // Apply formatting: "bold", "italic", "code", "strikethrough"
 
-    // Formatting toolbar visibility (toggle with Ctrl+Shift+F or button)
-    property <bool> show-formatting: false;
+    // Formatting toolbar always visible
+    property <bool> show-formatting: true;
 
     // Formatting bar height
     property <length> format-bar-height: show-formatting ? 32px : 0px;
@@ -587,35 +587,6 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Format toggle button
-            Rectangle {
-                width: 36px;
-                height: 36px;
-                background: root.show-formatting ? Colors.primary.transparentize(0.85) :
-                           (fmt-toggle-touch.has-hover ? Colors.surface-hover : transparent);
-                border-radius: Spacing.radius-sm;
-                opacity: root.disabled ? 0.5 : 1.0;
-                accessible-role: button;
-                accessible-label: "Toggle formatting";
-
-                Text {
-                    text: "Aa";
-                    color: root.show-formatting ? Colors.primary : Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-weight: Typography.medium;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                fmt-toggle-touch := TouchArea {
-                    enabled: !root.disabled;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.show-formatting = !root.show-formatting;
-                    }
-                }
-            }
-
             // Text input area
             Rectangle {
                 horizontal-stretch: 1;
@@ -683,7 +654,7 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Emoji + GIF button (single button, opens emoji picker which includes GIF tab)
+            // Emoji button
             Rectangle {
                 width: 36px;
                 height: 36px;
@@ -691,7 +662,7 @@ export component MessageComposer inherits Rectangle {
                 border-radius: Spacing.radius-sm;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
-                accessible-label: "Emoji and GIF picker";
+                accessible-label: "Emoji picker";
 
                 Text {
                     text: "\u{1F600}\u{FE0F}";
@@ -705,6 +676,34 @@ export component MessageComposer inherits Rectangle {
                     mouse-cursor: pointer;
                     clicked => {
                         root.emoji-clicked();
+                    }
+                }
+            }
+
+            // GIF button
+            Rectangle {
+                width: 36px;
+                height: 36px;
+                background: gif-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-sm;
+                opacity: root.disabled ? 0.5 : 1.0;
+                accessible-role: button;
+                accessible-label: "GIF picker";
+
+                Text {
+                    text: "GIF";
+                    color: Colors.text-secondary;
+                    font-size: 11px;
+                    font-weight: Typography.bold;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+
+                gif-touch := TouchArea {
+                    enabled: !root.disabled;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.gif-clicked();
                     }
                 }
             }
