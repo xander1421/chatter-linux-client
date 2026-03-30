@@ -57,6 +57,14 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                     w.set_loading_messages(true);
                     w.set_selected_channel_id(channel_id_str);
                     w.set_selected_dm_id("".into());
+                    // Clear composer reply/edit state to prevent stale context
+                    w.set_composer_is_replying(false);
+                    w.set_composer_reply_to_sender("".into());
+                    w.set_composer_reply_to_sender_name("".into());
+                    w.set_composer_reply_to_timestamp("".into());
+                    w.set_composer_reply_preview("".into());
+                    w.set_composer_is_editing(false);
+                    w.set_composer_edit_message_id("".into());
                 }
             });
 

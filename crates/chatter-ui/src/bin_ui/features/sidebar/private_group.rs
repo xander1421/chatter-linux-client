@@ -177,7 +177,15 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 w.set_selected_channel_id("".into());
                 w.set_selected_dm_id("".into());
                 w.set_selected_private_group_id(group_id_str.into());
-                
+                // Clear composer reply/edit state to prevent stale context
+                w.set_composer_is_replying(false);
+                w.set_composer_reply_to_sender("".into());
+                w.set_composer_reply_to_sender_name("".into());
+                w.set_composer_reply_to_timestamp("".into());
+                w.set_composer_reply_preview("".into());
+                w.set_composer_is_editing(false);
+                w.set_composer_edit_message_id("".into());
+
                 // Set chat header info for private group
                 // The header UI will show users icon and "Private" badge based on channel-type
                 w.set_channel_name(group_name.into());
@@ -417,6 +425,14 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                     w.set_selected_channel_id("".into());
                     w.set_selected_dm_id("".into());
                     w.set_selected_private_group_id(group_id.to_string().into());
+                    // Clear composer reply/edit state to prevent stale context
+                    w.set_composer_is_replying(false);
+                    w.set_composer_reply_to_sender("".into());
+                    w.set_composer_reply_to_sender_name("".into());
+                    w.set_composer_reply_to_timestamp("".into());
+                    w.set_composer_reply_preview("".into());
+                    w.set_composer_is_editing(false);
+                    w.set_composer_edit_message_id("".into());
 
                     // Set chat header info for private group
                     // The header UI will show users icon and "Private" badge based on channel-type
