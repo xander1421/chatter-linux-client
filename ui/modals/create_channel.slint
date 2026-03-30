@@ -72,6 +72,8 @@ export component CreateChannelModal inherits Rectangle {
         { id: "ollama", name: "Ollama (Local)" },
     ];
     in property <[AIModelOption]> ai-models: [];
+    in property <bool> ai-models-loading: false;
+    in property <string> ai-models-error: "";
 
     // Private group configuration (for private-group template)
     in-out property <[PrivateGroupFriend]> available-friends: [];
@@ -836,11 +838,31 @@ export component CreateChannelModal inherits Rectangle {
                             font-weight: Typography.medium;
                         }
 
-                        // Model list
-                        if root.ai-models.length == 0: Text {
+                        // Loading state
+                        if root.ai-models-loading && root.ai-models-error == "": Text {
                             text: "Loading models...";
                             color: Colors.text-muted;
                             font-size: Typography.sm;
+                        }
+
+                        // Error state with retry
+                        if root.ai-models-error != "": VerticalLayout {
+                            spacing: Spacing.xs;
+
+                            Text {
+                                text: root.ai-models-error;
+                                color: Colors.error;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                            }
+
+                            Button {
+                                text: "Retry";
+                                variant: "secondary";
+                                clicked => {
+                                    root.provider-selected(root.ai-provider);
+                                }
+                            }
                         }
 
                         Flickable {

@@ -132,11 +132,37 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if !matches!(provider_str.as_str(), "claude" | "openai") {
                 return;
             }
-            if let Ok(available_models) = ui_ctx_ai.list_ai_models(&provider_str).await {
-                let models: Vec<AIModelOption> = available_models.into_iter().map(|(id, name)| AIModelOption { id: id.into(), name: name.into(), provider: provider_str.clone().into() }).collect();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() { w.set_create_channel_ai_models(ModelRc::new(VecModel::from(models))); }
-                });
+
+            // Set loading state and clear previous error/models
+            let weak_loading = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_loading.upgrade() {
+                    w.set_create_channel_ai_models_loading(true);
+                    w.set_create_channel_ai_models_error("".into());
+                    w.set_create_channel_ai_models(ModelRc::new(VecModel::default()));
+                }
+            });
+
+            match ui_ctx_ai.list_ai_models(&provider_str).await {
+                Ok(available_models) => {
+                    let models: Vec<AIModelOption> = available_models.into_iter().map(|(id, name)| AIModelOption { id: id.into(), name: name.into(), provider: provider_str.clone().into() }).collect();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_create_channel_ai_models(ModelRc::new(VecModel::from(models)));
+                            w.set_create_channel_ai_models_loading(false);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, provider = %provider_str, "Failed to load AI models");
+                    let error_msg = format!("Failed to load models: {e}");
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_create_channel_ai_models_loading(false);
+                            w.set_create_channel_ai_models_error(error_msg.into());
+                        }
+                    });
+                }
             }
         });
     });
