@@ -33,7 +33,7 @@ export component RecoveryCodesModal inherits Rectangle {
     Rectangle {
         width: min(480px, parent.width - 32px);
         min-height: 200px;
-        max-height: parent.height - 48px;
+        max-height: min(parent.height - 48px, content-layout.preferred-height + 1px);
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Colors.surface;
@@ -45,7 +45,7 @@ export component RecoveryCodesModal inherits Rectangle {
             height: 100%;
         }
 
-        VerticalLayout {
+        content-layout := VerticalLayout {
             padding: Spacing.lg;
             spacing: Spacing.md;
 
