@@ -19,10 +19,11 @@ import { ChannelList, ChannelListItemData } from "channel_list.slint";
 import { DMList, DMListItemData } from "dm_list.slint";
 import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
 import { OrgSwitcher, OrgListItemData } from "org_switcher.slint";
+import { CustomSectionList, CustomSectionData, SectionConversationData } from "custom_section_list.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData }
 
 export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
@@ -32,6 +33,8 @@ export component Sidebar inherits Rectangle {
     in property <string> selected-dm-id: "";
     in property <[PrivateGroupListItemData]> private-groups: [];
     in property <string> selected-private-group-id: "";
+    in property <[CustomSectionData]> custom-sections: [];
+    in property <[SectionConversationData]> section-conversations: [];
 
     // ── Properties: User profile ──
     in property <string> user-display-name: "User";
@@ -73,6 +76,11 @@ export component Sidebar inherits Rectangle {
     callback search-clicked();
     callback jarvis-clicked();
     callback settings-clicked();
+    callback create-section-clicked();
+    callback section-toggle-expanded(/* section-id */ string);
+    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
+    callback delete-section-clicked(/* section-id */ string);
+    callback rename-section-clicked(/* section-id */ string);
 
     // ── Internal state ──
     property <bool> channels-expanded: true;
@@ -406,6 +414,20 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                     show-header: false;
                     conversation-selected(id) => { root.dm-selected(id); }
+                }
+
+                // 4b. CUSTOM SECTIONS (user-created, between Messages and Channels)
+                CustomSectionList {
+                    vertical-stretch: 0;
+                    sections: root.custom-sections;
+                    section-conversations: root.section-conversations;
+                    selected-conversation-id: root.selected-dm-id;
+                    collapsed: root.collapsed;
+                    create-section-clicked => { root.create-section-clicked(); }
+                    section-toggle-expanded(id) => { root.section-toggle-expanded(id); }
+                    section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
+                    delete-section-clicked(id) => { root.delete-section-clicked(id); }
+                    rename-section-clicked(id) => { root.rename-section-clicked(id); }
                 }
 
                 // 5. CHANNELS SECTION

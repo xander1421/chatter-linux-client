@@ -14,7 +14,7 @@ import { LoadingPage } from "pages/loading.slint";
 import { WelcomePage } from "pages/welcome.slint";
 
 // Import main layout components
-import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData } from "sidebar/sidebar.slint";
+import { Sidebar, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
 import { MembersPanel } from "chat/members_panel.slint";
@@ -58,7 +58,7 @@ import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, Acti
 import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -127,6 +127,8 @@ export component App inherits Rectangle {
     in property <string> selected-dm-id: "";
     in property <[PrivateGroupListItemData]> private-groups: [];
     in property <string> selected-private-group-id: "";
+    in property <[CustomSectionData]> custom-sections: [];
+    in property <[SectionConversationData]> section-conversations: [];
     in property <int> total-unread-count: 0;
     in property <string> user-display-name: "User";
     in property <image> user-avatar-source;
@@ -538,6 +540,11 @@ export component App inherits Rectangle {
     callback toggle-sidebar();
     callback org-selected(/* org_id */ string);
     callback manage-org-clicked();
+    callback create-section-clicked();
+    callback section-toggle-expanded(/* section-id */ string);
+    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
+    callback delete-section-clicked(/* section-id */ string);
+    callback rename-section-clicked(/* section-id */ string);
 
     // ========== Org management properties ==========
     in property <[OrgMemberData]> org-members: [];
@@ -908,6 +915,8 @@ export component App inherits Rectangle {
                 selected-dm-id: root.selected-dm-id;
                 private-groups: root.private-groups;
                 selected-private-group-id: root.selected-private-group-id;
+                custom-sections: root.custom-sections;
+                section-conversations: root.section-conversations;
                 user-display-name: root.user-display-name;
                 user-avatar-source: root.user-avatar-source;
                 user-initials: root.user-initials;
@@ -972,6 +981,21 @@ export component App inherits Rectangle {
                 }
                 manage-org-clicked => {
                     root.manage-org-clicked();
+                }
+                create-section-clicked => {
+                    root.create-section-clicked();
+                }
+                section-toggle-expanded(id) => {
+                    root.section-toggle-expanded(id);
+                }
+                section-conversation-selected(conv-id, conv-type) => {
+                    root.section-conversation-selected(conv-id, conv-type);
+                }
+                delete-section-clicked(id) => {
+                    root.delete-section-clicked(id);
+                }
+                rename-section-clicked(id) => {
+                    root.rename-section-clicked(id);
                 }
                 search-clicked => {
                     root.search-clicked();

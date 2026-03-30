@@ -1,0 +1,389 @@
+// Custom section list component
+//
+// Renders user-created sidebar sections (e.g. "Work", "Gaming") with collapsible
+// conversation lists. Conversations inside sections reuse existing list-item
+// components (channels, DMs, private groups) based on conversation_type.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Icons } from "../theme/icons.slint";
+import { Avatar } from "../components/avatar.slint";
+import { TooltipArea } from "../components/tooltip.slint";
+
+// ── Data structs ────────────────────────────────────────────────
+
+export struct CustomSectionData {
+    section-id: string,
+    name: string,
+    icon-emoji: string,
+    is-expanded: bool,
+    unread-count: int,
+}
+
+export struct SectionConversationData {
+    conversation-id: string,
+    section-id: string,
+    conversation-type: string,   // "channel", "dm", "private_group"
+    display-name: string,
+    avatar-source: image,
+    has-avatar: bool,
+    initials: string,
+    last-message: string,
+    timestamp: string,
+    unread-count: int,
+}
+
+// ── Single conversation item inside a section ───────────────────
+
+component SectionConversationItem inherits Rectangle {
+    in property <string> conversation-id;
+    in property <string> conversation-type: "channel";
+    in property <string> display-name;
+    in property <image> avatar-source;
+    in property <bool> has-avatar: false;
+    in property <string> initials;
+    in property <int> unread-count: 0;
+    in property <bool> selected: false;
+    in property <bool> collapsed: false;
+
+    callback clicked();
+
+    height: 36px;
+    border-radius: Spacing.radius-sm;
+    background: root.selected ? Colors.primary.with-alpha(0.2)
+              : touch.has-hover ? Colors.surface-hover
+              : transparent;
+
+    if !root.collapsed: HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
+        alignment: stretch;
+
+        // Icon or avatar based on type
+        Rectangle {
+            width: 20px;
+            height: parent.height;
+
+            if root.conversation-type == "channel": Image {
+                source: Icons.hash;
+                width: 14px;
+                height: 14px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: root.selected ? Colors.primary : Colors.text-secondary;
+            }
+            if root.conversation-type == "dm": Avatar {
+                size: 20px;
+                source: root.avatar-source;
+                fallback-text: root.initials;
+                show-presence: false;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+            if root.conversation-type == "private_group": Image {
+                source: Icons.shield;
+                width: 14px;
+                height: 14px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: root.selected ? #9333ea : #9333ea.with-alpha(0.7);
+            }
+        }
+
+        // Name
+        Text {
+            text: root.display-name;
+            color: root.selected ? Colors.text-primary : Colors.text-secondary;
+            font-size: 13px;
+            font-weight: root.unread-count > 0 ? 600 : 400;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        // Unread badge
+        if root.unread-count > 0: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: max(18px, sec-badge-text.preferred-width + 10px);
+                height: 18px;
+                border-radius: Spacing.radius-full;
+                background: Colors.primary;
+                sec-badge-text := Text {
+                    text: root.unread-count > 99 ? "99+" : root.unread-count;
+                    color: Colors.text-primary;
+                    font-size: 10px;
+                    font-weight: 600;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: 100%;
+                    height: 100%;
+                }
+            }
+        }
+    }
+
+    if root.collapsed: TooltipArea {
+        width: 100%;
+        height: 100%;
+        tooltip-text: root.display-name;
+        tooltip-enabled: true;
+        placement: "right";
+
+        if root.conversation-type == "channel": Image {
+            source: Icons.hash;
+            width: 16px;
+            height: 16px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: root.selected ? Colors.primary : Colors.text-secondary;
+        }
+        if root.conversation-type == "dm": Avatar {
+            size: 22px;
+            source: root.avatar-source;
+            fallback-text: root.initials;
+            show-presence: false;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+        if root.conversation-type == "private_group": Image {
+            source: Icons.shield;
+            width: 16px;
+            height: 16px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            colorize: #9333ea;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ── Section header ──────────────────────────────────────────────
+
+component CustomSectionHeader inherits Rectangle {
+    in property <string> section-id;
+    in property <string> name;
+    in property <string> icon-emoji;
+    in property <bool> is-expanded: true;
+    in property <int> unread-count: 0;
+    in property <bool> collapsed: false;
+
+    callback toggle-expanded();
+    callback rename-clicked();
+    callback delete-clicked();
+
+    height: 32px;
+
+    if !root.collapsed: HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 4px;
+
+        TouchArea {
+            horizontal-stretch: 1;
+            mouse-cursor: pointer;
+            clicked => { root.toggle-expanded(); }
+
+            HorizontalLayout {
+                padding-left: 2px;
+                spacing: 4px;
+                alignment: start;
+
+                // Collapse chevron
+                Image {
+                    source: Icons.chevron-right;
+                    width: 10px;
+                    height: 10px;
+                    colorize: Colors.text-muted;
+                    transform-rotation: root.is-expanded ? 90deg : 0deg;
+                }
+
+                // Emoji icon
+                Text {
+                    text: root.icon-emoji;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+
+                // Section name
+                Text {
+                    text: root.name;
+                    color: Colors.text-muted;
+                    font-size: 11px;
+                    font-weight: 600;
+                    letter-spacing: 0.5px;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+
+                // Aggregate unread badge
+                if root.unread-count > 0: Rectangle {
+                    width: root.unread-count > 9 ? 22px : 18px;
+                    height: 18px;
+                    border-radius: 9px;
+                    background: Colors.primary;
+                    Text {
+                        text: root.unread-count > 99 ? "99+" : root.unread-count;
+                        color: Colors.text-primary;
+                        font-size: 10px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+                }
+            }
+        }
+    }
+
+    // Collapsed: show emoji icon only with tooltip
+    if root.collapsed: TooltipArea {
+        width: 44px;
+        height: 100%;
+        x: (parent.width - self.width) / 2;
+        tooltip-text: root.name;
+        tooltip-enabled: true;
+        placement: "right";
+
+        HorizontalLayout {
+            alignment: center;
+            Text {
+                text: root.icon-emoji;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+        }
+
+        // Collapsed unread dot
+        if root.unread-count > 0: Rectangle {
+            x: parent.width / 2 + 6px;
+            y: 4px;
+            width: 10px;
+            height: 10px;
+            border-radius: 5px;
+            background: Colors.primary;
+        }
+    }
+}
+
+// ── Main component: renders all custom sections ────────────────
+
+export component CustomSectionList inherits Rectangle {
+    in property <[CustomSectionData]> sections: [];
+    in property <[SectionConversationData]> section-conversations: [];
+    in property <string> selected-conversation-id: "";
+    in property <bool> collapsed: false;
+
+    callback create-section-clicked();
+    callback section-toggle-expanded(/* section-id */ string);
+    callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
+    callback delete-section-clicked(/* section-id */ string);
+    callback rename-section-clicked(/* section-id */ string);
+
+    VerticalLayout {
+        spacing: 0px;
+
+        // "+ New Section" button
+        Rectangle {
+            height: 28px;
+            background: new-sec-touch.has-hover ? Colors.surface-hover : transparent;
+            border-radius: Spacing.radius-sm;
+
+            if !root.collapsed: HorizontalLayout {
+                padding-left: Spacing.sm;
+                spacing: 6px;
+                alignment: start;
+
+                Image {
+                    source: Icons.plus;
+                    width: 12px;
+                    height: 12px;
+                    colorize: Colors.text-muted;
+                }
+                Text {
+                    text: "New Section";
+                    color: Colors.text-muted;
+                    font-size: 11px;
+                    font-weight: 500;
+                    vertical-alignment: center;
+                }
+            }
+
+            if root.collapsed: TooltipArea {
+                width: 44px;
+                height: 100%;
+                x: (parent.width - self.width) / 2;
+                tooltip-text: "New Section";
+                tooltip-enabled: true;
+                placement: "right";
+                HorizontalLayout {
+                    alignment: center;
+                    Image {
+                        source: Icons.plus;
+                        width: 14px;
+                        height: 14px;
+                        colorize: Colors.text-muted;
+                    }
+                }
+            }
+
+            new-sec-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.create-section-clicked(); }
+            }
+        }
+
+        // Render each section
+        for section in root.sections: VerticalLayout {
+            spacing: 0px;
+
+            CustomSectionHeader {
+                section-id: section.section-id;
+                name: section.name;
+                icon-emoji: section.icon-emoji;
+                is-expanded: section.is-expanded;
+                unread-count: section.unread-count;
+                collapsed: root.collapsed;
+
+                toggle-expanded => { root.section-toggle-expanded(section.section-id); }
+                rename-clicked => { root.rename-section-clicked(section.section-id); }
+                delete-clicked => { root.delete-section-clicked(section.section-id); }
+            }
+
+            // Section conversations (only when expanded)
+            if section.is-expanded: VerticalLayout {
+                padding-left: Spacing.xs;
+                padding-right: Spacing.xs;
+                spacing: 2px;
+
+                for conv in root.section-conversations: SectionConversationItem {
+                    visible: conv.section-id == section.section-id;
+                    height: conv.section-id == section.section-id ? 36px : 0px;
+                    conversation-id: conv.conversation-id;
+                    conversation-type: conv.conversation-type;
+                    display-name: conv.display-name;
+                    avatar-source: conv.avatar-source;
+                    has-avatar: conv.has-avatar;
+                    initials: conv.initials;
+                    unread-count: conv.unread-count;
+                    selected: conv.conversation-id == root.selected-conversation-id;
+                    collapsed: root.collapsed;
+
+                    clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
+                }
+            }
+
+            // Empty state (expanded + no conversations for this section)
+            if section.is-expanded && !root.collapsed: Rectangle {
+                // Slint doesn't support runtime filtering, so we show a subtle hint
+                // The Rust side should only populate conversations for visible sections
+                height: 0px; // Placeholder — Rust populates section-conversations per section
+            }
+        }
+    }
+}
