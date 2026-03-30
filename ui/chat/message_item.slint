@@ -534,6 +534,13 @@ export component MessageItem inherits Rectangle {
                                 clicked => {
                                     root.link-preview-clicked(root.link-preview.url);
                                 }
+                                pointer-event(event) => {
+                                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                                        root.more-clicked(root.sender-id, root.timestamp-ns,
+                                            self.absolute-position.x + self.mouse-x,
+                                            self.absolute-position.y + self.mouse-y);
+                                    }
+                                }
                             }
                         }
 
@@ -627,6 +634,13 @@ export component MessageItem inherits Rectangle {
                                     img-touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => { root.attachment-clicked(attachment.id); }
+                                        pointer-event(event) => {
+                                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                                                root.more-clicked(root.sender-id, root.timestamp-ns,
+                                                    self.absolute-position.x + self.mouse-x,
+                                                    self.absolute-position.y + self.mouse-y);
+                                            }
+                                        }
                                     }
                                 }
 
@@ -653,6 +667,13 @@ export component MessageItem inherits Rectangle {
                                         audio-play-touch := TouchArea {
                                             mouse-cursor: pointer;
                                             clicked => { root.attachment-clicked(attachment.id); }
+                                            pointer-event(event) => {
+                                                if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                                                    root.more-clicked(root.sender-id, root.timestamp-ns,
+                                                        self.absolute-position.x + self.mouse-x,
+                                                        self.absolute-position.y + self.mouse-y);
+                                                }
+                                            }
                                         }
                                     }
 
@@ -690,6 +711,13 @@ export component MessageItem inherits Rectangle {
                                                 property <float> seek-pos: clamp(self.mouse-x / parent.width, 0.0, 1.0);
                                                 mouse-cursor: pointer;
                                                 clicked => { root.audio-seek(attachment.id, self.seek-pos); }
+                                                pointer-event(event) => {
+                                                    if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                                                        root.more-clicked(root.sender-id, root.timestamp-ns,
+                                                            self.absolute-position.x + self.mouse-x,
+                                                            self.absolute-position.y + self.mouse-y);
+                                                    }
+                                                }
                                             }
                                         }
 
@@ -770,6 +798,13 @@ export component MessageItem inherits Rectangle {
                                     video-touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => { root.attachment-clicked(attachment.id); }
+                                        pointer-event(event) => {
+                                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                                                root.more-clicked(root.sender-id, root.timestamp-ns,
+                                                    self.absolute-position.x + self.mouse-x,
+                                                    self.absolute-position.y + self.mouse-y);
+                                            }
+                                        }
                                     }
                                 }
 
@@ -856,6 +891,13 @@ export component MessageItem inherits Rectangle {
                                     file-touch := TouchArea {
                                         mouse-cursor: pointer;
                                         clicked => { root.attachment-clicked(attachment.id); }
+                                        pointer-event(event) => {
+                                            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                                                root.more-clicked(root.sender-id, root.timestamp-ns,
+                                                    self.absolute-position.x + self.mouse-x,
+                                                    self.absolute-position.y + self.mouse-y);
+                                            }
+                                        }
                                     }
                                 }
                             }
