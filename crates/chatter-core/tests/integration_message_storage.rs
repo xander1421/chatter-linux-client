@@ -1414,7 +1414,7 @@ fn test_reaction_counts_per_type_isolation() {
     );
     message_repo.insert(&msg_channel).unwrap();
     message_repo
-        .add_reaction(&msg_channel.id, &reactor, "fire")
+        .add_reaction(&sender, ts_channel, &reactor, "fire")
         .unwrap();
 
     // Insert a MailboxDm message and react to it with a different emoji
@@ -1428,7 +1428,7 @@ fn test_reaction_counts_per_type_isolation() {
     );
     message_repo.insert(&msg_dm).unwrap();
     message_repo
-        .add_reaction(&msg_dm.id, &reactor, "heart")
+        .add_reaction(&sender, ts_dm, &reactor, "heart")
         .unwrap();
 
     // get_reaction_counts_for_conversation for Channel should only have "fire"

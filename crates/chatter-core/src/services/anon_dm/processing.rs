@@ -212,12 +212,12 @@ impl AnonDmService {
                 }
             }
             Some(ContentType::Reaction(reaction)) => {
-                let message_id = crate::domain::MessageId::from_timestamp(reaction.target_sent_timestamp);
-                let author_id = reaction.target_author_aci.parse().unwrap_or(*sender_id);
+                let target_sender_id: crate::domain::UserId = reaction.target_author_aci.parse().unwrap_or(*sender_id);
+                let sent_at_ns = reaction.target_sent_timestamp;
 
                 // Persist reaction to anon_dm_reactions table
                 if reaction.remove {
-                    match self.remove_reaction(conversation_id, reaction.target_sent_timestamp, sender_id, &reaction.emoji) {
+                    match self.remove_reaction(conversation_id, &target_sender_id, sent_at_ns, sender_id, &reaction.emoji) {
                         Ok(_) => {}
                         Err(e) => {
                             tracing::warn!(
@@ -228,14 +228,14 @@ impl AnonDmService {
                         }
                     }
                     events.push(DomainEvent::ReactionRemoved {
-                        message_id,
-                        author_id,
+                        sender_id: target_sender_id,
+                        sent_at_ns,
                         reactor_id: *sender_id,
                         emoji: reaction.emoji.clone(),
                         timestamp: reaction.target_sent_timestamp,
                     });
                 } else {
-                    match self.add_reaction(conversation_id, reaction.target_sent_timestamp, sender_id, &reaction.emoji) {
+                    match self.add_reaction(conversation_id, &target_sender_id, sent_at_ns, sender_id, &reaction.emoji) {
                         Ok(_) => {}
                         Err(e) => {
                             tracing::warn!(
@@ -246,8 +246,8 @@ impl AnonDmService {
                         }
                     }
                     events.push(DomainEvent::ReactionAdded {
-                        message_id,
-                        author_id,
+                        sender_id: target_sender_id,
+                        sent_at_ns,
                         reactor_id: *sender_id,
                         emoji: reaction.emoji.clone(),
                         timestamp: reaction.target_sent_timestamp,

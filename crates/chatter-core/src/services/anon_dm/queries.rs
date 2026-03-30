@@ -148,30 +148,30 @@ impl AnonDmService {
 
     /// Add a reaction to an anon DM message in the DB.
     ///
-    /// Uses timestamp-based identification (Signal-style) — no separate message lookup needed.
+    /// Uses (sender_id, sent_at_ns) to identify the target message (Signal-style).
     pub fn add_reaction(
         &self,
-        conversation_id: &AnonDmId,
-        sent_timestamp: u64,
-        user_id: &UserId,
+        _conversation_id: &AnonDmId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        reactor_id: &UserId,
         emoji: &str,
     ) -> Result<bool, AnonDmError> {
-        let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.add_reaction_by_timestamp(&channel_id, sent_timestamp, user_id, emoji)?)
+        Ok(self.message_repo.add_reaction(sender_id, sent_at_ns, reactor_id, emoji)?)
     }
 
     /// Remove a reaction from an anon DM message in the DB.
     ///
-    /// Uses timestamp-based identification (Signal-style) — no separate message lookup needed.
+    /// Uses (sender_id, sent_at_ns) to identify the target message (Signal-style).
     pub fn remove_reaction(
         &self,
-        conversation_id: &AnonDmId,
-        sent_timestamp: u64,
-        user_id: &UserId,
+        _conversation_id: &AnonDmId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        reactor_id: &UserId,
         emoji: &str,
     ) -> Result<bool, AnonDmError> {
-        let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.remove_reaction_by_timestamp(&channel_id, sent_timestamp, user_id, emoji)?)
+        Ok(self.message_repo.remove_reaction(sender_id, sent_at_ns, reactor_id, emoji)?)
     }
 
     /// Get all reaction counts for an anon DM conversation's messages.

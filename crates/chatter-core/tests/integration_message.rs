@@ -253,7 +253,7 @@ async fn test_reactions() {
     // Add a reaction
     let with_reaction = assert_ok(
         msg_client
-            .add_reaction(&message.id, &channel_id, "👍")
+            .add_reaction(&channel_id, &message.author_id, message.timestamp, "👍")
             .await,
     );
 
@@ -267,7 +267,7 @@ async fn test_reactions() {
     // Remove the reaction
     let without_reaction = assert_ok(
         msg_client
-            .remove_reaction(&message.id, &channel_id, "👍")
+            .remove_reaction(&channel_id, &message.author_id, message.timestamp, "👍")
             .await,
     );
 

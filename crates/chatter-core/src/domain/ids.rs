@@ -228,6 +228,17 @@ impl MessageId {
         let uuid = Uuid::new_v5(&Uuid::nil(), input.as_bytes());
         Self(uuid)
     }
+
+    /// Create a deterministic MessageId from (sender_id, sent_at_ns).
+    ///
+    /// Used to derive a consistent cache key for streaming state and UI
+    /// from the Signal-style (sender, timestamp) composite key.
+    #[must_use]
+    pub fn from_sender_timestamp(sender_id: &UserId, sent_at_ns: u64) -> Self {
+        let input = format!("msg:{}:{}", sender_id, sent_at_ns);
+        let uuid = Uuid::new_v5(&Uuid::nil(), input.as_bytes());
+        Self(uuid)
+    }
 }
 
 // ============================================================================

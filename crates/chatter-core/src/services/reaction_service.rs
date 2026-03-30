@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
-use crate::domain::ids::{MessageId, UserId};
+use crate::domain::ids::UserId;
 use crate::domain::message::ReactionCount;
 use crate::domain::reaction::{Emoji, Reaction};
 use crate::error::{NetworkError, StorageError};
@@ -87,75 +87,81 @@ impl ReactionService {
     // Server Operations
     // ========================================================================
 
-    /// Add a reaction to a message.
+    /// Add a reaction to a message using Signal-style identification.
     ///
     /// Sends the reaction to the server and returns the updated message.
     ///
     /// # Arguments
     ///
     /// * `client` - Mutable reference to message client
-    /// * `message_id` - ID of the message to react to
     /// * `channel_id` - Channel containing the message
+    /// * `target_author_aci` - UUID of the target message sender
+    /// * `target_sent_timestamp` - Sent timestamp of the target message (nanoseconds)
     /// * `emoji` - Emoji reaction (Unicode string, e.g., "👍")
     pub async fn add_reaction(
         &self,
         client: &mut MessageClient,
-        message_id: &str,
         channel_id: &str,
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
         emoji: &str,
     ) -> Result<Message, ReactionError> {
         // Check logged in
         let _ = self.settings_repo.current_user_id()?;
 
         // Send reaction to server
-        let message = client.add_reaction(message_id, channel_id, emoji).await?;
+        let message = client.add_reaction(channel_id, target_author_aci, target_sent_timestamp, emoji).await?;
 
         Ok(message)
     }
 
-    /// Remove a reaction from a message.
+    /// Remove a reaction from a message using Signal-style identification.
     ///
     /// Removes the reaction on the server and returns the updated message.
     ///
     /// # Arguments
     ///
     /// * `client` - Mutable reference to message client
-    /// * `message_id` - ID of the message to remove reaction from
     /// * `channel_id` - Channel containing the message
+    /// * `target_author_aci` - UUID of the target message sender
+    /// * `target_sent_timestamp` - Sent timestamp of the target message (nanoseconds)
     /// * `emoji` - Emoji reaction to remove
     pub async fn remove_reaction(
         &self,
         client: &mut MessageClient,
-        message_id: &str,
         channel_id: &str,
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
         emoji: &str,
     ) -> Result<Message, ReactionError> {
         // Check logged in
         let _ = self.settings_repo.current_user_id()?;
 
         // Remove reaction on server
-        let message = client.remove_reaction(message_id, channel_id, emoji).await?;
+        let message = client.remove_reaction(channel_id, target_author_aci, target_sent_timestamp, emoji).await?;
 
         Ok(message)
     }
 
-    /// Get reactions for a message from the server.
+    /// Get reactions for a message from the server using Signal-style identification.
     ///
     /// Fetches reactions from the server with pagination support.
     ///
     /// # Arguments
     ///
     /// * `client` - Mutable reference to message client
-    /// * `message_id` - ID of the message to get reactions for
     /// * `channel_id` - Channel containing the message
+    /// * `target_author_aci` - UUID of the target message sender
+    /// * `target_sent_timestamp` - Sent timestamp of the target message (nanoseconds)
     /// * `limit` - Maximum number of reactions to return
     /// * `offset` - Pagination offset
     /// * `emoji_filter` - Optional filter by specific emoji
     pub async fn get_reactions(
         &self,
         client: &mut MessageClient,
-        message_id: &str,
         channel_id: &str,
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
         limit: i32,
         offset: i32,
         emoji_filter: Option<&str>,
@@ -163,22 +169,23 @@ impl ReactionService {
         // Check logged in
         let _ = self.settings_repo.current_user_id()?;
 
+        // Parse sender_id for domain conversion
+        let sender_id: UserId = target_author_aci
+            .parse()
+            .map_err(|_| ReactionError::Storage(StorageError::InvalidData(
+                "Invalid target_author_aci".to_string(),
+            )))?;
+
         // Fetch from server
         let response = client
-            .get_message_reactions(message_id, channel_id, limit, offset, emoji_filter)
+            .get_message_reactions(channel_id, target_author_aci, target_sent_timestamp, limit, offset, emoji_filter)
             .await?;
 
         // Convert proto reactions to domain reactions
-        let message_id: MessageId = message_id
-            .parse()
-            .map_err(|_| ReactionError::Storage(StorageError::InvalidData(
-                "Invalid message ID".to_string(),
-            )))?;
-
         let reactions: Vec<Reaction> = response
             .reactions
             .iter()
-            .filter_map(|proto| proto_to_domain_reaction(proto, &message_id).ok())
+            .filter_map(|proto| proto_to_domain_reaction(proto, &sender_id, target_sent_timestamp).ok())
             .collect();
 
         Ok(reactions)
@@ -229,10 +236,15 @@ impl ReactionService {
     ///
     /// # Arguments
     ///
-    /// * `message_id` - ID of the message to get reactions for
-    pub fn get_reactions_local(&self, message_id: &MessageId) -> Result<Vec<Reaction>, ReactionError> {
+    /// * `sender_id` - Target message sender
+    /// * `sent_at_ns` - Target message sent timestamp (nanoseconds)
+    pub fn get_reactions_local(
+        &self,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+    ) -> Result<Vec<Reaction>, ReactionError> {
         self.reaction_repo
-            .list_for_message(message_id)
+            .list_for_message(sender_id, sent_at_ns)
             .map_err(ReactionError::Storage)
     }
 
@@ -242,13 +254,15 @@ impl ReactionService {
     ///
     /// # Arguments
     ///
-    /// * `message_id` - ID of the message to get counts for
+    /// * `sender_id` - Target message sender
+    /// * `sent_at_ns` - Target message sent timestamp (nanoseconds)
     pub fn get_reaction_counts_local(
         &self,
-        message_id: &MessageId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
     ) -> Result<Vec<ReactionCount>, ReactionError> {
         self.reaction_repo
-            .get_reaction_counts(message_id)
+            .get_reaction_counts(sender_id, sent_at_ns)
             .map_err(ReactionError::Storage)
     }
 
@@ -259,18 +273,20 @@ impl ReactionService {
     ///
     /// # Arguments
     ///
-    /// * `message_id` - ID of the message to toggle reaction on
+    /// * `sender_id` - Target message sender
+    /// * `sent_at_ns` - Target message sent timestamp (nanoseconds)
     /// * `emoji` - Emoji to toggle
     pub fn toggle_reaction_local(
         &self,
-        message_id: &MessageId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
         emoji: &Emoji,
     ) -> Result<bool, ReactionError> {
         // Get current user for the reaction
         let user_id = self.settings_repo.current_user_id()?;
 
         self.reaction_repo
-            .toggle(message_id, &user_id, emoji)
+            .toggle(sender_id, sent_at_ns, &user_id, emoji)
             .map_err(ReactionError::Storage)
     }
 
@@ -307,7 +323,8 @@ impl ReactionService {
 /// Uses the proto's user_id, emoji, and timestamp fields.
 fn proto_to_domain_reaction(
     proto: &crate::proto::chat_v1::Reaction,
-    message_id: &MessageId,
+    sender_id: &UserId,
+    sent_at_ns: u64,
 ) -> Result<Reaction, ReactionError> {
     // Parse user_id
     let user_id: UserId = proto
@@ -320,13 +337,13 @@ fn proto_to_domain_reaction(
     // Create emoji (assume unicode if no custom indicator)
     let emoji = Emoji::unicode(&proto.emoji);
 
-    // Convert timestamp (proto uses u64 millis)
-    let created_at = chrono::DateTime::from_timestamp_millis(proto.timestamp as i64)
-        .unwrap_or_else(chrono::Utc::now);
+    // Convert timestamp (proto uses u64 nanoseconds)
+    let created_at = chrono::DateTime::from_timestamp_nanos(proto.timestamp as i64);
 
     Ok(Reaction {
         id: crate::domain::ids::ReactionId::new(),
-        message_id: *message_id,
+        sender_id: *sender_id,
+        sent_at_ns,
         user_id,
         emoji,
         created_at,
@@ -362,10 +379,12 @@ mod tests {
                 );
                 CREATE TABLE IF NOT EXISTS reactions (
                     id TEXT PRIMARY KEY,
-                    message_id TEXT NOT NULL,
+                    sender_id TEXT NOT NULL,
+                    sent_at_ns INTEGER NOT NULL,
                     user_id TEXT NOT NULL,
                     emoji_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    UNIQUE(sender_id, sent_at_ns, user_id, emoji_json)
                 );
                 "#,
             )
@@ -416,8 +435,9 @@ mod tests {
         let (service, _aggregator, _temp_dir) = create_test_service();
 
         // Unknown message should return empty vec
-        let message_id = MessageId::new();
-        let reactions = service.get_reactions_local(&message_id).unwrap();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
+        let reactions = service.get_reactions_local(&sender_id, sent_at_ns).unwrap();
         assert!(reactions.is_empty());
     }
 
@@ -426,8 +446,9 @@ mod tests {
         let (service, _aggregator, _temp_dir) = create_test_service();
 
         // Unknown message should return empty vec
-        let message_id = MessageId::new();
-        let counts = service.get_reaction_counts_local(&message_id).unwrap();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
+        let counts = service.get_reaction_counts_local(&sender_id, sent_at_ns).unwrap();
         assert!(counts.is_empty());
     }
 
@@ -435,11 +456,12 @@ mod tests {
     fn test_toggle_reaction_local_requires_login() {
         let (service, _aggregator, _temp_dir) = create_test_service();
 
-        let message_id = MessageId::new();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
         let emoji = Emoji::unicode("👍");
 
         // Should fail without login
-        let result = service.toggle_reaction_local(&message_id, &emoji);
+        let result = service.toggle_reaction_local(&sender_id, sent_at_ns, &emoji);
         assert!(matches!(result, Err(ReactionError::NotLoggedIn)));
     }
 
@@ -450,15 +472,16 @@ mod tests {
         let user_id = "550e8400-e29b-41d4-a716-446655440000";
         set_logged_in_user(&service, user_id);
 
-        let message_id = MessageId::new();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
         let emoji = Emoji::unicode("👍");
 
         // First toggle should add (return true)
-        let added = service.toggle_reaction_local(&message_id, &emoji).unwrap();
+        let added = service.toggle_reaction_local(&sender_id, sent_at_ns, &emoji).unwrap();
         assert!(added);
 
         // Should now have a reaction
-        let reactions = service.get_reactions_local(&message_id).unwrap();
+        let reactions = service.get_reactions_local(&sender_id, sent_at_ns).unwrap();
         assert_eq!(reactions.len(), 1);
         assert_eq!(reactions[0].emoji, emoji);
     }
@@ -470,19 +493,20 @@ mod tests {
         let user_id = "550e8400-e29b-41d4-a716-446655440000";
         set_logged_in_user(&service, user_id);
 
-        let message_id = MessageId::new();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
         let emoji = Emoji::unicode("👍");
 
         // First toggle adds
-        let added = service.toggle_reaction_local(&message_id, &emoji).unwrap();
+        let added = service.toggle_reaction_local(&sender_id, sent_at_ns, &emoji).unwrap();
         assert!(added);
 
         // Second toggle removes (return false)
-        let removed = service.toggle_reaction_local(&message_id, &emoji).unwrap();
+        let removed = service.toggle_reaction_local(&sender_id, sent_at_ns, &emoji).unwrap();
         assert!(!removed);
 
         // Should now have no reactions
-        let reactions = service.get_reactions_local(&message_id).unwrap();
+        let reactions = service.get_reactions_local(&sender_id, sent_at_ns).unwrap();
         assert!(reactions.is_empty());
     }
 
@@ -612,10 +636,12 @@ mod tests {
             timestamp: 1234567890000,
         };
 
-        let message_id = MessageId::new();
-        let reaction = proto_to_domain_reaction(&proto, &message_id).unwrap();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
+        let reaction = proto_to_domain_reaction(&proto, &sender_id, sent_at_ns).unwrap();
 
-        assert_eq!(reaction.message_id, message_id);
+        assert_eq!(reaction.sender_id, sender_id);
+        assert_eq!(reaction.sent_at_ns, sent_at_ns);
         assert_eq!(reaction.emoji.value, "🎉");
         assert!(!reaction.emoji.is_custom);
     }
@@ -628,8 +654,9 @@ mod tests {
             timestamp: 1234567890000,
         };
 
-        let message_id = MessageId::new();
-        let result = proto_to_domain_reaction(&proto, &message_id);
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
+        let result = proto_to_domain_reaction(&proto, &sender_id, sent_at_ns);
 
         assert!(matches!(result, Err(ReactionError::Storage(_))));
     }
@@ -641,7 +668,8 @@ mod tests {
         let user_id = "550e8400-e29b-41d4-a716-446655440000";
         set_logged_in_user(&service, user_id);
 
-        let message_id = MessageId::new();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
 
         // Add reactions
         let thumbs_up = Emoji::unicode("👍");
@@ -650,15 +678,15 @@ mod tests {
         // Add via repository directly for testing
         service
             .reaction_repo
-            .insert(&Reaction::new(message_id, user_id.parse().unwrap(), thumbs_up.clone()))
+            .insert(&Reaction::new(sender_id, sent_at_ns, user_id.parse().unwrap(), thumbs_up.clone()))
             .unwrap();
         service
             .reaction_repo
-            .insert(&Reaction::new(message_id, user_id.parse().unwrap(), heart.clone()))
+            .insert(&Reaction::new(sender_id, sent_at_ns, user_id.parse().unwrap(), heart.clone()))
             .unwrap();
 
         // Get counts
-        let counts = service.get_reaction_counts_local(&message_id).unwrap();
+        let counts = service.get_reaction_counts_local(&sender_id, sent_at_ns).unwrap();
         assert_eq!(counts.len(), 2);
 
         // Each should have count 1

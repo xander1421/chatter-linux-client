@@ -101,22 +101,22 @@ pub(super) fn handle_reaction<S: AnonContentService>(
     ctx: &HandlerContext,
     svc: &S,
 ) -> HandlerResult {
-    let message_id = crate::domain::MessageId::from_timestamp(reaction.target_sent_timestamp);
-    let author_id = UserId::from_str(&reaction.target_author_aci)
+    let sender_id_target = UserId::from_str(&reaction.target_author_aci)
         .unwrap_or(sender_id);
+    let sent_at_ns = reaction.target_sent_timestamp;
 
     let event = if reaction.remove {
         DomainEvent::ReactionRemoved {
-            message_id,
-            author_id,
+            sender_id: sender_id_target,
+            sent_at_ns,
             reactor_id: sender_id,
             emoji: reaction.emoji.clone(),
             timestamp: reaction.timestamp,
         }
     } else {
         DomainEvent::ReactionAdded {
-            message_id,
-            author_id,
+            sender_id: sender_id_target,
+            sent_at_ns,
             reactor_id: sender_id,
             emoji: reaction.emoji.clone(),
             timestamp: reaction.timestamp,

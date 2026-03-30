@@ -2,7 +2,7 @@
 //!
 //! Represents emoji reactions on messages.
 
-use crate::domain::ids::{MessageId, ReactionId, UserId};
+use crate::domain::ids::{ReactionId, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -12,12 +12,16 @@ use serde::{Deserialize, Serialize};
 
 /// Represents a reaction on a message.
 ///
-/// Reactions allow users to respond to messages with emoji. Each reaction
-/// is associated with a specific message and user.
+/// Reactions allow users to respond to messages with emoji. Target messages
+/// are identified by (sender_id, sent_at_ns) composite key, matching
+/// Signal Protocol's message identification scheme.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Reaction {
     pub id: ReactionId,
-    pub message_id: MessageId,
+    /// The sender of the target message (target_author_aci in Signal).
+    pub sender_id: UserId,
+    /// The sent timestamp of the target message in nanoseconds since epoch.
+    pub sent_at_ns: u64,
     pub user_id: UserId,
     pub emoji: Emoji,
     pub created_at: DateTime<Utc>,
@@ -26,10 +30,11 @@ pub struct Reaction {
 impl Reaction {
     /// Create a new reaction with a generated ID and current timestamp.
     #[must_use]
-    pub fn new(message_id: MessageId, user_id: UserId, emoji: Emoji) -> Self {
+    pub fn new(sender_id: UserId, sent_at_ns: u64, user_id: UserId, emoji: Emoji) -> Self {
         Self {
             id: ReactionId::new(),
-            message_id,
+            sender_id,
+            sent_at_ns,
             user_id,
             emoji,
             created_at: Utc::now(),
@@ -127,25 +132,28 @@ mod tests {
 
     #[test]
     fn test_reaction_new() {
-        let message_id = MessageId::new();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
         let user_id = UserId::new();
         let emoji = Emoji::unicode("👍");
 
-        let reaction = Reaction::new(message_id, user_id, emoji.clone());
+        let reaction = Reaction::new(sender_id, sent_at_ns, user_id, emoji.clone());
 
-        assert_eq!(reaction.message_id, message_id);
+        assert_eq!(reaction.sender_id, sender_id);
+        assert_eq!(reaction.sent_at_ns, sent_at_ns);
         assert_eq!(reaction.user_id, user_id);
         assert_eq!(reaction.emoji, emoji);
     }
 
     #[test]
     fn test_reaction_is_from_user() {
-        let message_id = MessageId::new();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
         let user_id = UserId::new();
         let other_user_id = UserId::new();
         let emoji = Emoji::unicode("❤️");
 
-        let reaction = Reaction::new(message_id, user_id, emoji);
+        let reaction = Reaction::new(sender_id, sent_at_ns, user_id, emoji);
 
         assert!(reaction.is_from_user(&user_id));
         assert!(!reaction.is_from_user(&other_user_id));

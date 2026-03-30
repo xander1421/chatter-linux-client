@@ -361,13 +361,16 @@ impl EventHandlers {
             // Reaction Events
             // ================================================================
             DomainEvent::ReactionAdded {
-                message_id,
+                sender_id,
+                sent_at_ns,
                 reactor_id,
                 emoji,
                 ..
             } => {
+                let cache_key = crate::domain::MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
                 tracing::info!(
-                    ?message_id,
+                    ?sender_id,
+                    sent_at_ns,
                     ?reactor_id,
                     %emoji,
                     "Inbox event: ReactionAdded received"
@@ -375,32 +378,35 @@ impl EventHandlers {
                 // Determine if current user reacted (would need local user ID context)
                 // For now, assume not current user unless services layer provides that info
                 self.streaming_state
-                    .update_reaction(&message_id, emoji.clone(), 1, None);
+                    .update_reaction(&cache_key, emoji.clone(), 1, None);
                 // Persist to DB so reactions survive reload
                 if let Some(ref svc) = self.message_service {
-                    if let Err(e) = svc.update_reaction(&message_id, &emoji, true) {
-                        tracing::warn!(?message_id, error = %e, "Failed to persist reaction add to DB");
+                    if let Err(e) = svc.update_reaction_by_sender(&sender_id, sent_at_ns, &emoji, true) {
+                        tracing::warn!(?sender_id, sent_at_ns, error = %e, "Failed to persist reaction add to DB");
                     }
                 }
             }
 
             DomainEvent::ReactionRemoved {
-                message_id,
+                sender_id,
+                sent_at_ns,
                 reactor_id,
                 emoji,
                 ..
             } => {
+                let cache_key = crate::domain::MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
                 tracing::info!(
-                    ?message_id,
+                    ?sender_id,
+                    sent_at_ns,
                     ?reactor_id,
                     %emoji,
                     "Inbox event: ReactionRemoved received"
                 );
                 self.streaming_state
-                    .update_reaction(&message_id, emoji.clone(), -1, None);
+                    .update_reaction(&cache_key, emoji.clone(), -1, None);
                 if let Some(ref svc) = self.message_service {
-                    if let Err(e) = svc.update_reaction(&message_id, &emoji, false) {
-                        tracing::warn!(?message_id, error = %e, "Failed to persist reaction remove to DB");
+                    if let Err(e) = svc.update_reaction_by_sender(&sender_id, sent_at_ns, &emoji, false) {
+                        tracing::warn!(?sender_id, sent_at_ns, error = %e, "Failed to persist reaction remove to DB");
                     }
                 }
             }
@@ -1104,19 +1110,20 @@ mod tests {
     #[test]
     fn test_handle_reaction_added() {
         let handlers = create_handlers();
-        let message_id = MessageId::new();
-        let author_id = UserId::new();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
         let reactor_id = UserId::new();
 
         handlers.handle_domain_event(DomainEvent::ReactionAdded {
-            message_id,
-            author_id,
+            sender_id,
+            sent_at_ns,
             reactor_id,
             emoji: "👍".to_string(),
             timestamp: 1234567890,
         });
 
-        let reactions = handlers.streaming_state.get_reactions(&message_id);
+        let cache_key = MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
+        let reactions = handlers.streaming_state.get_reactions(&cache_key);
         assert!(reactions.is_some());
         let reactions = reactions.unwrap();
         assert_eq!(reactions.len(), 1);
@@ -1127,14 +1134,14 @@ mod tests {
     #[test]
     fn test_handle_reaction_removed() {
         let handlers = create_handlers();
-        let message_id = MessageId::new();
-        let author_id = UserId::new();
+        let sender_id = UserId::new();
+        let sent_at_ns: u64 = 1704067200_000_000_000;
         let reactor_id = UserId::new();
 
         // Add reaction
         handlers.handle_domain_event(DomainEvent::ReactionAdded {
-            message_id,
-            author_id,
+            sender_id,
+            sent_at_ns,
             reactor_id,
             emoji: "👍".to_string(),
             timestamp: 1234567890,
@@ -1142,15 +1149,16 @@ mod tests {
 
         // Remove reaction
         handlers.handle_domain_event(DomainEvent::ReactionRemoved {
-            message_id,
-            author_id,
+            sender_id,
+            sent_at_ns,
             reactor_id,
             emoji: "👍".to_string(),
             timestamp: 1234567891,
         });
 
         // Should be removed entirely when count hits 0
-        let reactions = handlers.streaming_state.get_reactions(&message_id);
+        let cache_key = MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
+        let reactions = handlers.streaming_state.get_reactions(&cache_key);
         assert!(reactions.is_none());
     }
 

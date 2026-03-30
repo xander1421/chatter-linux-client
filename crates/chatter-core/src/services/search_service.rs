@@ -452,12 +452,12 @@ mod tests {
         let local_results = vec![
             SearchResult {
                 message_id: MessageId::new(),
-                channel_id: ChannelId::new(),
+                conversation_id: ChannelId::new(),
                 score: -1.5,
             },
             SearchResult {
                 message_id: MessageId::new(),
-                channel_id: ChannelId::new(),
+                conversation_id: ChannelId::new(),
                 score: -2.0,
             },
         ];
@@ -474,7 +474,7 @@ mod tests {
         let local_results = vec![
             SearchResult {
                 message_id: MessageId::new(),
-                channel_id: ChannelId::new(),
+                conversation_id: ChannelId::new(),
                 score: -1.0,
             },
         ];

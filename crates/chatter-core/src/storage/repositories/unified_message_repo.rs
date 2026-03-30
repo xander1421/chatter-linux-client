@@ -446,13 +446,15 @@ impl UnifiedMessageRepository {
     // Reactions (unified_reactions table)
     // ========================================================================
 
-    /// Add a reaction. Inserts into `unified_reactions` and updates blobs on the
-    /// message row. No-op if the (message_id, user_id, emoji) triple already exists.
+    /// Add a reaction using Signal-style (sender_id, sent_at_ns) message identification.
+    /// Inserts into `unified_reactions` and updates blobs on the message row.
+    /// No-op if the (sender_id, sent_at_ns, user_id, emoji) tuple already exists.
     ///
     /// Returns `true` if a new reaction was added.
     pub fn add_reaction(
         &self,
-        message_id: &MessageId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
         user_id: &UserId,
         emoji: &str,
     ) -> Result<bool, StorageError> {
@@ -461,11 +463,12 @@ impl UnifiedMessageRepository {
         let now = Utc::now().to_rfc3339();
 
         let inserted = conn.execute(
-            "INSERT OR IGNORE INTO unified_reactions (id, message_id, user_id, emoji, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR IGNORE INTO unified_reactions (id, sender_id, sent_at_ns, user_id, emoji, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 reaction_id.to_string(),
-                message_id.to_string(),
+                sender_id.to_string(),
+                sent_at_ns as i64,
                 user_id.to_string(),
                 emoji,
                 now,
@@ -477,149 +480,49 @@ impl UnifiedMessageRepository {
         }
 
         // Rebuild blobs from ground truth in unified_reactions
-        self.rebuild_reaction_blobs_with_conn(&conn, message_id, user_id)?;
+        self.rebuild_reaction_blobs_with_conn(&conn, sender_id, sent_at_ns, user_id)?;
         Ok(true)
     }
 
-    /// Remove a reaction by (message_id, user_id, emoji). Updates blobs on the message row.
+    /// Remove a reaction by (sender_id, sent_at_ns, user_id, emoji).
+    /// Updates blobs on the message row.
     ///
     /// Returns `true` if a reaction was actually removed.
     pub fn remove_reaction(
         &self,
-        message_id: &MessageId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
         user_id: &UserId,
         emoji: &str,
     ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
-        let deleted = conn.execute(
-            "DELETE FROM unified_reactions WHERE message_id = ?1 AND user_id = ?2 AND emoji = ?3",
-            params![message_id.to_string(), user_id.to_string(), emoji],
-        )?;
-
-        if deleted == 0 {
-            return Ok(false);
-        }
-
-        self.rebuild_reaction_blobs_with_conn(&conn, message_id, user_id)?;
-        Ok(true)
-    }
-
-    /// Add a reaction by (conversation_id, sent_at) tuple — Signal-style identification.
-    ///
-    /// Uses a SQL subquery to resolve the message, avoiding a separate lookup round-trip.
-    /// Returns `true` if a new reaction was added.
-    pub fn add_reaction_by_timestamp(
-        &self,
-        conversation_id: &ChannelId,
-        sent_at: u64,
-        user_id: &UserId,
-        emoji: &str,
-    ) -> Result<bool, StorageError> {
-        let conn = self.db.connection()?;
-        let reaction_id = ReactionId::new();
-        let now = Utc::now().to_rfc3339();
-
-        // Resolve message_id via subquery and insert in one statement.
-        let inserted = conn.execute(
-            "INSERT OR IGNORE INTO unified_reactions (id, message_id, user_id, emoji, created_at)
-             SELECT ?1, m.id, ?2, ?3, ?4
-             FROM messages m
-             WHERE m.conversation_id = ?5 AND m.sent_at = ?6 AND m.is_deleted = 0
-             LIMIT 1",
-            params![
-                reaction_id.to_string(),
-                user_id.to_string(),
-                emoji,
-                now,
-                conversation_id.to_string(),
-                sent_at as i64,
-            ],
-        )?;
-
-        if inserted == 0 {
-            return Ok(false); // Message not found or reaction already exists
-        }
-
-        // Look up the resolved message_id to rebuild blobs.
-        let message_id = self.resolve_message_id(&conn, conversation_id, sent_at)?;
-        if let Some(mid) = message_id {
-            self.rebuild_reaction_blobs_with_conn(&conn, &mid, user_id)?;
-        }
-        Ok(true)
-    }
-
-    /// Remove a reaction by (conversation_id, sent_at) tuple — Signal-style identification.
-    ///
-    /// Returns `true` if a reaction was actually removed.
-    pub fn remove_reaction_by_timestamp(
-        &self,
-        conversation_id: &ChannelId,
-        sent_at: u64,
-        user_id: &UserId,
-        emoji: &str,
-    ) -> Result<bool, StorageError> {
-        let conn = self.db.connection()?;
-
         let deleted = conn.execute(
             "DELETE FROM unified_reactions
-             WHERE user_id = ?1 AND emoji = ?2
-               AND message_id IN (
-                   SELECT id FROM messages
-                   WHERE conversation_id = ?3 AND sent_at = ?4 AND is_deleted = 0
-               )",
-            params![
-                user_id.to_string(),
-                emoji,
-                conversation_id.to_string(),
-                sent_at as i64,
-            ],
+             WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND emoji = ?4",
+            params![sender_id.to_string(), sent_at_ns as i64, user_id.to_string(), emoji],
         )?;
 
         if deleted == 0 {
             return Ok(false);
         }
 
-        let message_id = self.resolve_message_id(&conn, conversation_id, sent_at)?;
-        if let Some(mid) = message_id {
-            self.rebuild_reaction_blobs_with_conn(&conn, &mid, user_id)?;
-        }
+        self.rebuild_reaction_blobs_with_conn(&conn, sender_id, sent_at_ns, user_id)?;
         Ok(true)
     }
 
-    /// Resolve a message UUID from (conversation_id, sent_at).
-    fn resolve_message_id(
+    /// Get all reactions on a message identified by (sender_id, sent_at_ns).
+    pub fn get_reactions(
         &self,
-        conn: &rusqlite::Connection,
-        conversation_id: &ChannelId,
-        sent_at: u64,
-    ) -> Result<Option<MessageId>, StorageError> {
-        match conn.query_row(
-            "SELECT id FROM messages WHERE conversation_id = ?1 AND sent_at = ?2 AND is_deleted = 0 LIMIT 1",
-            params![conversation_id.to_string(), sent_at as i64],
-            |row| {
-                let id_str: String = row.get(0)?;
-                Ok(id_str)
-            },
-        ) {
-            Ok(id_str) => {
-                let mid: MessageId = id_str.parse()
-                    .map_err(|_| StorageError::InvalidData(format!("Invalid message UUID: {}", id_str)))?;
-                Ok(Some(mid))
-            }
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
-    }
-
-    /// Get all reactions on a message.
-    pub fn get_reactions(&self, message_id: &MessageId) -> Result<Vec<Reaction>, StorageError> {
+        sender_id: &UserId,
+        sent_at_ns: u64,
+    ) -> Result<Vec<Reaction>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, message_id, user_id, emoji, created_at
-             FROM unified_reactions WHERE message_id = ?1
+            "SELECT id, sender_id, sent_at_ns, user_id, emoji, created_at
+             FROM unified_reactions WHERE sender_id = ?1 AND sent_at_ns = ?2
              ORDER BY created_at ASC",
         )?;
-        let mut rows = stmt.query(params![message_id.to_string()])?;
+        let mut rows = stmt.query(params![sender_id.to_string(), sent_at_ns as i64])?;
         let mut reactions = Vec::new();
         while let Some(row) = rows.next()? {
             reactions.push(row_to_reaction(row)?);
@@ -630,14 +533,15 @@ impl UnifiedMessageRepository {
     /// Get reaction counts per emoji for a message (from unified_reactions, not blob).
     pub fn get_reaction_counts(
         &self,
-        message_id: &MessageId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
     ) -> Result<Vec<ReactionCount>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT emoji, COUNT(*) FROM unified_reactions
-             WHERE message_id = ?1 GROUP BY emoji ORDER BY COUNT(*) DESC",
+             WHERE sender_id = ?1 AND sent_at_ns = ?2 GROUP BY emoji ORDER BY COUNT(*) DESC",
         )?;
-        let mut rows = stmt.query(params![message_id.to_string()])?;
+        let mut rows = stmt.query(params![sender_id.to_string(), sent_at_ns as i64])?;
         let mut counts = Vec::new();
         while let Some(row) = rows.next()? {
             let emoji_str: String = row.get(0)?;
@@ -657,12 +561,12 @@ impl UnifiedMessageRepository {
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT m.sent_at, r.emoji, COUNT(*) as cnt
+            "SELECT r.sent_at_ns, r.emoji, COUNT(*) as cnt
              FROM unified_reactions r
-             INNER JOIN messages m ON r.message_id = m.id
+             INNER JOIN messages m ON r.sender_id = m.sender_id AND r.sent_at_ns = m.sent_at
              WHERE m.conversation_id = ?1 AND m.conversation_type = ?2 AND m.is_deleted = 0
-             GROUP BY m.sent_at, r.emoji
-             ORDER BY m.sent_at, cnt DESC",
+             GROUP BY r.sent_at_ns, r.emoji
+             ORDER BY r.sent_at_ns, cnt DESC",
         )?;
         let mut rows = stmt.query(params![conversation_id.to_string(), conversation_type.as_str()])?;
         let mut map: std::collections::HashMap<u64, Vec<(String, u32)>> =
@@ -1160,20 +1064,23 @@ impl UnifiedMessageRepository {
 
     /// Rebuild `reaction_counts_blob` and `current_user_reactions_blob` on the
     /// message row from the `unified_reactions` table (source of truth).
+    /// Resolves the message row via (sender_id, sent_at) in the messages table.
     fn rebuild_reaction_blobs_with_conn(
         &self,
         conn: &rusqlite::Connection,
-        message_id: &MessageId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
         current_user_id: &UserId,
     ) -> Result<(), StorageError> {
-        let mid = message_id.to_string();
+        let sid = sender_id.to_string();
         let uid = current_user_id.to_string();
 
         // Reaction counts
         let mut stmt = conn.prepare(
-            "SELECT emoji, COUNT(*) FROM unified_reactions WHERE message_id = ?1 GROUP BY emoji",
+            "SELECT emoji, COUNT(*) FROM unified_reactions
+             WHERE sender_id = ?1 AND sent_at_ns = ?2 GROUP BY emoji",
         )?;
-        let mut rows = stmt.query(params![&mid])?;
+        let mut rows = stmt.query(params![&sid, sent_at_ns as i64])?;
         let mut counts: Vec<ReactionCount> = Vec::new();
         while let Some(row) = rows.next()? {
             let emoji_str: String = row.get(0)?;
@@ -1185,9 +1092,10 @@ impl UnifiedMessageRepository {
 
         // Current user's reactions
         let mut stmt2 = conn.prepare(
-            "SELECT emoji FROM unified_reactions WHERE message_id = ?1 AND user_id = ?2",
+            "SELECT emoji FROM unified_reactions
+             WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3",
         )?;
-        let mut rows2 = stmt2.query(params![&mid, &uid])?;
+        let mut rows2 = stmt2.query(params![&sid, sent_at_ns as i64, &uid])?;
         let mut user_reactions: Vec<String> = Vec::new();
         while let Some(row) = rows2.next()? {
             user_reactions.push(row.get(0)?);
@@ -1198,10 +1106,11 @@ impl UnifiedMessageRepository {
         let counts_blob = db_serialize(&counts)?;
         let user_blob = db_serialize(&user_reactions)?;
 
+        // Update the message row, resolving via (sender_id, sent_at)
         conn.execute(
             "UPDATE messages SET reaction_counts_blob = ?1, current_user_reactions_blob = ?2, updated_at = ?3
-             WHERE id = ?4",
-            params![counts_blob, user_blob, Utc::now().to_rfc3339(), &mid],
+             WHERE sender_id = ?4 AND sent_at = ?5 AND is_deleted = 0",
+            params![counts_blob, user_blob, Utc::now().to_rfc3339(), &sid, sent_at_ns as i64],
         )?;
 
         Ok(())
@@ -1345,20 +1254,23 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
 }
 
 /// Map a unified_reactions row to Reaction.
+/// Expected columns: id, sender_id, sent_at_ns, user_id, emoji, created_at
 fn row_to_reaction(row: &rusqlite::Row<'_>) -> Result<Reaction, StorageError> {
     let id_str: String = row.get(0).map_err(StorageError::Database)?;
-    let msg_id_str: String = row.get(1).map_err(StorageError::Database)?;
-    let user_id_str: String = row.get(2).map_err(StorageError::Database)?;
-    let emoji_str: String = row.get(3).map_err(StorageError::Database)?;
-    let created_at_str: String = row.get(4).map_err(StorageError::Database)?;
+    let sender_id_str: String = row.get(1).map_err(StorageError::Database)?;
+    let sent_at_ns: i64 = row.get(2).map_err(StorageError::Database)?;
+    let user_id_str: String = row.get(3).map_err(StorageError::Database)?;
+    let emoji_str: String = row.get(4).map_err(StorageError::Database)?;
+    let created_at_str: String = row.get(5).map_err(StorageError::Database)?;
 
     Ok(Reaction {
         id: id_str
             .parse()
             .map_err(|e| StorageError::InvalidData(format!("Invalid reaction ID: {}", e)))?,
-        message_id: msg_id_str
+        sender_id: sender_id_str
             .parse()
-            .map_err(|e| StorageError::InvalidData(format!("Invalid message ID: {}", e)))?,
+            .map_err(|e| StorageError::InvalidData(format!("Invalid sender ID: {}", e)))?,
+        sent_at_ns: sent_at_ns as u64,
         user_id: user_id_str
             .parse()
             .map_err(|e| StorageError::InvalidData(format!("Invalid user ID: {}", e)))?,

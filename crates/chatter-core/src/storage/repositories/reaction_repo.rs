@@ -1,8 +1,9 @@
 //! Reaction repository.
 //!
-//! Data access for reaction entities.
+//! Data access for reaction entities. Target messages are identified by
+//! (sender_id, sent_at_ns) composite key matching Signal Protocol.
 
-use crate::domain::ids::{MessageId, ReactionId, UserId};
+use crate::domain::ids::{ReactionId, UserId};
 use crate::domain::message::ReactionCount;
 use crate::domain::reaction::{Emoji, Reaction};
 use crate::error::StorageError;
@@ -33,11 +34,12 @@ impl ReactionRepository {
             .map_err(|e| StorageError::InvalidData(format!("Failed to serialize emoji: {}", e)))?;
 
         conn.execute(
-            "INSERT INTO reactions (id, message_id, user_id, emoji_json, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO reactions (id, sender_id, sent_at_ns, user_id, emoji_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 reaction.id.to_string(),
-                reaction.message_id.to_string(),
+                reaction.sender_id.to_string(),
+                reaction.sent_at_ns as i64,
                 reaction.user_id.to_string(),
                 emoji_json,
                 reaction.created_at.to_rfc3339(),
@@ -51,7 +53,7 @@ impl ReactionRepository {
     pub fn get(&self, id: &ReactionId) -> Result<Option<Reaction>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, message_id, user_id, emoji_json, created_at
+            "SELECT id, sender_id, sent_at_ns, user_id, emoji_json, created_at
              FROM reactions WHERE id = ?1",
         )?;
 
@@ -83,33 +85,42 @@ impl ReactionRepository {
     // Queries
     // ========================================================================
 
-    /// List all reactions on a message.
-    pub fn list_for_message(&self, message_id: &MessageId) -> Result<Vec<Reaction>, StorageError> {
+    /// List all reactions on a message identified by (sender_id, sent_at_ns).
+    pub fn list_for_message(
+        &self,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+    ) -> Result<Vec<Reaction>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, message_id, user_id, emoji_json, created_at
-             FROM reactions WHERE message_id = ?1
+            "SELECT id, sender_id, sent_at_ns, user_id, emoji_json, created_at
+             FROM reactions WHERE sender_id = ?1 AND sent_at_ns = ?2
              ORDER BY created_at ASC",
         )?;
 
-        let mut rows = stmt.query(params![message_id.to_string()])?;
+        let mut rows = stmt.query(params![sender_id.to_string(), sent_at_ns as i64])?;
         collect_reactions(&mut rows)
     }
 
     /// List a user's reactions on a specific message.
     pub fn list_user_reactions_on_message(
         &self,
-        message_id: &MessageId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
         user_id: &UserId,
     ) -> Result<Vec<Reaction>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, message_id, user_id, emoji_json, created_at
-             FROM reactions WHERE message_id = ?1 AND user_id = ?2
+            "SELECT id, sender_id, sent_at_ns, user_id, emoji_json, created_at
+             FROM reactions WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3
              ORDER BY created_at ASC",
         )?;
 
-        let mut rows = stmt.query(params![message_id.to_string(), user_id.to_string()])?;
+        let mut rows = stmt.query(params![
+            sender_id.to_string(),
+            sent_at_ns as i64,
+            user_id.to_string(),
+        ])?;
         collect_reactions(&mut rows)
     }
 
@@ -118,7 +129,8 @@ impl ReactionRepository {
     /// Returns `true` if the reaction was added, `false` if removed.
     pub fn toggle(
         &self,
-        message_id: &MessageId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
         user_id: &UserId,
         emoji: &Emoji,
     ) -> Result<bool, StorageError> {
@@ -126,12 +138,17 @@ impl ReactionRepository {
         let emoji_json = serde_json::to_string(emoji)
             .map_err(|e| StorageError::InvalidData(format!("Failed to serialize emoji: {}", e)))?;
 
-        // Try to find existing reaction with matching (message_id, user_id, emoji_json)
+        // Try to find existing reaction with matching (sender_id, sent_at_ns, user_id, emoji_json)
         let existing_id: Option<String> = conn
             .query_row(
                 "SELECT id FROM reactions
-                 WHERE message_id = ?1 AND user_id = ?2 AND emoji_json = ?3",
-                params![message_id.to_string(), user_id.to_string(), emoji_json],
+                 WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND emoji_json = ?4",
+                params![
+                    sender_id.to_string(),
+                    sent_at_ns as i64,
+                    user_id.to_string(),
+                    emoji_json,
+                ],
                 |row| row.get(0),
             )
             .ok();
@@ -142,18 +159,19 @@ impl ReactionRepository {
             Ok(false)
         } else {
             // Doesn't exist: insert new reaction and return true
-            let reaction = Reaction::new(*message_id, *user_id, emoji.clone());
+            let reaction = Reaction::new(*sender_id, sent_at_ns, *user_id, emoji.clone());
             let new_emoji_json = serde_json::to_string(&reaction.emoji)
                 .map_err(|e| {
                     StorageError::InvalidData(format!("Failed to serialize emoji: {}", e))
                 })?;
 
             conn.execute(
-                "INSERT INTO reactions (id, message_id, user_id, emoji_json, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO reactions (id, sender_id, sent_at_ns, user_id, emoji_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     reaction.id.to_string(),
-                    reaction.message_id.to_string(),
+                    reaction.sender_id.to_string(),
+                    reaction.sent_at_ns as i64,
                     reaction.user_id.to_string(),
                     new_emoji_json,
                     reaction.created_at.to_rfc3339(),
@@ -170,17 +188,18 @@ impl ReactionRepository {
     /// Get reaction counts per emoji for a message.
     pub fn get_reaction_counts(
         &self,
-        message_id: &MessageId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
     ) -> Result<Vec<ReactionCount>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT emoji_json, COUNT(*) as count
              FROM reactions
-             WHERE message_id = ?1
+             WHERE sender_id = ?1 AND sent_at_ns = ?2
              GROUP BY emoji_json",
         )?;
 
-        let mut rows = stmt.query(params![message_id.to_string()])?;
+        let mut rows = stmt.query(params![sender_id.to_string(), sent_at_ns as i64])?;
         let mut counts = Vec::new();
 
         while let Some(row) = rows.next()? {
@@ -213,10 +232,11 @@ fn parse_datetime(s: &str) -> DateTime<Utc> {
 /// Convert a database row to Reaction.
 fn row_to_reaction(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Reaction, StorageError>> {
     let id_str: String = row.get(0)?;
-    let message_id_str: String = row.get(1)?;
-    let user_id_str: String = row.get(2)?;
-    let emoji_json: String = row.get(3)?;
-    let created_at_str: String = row.get(4)?;
+    let sender_id_str: String = row.get(1)?;
+    let sent_at_ns: i64 = row.get(2)?;
+    let user_id_str: String = row.get(3)?;
+    let emoji_json: String = row.get(4)?;
+    let created_at_str: String = row.get(5)?;
 
     let id: ReactionId = match id_str.parse() {
         Ok(id) => id,
@@ -228,11 +248,11 @@ fn row_to_reaction(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Reaction,
         }
     };
 
-    let message_id: MessageId = match message_id_str.parse() {
+    let sender_id: UserId = match sender_id_str.parse() {
         Ok(id) => id,
         Err(e) => {
             return Ok(Err(StorageError::InvalidData(format!(
-                "Invalid message ID: {}",
+                "Invalid sender ID: {}",
                 e
             ))))
         }
@@ -260,7 +280,8 @@ fn row_to_reaction(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Reaction,
 
     Ok(Ok(Reaction {
         id,
-        message_id,
+        sender_id,
+        sent_at_ns: sent_at_ns as u64,
         user_id,
         emoji,
         created_at: parse_datetime(&created_at_str),

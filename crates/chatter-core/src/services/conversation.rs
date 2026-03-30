@@ -86,10 +86,11 @@ impl ConversationHandle {
                     .await?;
                 // Persist own reaction
                 if let Some(user_id) = self.client.auth_state().get().current_user_id {
+                    let target_sender_id: UserId = target_author.parse().unwrap_or(user_id);
                     if remove {
-                        let _ = self.client.anon_dms().remove_reaction(id, target_sent_timestamp, &user_id, emoji);
+                        let _ = self.client.anon_dms().remove_reaction(id, &target_sender_id, target_sent_timestamp, &user_id, emoji);
                     } else {
-                        let _ = self.client.anon_dms().add_reaction(id, target_sent_timestamp, &user_id, emoji);
+                        let _ = self.client.anon_dms().add_reaction(id, &target_sender_id, target_sent_timestamp, &user_id, emoji);
                     }
                 }
                 Ok(())
@@ -100,7 +101,12 @@ impl ConversationHandle {
                     .await?;
                 // Persist own reaction
                 if let Some(user_id) = self.client.auth_state().get().current_user_id {
-                    let _ = self.client.anon_groups().add_reaction(id, target_sent_timestamp, &user_id, emoji);
+                    let target_sender_id: UserId = target_author.parse().unwrap_or(user_id);
+                    if remove {
+                        let _ = self.client.anon_groups().remove_reaction(id, &target_sender_id, target_sent_timestamp, &user_id, emoji);
+                    } else {
+                        let _ = self.client.anon_groups().add_reaction(id, &target_sender_id, target_sent_timestamp, &user_id, emoji);
+                    }
                 }
                 Ok(())
             }

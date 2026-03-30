@@ -311,10 +311,10 @@ pub enum DomainEvent {
     },
     /// Reaction added to message.
     ReactionAdded {
-        /// Target message (identified by timestamp in Signal protocol).
-        message_id: MessageId,
-        /// Message author's ID (for lookup with target_author_aci).
-        author_id: UserId,
+        /// Target message sender (target_author_aci in Signal protocol).
+        sender_id: UserId,
+        /// Target message sent timestamp in nanoseconds (target_sent_timestamp).
+        sent_at_ns: u64,
         /// User who added the reaction.
         reactor_id: UserId,
         /// Emoji used.
@@ -324,10 +324,10 @@ pub enum DomainEvent {
     },
     /// Reaction removed from message.
     ReactionRemoved {
-        /// Target message (identified by timestamp in Signal protocol).
-        message_id: MessageId,
-        /// Message author's ID (for lookup with target_author_aci).
-        author_id: UserId,
+        /// Target message sender (target_author_aci in Signal protocol).
+        sender_id: UserId,
+        /// Target message sent timestamp in nanoseconds (target_sent_timestamp).
+        sent_at_ns: u64,
         /// User who removed the reaction.
         reactor_id: UserId,
         /// Emoji that was removed.

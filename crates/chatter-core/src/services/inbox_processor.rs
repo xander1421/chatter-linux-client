@@ -717,26 +717,24 @@ impl InboxEventProcessor {
             // =================================================================
 
             InboxEvent::DmReaction { peer_id, emoji, remove, target_sent_timestamp, target_author_aci, .. } => {
-                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
-                    let event = if *remove {
-                        DomainEvent::ReactionRemoved { message_id: msg.id, author_id: msg.sender_id.unwrap_or(*peer_id), reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
-                    } else {
-                        DomainEvent::ReactionAdded { message_id: msg.id, author_id: msg.sender_id.unwrap_or(*peer_id), reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
-                    };
-                    self.event_bus.emit_domain(event);
-                }
+                let sender_id = target_author_aci.parse().unwrap_or(*peer_id);
+                let event = if *remove {
+                    DomainEvent::ReactionRemoved { sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                } else {
+                    DomainEvent::ReactionAdded { sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *peer_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                };
+                self.event_bus.emit_domain(event);
                 false
             }
 
             InboxEvent::ChannelReaction { channel_id: _, sender_id, emoji, remove, target_sent_timestamp, target_author_aci, .. } => {
-                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
-                    let event = if *remove {
-                        DomainEvent::ReactionRemoved { message_id: msg.id, author_id: msg.sender_id.unwrap_or(*sender_id), reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
-                    } else {
-                        DomainEvent::ReactionAdded { message_id: msg.id, author_id: msg.sender_id.unwrap_or(*sender_id), reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
-                    };
-                    self.event_bus.emit_domain(event);
-                }
+                let target_sender_id = target_author_aci.parse().unwrap_or(*sender_id);
+                let event = if *remove {
+                    DomainEvent::ReactionRemoved { sender_id: target_sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                } else {
+                    DomainEvent::ReactionAdded { sender_id: target_sender_id, sent_at_ns: *target_sent_timestamp, reactor_id: *sender_id, emoji: emoji.clone(), timestamp: *target_sent_timestamp }
+                };
+                self.event_bus.emit_domain(event);
                 false
             }
 
@@ -1291,23 +1289,23 @@ impl InboxEventProcessor {
 
             // Persist ephemeral actions to anon group DB and emit domain events for real-time UI
             Some(content::Content::Reaction(reaction)) => {
-                let message_id = crate::domain::MessageId::from_timestamp(reaction.target_sent_timestamp);
-                let author_id = reaction.target_author_aci.parse().unwrap_or(peer_id);
+                let sender_id = reaction.target_author_aci.parse().unwrap_or(peer_id);
+                let sent_at_ns = reaction.target_sent_timestamp;
 
                 if reaction.remove {
-                    let _ = self.anon_group_service.remove_reaction(&anon_group_id, reaction.target_sent_timestamp, &peer_id, &reaction.emoji);
+                    let _ = self.anon_group_service.remove_reaction(&anon_group_id, &sender_id, sent_at_ns, &peer_id, &reaction.emoji);
                     self.event_bus.emit_domain(DomainEvent::ReactionRemoved {
-                        message_id,
-                        author_id,
+                        sender_id,
+                        sent_at_ns,
                         reactor_id: peer_id,
                         emoji: reaction.emoji.clone(),
                         timestamp: reaction.target_sent_timestamp,
                     });
                 } else {
-                    let _ = self.anon_group_service.add_reaction(&anon_group_id, reaction.target_sent_timestamp, &peer_id, &reaction.emoji);
+                    let _ = self.anon_group_service.add_reaction(&anon_group_id, &sender_id, sent_at_ns, &peer_id, &reaction.emoji);
                     self.event_bus.emit_domain(DomainEvent::ReactionAdded {
-                        message_id,
-                        author_id,
+                        sender_id,
+                        sent_at_ns,
                         reactor_id: peer_id,
                         emoji: reaction.emoji.clone(),
                         timestamp: reaction.target_sent_timestamp,

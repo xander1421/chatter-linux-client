@@ -158,12 +158,14 @@ pub async fn handle_domain_event(
         }
 
         // Reaction UI updates: update emoji summary on the message bubble + sidebar
-        DomainEvent::ReactionAdded { message_id, emoji, timestamp, .. } => {
-            messaging::handle_reaction_update(window, &message_id.to_string(), &emoji, false, timestamp);
+        DomainEvent::ReactionAdded { sender_id, sent_at_ns, emoji, timestamp, .. } => {
+            let msg_key = format!("{}:{}", sender_id, sent_at_ns);
+            messaging::handle_reaction_update(window, &msg_key, &emoji, false, timestamp);
             messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, false);
         }
-        DomainEvent::ReactionRemoved { message_id, emoji, timestamp, .. } => {
-            messaging::handle_reaction_update(window, &message_id.to_string(), &emoji, true, timestamp);
+        DomainEvent::ReactionRemoved { sender_id, sent_at_ns, emoji, timestamp, .. } => {
+            let msg_key = format!("{}:{}", sender_id, sent_at_ns);
+            messaging::handle_reaction_update(window, &msg_key, &emoji, true, timestamp);
             messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, true);
         }
 

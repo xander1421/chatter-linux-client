@@ -16,8 +16,13 @@ pub enum OperationType {
         channel_id: String,
         content: Vec<u8>, // Serialized message content
     },
-    /// Send a reaction
-    SendReaction { message_id: String, emoji: String },
+    /// Send a reaction (Signal-style identification)
+    SendReaction {
+        channel_id: String,
+        target_author_aci: String,
+        target_sent_timestamp: u64,
+        emoji: String,
+    },
     /// Mark messages as read
     MarkRead {
         channel_id: String,

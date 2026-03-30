@@ -428,7 +428,9 @@ mod tests {
     // Helper to create a test reaction operation
     fn reaction_op(msg_id: &str, emoji: &str) -> OperationType {
         OperationType::SendReaction {
-            message_id: msg_id.to_string(),
+            channel_id: "test-channel".to_string(),
+            target_author_aci: msg_id.to_string(),
+            target_sent_timestamp: 1704067200_000_000_000,
             emoji: emoji.to_string(),
         }
     }

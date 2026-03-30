@@ -209,8 +209,8 @@ fn test_domain_event_key_variants() {
 
     // Reaction events
     let reaction = DomainEvent::ReactionAdded {
-        message_id,
-        author_id: user_id,
+        sender_id: user_id,
+        sent_at_ns: 1234567890,
         reactor_id: UserId::new(),
         emoji: "👍".to_string(),
         timestamp: 1234567890,

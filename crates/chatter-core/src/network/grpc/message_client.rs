@@ -501,22 +501,25 @@ impl MessageClient {
 
     // ==================== Reaction RPCs ====================
 
-    /// Add a reaction to a message.
+    /// Add a reaction to a message using Signal-style identification.
     ///
     /// # Arguments
     ///
-    /// * `message_id` - Message to react to
     /// * `channel_id` - Channel containing the message
+    /// * `target_author_aci` - UUID of the target message sender
+    /// * `target_sent_timestamp` - Sent timestamp of the target message (nanoseconds)
     /// * `emoji` - Emoji reaction (Unicode or custom format)
     pub async fn add_reaction(
         &mut self,
-        message_id: &str,
         channel_id: &str,
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
         emoji: &str,
     ) -> Result<Message, NetworkError> {
         let request = ReactionRequest {
-            message_id: message_id.to_string(),
             channel_id: channel_id.to_string(),
+            target_author_aci: target_author_aci.to_string(),
+            target_sent_timestamp,
             emoji: emoji.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
@@ -528,22 +531,25 @@ impl MessageClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Remove a reaction from a message.
+    /// Remove a reaction from a message using Signal-style identification.
     ///
     /// # Arguments
     ///
-    /// * `message_id` - Message to remove reaction from
     /// * `channel_id` - Channel containing the message
+    /// * `target_author_aci` - UUID of the target message sender
+    /// * `target_sent_timestamp` - Sent timestamp of the target message (nanoseconds)
     /// * `emoji` - Emoji reaction to remove
     pub async fn remove_reaction(
         &mut self,
-        message_id: &str,
         channel_id: &str,
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
         emoji: &str,
     ) -> Result<Message, NetworkError> {
         let request = ReactionRequest {
-            message_id: message_id.to_string(),
             channel_id: channel_id.to_string(),
+            target_author_aci: target_author_aci.to_string(),
+            target_sent_timestamp,
             emoji: emoji.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
         };
@@ -555,26 +561,29 @@ impl MessageClient {
             .map_err(|s| NetworkError::from_status(&s))
     }
 
-    /// Get reactions for a message.
+    /// Get reactions for a message using Signal-style identification.
     ///
     /// # Arguments
     ///
-    /// * `message_id` - Message to get reactions for
     /// * `channel_id` - Channel containing the message
+    /// * `target_author_aci` - UUID of the target message sender
+    /// * `target_sent_timestamp` - Sent timestamp of the target message (nanoseconds)
     /// * `limit` - Max reactions to return
     /// * `offset` - Pagination offset
     /// * `emoji_filter` - Optional filter by specific emoji
     pub async fn get_message_reactions(
         &mut self,
-        message_id: &str,
         channel_id: &str,
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
         limit: i32,
         offset: i32,
         emoji_filter: Option<&str>,
     ) -> Result<GetMessageReactionsResponse, NetworkError> {
         let request = GetMessageReactionsRequest {
-            message_id: message_id.to_string(),
             channel_id: channel_id.to_string(),
+            target_author_aci: target_author_aci.to_string(),
+            target_sent_timestamp,
             limit,
             offset,
             emoji_filter: emoji_filter.unwrap_or("").to_string(),

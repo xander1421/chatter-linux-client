@@ -365,7 +365,7 @@ async fn test_e2e_message_reactions() {
 
         let reacted_msg = assert_ok(
             msg_client
-                .add_reaction(&message.id, &channel_id, emoji)
+                .add_reaction(&channel_id, &message.author_id, message.timestamp, emoji)
                 .await,
         );
 
@@ -380,7 +380,7 @@ async fn test_e2e_message_reactions() {
     // Verify reactions
     let reaction_response = assert_ok(
         sender_client
-            .get_message_reactions(&message.id, &channel_id, 10, 0, None)
+            .get_message_reactions(&channel_id, &message.author_id, message.timestamp, 10, 0, None)
             .await,
     );
 

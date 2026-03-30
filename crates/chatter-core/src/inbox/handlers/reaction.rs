@@ -9,7 +9,7 @@ use prost::Message as ProstMessage;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::domain::{MessageId, UserId};
+use crate::domain::UserId;
 use crate::inbox::processor::{ContentType, ProcessedMessage};
 use crate::proto::content_v1::{content, Content, Reaction};
 
@@ -18,17 +18,6 @@ use super::{DomainEvent, HandlerContext, HandlerError, HandlerOutcome, HandlerRe
 // ============================================================================
 // UUID Helpers
 // ============================================================================
-
-/// Create a deterministic UUID from a u64 timestamp.
-fn uuid_from_timestamp(ts: u64) -> Uuid {
-    let hash = Sha256::digest(ts.to_le_bytes());
-    let mut uuid_bytes = [0u8; 16];
-    uuid_bytes.copy_from_slice(&hash[..16]);
-    // Set version 4 (random) and variant 1 (RFC 4122)
-    uuid_bytes[6] = (uuid_bytes[6] & 0x0f) | 0x40;
-    uuid_bytes[8] = (uuid_bytes[8] & 0x3f) | 0x80;
-    Uuid::from_bytes(uuid_bytes)
-}
 
 /// Create a deterministic UUID from a string.
 fn uuid_from_string(s: &str) -> Uuid {
@@ -110,19 +99,18 @@ impl InboxHandler for ReactionHandler {
             .ok_or_else(|| HandlerError::missing_context("sender_address"))?;
 
         // Parse target message author from ACI
-        let author_id =
+        let sender_id =
             UserId::from_str(&reaction.target_author_aci).unwrap_or_else(|_| {
                 UserId::from_uuid(uuid_from_string(&reaction.target_author_aci))
             });
 
-        // Derive message ID from target timestamp (Signal uses timestamps as message IDs)
-        let message_id = MessageId::from_uuid(uuid_from_timestamp(reaction.target_sent_timestamp));
+        let sent_at_ns = reaction.target_sent_timestamp;
 
         // Emit appropriate event based on remove flag
         let action = if reaction.remove { "remove" } else { "add" };
         tracing::info!(
-            ?message_id,
-            ?author_id,
+            ?sender_id,
+            sent_at_ns,
             ?reactor_id,
             emoji = %reaction.emoji,
             action = %action,
@@ -132,16 +120,16 @@ impl InboxHandler for ReactionHandler {
 
         let event = if reaction.remove {
             DomainEvent::ReactionRemoved {
-                message_id,
-                author_id,
+                sender_id,
+                sent_at_ns,
                 reactor_id,
                 emoji: reaction.emoji.clone(),
                 timestamp: reaction.timestamp,
             }
         } else {
             DomainEvent::ReactionAdded {
-                message_id,
-                author_id,
+                sender_id,
+                sent_at_ns,
                 reactor_id,
                 emoji: reaction.emoji.clone(),
                 timestamp: reaction.timestamp,
@@ -218,11 +206,12 @@ mod tests {
         // Verify event was emitted
         let event = rx.try_recv().unwrap();
         if let DomainEvent::ReactionAdded {
-            emoji, timestamp, ..
+            emoji, timestamp, sent_at_ns, ..
         } = event
         {
             assert_eq!(emoji, "👍");
             assert_eq!(timestamp, 1704067201000);
+            assert_eq!(sent_at_ns, 1704067200000);
         } else {
             panic!("Expected ReactionAdded event");
         }

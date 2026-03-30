@@ -4192,33 +4192,37 @@ pub struct StreamMessagesRequest {
     #[prost(string, tag="2")]
     pub resume_from_message_id: ::prost::alloc::string::String,
 }
-/// New definition for ReactionRequest
+/// ReactionRequest uses Signal-style (target_author_aci, target_sent_timestamp) routing.
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReactionRequest {
     #[prost(string, tag="1")]
-    pub message_id: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
     pub channel_id: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub emoji: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub target_author_aci: ::prost::alloc::string::String,
+    #[prost(fixed64, tag="3")]
+    pub target_sent_timestamp: u64,
     #[prost(string, tag="4")]
+    pub emoji: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
     pub request_id: ::prost::alloc::string::String,
 }
-/// Request to get reactions for a specific message
+/// Request to get reactions for a specific message (Signal-style timestamp routing)
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetMessageReactionsRequest {
     #[prost(string, tag="1")]
-    pub message_id: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
     pub channel_id: ::prost::alloc::string::String,
-    #[prost(int32, tag="3")]
-    pub limit: i32,
+    #[prost(string, tag="2")]
+    pub target_author_aci: ::prost::alloc::string::String,
+    #[prost(fixed64, tag="3")]
+    pub target_sent_timestamp: u64,
     #[prost(int32, tag="4")]
+    pub limit: i32,
+    #[prost(int32, tag="5")]
     pub offset: i32,
     /// Optional: filter by emoji
-    #[prost(string, tag="5")]
+    #[prost(string, tag="6")]
     pub emoji_filter: ::prost::alloc::string::String,
 }
 /// Response containing reactions for a message
@@ -4226,10 +4230,12 @@ pub struct GetMessageReactionsRequest {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetMessageReactionsResponse {
     #[prost(string, tag="1")]
-    pub message_id: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="2")]
+    pub target_author_aci: ::prost::alloc::string::String,
+    #[prost(fixed64, tag="2")]
+    pub target_sent_timestamp: u64,
+    #[prost(message, repeated, tag="3")]
     pub reactions: ::prost::alloc::vec::Vec<Reaction>,
-    #[prost(int32, tag="3")]
+    #[prost(int32, tag="4")]
     pub total_count: i32,
 }
 /// New definition for SendReadReceiptRequest
