@@ -257,6 +257,8 @@ export component MessageItem inherits Rectangle {
 
                 bubble := Rectangle {
                     property <bool> bubble-hovered: bubble-touch.has-hover;
+                    accessible-role: text;
+                    accessible-label: root.is-own ? "Your message: " + root.content : root.sender-name + " says: " + root.content;
 
                     // AI messages get distinct styling with primary color tint
                     background: root.is-ai
@@ -981,6 +983,8 @@ export component MessageItem inherits Rectangle {
                     border-color: Colors.text-muted.with-alpha(0.15);
                     x: root.is-own ? -self.width + 8px : bubble.width - 8px;
                     y: bubble.height - 4px;
+                    accessible-role: button;
+                    accessible-label: "Reactions: " + root.reaction-summary;
 
                     reactions-row := HorizontalLayout {
                         padding-left: 6px;

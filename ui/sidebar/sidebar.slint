@@ -204,6 +204,8 @@ export component Sidebar inherits Rectangle {
                 Rectangle {
                     height: 34px;
                     background: friends-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Friends";
                     if !root.collapsed: HorizontalLayout {
                         padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         Image { source: Icons.users; width: 14px; height: 14px; colorize: Colors.text-secondary; }
@@ -220,6 +222,8 @@ export component Sidebar inherits Rectangle {
                 Rectangle {
                     height: 34px;
                     background: saved-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Saved Messages";
                     if !root.collapsed: HorizontalLayout {
                         padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
                         Image { source: Icons.bookmark; width: 14px; height: 14px; colorize: Colors.text-secondary; }
