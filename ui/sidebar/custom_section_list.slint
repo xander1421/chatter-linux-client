@@ -179,6 +179,13 @@ component CustomSectionHeader inherits Rectangle {
 
     height: 32px;
 
+    // Hover detector — always present (not inside conditional)
+    header-hover := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: default;
+    }
+
     if !root.collapsed: HorizontalLayout {
         padding-left: 6px;
         padding-right: 4px;
@@ -221,8 +228,8 @@ component CustomSectionHeader inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
-                // Aggregate unread badge
-                if root.unread-count > 0: Rectangle {
+                // Aggregate unread badge (hidden when action buttons show)
+                if root.unread-count > 0 && !header-hover.has-hover: Rectangle {
                     width: root.unread-count > 9 ? 22px : 18px;
                     height: 18px;
                     border-radius: 9px;
@@ -237,6 +244,56 @@ component CustomSectionHeader inherits Rectangle {
                         width: 100%;
                         height: 100%;
                     }
+                }
+            }
+        }
+
+        // Hover-reveal action buttons
+        if header-hover.has-hover: HorizontalLayout {
+            spacing: 2px;
+            alignment: end;
+
+            // Rename button
+            Rectangle {
+                width: 24px;
+                height: 24px;
+                border-radius: Spacing.radius-sm;
+                background: rename-touch.has-hover ? Colors.surface-hover : transparent;
+
+                Image {
+                    source: Icons.edit;
+                    width: 12px;
+                    height: 12px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.text-muted;
+                }
+
+                rename-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.rename-clicked(); }
+                }
+            }
+
+            // Delete button
+            Rectangle {
+                width: 24px;
+                height: 24px;
+                border-radius: Spacing.radius-sm;
+                background: delete-touch.has-hover ? Colors.surface-hover : transparent;
+
+                Image {
+                    source: Icons.trash;
+                    width: 12px;
+                    height: 12px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: delete-touch.has-hover ? Colors.error : Colors.text-muted;
+                }
+
+                delete-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.delete-clicked(); }
                 }
             }
         }

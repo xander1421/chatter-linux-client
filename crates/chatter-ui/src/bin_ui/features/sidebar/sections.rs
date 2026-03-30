@@ -175,14 +175,78 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let _ui_ctx = ui_ctx.clone();
-    let _weak = window.as_weak();
+    // on_rename_section_clicked opens the rename modal. Pre-fill name/emoji from DB
+    // so the modal shows current values. This runs synchronously on the UI thread
+    // before Slint opens the modal.
+    {
+        let section_service = ui_ctx.clone().sections().clone();
+        let weak = window.as_weak();
 
-    window.on_rename_section_clicked(move |section_id: SharedString| {
-        // The rename callback from Slint currently only passes the section_id.
-        // The UI handles showing the rename dialog and will call a separate
-        // mechanism when the user confirms. Log for now.
-        tracing::debug!(section_id = %section_id, "Rename section requested");
+        window.on_rename_section_clicked(move |section_id: SharedString| {
+            let section_id_str = section_id.to_string();
+            // Look up current section to pre-fill modal
+            if let Ok(sections) = section_service.list_sections_with_conversations() {
+                if let Some(section) = sections.iter().find(|s| s.id.to_string() == section_id_str) {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_create_section_name(section.name.clone().into());
+                        w.set_create_section_emoji(section.icon_emoji.clone().into());
+                    }
+                }
+            }
+            tracing::debug!(section_id = %section_id, "Rename section modal opened");
+        });
+    }
+
+    // on_rename_section is called when the modal's "Save" button is pressed.
+    let ui_ctx = ui_ctx.clone();
+    let weak = window.as_weak();
+
+    window.on_rename_section(move |section_id: SharedString, name: SharedString, emoji: SharedString| {
+        let section_id_str = section_id.to_string();
+        let name_str = name.to_string();
+        let emoji_str = emoji.to_string();
+        let section_service = ui_ctx.sections().clone();
+        let channel_service = ui_ctx.channels().clone();
+        let anon_dm_service = ui_ctx.anon_dms().clone();
+        let anon_group_service = ui_ctx.anon_groups().clone();
+        let weak = weak.clone();
+
+        tokio::spawn(async move {
+            let Ok(id) = section_id_str.parse::<uuid::Uuid>() else {
+                tracing::error!(section_id = %section_id_str, "Invalid section ID for rename");
+                return;
+            };
+            let id = SectionId(id);
+
+            // Update name
+            if let Err(e) = section_service.rename_section(&id, &name_str) {
+                tracing::error!(error = %e, section_id = %section_id_str, "Failed to rename section");
+                return;
+            }
+
+            // Update icon
+            if let Err(e) = section_service.change_icon(&id, &emoji_str) {
+                tracing::error!(error = %e, section_id = %section_id_str, "Failed to change section icon");
+                return;
+            }
+
+            tracing::info!(section_id = %section_id_str, name = %name_str, "Renamed custom section");
+
+            // Close modal and refresh
+            let weak_close = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak_close.upgrade() {
+                    w.set_active_modal("none".into());
+                }
+            });
+            refresh_sections_ui(
+                &weak,
+                &section_service,
+                &channel_service,
+                &anon_dm_service,
+                &anon_group_service,
+            );
+        });
     });
 }
 
