@@ -247,16 +247,16 @@ pub async fn handle_domain_event(
             anon::handle_group_joined(window, ui_ctx, group_id);
         }
 
-        DomainEvent::AnonGroupMemberJoined { group_id, user_id, display_name, .. } => {
-            anon::handle_group_member_joined(group_id, user_id, display_name);
+        DomainEvent::AnonGroupMemberJoined { group_id, user_id, .. } => {
+            anon::handle_group_member_joined(window, ui_ctx, group_id, user_id);
         }
 
         DomainEvent::AnonGroupMemberLeft { group_id, user_id } => {
-            anon::handle_group_member_left(group_id, user_id);
+            anon::handle_group_member_left(window, ui_ctx, group_id, user_id);
         }
 
         DomainEvent::AnonGroupMemberKicked { group_id, user_id, kicked_by } => {
-            anon::handle_group_member_kicked(group_id, user_id, kicked_by);
+            anon::handle_group_member_kicked(window, ui_ctx, group_id, user_id, kicked_by);
         }
 
         DomainEvent::AnonGroupBootstrapComplete { group_id } => {
@@ -364,7 +364,7 @@ pub async fn handle_domain_event(
         }
 
         DomainEvent::MessageSendFailed { channel_id, error } => {
-            messaging::handle_message_send_failed(channel_id, error);
+            messaging::handle_message_send_failed(window, channel_id, error);
         }
 
         // =========================================================================

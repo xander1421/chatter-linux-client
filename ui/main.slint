@@ -646,6 +646,11 @@ export component MainWindow inherits Window {
     callback jarvis-clear <=> app.jarvis-clear;
     callback toggle-jarvis-panel <=> app.toggle-jarvis-panel;
 
+    // ========== Toast notification properties ==========
+    in-out property <bool> toast-visible <=> app.toast-visible;
+    in property <string> toast-message <=> app.toast-message;
+    in property <string> toast-variant <=> app.toast-variant;
+
     // App fills the entire window - explicit sizing ensures width flows to children
     app := App {
         width: root.width;

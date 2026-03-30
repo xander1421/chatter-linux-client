@@ -45,6 +45,7 @@ import { OrgManagementScreen, OrgMemberData, OrgDashboardData } from "org/org_ma
 
 // Import components
 import { ImageViewer, EmojiData } from "components/mod.slint";
+import { Toast } from "components/mod.slint";
 import { CodePreviewPanel } from "components/mod.slint";
 import { PdfPreviewPanel } from "components/mod.slint";
 import { VideoPlayer } from "components/mod.slint";
@@ -550,6 +551,11 @@ export component App inherits Rectangle {
     in property <bool> org-invite-loading: false;
     in property <string> org-invite-error: "";
     in property <string> org-invite-success: "";
+
+    // ========== Toast notification properties ==========
+    in-out property <bool> toast-visible: false;
+    in property <string> toast-message: "";
+    in property <string> toast-variant: "info";  // "success", "error", "warning", "info"
 
     // Org management callbacks
     callback org-load-members();
@@ -2240,6 +2246,30 @@ export component App inherits Rectangle {
         }
         close => {
             root.composer-gif-picker-visible = false;
+        }
+    }
+
+    // ========== Toast notification overlay (top-right) ==========
+    Toast {
+        show-toast: root.toast-visible;
+        message: root.toast-message;
+        variant: root.toast-variant;
+        max-toast-width: min(360px, root.width - 32px);
+
+        x: root.width - self.width - Spacing.md;
+        y: Spacing.lg + root.safe-area-top;
+
+        dismissed => {
+            root.toast-visible = false;
+        }
+    }
+
+    // Auto-dismiss timer for toasts
+    toast-timer := Timer {
+        interval: 5s;
+        running: root.toast-visible;
+        triggered => {
+            root.toast-visible = false;
         }
     }
     }

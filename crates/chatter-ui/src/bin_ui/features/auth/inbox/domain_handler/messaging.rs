@@ -463,14 +463,25 @@ pub(super) fn handle_message_delete(
     });
 }
 
-/// Handle message send failed event.
-pub(super) fn handle_message_send_failed(channel_id: ChannelId, error: String) {
+/// Handle message send failed event — show error toast in the UI.
+pub(super) fn handle_message_send_failed(
+    window: &Weak<MainWindow>,
+    channel_id: ChannelId,
+    error: String,
+) {
     tracing::error!(
         channel_id = %channel_id,
         error = %error,
         "Message send failed"
     );
-    // TODO: Show error notification in UI
+
+    let weak = window.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        w.set_toast_message("Failed to send message. Please try again.".into());
+        w.set_toast_variant("error".into());
+        w.set_toast_visible(true);
+    });
 }
 
 // Channel member joined/left system messages are handled via
