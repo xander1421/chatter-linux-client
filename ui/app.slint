@@ -1729,7 +1729,7 @@ export component App inherits Rectangle {
     if active-modal == "keyboard-shortcuts": Rectangle {
         width: root.width;
         height: root.height;
-        background: #00000080;
+        background: Colors.overlay;
 
         TouchArea {
             clicked => { root.active-modal = "none"; }
@@ -2075,7 +2075,7 @@ export component App inherits Rectangle {
     if root.code-preview-visible: Rectangle {
         width: 100%;
         height: 100%;
-        background: #000000cc;
+        background: Colors.overlay-heavy;
 
         // Click backdrop to close
         TouchArea {
@@ -2143,7 +2143,7 @@ export component App inherits Rectangle {
     if root.pdf-preview-visible: Rectangle {
         width: 100%;
         height: 100%;
-        background: #000000cc;
+        background: Colors.overlay-heavy;
 
         // Click backdrop to close
         TouchArea {
