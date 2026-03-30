@@ -486,3 +486,33 @@ pub(super) fn handle_message_send_failed(
 
 // Channel member joined/left system messages are handled via
 // handle_message_received() — the DomainEvent carries the Message directly.
+
+/// Update the header member count if the given channel is currently active.
+///
+/// Called after ChannelMemberJoined/Left events. The local membership repo
+/// is already updated by the time this runs, so we query it for the count.
+pub(super) fn update_active_channel_member_count(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    channel_id: ChannelId,
+) {
+    let is_active = ui_ctx.chat_state().get().active_channel_id
+        .map(|id| id == channel_id)
+        .unwrap_or(false);
+
+    if !is_active {
+        return;
+    }
+
+    let member_count = ui_ctx.channels()
+        .list_members_local(&channel_id)
+        .map(|m| m.len() as i32)
+        .unwrap_or(0);
+
+    let weak = window.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_member_count(member_count);
+        }
+    });
+}

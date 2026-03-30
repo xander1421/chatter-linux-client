@@ -370,12 +370,14 @@ pub async fn handle_domain_event(
         // =========================================================================
         // Channel Member Events
         // =========================================================================
-        DomainEvent::ChannelMemberJoined { channel_id: _, user_id: _, display_name: _, message } => {
+        DomainEvent::ChannelMemberJoined { channel_id, user_id: _, display_name: _, message } => {
             messaging::handle_message_received(window, ui_ctx, message);
+            messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
         }
 
-        DomainEvent::ChannelMemberLeft { channel_id: _, user_id: _, display_name: _, message } => {
+        DomainEvent::ChannelMemberLeft { channel_id, user_id: _, display_name: _, message } => {
             messaging::handle_message_received(window, ui_ctx, message);
+            messaging::update_active_channel_member_count(window, ui_ctx, channel_id);
         }
 
         // =========================================================================
