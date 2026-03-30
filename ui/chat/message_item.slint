@@ -98,12 +98,14 @@ export component MessageItem inherits Rectangle {
     min-height: main-layout.preferred-height;
     background: transparent;
 
+    // Wrap entire content in TouchArea for reliable hover detection.
+    // Previously touch was a sibling behind main-layout, which caused
+    // has-hover to get stuck when child TouchAreas intercepted events.
     touch := TouchArea {
         mouse-cursor: pointer;
         clicked => {
             root.message-clicked(root.message-id);
         }
-    }
 
     main-layout := VerticalLayout {
         width: 100%;
@@ -332,7 +334,7 @@ export component MessageItem inherits Rectangle {
 
                         // Quote / reply-to bubble
                         if root.is-reply: Rectangle {
-                            background: root.is-own ? #00000015 : #00000010;
+                            background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.background.with-alpha(0.06);
                             border-radius: 6px;
                             max-width: root.width * 0.7 - Spacing.sm * 2;
                             height: quote-layout.preferred-height + Spacing.sm;
@@ -381,7 +383,7 @@ export component MessageItem inherits Rectangle {
                             for span in root.rich-content: VerticalLayout {
                                 // Code block: monospace + dark background
                                 if span.code-block: Rectangle {
-                                    background: root.is-own ? #00000020 : #1e1e2e;
+                                    background: root.is-own ? Colors.background.with-alpha(0.12) : Colors.code-bg;
                                     border-radius: 4px;
 
                                     VerticalLayout {
@@ -389,7 +391,7 @@ export component MessageItem inherits Rectangle {
 
                                         Text {
                                             text: span.text;
-                                            color: span.code-block && !root.is-own ? #d4d4d4 : Colors.text-primary;
+                                            color: span.code-block && !root.is-own ? Colors.code-text : Colors.text-primary;
                                             font-family: "monospace";
                                             font-size: Typography.xs;
                                             wrap: word-wrap;
@@ -403,7 +405,7 @@ export component MessageItem inherits Rectangle {
                                     alignment: start;
 
                                     Rectangle {
-                                        background: root.is-own ? #00000015 : Colors.surface-hover;
+                                        background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.surface-hover;
                                         border-radius: 3px;
                                         width: code-text.preferred-width + 8px;
                                         height: code-text.preferred-height + 4px;
@@ -465,7 +467,7 @@ export component MessageItem inherits Rectangle {
                         // Link preview card
                         if root.has-link-preview: Rectangle {
                             max-width: min(300px, root.width * 0.7);
-                            background: root.is-own ? #00000015 : Colors.surface;
+                            background: root.is-own ? Colors.background.with-alpha(0.08) : Colors.surface;
                             border-radius: Spacing.radius-sm;
                             border-width: 1px;
                             border-color: Colors.text-muted.with-alpha(0.15);
@@ -604,7 +606,7 @@ export component MessageItem inherits Rectangle {
                                     if attachment.is-uploading || attachment.is-downloading: Rectangle {
                                         width: 100%;
                                         height: 100%;
-                                        background: #00000080;
+                                        background: Colors.overlay;
 
                                         VerticalLayout {
                                             alignment: center;
@@ -741,7 +743,7 @@ export component MessageItem inherits Rectangle {
 
                                     width: attachment.has-thumbnail && attachment.width > 0 ? max(160px, min(max-w, calc-w)) : 260px;
                                     height: attachment.has-thumbnail && attachment.height > 0 ? max(100px, min(max-h, calc-h)) : 160px;
-                                    background: attachment.has-thumbnail ? #2a2a40 : #1a1a2e; // Use lighter background when thumbnail is present to detect transparency
+                                    background: attachment.has-thumbnail ? Colors.surface-hover : Colors.surface;
                                     border-radius: Spacing.radius-sm;
                                     clip: true;
 
@@ -1018,8 +1020,8 @@ export component MessageItem inherits Rectangle {
                 }
                 // Action buttons — float above top-right of bubble
                 Rectangle {
-                    x: bubble.width - action-btns.width - 8px;
-                    y: -action-btns.height - 8px;
+                    x: (bubble.width - action-btns.width) / 2;
+                    y: 0px;
                     width: action-btns.width;
                     height: action-btns.height;
                     visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;
@@ -1161,5 +1163,6 @@ export component MessageItem inherits Rectangle {
                 }
             }
         }
-    }
+    } // end main-layout
+    } // end touch wrapper
 }

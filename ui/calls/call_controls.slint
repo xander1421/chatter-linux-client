@@ -18,9 +18,9 @@ component ControlButton inherits Rectangle {
     border-radius: 24px;
     background: {
         if danger {
-            touch.has-hover ? #dc2626 : Colors.error
+            touch.has-hover ? Colors.error-hover : Colors.error
         } else if active {
-            touch.has-hover ? #dc2626 : Colors.error
+            touch.has-hover ? Colors.error-hover : Colors.error
         } else {
             touch.has-hover ? Colors.surface-hover : Colors.surface
         }
@@ -112,7 +112,7 @@ export component CallControls inherits Rectangle {
             width: 56px;
             height: 48px;
             border-radius: 24px;
-            background: end-touch.has-hover ? #dc2626 : Colors.error;
+            background: end-touch.has-hover ? Colors.error-hover : Colors.error;
 
             end-touch := TouchArea {
                 mouse-cursor: pointer;

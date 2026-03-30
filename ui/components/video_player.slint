@@ -25,7 +25,7 @@ export component VideoPlayer inherits Rectangle {
 
     // Only render when show is true
     visible: root.show;
-    background: #000000f0;  // Nearly opaque black
+    background: Colors.background.with-alpha(0.94);
 
     // Close on backdrop click (outside content area)
     backdrop := TouchArea {
@@ -106,7 +106,7 @@ export component VideoPlayer inherits Rectangle {
         Rectangle {
             vertical-stretch: 1;
             min-height: 200px;  // Ensure video area has minimum size
-            background: #000000;
+            background: Colors.background;
             border-radius: Spacing.radius-md;
 
             // Prevent clicks from closing
@@ -132,7 +132,7 @@ export component VideoPlayer inherits Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 border-radius: 40px;
-                background: #00000080;
+                background: Colors.overlay;
 
                 Text {
                     width: 100%;
@@ -180,7 +180,7 @@ export component VideoPlayer inherits Rectangle {
                         Rectangle {
                             height: 6px;
                             horizontal-stretch: 1;
-                            background: #333333;  // Visible on dark background
+                            background: Colors.surface-hover;
                             border-radius: 3px;
 
                             // Progress fill - must be explicitly left-aligned

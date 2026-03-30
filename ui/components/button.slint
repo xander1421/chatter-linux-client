@@ -31,12 +31,12 @@ export component Button inherits Rectangle {
         } else if pressed {
             variant == "primary" ? Colors.primary-active :
             variant == "secondary" ? Colors.surface-hover :
-            variant == "danger" ? #dc2626 :
+            variant == "danger" ? Colors.error-hover :
             Colors.surface-hover.with-alpha(0.2)
         } else if hover {
             variant == "primary" ? Colors.primary-hover :
             variant == "secondary" ? Colors.surface-hover :
-            variant == "danger" ? #dc2626 :
+            variant == "danger" ? Colors.error-hover :
             Colors.surface.with-alpha(0.1)
         } else {
             variant == "primary" ? Colors.primary :

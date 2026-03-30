@@ -18,7 +18,7 @@ export component ImageViewer inherits Rectangle {
 
     // Only render when show is true
     visible: root.show;
-    background: #000000e6;  // Semi-transparent black
+    background: Colors.background.with-alpha(0.9);
 
     // Close on backdrop click
     backdrop := TouchArea {

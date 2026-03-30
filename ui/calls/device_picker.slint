@@ -87,7 +87,7 @@ export component DevicePicker inherits Rectangle {
     callback closed();
 
     visible: show;
-    background: #00000088;
+    background: Colors.overlay;
 
     // Click outside to close
     TouchArea {
@@ -103,7 +103,7 @@ export component DevicePicker inherits Rectangle {
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
         drop-shadow-blur: 20px;
-        drop-shadow-color: #00000066;
+        drop-shadow-color: Colors.shadow;
 
         // Prevent clicks from closing
         TouchArea {}
