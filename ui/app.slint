@@ -173,6 +173,8 @@ export component App inherits Rectangle {
     in-out property <string> composer-reply-to-sender-name: ""; // Sender display name (for UI)
     in-out property <string> composer-reply-to-timestamp: "";
     in-out property <string> composer-reply-preview: "";
+    in-out property <bool> composer-reply-has-thumbnail: false;
+    in-out property <image> composer-reply-thumbnail;
 
     // ========== Audio playback state ==========
     in-out property <string> current-playing-attachment-id: "";
@@ -325,6 +327,8 @@ export component App inherits Rectangle {
     in-out property <string> create-channel-ai-provider: "";
     in-out property <string> create-channel-ai-model: "";
     in property <[AIModelOption]> create-channel-ai-models: [];
+    in property <bool> create-channel-ai-models-loading: false;
+    in property <string> create-channel-ai-models-error: "";
 
     // Create channel private group properties
     in-out property <[PrivateGroupFriend]> create-channel-available-friends: [];
@@ -1033,6 +1037,8 @@ export component App inherits Rectangle {
                     composer-is-replying: root.composer-is-replying;
                     composer-reply-to-sender-name: root.composer-reply-to-sender-name;
                     composer-reply-preview: root.composer-reply-preview;
+                    composer-reply-has-thumbnail: root.composer-reply-has-thumbnail;
+                    composer-reply-thumbnail: root.composer-reply-thumbnail;
 
                     // Picker state
                     emoji-picker-visible <=> root.composer-emoji-picker-visible;
@@ -1235,6 +1241,8 @@ export component App inherits Rectangle {
         ai-provider <=> root.create-channel-ai-provider;
         ai-model <=> root.create-channel-ai-model;
         ai-models: root.create-channel-ai-models;
+        ai-models-loading: root.create-channel-ai-models-loading;
+        ai-models-error: root.create-channel-ai-models-error;
         available-friends <=> root.create-channel-available-friends;
         selected-friend-count <=> root.create-channel-selected-friend-count;
 

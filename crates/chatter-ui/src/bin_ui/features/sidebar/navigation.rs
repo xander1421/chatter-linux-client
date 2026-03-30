@@ -63,6 +63,8 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                     w.set_composer_reply_to_sender_name("".into());
                     w.set_composer_reply_to_timestamp("".into());
                     w.set_composer_reply_preview("".into());
+                    w.set_composer_reply_has_thumbnail(false);
+                    w.set_composer_reply_thumbnail(slint::Image::default());
                     w.set_composer_is_editing(false);
                     w.set_composer_edit_message_id("".into());
                 }

@@ -32,6 +32,8 @@ export component MessageComposer inherits Rectangle {
     in property <bool> is-replying: false;
     in property <string> reply-to-sender: "";
     in property <string> reply-to-preview: "";
+    in property <bool> reply-has-thumbnail: false;
+    in property <image> reply-thumbnail;
 
     // Computed properties
     property <bool> can-send: text != "" || pending-attachments.length > 0;
@@ -176,13 +178,29 @@ export component MessageComposer inherits Rectangle {
                     spacing: Spacing.sm;
                     alignment: start;
 
-                    // Reply icon
+                    // Reply accent bar
                     Rectangle {
                         width: 4px;
                         height: parent.height - Spacing.sm * 2;
                         y: Spacing.sm;
                         background: Colors.primary;
                         border-radius: 2px;
+                    }
+
+                    // Thumbnail preview for image replies
+                    if root.reply-has-thumbnail: Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: Spacing.radius-sm;
+                        clip: true;
+                        background: Colors.surface-hover;
+
+                        Image {
+                            width: 100%;
+                            height: 100%;
+                            source: root.reply-thumbnail;
+                            image-fit: cover;
+                        }
                     }
 
                     VerticalLayout {

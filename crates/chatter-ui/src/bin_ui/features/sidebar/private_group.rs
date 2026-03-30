@@ -183,6 +183,8 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 w.set_composer_reply_to_sender_name("".into());
                 w.set_composer_reply_to_timestamp("".into());
                 w.set_composer_reply_preview("".into());
+                w.set_composer_reply_has_thumbnail(false);
+                w.set_composer_reply_thumbnail(slint::Image::default());
                 w.set_composer_is_editing(false);
                 w.set_composer_edit_message_id("".into());
 
@@ -431,6 +433,8 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                     w.set_composer_reply_to_sender_name("".into());
                     w.set_composer_reply_to_timestamp("".into());
                     w.set_composer_reply_preview("".into());
+                    w.set_composer_reply_has_thumbnail(false);
+                    w.set_composer_reply_thumbnail(slint::Image::default());
                     w.set_composer_is_editing(false);
                     w.set_composer_edit_message_id("".into());
 

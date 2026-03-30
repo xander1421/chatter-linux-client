@@ -135,6 +135,8 @@ export component MainWindow inherits Window {
     in-out property <string> composer-reply-to-sender-name <=> app.composer-reply-to-sender-name;
     in-out property <string> composer-reply-to-timestamp <=> app.composer-reply-to-timestamp;
     in-out property <string> composer-reply-preview <=> app.composer-reply-preview;
+    in-out property <bool> composer-reply-has-thumbnail <=> app.composer-reply-has-thumbnail;
+    in-out property <image> composer-reply-thumbnail <=> app.composer-reply-thumbnail;
 
     // ========== Audio playback state ==========
     in-out property <string> current-playing-attachment-id <=> app.current-playing-attachment-id;
@@ -287,6 +289,8 @@ export component MainWindow inherits Window {
     in-out property <string> create-channel-ai-provider <=> app.create-channel-ai-provider;
     in-out property <string> create-channel-ai-model <=> app.create-channel-ai-model;
     in property <[AIModelOption]> create-channel-ai-models <=> app.create-channel-ai-models;
+    in property <bool> create-channel-ai-models-loading <=> app.create-channel-ai-models-loading;
+    in property <string> create-channel-ai-models-error <=> app.create-channel-ai-models-error;
 
     // Create channel private group properties
     in-out property <[PrivateGroupFriend]> create-channel-available-friends <=> app.create-channel-available-friends;

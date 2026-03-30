@@ -67,6 +67,8 @@ export component ChatLayout inherits Rectangle {
     in property <string> composer-reply-to-sender-name: "";
     in property <string> composer-reply-to-timestamp: "";
     in property <string> composer-reply-preview: "";
+    in property <bool> composer-reply-has-thumbnail: false;
+    in property <image> composer-reply-thumbnail;
 
     // Pinned bar properties (Telegram-style always visible)
     in property <bool> has-pinned-messages: false;
@@ -415,6 +417,8 @@ export component ChatLayout inherits Rectangle {
                 is-replying: root.composer-is-replying;
                 reply-to-sender: root.composer-reply-to-sender-name;
                 reply-to-preview: root.composer-reply-preview;
+                reply-has-thumbnail: root.composer-reply-has-thumbnail;
+                reply-thumbnail: root.composer-reply-thumbnail;
 
                 send(text) => {
                     root.send(text);

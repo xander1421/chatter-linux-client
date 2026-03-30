@@ -50,6 +50,8 @@ pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
         let messages = w.get_messages();
         let mut sender_name = String::new();
         let mut reply_preview = String::new();
+        let mut reply_thumbnail = slint::Image::default();
+        let mut reply_has_thumbnail = false;
 
         for i in 0..messages.row_count() {
             if let Some(m) = messages.row_data(i) {
@@ -58,11 +60,60 @@ pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                 {
                     sender_name = m.sender_name.to_string();
                     let content = m.content.to_string();
-                    reply_preview = if content.chars().count() > 50 {
+
+                    // Build text preview (truncate if needed)
+                    let text_preview = if content.chars().count() > 50 {
                         format!("{}...", content.chars().take(47).collect::<String>())
                     } else {
-                        content
+                        content.clone()
                     };
+
+                    // Build attachment indicator and extract thumbnail
+                    let mut attachment_label = String::new();
+                    if m.has_attachments {
+                        let att_model = m.attachments;
+                        let att_count = att_model.row_count();
+                        let mut image_count = 0;
+                        let mut file_names: Vec<String> = Vec::new();
+
+                        for j in 0..att_count {
+                            if let Some(att) = att_model.row_data(j) {
+                                if att.is_image {
+                                    image_count += 1;
+                                    // Grab the first image thumbnail for the composer
+                                    if !reply_has_thumbnail && att.has_thumbnail {
+                                        reply_thumbnail = att.thumbnail;
+                                        reply_has_thumbnail = true;
+                                    }
+                                } else {
+                                    file_names.push(att.filename.to_string());
+                                }
+                            }
+                        }
+
+                        // Build descriptive label
+                        let mut parts: Vec<String> = Vec::new();
+                        if image_count == 1 {
+                            parts.push("\u{1F4F7} Photo".to_string());
+                        } else if image_count > 1 {
+                            parts.push(format!("\u{1F4F7} {} Photos", image_count));
+                        }
+                        if file_names.len() == 1 {
+                            parts.push(format!("\u{1F4CE} {}", file_names[0]));
+                        } else if file_names.len() > 1 {
+                            parts.push(format!("\u{1F4CE} {} files", file_names.len()));
+                        }
+                        attachment_label = parts.join(", ");
+                    }
+
+                    // Combine text + attachment label
+                    reply_preview = match (text_preview.is_empty(), attachment_label.is_empty()) {
+                        (false, false) => format!("{} \u{2022} {}", text_preview, attachment_label),
+                        (true, false) => attachment_label,
+                        (false, true) => text_preview,
+                        (true, true) => String::new(),
+                    };
+
                     break;
                 }
             }
@@ -77,12 +128,15 @@ pub fn wire_reply_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
         w.set_composer_reply_to_sender_name(sender_name.clone().into());
         w.set_composer_reply_to_timestamp(timestamp_str.clone().into());
         w.set_composer_reply_preview(reply_preview.clone().into());
+        w.set_composer_reply_has_thumbnail(reply_has_thumbnail);
+        w.set_composer_reply_thumbnail(reply_thumbnail);
         w.set_composer_placeholder("Type your reply...".into());
 
         tracing::info!(
             sender = %sender_name,
             timestamp = %timestamp_str,
             preview = %reply_preview,
+            has_thumbnail = %reply_has_thumbnail,
             "Reply mode activated"
         );
     });
@@ -157,6 +211,8 @@ pub fn wire_cancel_reply(window: &MainWindow) {
                 w.set_composer_reply_to_sender_name("".into());
                 w.set_composer_reply_to_timestamp("".into());
                 w.set_composer_reply_preview("".into());
+                w.set_composer_reply_has_thumbnail(false);
+                w.set_composer_reply_thumbnail(slint::Image::default());
                 w.set_composer_placeholder("Type a message...".into());
                 tracing::debug!("Cancelled reply mode");
             }

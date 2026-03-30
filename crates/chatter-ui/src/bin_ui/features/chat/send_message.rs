@@ -106,6 +106,8 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_composer_reply_to_sender_name("".into());
                     w.set_composer_reply_to_timestamp("".into());
                     w.set_composer_reply_preview("".into());
+                    w.set_composer_reply_has_thumbnail(false);
+                    w.set_composer_reply_thumbnail(slint::Image::default());
                     w.set_composer_placeholder("Type a message...".into());
                 }
             });
