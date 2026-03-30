@@ -869,7 +869,7 @@ impl InboxEventProcessor {
                 false
             }
 
-            InboxEvent::ChannelReceipt { channel_id: _, sender_id: _, receipt_type, timestamps, .. } => {
+            InboxEvent::ChannelReceipt { channel_id, sender_id: _, receipt_type, timestamps, .. } => {
                 let status = match receipt_type {
                     1 => "delivered",
                     2 => "read",
@@ -877,9 +877,9 @@ impl InboxEventProcessor {
                     _ => "sent",
                 };
                 for ts in timestamps {
-                    if let Some(ref svc) = Some(&self.message_service) {
-                        let _ = svc.update_delivery_status_by_timestamp(*ts, status);
-                    }
+                    let _ = self.message_service.update_delivery_status_by_timestamp(
+                        channel_id, &crate::domain::message::ConversationType::Channel, *ts, status,
+                    );
                 }
                 false
             }

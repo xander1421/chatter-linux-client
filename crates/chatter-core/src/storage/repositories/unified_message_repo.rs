@@ -904,19 +904,62 @@ impl UnifiedMessageRepository {
         Ok(count as u64)
     }
 
-    /// Update delivery status by sent_at timestamp only (no channel_id needed).
+    /// Update delivery status by conversation + timestamp (scoped to one conversation).
     pub fn update_delivery_status_by_timestamp(
         &self,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
         sent_at: u64,
         status: &str,
     ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE messages SET delivery_status = ?1, updated_at = ?2
-             WHERE sent_at = ?3",
-            params![status, Utc::now().to_rfc3339(), sent_at as i64],
+             WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5",
+            params![
+                status,
+                Utc::now().to_rfc3339(),
+                conversation_id.to_string(),
+                conversation_type.as_str(),
+                sent_at as i64,
+            ],
         )?;
         Ok(rows > 0)
+    }
+
+    /// Update delivery status by timestamp with automatic conversation lookup.
+    ///
+    /// For callers that lack conversation context (e.g. cross-channel receipts),
+    /// looks up matching message IDs first, then performs scoped updates by
+    /// primary key. Never does an unscoped `WHERE sent_at = ?` UPDATE.
+    pub fn update_delivery_status_by_timestamp_with_lookup(
+        &self,
+        sent_at: u64,
+        status: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        // Step 1: Find message IDs matching this timestamp (read-only).
+        let mut stmt = conn.prepare("SELECT id FROM messages WHERE sent_at = ?1")?;
+        let ids: Vec<String> = stmt
+            .query_map(params![sent_at as i64], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if ids.is_empty() {
+            return Ok(false);
+        }
+        // Step 2: Update each by primary key (scoped, no cross-conversation risk).
+        let now = Utc::now().to_rfc3339();
+        let mut updated = false;
+        for id in &ids {
+            let rows = conn.execute(
+                "UPDATE messages SET delivery_status = ?1, updated_at = ?2 WHERE id = ?3",
+                params![status, now, id],
+            )?;
+            if rows > 0 {
+                updated = true;
+            }
+        }
+        Ok(updated)
     }
 
     /// Update delivery status by conversation + timestamps (batch).

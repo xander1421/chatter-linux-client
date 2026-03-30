@@ -24,6 +24,7 @@ use std::sync::Arc;
 
 use crate::crypto::signal::{SesameManager, SqliteSesameStore};
 use crate::domain::ids::{AttachmentId, ChannelId, UserId};
+use crate::domain::message::ConversationType;
 use crate::domain::message::Message;
 use crate::error::{NetworkError, StorageError};
 use crate::mailbox::group::GroupMailboxManager;
@@ -394,14 +395,30 @@ impl MessageService {
             .map_err(MessageError::from)
     }
 
-    /// Update delivery status by timestamp only (no channel_id needed).
+    /// Update delivery status by conversation + timestamp (scoped to one conversation).
     pub fn update_delivery_status_by_timestamp(
+        &self,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
+        sent_at: u64,
+        status: &str,
+    ) -> Result<bool, MessageError> {
+        self.message_repo
+            .update_delivery_status_by_timestamp(conversation_id, conversation_type, sent_at, status)
+            .map_err(MessageError::from)
+    }
+
+    /// Update delivery status by timestamp with automatic conversation lookup.
+    ///
+    /// For callers that lack conversation context (e.g. cross-channel receipts).
+    /// Looks up matching messages first, then updates each by primary key.
+    pub fn update_delivery_status_by_timestamp_with_lookup(
         &self,
         sent_at: u64,
         status: &str,
     ) -> Result<bool, MessageError> {
         self.message_repo
-            .update_delivery_status_by_timestamp(sent_at, status)
+            .update_delivery_status_by_timestamp_with_lookup(sent_at, status)
             .map_err(MessageError::from)
     }
 

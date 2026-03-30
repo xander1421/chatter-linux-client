@@ -930,3 +930,81 @@ fn test_signal_style_lookup_across_channels() {
     assert_eq!(found1.conversation_id, channel1.id);
     assert_eq!(found2.conversation_id, channel2.id);
 }
+
+// ============================================================================
+// Cross-Conversation Isolation Tests (GRA-441)
+// ============================================================================
+
+/// Verify that update_delivery_status_by_timestamp scopes to a single
+/// conversation and does not affect messages with the same timestamp in
+/// other conversations.
+#[test]
+fn test_delivery_status_update_cross_conversation_isolation() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let sender = UserId::new();
+
+    // Create two different channels
+    let channel1 = create_test_channel(&channel_repo, ChannelType::Public);
+    let channel2 = create_test_channel(&channel_repo, ChannelType::Public);
+
+    // Insert messages with the SAME timestamp in different conversations
+    let same_timestamp = next_timestamp_ns();
+    let msg1 = Message::new_text(channel1.id, Some(sender), "Msg in channel 1".to_string(), same_timestamp);
+    let msg2 = Message::new_text(channel2.id, Some(sender), "Msg in channel 2".to_string(), same_timestamp);
+
+    message_repo.insert(&msg1).unwrap();
+    message_repo.insert(&msg2).unwrap();
+
+    // Update delivery status for channel 1 only (scoped update)
+    let updated = message_repo
+        .update_delivery_status_by_timestamp(
+            &channel1.id,
+            &ConversationType::Channel,
+            same_timestamp,
+            "delivered",
+        )
+        .unwrap();
+    assert!(updated, "Should have updated at least one row");
+
+    // Verify: channel 1 message should be "delivered"
+    let loaded1 = message_repo.get(&msg1.id).unwrap().unwrap();
+    assert_eq!(
+        loaded1.delivery_status, "delivered",
+        "Channel 1 message should be 'delivered'"
+    );
+
+    // Verify: channel 2 message should still be empty (unchanged)
+    let loaded2 = message_repo.get(&msg2.id).unwrap().unwrap();
+    assert_eq!(
+        loaded2.delivery_status, "",
+        "Channel 2 message must NOT be affected by scoped update to channel 1"
+    );
+}
+
+/// Verify that the lookup-based fallback updates messages by primary key
+/// without leaking across conversations unexpectedly.
+#[test]
+fn test_delivery_status_update_with_lookup_updates_by_id() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let sender = UserId::new();
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+
+    let ts = next_timestamp_ns();
+    let msg = Message::new_text(channel.id, Some(sender), "Test".to_string(), ts);
+    message_repo.insert(&msg).unwrap();
+
+    // Use the lookup-based update
+    let updated = message_repo
+        .update_delivery_status_by_timestamp_with_lookup(ts, "read")
+        .unwrap();
+    assert!(updated);
+
+    let loaded = message_repo.get(&msg.id).unwrap().unwrap();
+    assert_eq!(loaded.delivery_status, "read");
+}

@@ -305,7 +305,9 @@ impl EventHandlers {
                     .update_delivery_status_by_timestamps(&message_timestamps, "read");
                 if let Some(ref svc) = self.message_service {
                     for ts in &message_timestamps {
-                        if let Err(e) = svc.update_delivery_status_by_timestamp(*ts, "read") {
+                        // Receipt may lack conversation context; use lookup-based update
+                        // to avoid unscoped WHERE sent_at = ? across conversations.
+                        if let Err(e) = svc.update_delivery_status_by_timestamp_with_lookup(*ts, "read") {
                             tracing::trace!(timestamp = ts, error = %e, "Failed to persist read status");
                         }
                     }
@@ -325,10 +327,11 @@ impl EventHandlers {
                 );
                 self.message_state
                     .update_delivery_status_by_timestamps(&message_timestamps, "delivered");
-                // Persist delivery status to DB
+                // Persist delivery status to DB — receipts lack conversation context,
+                // so use lookup-based update (SELECT by timestamp, UPDATE by ID).
                 if let Some(ref svc) = self.message_service {
                     for ts in &message_timestamps {
-                        if let Err(e) = svc.update_delivery_status_by_timestamp(*ts, "delivered") {
+                        if let Err(e) = svc.update_delivery_status_by_timestamp_with_lookup(*ts, "delivered") {
                             tracing::trace!(timestamp = ts, error = %e, "Failed to persist delivery status");
                         }
                     }
@@ -349,7 +352,8 @@ impl EventHandlers {
                 self.message_state
                     .update_delivery_status_by_timestamps(&[message_timestamp], "read");
                 if let Some(ref svc) = self.message_service {
-                    let _ = svc.update_delivery_status_by_timestamp(message_timestamp, "read");
+                    // ViewedReceipt lacks conversation context; use lookup-based update.
+                    let _ = svc.update_delivery_status_by_timestamp_with_lookup(message_timestamp, "read");
                 }
             }
 

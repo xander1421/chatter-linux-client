@@ -2,6 +2,7 @@
 
 use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
 use crate::domain::ids::ChannelId;
+use crate::domain::message::ConversationType;
 use crate::proto::content_v1::{self, Content};
 use crate::services::gateway::builders::{
     build_text_content, build_data_message_content,
@@ -39,7 +40,10 @@ impl AnonGroupService {
         self.send_message(group_id, inner_content).await?;
 
         // Mark as "sent" for delivery status indicator
-        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(sent_at, "sent");
+        let channel_id: ChannelId = (*group_id).into();
+        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(
+            &channel_id, &ConversationType::AnonGroup, sent_at, "sent",
+        );
 
         Ok((message_id, sent_at))
     }
@@ -84,7 +88,10 @@ impl AnonGroupService {
         self.send_message(group_id, inner_content).await?;
 
         // Mark as "sent" for delivery status indicator
-        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(sent_at, "sent");
+        let channel_id: ChannelId = (*group_id).into();
+        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(
+            &channel_id, &ConversationType::AnonGroup, sent_at, "sent",
+        );
 
         Ok((message_id, sent_at))
     }
@@ -161,7 +168,10 @@ impl AnonGroupService {
         self.send_message(group_id, inner_content).await?;
 
         // Mark as "sent" for delivery status indicator
-        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(sent_at, "sent");
+        // channel_id already bound above at line 108 from (*group_id).into()
+        let _ = self.message_service.message_repo.update_delivery_status_by_timestamp(
+            &channel_id, &ConversationType::AnonGroup, sent_at, "sent",
+        );
 
         Ok((message_id, sent_at))
     }
