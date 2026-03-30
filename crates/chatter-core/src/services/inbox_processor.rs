@@ -757,7 +757,7 @@ impl InboxEventProcessor {
                         message_id: msg.id,
                         new_content: crate::domain::message::MessageContent::Text(new_body.clone()),
                         channel_id: *channel_id,
-                        conversation_type: crate::domain::message::ConversationType::Channel,
+                        conversation_type: crate::domain::message::ConversationType::AnonGroup,
                         target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
@@ -878,7 +878,7 @@ impl InboxEventProcessor {
                 };
                 for ts in timestamps {
                     let _ = self.message_service.update_delivery_status_by_timestamp(
-                        channel_id, &crate::domain::message::ConversationType::Channel, *ts, status,
+                        channel_id, &crate::domain::message::ConversationType::AnonGroup, *ts, status,
                     );
                 }
                 false

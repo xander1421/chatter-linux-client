@@ -1857,7 +1857,8 @@ impl ChatterClient {
     ) -> Result<Vec<Message>, crate::services::message::MessageError> {
         match conversation {
             ActiveConversation::Channel(id) => {
-                self.messages().get_messages_local(id, &ConversationType::Channel, None, limit)
+                // All channels use encrypted group mailboxes → stored as AnonGroup
+                self.messages().get_messages_local(id, &ConversationType::AnonGroup, None, limit)
             }
             ActiveConversation::ServerDm { channel_id: id, .. } => {
                 self.messages().get_messages_local(id, &ConversationType::ServerDm, None, limit)
@@ -1965,7 +1966,7 @@ impl ChatterClient {
         let message = Message {
             id: crate::domain::ids::MessageId::new(),
             conversation_id: *channel_id,
-            conversation_type: ConversationType::Channel,
+            conversation_type: ConversationType::AnonGroup,
             sender_id: Some(*initiator_id),
             device_id: None,
             content: MessageContent::Call(call_msg),

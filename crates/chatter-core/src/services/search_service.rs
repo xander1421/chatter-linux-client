@@ -355,7 +355,7 @@ fn proto_to_domain_message(proto: &chat_v1::Message) -> Result<Message, SearchEr
     Ok(Message {
         id,
         conversation_id: channel_id,
-        conversation_type: ConversationType::Channel,
+        conversation_type: ConversationType::AnonGroup,
         sender_id,
         device_id: None,
         content,

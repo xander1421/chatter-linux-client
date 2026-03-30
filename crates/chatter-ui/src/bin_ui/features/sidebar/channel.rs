@@ -100,7 +100,8 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             );
 
             // Load pinned messages for this channel
-            let (msg_ids, preview) = match pin_service.load_pinned_for_channel(&channel_id, &ConversationType::Channel).await {
+            // All channels use encrypted group mailboxes, so messages are stored as AnonGroup
+            let (msg_ids, preview) = match pin_service.load_pinned_for_channel(&channel_id, &ConversationType::AnonGroup).await {
                 Ok(pinned) if !pinned.is_empty() => {
                     let ids = pinned.iter().map(|p| p.message_id).collect();
                     let preview = pinned[0].preview.clone();
@@ -186,15 +187,8 @@ pub async fn load_channel_into_ui(
         }
     };
 
-    // Map ChannelType -> ConversationType for unified message queries.
-    // Encrypted channels use the anonymous group mailbox system (NDSS '21),
-    // so their messages are stored with ConversationType::AnonGroup.
-    let conversation_type = match channel.channel_type {
-        ChannelType::DirectMessage => ConversationType::ServerDm,
-        ChannelType::SavedMessages => ConversationType::SavedMessages,
-        _ if channel.config.require_encryption => ConversationType::AnonGroup,
-        _ => ConversationType::Channel,
-    };
+    // Use the channel's own conversation_type() which respects require_encryption
+    let conversation_type = channel.conversation_type();
 
     // Fetch recent messages (limit 50)
     let messages = match message_service.get_messages_local(channel_id, &conversation_type, None, 50) {

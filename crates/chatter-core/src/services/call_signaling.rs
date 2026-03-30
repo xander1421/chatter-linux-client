@@ -872,7 +872,7 @@ impl CallSignalingService {
         let message = crate::domain::message::Message {
             id: crate::domain::ids::MessageId::new(),
             conversation_id: *channel_id,
-            conversation_type: ConversationType::Channel,
+            conversation_type: ConversationType::AnonGroup,
             sender_id: Some(*initiator_id),
             device_id: None,
             content: MessageContent::Call(call_msg),
@@ -1089,7 +1089,7 @@ impl CallSignalingService {
         let message = Message {
             id: crate::domain::ids::MessageId::new(),
             conversation_id: *channel_id,
-            conversation_type: ConversationType::Channel,
+            conversation_type: ConversationType::AnonGroup,
             sender_id: Some(*initiator_id),
             device_id: None,
             content: MessageContent::Call(call_msg),

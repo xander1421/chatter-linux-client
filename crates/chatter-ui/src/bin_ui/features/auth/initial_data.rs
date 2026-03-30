@@ -622,12 +622,8 @@ async fn load_channel_into_ui_from_services(
         }
     };
 
-    // Map ChannelType -> ConversationType for unified message queries
-    let conversation_type = match channel.channel_type {
-        ChannelType::DirectMessage => ConversationType::ServerDm,
-        ChannelType::SavedMessages => ConversationType::SavedMessages,
-        _ => ConversationType::Channel,
-    };
+    // Use the channel's own conversation_type() which respects require_encryption
+    let conversation_type = channel.conversation_type();
 
     // Fetch recent messages (limit 50)
     let messages = match ui_ctx.messages().get_messages_local(channel_id, &conversation_type, None, 50) {

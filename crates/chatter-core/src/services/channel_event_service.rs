@@ -286,7 +286,7 @@ impl ChannelEventService {
         Message {
             id: MessageId::new(),
             conversation_id: *channel_id,
-            conversation_type: ConversationType::Channel,
+            conversation_type: ConversationType::AnonGroup,
             sender_id: None, // System messages have no sender
             device_id: None,
             content: MessageContent::System(content),

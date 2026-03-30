@@ -170,7 +170,7 @@ impl MessageGateway {
         let message = Message {
             id: message_id,
             conversation_id: channel_id,
-            conversation_type: ConversationType::Channel,
+            conversation_type: ConversationType::AnonGroup,
             sender_id,
             device_id: None,
             content,

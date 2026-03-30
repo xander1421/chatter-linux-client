@@ -608,7 +608,7 @@ impl ConversationHandle {
             }
             ActiveConversation::Channel(channel_id) => {
                 let my_user_id = self.client.auth_state().get().current_user_id.map(|id| id.to_string());
-                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, &ConversationType::Channel, None, 50) {
+                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, &ConversationType::AnonGroup, None, 50) {
                     let timestamps: Vec<u64> = messages.iter()
                         .filter(|m| m.sender_id.as_ref().map(|id| id.to_string()).as_ref() != my_user_id.as_ref())
                         .map(|m| m.sent_at)

@@ -140,7 +140,7 @@ impl ChatHandler {
 
         // Build the message with sender's timestamp for Signal-style dedup
         // created_at is derived from sent_at in Message::new_text()
-        let mut message = Message::new_text(channel_id, ConversationType::Channel, sender_id, String::new(), data_message.timestamp);
+        let mut message = Message::new_text(channel_id, ConversationType::AnonGroup, sender_id, String::new(), data_message.timestamp);
         message.content = content;
         message.reply_to = reply_to;
         message.reply_to_author_id = reply_to_author_id;

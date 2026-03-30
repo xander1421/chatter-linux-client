@@ -388,7 +388,7 @@ fn process_decrypted_data_message(
             // Create domain message with sender's timestamp for Signal-style dedup
             // created_at is derived from sent_at in Message::new_text()
             let mut message =
-                Message::new_text(channel_id, ConversationType::Channel, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
+                Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
             message.id = message_id;
 
             // Add attachment IDs to message (attachments are stored separately in attachment_repo)
