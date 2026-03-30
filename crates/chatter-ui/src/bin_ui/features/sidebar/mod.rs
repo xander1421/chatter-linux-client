@@ -6,6 +6,7 @@ pub mod channel;
 pub mod dm;
 mod navigation;
 pub mod private_group;
+mod sections;
 
 use std::sync::Arc;
 
@@ -38,6 +39,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     navigation::wire_org_management_callbacks(window, ui_ctx);
     navigation::load_org_state(window, ui_ctx);
     navigation::subscribe_org_state(window, ui_ctx);
+    sections::wire_section_callbacks(window, ui_ctx);
+    sections::load_sections(window, ui_ctx);
 }
 
 /// Apply pinned message state to the UI.

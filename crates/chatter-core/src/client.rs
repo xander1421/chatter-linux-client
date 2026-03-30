@@ -46,6 +46,7 @@ use crate::services::pin_service::PinService;
 use crate::services::reaction_service::ReactionService;
 use crate::services::session_service::{SessionError, SessionService};
 use crate::services::signal_service::SignalService;
+use crate::services::section_service::SectionService;
 use crate::services::typing_service::TypingService;
 use crate::services::user::UserService;
 use crate::services::conversation::ConversationHandle;
@@ -201,6 +202,7 @@ impl ChatterClient {
     pub fn dm_bootstrap(&self) -> &Arc<DmBootstrapService> { &self.ui.dm_bootstrap_service }
     pub fn channel_events(&self) -> &Arc<ChannelEventService> { &self.ui.channel_event_service }
     pub fn notifications(&self) -> &Arc<crate::services::notification_service::NotificationService> { &self.ui.notification_service }
+    pub fn sections(&self) -> &Arc<SectionService> { &self.ui.section_service }
 
     /// Get the SVR backup service (lazy-initialized, persistent instance).
     pub fn svr_backup(&self) -> &crate::services::svr_backup_service::SvrBackupService {

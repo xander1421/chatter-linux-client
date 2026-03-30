@@ -1,10 +1,10 @@
 // Chatter Linux Client - Main UI
 // Root component for the application
 
-import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData } from "app.slint";
+import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData, CustomSectionData, SectionConversationData } from "app.slint";
 
 // Re-export all types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData, CustomSectionData, SectionConversationData }
 
 export component MainWindow inherits Window {
     title: "Chatter";
@@ -83,6 +83,10 @@ export component MainWindow inherits Window {
     in property <string> user-presence-status <=> app.user-presence-status;
     in property <string> user-custom-status <=> app.user-custom-status;
     in-out property <bool> sidebar-collapsed <=> app.sidebar-collapsed;
+
+    // ========== Custom sections properties ==========
+    in property <[CustomSectionData]> custom-sections <=> app.custom-sections;
+    in property <[SectionConversationData]> section-conversations <=> app.section-conversations;
 
     // ========== Organization properties ==========
     in property <string> current-org-id <=> app.current-org-id;
@@ -500,6 +504,16 @@ export component MainWindow inherits Window {
     callback toggle-sidebar <=> app.toggle-sidebar;
     callback org-selected <=> app.org-selected;
     callback manage-org-clicked <=> app.manage-org-clicked;
+
+    // ========== Custom sections callbacks ==========
+    callback create-section-clicked <=> app.create-section-clicked;
+    callback section-toggle-expanded <=> app.section-toggle-expanded;
+    callback section-conversation-selected <=> app.section-conversation-selected;
+    callback delete-section-clicked <=> app.delete-section-clicked;
+    callback rename-section-clicked <=> app.rename-section-clicked;
+    callback move-to-section <=> app.move-to-section;
+    callback remove-from-section <=> app.remove-from-section;
+
     callback org-load-members <=> app.org-load-members;
     callback org-load-settings <=> app.org-load-settings;
     callback org-load-dashboard <=> app.org-load-dashboard;

@@ -159,6 +159,16 @@ impl SectionService {
         Ok(())
     }
 
+    /// Toggle the expanded/collapsed state of a section.
+    pub fn toggle_expanded(&self, id: &SectionId, expanded: bool) -> Result<(), SectionError> {
+        self.section_repo
+            .toggle_section_expanded(id, expanded)
+            .map_err(|e| match e {
+                StorageError::NotFound(_) => SectionError::NotFound,
+                other => SectionError::Storage(other),
+            })
+    }
+
     /// Remove a conversation from whichever section it belongs to.
     pub fn remove_conversation_from_section(
         &self,
