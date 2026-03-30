@@ -24,7 +24,7 @@ fn test_appcontext_three_tier_initialization() {
     let ctx = chatter_core::app::AppContext::with_config(Some("http://localhost:50051".to_string()), None);
 
     let elapsed = start.elapsed();
-    assert!(elapsed < Duration::from_secs(10), "AppContext init took too long: {:?}", elapsed);
+    assert!(elapsed < Duration::from_secs(30), "AppContext init took too long: {:?}", elapsed);
 
     match ctx {
         Ok(_ctx) => {

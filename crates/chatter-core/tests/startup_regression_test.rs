@@ -98,6 +98,7 @@ fn test_03_directories_init() {
 }
 
 #[test]
+#[ignore] // Requires real keyring service (D-Bus secret service)
 fn test_04_keyring_access() {
     use chatter_core::system::Keyring;
     use std::path::PathBuf;
@@ -164,6 +165,7 @@ fn test_05_keyring_with_env_bypass() {
 }
 
 #[test]
+#[ignore] // Requires keyring for DB passphrase; run with --test-threads=1
 fn test_06_database_open() {
     use chatter_core::storage::Database;
 
@@ -220,6 +222,7 @@ fn test_07_grpc_pool_creation() {
 }
 
 #[test]
+#[ignore] // Requires keyring + real filesystem; run with --test-threads=1
 fn test_08_infrastructure_container() {
     println!("\n=== Testing InfrastructureContainer (full init) ===");
 
@@ -253,6 +256,7 @@ fn test_08_infrastructure_container() {
 }
 
 #[test]
+#[ignore] // Requires keyring + real filesystem; run with --test-threads=1
 fn test_09_app_context() {
     println!("\n=== Testing AppContext (full app init) ===");
 
@@ -287,6 +291,7 @@ fn test_09_app_context() {
 
 /// Test that specifically checks for the keyring retry blocking issue.
 #[test]
+#[ignore] // Requires real keyring service (D-Bus secret service)
 fn test_10_keyring_no_retry_block() {
     use chatter_core::system::Keyring;
     use std::path::PathBuf;
@@ -357,6 +362,7 @@ fn test_10b_keyring_real_retry_params() {
 /// Test keyring with the EXACT path the app uses (XDG_DATA_HOME based)
 /// Tests the NEW smart retry logic that fails fast on NoEntry errors.
 #[test]
+#[ignore] // Requires real keyring service (D-Bus secret service)
 fn test_11_keyring_real_path() {
     use chatter_core::system::{Directories, Keyring};
     use std::sync::mpsc;
@@ -459,6 +465,7 @@ fn test_12_keyring_set_passphrase() {
 
 /// Test the full passphrase_or_generate flow with real path
 #[test]
+#[ignore] // Requires real keyring + filesystem; run with --test-threads=1
 fn test_13_infrastructure_real_path() {
     use std::sync::mpsc;
     use std::thread;

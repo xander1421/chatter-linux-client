@@ -84,8 +84,8 @@ fn test_jarvis_fact_upsert_and_reinforce() {
         .expect("Failed to get facts");
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].object, "Chatter project");
-    // Confidence should have increased
-    assert!(facts[0].confidence > 1.0);
+    // Confidence stays at max (1.0) since initial was already 1.0 and SQL clamps to 1.0
+    assert!((facts[0].confidence - 1.0).abs() < f64::EPSILON, "Confidence should remain at 1.0 after reinforce");
 }
 
 #[test]
@@ -95,17 +95,17 @@ fn test_jarvis_fact_search() {
 
     let user_id = UserId::new();
 
-    // Insert multiple facts
-    repo.upsert_fact(&JarvisFact::about_user(&user_id, "interested_in", "machine learning")).unwrap();
+    // Insert multiple facts (each with unique predicate to avoid upsert collisions)
+    repo.upsert_fact(&JarvisFact::about_user(&user_id, "interested_in_ml", "machine learning")).unwrap();
     repo.upsert_fact(&JarvisFact::about_user(&user_id, "uses", "Rust")).unwrap();
-    repo.upsert_fact(&JarvisFact::about_user(&user_id, "interested_in", "cryptography")).unwrap();
+    repo.upsert_fact(&JarvisFact::about_user(&user_id, "interested_in_crypto", "cryptography")).unwrap();
 
-    // Search for "machine"
+    // Search for "machine" — matches object "machine learning"
     let results = repo.search_facts("machine", 10).expect("Failed to search");
     assert_eq!(results.len(), 1);
     assert!(results[0].object.contains("machine learning"));
 
-    // Search for "interested"
+    // Search for "interested" — matches predicates "interested_in_ml" and "interested_in_crypto"
     let results = repo.search_facts("interested", 10).expect("Failed to search");
     assert_eq!(results.len(), 2);
 }

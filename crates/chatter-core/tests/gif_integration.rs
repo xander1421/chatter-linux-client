@@ -4,6 +4,7 @@ use chatter_core::network::grpc::GifClient;
 use chatter_core::mailbox::blind_signature::UnblindedToken;
 
 #[tokio::test]
+#[ignore] // Requires running backend with anonymous GIF endpoint whitelisted
 async fn test_gif_client_anonymous_search() {
     // This test assumes a running backend at localhost:50051
     // or tests the logic of token injection.

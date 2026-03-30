@@ -608,7 +608,7 @@ impl AnonGroupRepository {
     pub fn list_active_groups(&self) -> Result<Vec<AnonGroup>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, name, my_role, bootstrap_complete, created_at, updated_at, status
+            "SELECT id, name, my_role, bootstrap_complete, created_at, updated_at, status, owner_id
              FROM anon_groups WHERE status != 2 ORDER BY updated_at DESC",
         )?;
 

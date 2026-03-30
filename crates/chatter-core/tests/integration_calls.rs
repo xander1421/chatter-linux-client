@@ -347,9 +347,9 @@ fn test_bgra_to_i420_blue() {
     // Blue: B=255, G=0, R=0
     let (y, u, v) = convert_single_color(255, 0, 0);
 
-    // Expected values for pure blue
-    // Y ≈ 29, U ≈ 240, V ≈ 110
-    assert!(y > 19 && y < 39, "Blue Y should be ~29, got {}", y);
+    // Expected values for pure blue (BT.601 studio-swing)
+    // Y ≈ 41, U ≈ 240, V ≈ 110
+    assert!(y > 31 && y < 51, "Blue Y should be ~41, got {}", y);
     assert!(u > 230, "Blue U should be ~240, got {}", u);
     assert!(v > 100 && v < 120, "Blue V should be ~110, got {}", v);
 }

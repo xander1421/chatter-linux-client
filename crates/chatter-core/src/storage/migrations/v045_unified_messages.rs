@@ -102,9 +102,9 @@ impl Migration for V045UnifiedMessages {
         CREATE INDEX idx_messages_pinned
             ON messages(conversation_id) WHERE is_pinned = 1;
 
-        -- Signal dedup: unique on (sender_id, sent_at)
+        -- Signal dedup: unique on (sender_id, sent_at) per conversation+type
         CREATE UNIQUE INDEX idx_messages_sender_sent_at
-            ON messages(sender_id, sent_at)
+            ON messages(conversation_type, conversation_id, sender_id, sent_at)
             WHERE sender_id IS NOT NULL AND sent_at > 0;
 
         -- Unread queries
@@ -130,15 +130,15 @@ impl Migration for V045UnifiedMessages {
 
         CREATE TABLE unified_reactions (
             id TEXT PRIMARY KEY,
-            message_id TEXT NOT NULL,
+            sender_id TEXT NOT NULL,
+            sent_at_ns INTEGER NOT NULL,
             user_id TEXT NOT NULL,
             emoji TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            UNIQUE(message_id, user_id, emoji),
-            FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+            UNIQUE(sender_id, sent_at_ns, user_id, emoji)
         );
 
-        CREATE INDEX idx_ur_message ON unified_reactions(message_id);
+        CREATE INDEX idx_ur_sender_sent ON unified_reactions(sender_id, sent_at_ns);
         CREATE INDEX idx_ur_user ON unified_reactions(user_id);
         "#
     }
