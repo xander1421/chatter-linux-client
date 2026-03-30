@@ -142,6 +142,7 @@ export component App inherits Rectangle {
     // Organization properties
     in property <string> current-org-id: "";
     in property <string> current-org-name: "";
+    in property <string> current-org-initial: "";
     in property <string> current-org-slug: "";
     in property <string> current-org-viewer-role: "member";
     in property <[OrgListItemData]> organizations: [];
@@ -942,6 +943,7 @@ export component App inherits Rectangle {
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
                 current-org-name: root.current-org-name;
+                current-org-initial: root.current-org-initial;
                 organizations: root.organizations;
                 org-loading: root.org-loading;
 

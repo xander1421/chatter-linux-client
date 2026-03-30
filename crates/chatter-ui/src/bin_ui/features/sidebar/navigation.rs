@@ -9,6 +9,16 @@ use chatter_core::domain::ids::ChannelId;
 
 use crate::MainWindow;
 
+/// Extract the first uppercase character from an org name for the collapsed badge.
+fn org_initial(name: &str) -> SharedString {
+    SharedString::from(
+        name.chars()
+            .next()
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_default(),
+    )
+}
+
 use super::channel::load_channel_into_ui;
 use super::stop_audio_playback;
 
@@ -364,9 +374,10 @@ pub(crate) fn load_pending_group_invites_count(window: &MainWindow, _ui_ctx: &Ar
 pub(crate) fn load_org_state(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let org_data = ui_ctx.org_state().get();
 
-    // Set current org name
+    // Set current org name + initial
     if let Some(ref name) = org_data.current_org_name {
         window.set_current_org_name(SharedString::from(name.as_str()));
+        window.set_current_org_initial(org_initial(name));
     }
 
     // Set org loading state
@@ -419,6 +430,7 @@ pub(crate) fn wire_org_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 w.set_current_org_name(SharedString::from(org_name.as_str()));
+                w.set_current_org_initial(org_initial(&org_name));
 
                 // Update is_current flags in the list
                 let model = w.get_organizations();
@@ -469,6 +481,7 @@ pub(crate) fn wire_manage_org_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterC
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     w.set_current_org_id(org_id.into());
+                    w.set_current_org_initial(org_initial(&org_name));
                     w.set_current_org_name(org_name.into());
                     w.set_current_org_slug(slug.into());
                     w.set_current_org_viewer_role(viewer_role.into());
@@ -703,10 +716,10 @@ pub(crate) fn subscribe_org_state(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    // Update org name
-                    w.set_current_org_name(SharedString::from(
-                        data.current_org_name.as_deref().unwrap_or(""),
-                    ));
+                    // Update org name + initial
+                    let name = data.current_org_name.as_deref().unwrap_or("");
+                    w.set_current_org_name(SharedString::from(name));
+                    w.set_current_org_initial(org_initial(name));
                     w.set_org_loading(data.is_loading);
 
                     // Update org list

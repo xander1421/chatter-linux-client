@@ -46,6 +46,7 @@ export component Sidebar inherits Rectangle {
 
     // ── Properties: Organization ──
     in property <string> current-org-name: "";
+    in property <string> current-org-initial: "";
     in property <[OrgListItemData]> organizations: [];
     in property <bool> org-loading: false;
 
@@ -113,6 +114,7 @@ export component Sidebar inherits Rectangle {
         // ════════════════════════════════════════
         OrgSwitcher {
             current-org-name: root.current-org-name;
+            current-org-initial: root.current-org-initial;
             organizations: root.organizations;
             collapsed: root.collapsed;
             is-loading: root.org-loading;

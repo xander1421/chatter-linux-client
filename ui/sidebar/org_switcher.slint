@@ -21,6 +21,7 @@ export struct OrgListItemData {
 
 export component OrgSwitcher inherits Rectangle {
     in property <string> current-org-name: "";
+    in property <string> current-org-initial: "";
     in property <bool> has-org: current-org-name != "";
     in property <[OrgListItemData]> organizations: [];
     in property <bool> collapsed: false;
@@ -120,7 +121,7 @@ export component OrgSwitcher inherits Rectangle {
                     background: Colors.primary;
 
                     Text {
-                        text: root.current-org-name;
+                        text: root.current-org-initial != "" ? root.current-org-initial : root.current-org-name;
                         color: Colors.text-primary;
                         font-size: 13px;
                         font-weight: 700;
