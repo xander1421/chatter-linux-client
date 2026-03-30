@@ -149,13 +149,17 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             // Resolve reply-to sender name if this is a reply/quote
             if display_data.is_reply {
                 if let Some(ref author_id) = msg.reply_to_author_id {
-                    display_data.reply_to_sender_name = user_service.get_display_name(author_id);
+                    display_data.reply_to_sender_name = anon_group_service
+                        .get_member_display_name(&group_id, author_id)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| user_service.get_display_name(author_id));
                 }
             }
 
             display_messages.push(display_data);
         }
-        
+
         // Reverse to show oldest first (messages come from DB in DESC order)
         display_messages.reverse();
         
@@ -385,7 +389,11 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                 // Resolve reply-to sender name if this is a reply/quote
                 if display_data.is_reply {
                     if let Some(ref author_id) = msg.reply_to_author_id {
-                        display_data.reply_to_sender_name = user_service.get_display_name(author_id);
+                        display_data.reply_to_sender_name = anon_group_service
+                            .get_member_display_name(&group_id, author_id)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| user_service.get_display_name(author_id));
                     }
                 }
 
