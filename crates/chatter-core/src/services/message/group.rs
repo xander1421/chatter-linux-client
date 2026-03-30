@@ -55,12 +55,13 @@ impl MessageService {
 
         // Build the Content proto with our mailbox announcement
         let timestamp = TimestampNanos::now().as_u64();
-        let content = Content {
+        let mut content = Content {
             content: Some(content::Content::GroupMailboxAddress(announcement)),
             ephemeral_reply_to: None,
             timestamp,
             padding: vec![],
         };
+        Self::pad_content_to_bucket(&mut content);
         let plaintext = content.encode_to_vec();
 
         // Use shared token manager for anonymous credential sending
@@ -84,6 +85,13 @@ impl MessageService {
 
                     match token {
                         Some(token) => {
+                            // Mark token used BEFORE sending — the server consumes
+                            // the credential at auth middleware regardless of whether
+                            // the handler succeeds. If we only mark on success, a
+                            // handler failure leaves the token "available" client-side
+                            // but consumed server-side, causing "already used" errors.
+                            let _ = token_manager.mark_token_used(&token.id);
+
                             // Create SealedSenderMessage proto
                             let sealed_message = SealedSenderMessage {
                                 sealed_body: sealed_bytes,
@@ -108,7 +116,6 @@ impl MessageService {
                                 .await
                             {
                                 Ok(_) => {
-                                    let _ = token_manager.mark_token_used(&token.id);
                                     success_count += 1;
                                     tracing::debug!(
                                         channel_id = %channel_id,
@@ -320,12 +327,13 @@ impl MessageService {
         // Build the Content proto with SKDM + our mailbox announcement
         let timestamp = TimestampNanos::now().as_u64();
 
-        let skdm_content = content_v1::Content {
+        let mut skdm_content = content_v1::Content {
             ephemeral_reply_to,
             timestamp,
             padding: vec![],
             content: Some(content::Content::SenderKey(skdm.clone())),
         };
+        Self::pad_content_to_bucket(&mut skdm_content);
 
         let plaintext = skdm_content.encode_to_vec();
 
@@ -350,6 +358,9 @@ impl MessageService {
 
                     match token {
                         Some(token) => {
+                            // Mark token used BEFORE sending — server consumes at auth layer
+                            let _ = token_manager.mark_token_used(&token.id);
+
                             // Create SealedSenderMessage proto
                             let sealed_message = SealedSenderMessage {
                                 sealed_body: sealed_bytes,
@@ -374,7 +385,6 @@ impl MessageService {
                                 .await
                             {
                                 Ok(_) => {
-                                    let _ = token_manager.mark_token_used(&token.id);
                                     success_count += 1;
                                     tracing::debug!(
                                         channel_id = %channel_id,
@@ -473,12 +483,13 @@ impl MessageService {
         // Build the Content proto with SKDM + our mailbox announcement
         let timestamp = TimestampNanos::now().as_u64();
 
-        let skdm_content = content_v1::Content {
+        let mut skdm_content = content_v1::Content {
             ephemeral_reply_to,
             timestamp,
             padding: vec![],
             content: Some(content::Content::SenderKey(skdm.clone())),
         };
+        Self::pad_content_to_bucket(&mut skdm_content);
 
         let plaintext = skdm_content.encode_to_vec();
         let member_id_str = member_id.to_string();
@@ -494,6 +505,9 @@ impl MessageService {
         let token_manager = TokenManager::new(database);
         let token = self.get_or_request_token_for_skdm(&token_manager, &member_id_str).await
             .ok_or_else(|| MessageError::EncryptionFailed("No anonymous tokens available for SKDM".into()))?;
+
+        // Mark token used BEFORE sending — server consumes at auth layer
+        let _ = token_manager.mark_token_used(&token.id);
 
         // Create SealedSenderMessage proto
         let sealed_message = SealedSenderMessage {
@@ -518,8 +532,6 @@ impl MessageService {
             )
             .await
             .map_err(MessageError::Network)?;
-
-        let _ = token_manager.mark_token_used(&token.id);
 
         tracing::info!(
             channel_id = %channel_id,
@@ -567,12 +579,13 @@ impl MessageService {
         };
 
         // Wrap in Content proto
-        let content = content_v1::Content {
+        let mut content = content_v1::Content {
             content: Some(content::Content::SenderKeyRequest(request.clone())),
             ephemeral_reply_to: None,
             timestamp,
             padding: vec![],
         };
+        Self::pad_content_to_bucket(&mut content);
 
         let plaintext = content.encode_to_vec();
         let target_id_str = target_user_id.to_string();
@@ -588,6 +601,9 @@ impl MessageService {
         let token_manager = TokenManager::new(database);
         let token = self.get_or_request_token_for_skdm(&token_manager, &target_id_str).await
             .ok_or_else(|| MessageError::EncryptionFailed("No anonymous tokens available for sender key request".into()))?;
+
+        // Mark token used BEFORE sending — server consumes at auth layer
+        let _ = token_manager.mark_token_used(&token.id);
 
         // Create SealedSenderMessage proto
         let sealed_message = SealedSenderMessage {
@@ -612,8 +628,6 @@ impl MessageService {
             )
             .await
             .map_err(MessageError::Network)?;
-
-        let _ = token_manager.mark_token_used(&token.id);
 
         tracing::info!(
             channel_id = %channel_id,
@@ -939,6 +953,41 @@ impl MessageService {
                 "[TIMING_FIX] Queued message for {} member(s) without mailboxes yet",
                 missing_members.len()
             );
+        }
+    }
+
+    /// Pad a Content proto to the nearest standard bucket size for traffic analysis protection.
+    ///
+    /// The server validates that sealed sender ciphertexts match one of these plaintext bucket
+    /// sizes: 256, 512, 1024, 4096 bytes. Without padding, message sizes leak event type info.
+    fn pad_content_to_bucket(content: &mut crate::proto::content_v1::Content) {
+        use prost::Message;
+        const BUCKETS: [usize; 4] = [256, 512, 1024, 4096];
+
+        // Get current size without padding
+        content.padding = vec![];
+        let base_size = content.encoded_len();
+
+        // Find smallest bucket that fits
+        let target = BUCKETS.iter().copied()
+            .find(|&b| b >= base_size)
+            .unwrap_or(4096);
+
+        if base_size >= target {
+            return;
+        }
+
+        // Start with an overestimate, then trim to exact target.
+        // Protobuf overhead for the padding field: 1 (tag) + varint(len) + len.
+        let estimate = target.saturating_sub(base_size);
+        content.padding = vec![0u8; estimate];
+
+        while content.encoded_len() > target && !content.padding.is_empty() {
+            content.padding.pop();
+        }
+        // If we undershot by 1 due to varint boundary, add back
+        while content.encoded_len() < target {
+            content.padding.push(0);
         }
     }
 
