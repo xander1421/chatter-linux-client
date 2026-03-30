@@ -176,13 +176,25 @@ fn handle_dm_message_unified(
             });
 
             if !already_exists {
+                // Find sorted insert position (by timestamp, tiebreak by sender_id)
+                let new_ts = ts_str.parse::<u64>().unwrap_or(0);
+                let mut messages: Vec<crate::MessageItemData> = (0..current_model.row_count())
+                    .filter_map(|i| current_model.row_data(i))
+                    .collect();
+
+                let insert_pos = messages.iter().position(|m| {
+                    let ts = m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
+                    match ts.cmp(&new_ts) {
+                        std::cmp::Ordering::Greater => true,
+                        std::cmp::Ordering::Equal => m.sender_id.as_str() > sender_str.as_str(),
+                        std::cmp::Ordering::Less => false,
+                    }
+                }).unwrap_or(messages.len());
+
                 if let Some(vec_model) = current_model.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
-                    vec_model.push(new_msg);
+                    vec_model.insert(insert_pos, new_msg);
                 } else {
-                    let mut messages: Vec<crate::MessageItemData> = (0..current_model.row_count())
-                        .filter_map(|i| current_model.row_data(i))
-                        .collect();
-                    messages.push(new_msg);
+                    messages.insert(insert_pos, new_msg);
                     w.set_messages(slint::ModelRc::new(slint::VecModel::from(messages)));
                 }
             }
@@ -281,13 +293,46 @@ fn handle_group_message_unified(
 
         let selected_group = window.get_selected_private_group_id().to_string();
         if selected_group == group_id_str {
-            let messages = window.get_messages();
-            if let Some(model) = messages.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
-                let msg_item = display_data.to_slint_with_user(&current_user_id);
-                model.push(msg_item);
+            let was_at_bottom = window.get_is_at_bottom();
+
+            let msg_item = display_data.to_slint_with_user(&current_user_id);
+
+            let current_model = window.get_messages();
+            let ts_str = msg_item.timestamp_ns.to_string();
+            let sender_str = msg_item.sender_id.to_string();
+
+            // Deduplicate by (sender_id, timestamp_ns)
+            let already_exists = (0..current_model.row_count()).any(|i| {
+                current_model.row_data(i).map(|m| {
+                    m.sender_id.as_str() == sender_str && m.timestamp_ns.as_str() == ts_str
+                }).unwrap_or(false)
+            });
+
+            if !already_exists {
+                // Find sorted insert position (by timestamp, tiebreak by sender_id)
+                let new_ts = ts_str.parse::<u64>().unwrap_or(0);
+                let mut messages: Vec<crate::MessageItemData> = (0..current_model.row_count())
+                    .filter_map(|i| current_model.row_data(i))
+                    .collect();
+
+                let insert_pos = messages.iter().position(|m| {
+                    let ts = m.timestamp_ns.to_string().parse::<u64>().unwrap_or(0);
+                    match ts.cmp(&new_ts) {
+                        std::cmp::Ordering::Greater => true,
+                        std::cmp::Ordering::Equal => m.sender_id.as_str() > sender_str.as_str(),
+                        std::cmp::Ordering::Less => false,
+                    }
+                }).unwrap_or(messages.len());
+
+                if let Some(vec_model) = current_model.as_any().downcast_ref::<slint::VecModel<crate::MessageItemData>>() {
+                    vec_model.insert(insert_pos, msg_item);
+                } else {
+                    messages.insert(insert_pos, msg_item);
+                    window.set_messages(slint::ModelRc::new(slint::VecModel::from(messages)));
+                }
             }
 
-            if window.get_is_at_bottom() {
+            if was_at_bottom {
                 window.set_message_scroll_position(-99999.0);
                 window.set_is_at_bottom(true);
             }
