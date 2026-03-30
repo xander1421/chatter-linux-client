@@ -921,16 +921,6 @@ impl UnifiedMessageRepository {
     }
 
     /// Count messages in a channel (no conversation_type filter).
-    pub fn count_in_channel(&self, channel_id: &ChannelId) -> Result<u64, StorageError> {
-        let conn = self.db.read_connection()?;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM messages WHERE conversation_id = ?1",
-            params![channel_id.to_string()],
-            |row| row.get(0),
-        )?;
-        Ok(count as u64)
-    }
-
     /// Update delivery status by conversation + timestamp (scoped to one conversation).
     pub fn update_delivery_status_by_timestamp(
         &self,
@@ -1025,15 +1015,20 @@ impl UnifiedMessageRepository {
     }
 
     /// List all pinned messages in a channel (no conversation_type filter).
-    pub fn list_pinned_all(&self, channel_id: &ChannelId) -> Result<Vec<Message>, StorageError> {
+    pub fn list_pinned_all(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<Vec<Message>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {} FROM messages \
-             WHERE conversation_id = ?1 AND is_pinned = 1 AND is_deleted = 0 \
+             WHERE conversation_id = ?1 AND conversation_type = ?2 \
+               AND is_pinned = 1 AND is_deleted = 0 \
              ORDER BY sent_at DESC",
             MSG_COLS,
         ))?;
-        let mut rows = stmt.query(params![channel_id.to_string()])?;
+        let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str()])?;
         collect_messages(&mut rows)
     }
 

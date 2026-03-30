@@ -100,7 +100,7 @@ pub(crate) fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             );
 
             // Load pinned messages for this channel
-            let (msg_ids, preview) = match pin_service.load_pinned_for_channel(&channel_id).await {
+            let (msg_ids, preview) = match pin_service.load_pinned_for_channel(&channel_id, &ConversationType::Channel).await {
                 Ok(pinned) if !pinned.is_empty() => {
                     let ids = pinned.iter().map(|p| p.message_id).collect();
                     let preview = pinned[0].preview.clone();

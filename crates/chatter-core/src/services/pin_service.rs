@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use crate::domain::{Attachment, FileCategory, Message};
+use crate::domain::{Attachment, ConversationType, FileCategory, Message};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::services::attachment::AttachmentService;
 use crate::services::message::MessageService;
@@ -56,9 +56,13 @@ impl PinService {
     }
 
     /// Load pinned messages for a channel.
-    pub async fn load_pinned_for_channel(&self, channel_id: &ChannelId) -> PinResult<Vec<PinnedMessageData>> {
+    pub async fn load_pinned_for_channel(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> PinResult<Vec<PinnedMessageData>> {
         // Get pinned messages from message service
-        let pinned_messages = self.message_service.get_pinned_messages_local(channel_id)?;
+        let pinned_messages = self.message_service.get_pinned_messages_local(channel_id, conversation_type)?;
         
         if pinned_messages.is_empty() {
             return Ok(Vec::new());

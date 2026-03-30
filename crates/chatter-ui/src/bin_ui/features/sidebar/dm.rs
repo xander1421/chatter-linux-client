@@ -175,7 +175,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             // Load pinned messages for this DM channel
             if let Ok(Ok(pinned_messages)) = tokio::time::timeout(
                 crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                pin_service.load_pinned_for_channel(&channel_id),
+                pin_service.load_pinned_for_channel(&channel_id, &ConversationType::ServerDm),
             ).await {
                 if !pinned_messages.is_empty() {
                     let message_ids: Vec<_> = pinned_messages.iter().map(|p| p.message_id).collect();

@@ -319,8 +319,9 @@ impl MessageService {
     pub fn get_pinned_messages_local(
         &self,
         channel_id: &ChannelId,
+        conversation_type: &ConversationType,
     ) -> Result<Vec<Message>, MessageError> {
-        self.message_repo.list_pinned_all(channel_id).map_err(MessageError::from)
+        self.message_repo.list_pinned_all(channel_id, conversation_type).map_err(MessageError::from)
     }
 
     /// Set the pinned status of a message in local storage.

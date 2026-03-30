@@ -109,7 +109,7 @@ impl Migration for V045UnifiedMessages {
 
         -- Unread queries
         CREATE INDEX idx_messages_unread
-            ON messages(conversation_id, is_read) WHERE is_read = 0;
+            ON messages(conversation_type, conversation_id, is_read) WHERE is_read = 0;
 
         -- ============================================================
         -- Recreate threads table with conversation_id
