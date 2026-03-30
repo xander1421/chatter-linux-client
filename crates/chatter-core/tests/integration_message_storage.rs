@@ -1012,3 +1012,541 @@ fn test_delivery_status_update_with_lookup_updates_by_id() {
     let loaded = message_repo.get(&msg.id).unwrap().unwrap();
     assert_eq!(loaded.delivery_status, "read");
 }
+
+// ============================================================================
+// Cross-Conversation-Type Isolation Tests (GRA-442)
+// ============================================================================
+
+/// Test 1: Insert messages with all 6 ConversationType values using the same
+/// conversation_id and verify list_for_conversation returns only matching type.
+#[test]
+fn test_type_isolation_on_list() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+
+    let all_types = [
+        ConversationType::Channel,
+        ConversationType::ServerDm,
+        ConversationType::MailboxDm,
+        ConversationType::AnonDm,
+        ConversationType::AnonGroup,
+        ConversationType::SavedMessages,
+    ];
+
+    let sender = UserId::new();
+
+    // Insert one message per conversation type, all sharing the same conversation_id.
+    for ct in &all_types {
+        let msg = Message::new_text(
+            channel.id,
+            ct.clone(),
+            Some(sender),
+            format!("msg-{:?}", ct),
+            next_timestamp_ns(),
+        );
+        message_repo.insert(&msg).unwrap();
+    }
+
+    // Each type should return exactly 1 message, and only its own.
+    for ct in &all_types {
+        let messages = message_repo
+            .list_for_conversation(&channel.id, ct, None, 100)
+            .unwrap();
+        assert_eq!(
+            messages.len(),
+            1,
+            "Expected exactly 1 message for {:?}, got {}",
+            ct,
+            messages.len()
+        );
+        match &messages[0].content {
+            MessageContent::Text(text) => {
+                assert_eq!(text, &format!("msg-{:?}", ct));
+            }
+            _ => panic!("Expected text for {:?}", ct),
+        }
+    }
+}
+
+/// Test 2: Insert AnonDm and AnonGroup messages with same channel_id and
+/// verify no cross-leak via list_for_conversation.
+#[test]
+fn test_anon_dm_vs_anon_group_isolation() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Insert 3 AnonDm messages
+    for i in 0..3 {
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::AnonDm,
+            Some(sender),
+            format!("anon-dm-{}", i),
+            next_timestamp_ns(),
+        );
+        message_repo.insert(&msg).unwrap();
+    }
+
+    // Insert 2 AnonGroup messages (same channel_id)
+    for i in 0..2 {
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::AnonGroup,
+            Some(sender),
+            format!("anon-group-{}", i),
+            next_timestamp_ns(),
+        );
+        message_repo.insert(&msg).unwrap();
+    }
+
+    // AnonDm list should have exactly 3
+    let dm_msgs = message_repo
+        .list_for_conversation(&channel.id, &ConversationType::AnonDm, None, 100)
+        .unwrap();
+    assert_eq!(dm_msgs.len(), 3, "AnonDm should have 3 messages");
+    for m in &dm_msgs {
+        match &m.content {
+            MessageContent::Text(t) => assert!(
+                t.starts_with("anon-dm-"),
+                "AnonDm list leaked an AnonGroup message: {}",
+                t
+            ),
+            _ => panic!("Expected text"),
+        }
+    }
+
+    // AnonGroup list should have exactly 2
+    let group_msgs = message_repo
+        .list_for_conversation(&channel.id, &ConversationType::AnonGroup, None, 100)
+        .unwrap();
+    assert_eq!(group_msgs.len(), 2, "AnonGroup should have 2 messages");
+    for m in &group_msgs {
+        match &m.content {
+            MessageContent::Text(t) => assert!(
+                t.starts_with("anon-group-"),
+                "AnonGroup list leaked an AnonDm message: {}",
+                t
+            ),
+            _ => panic!("Expected text"),
+        }
+    }
+}
+
+/// Test 3: Two messages with same channel+timestamp but different types.
+/// update_text_by_timestamp with one type should only change that message.
+#[test]
+fn test_update_text_by_timestamp_type_isolation() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+    let shared_ts = next_timestamp_ns();
+
+    // Insert a Channel message and a ServerDm message at the same timestamp+channel
+    let msg_channel = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "original-channel".to_string(),
+        shared_ts,
+    );
+    let msg_server_dm = Message::new_text(
+        channel.id,
+        ConversationType::ServerDm,
+        Some(sender),
+        "original-server-dm".to_string(),
+        shared_ts,
+    );
+    message_repo.insert(&msg_channel).unwrap();
+    message_repo.insert(&msg_server_dm).unwrap();
+
+    // Update only the Channel message's text
+    let updated = message_repo
+        .update_text_by_timestamp(
+            &channel.id,
+            &ConversationType::Channel,
+            shared_ts,
+            "edited-channel",
+        )
+        .unwrap();
+    assert!(updated, "Should have updated the Channel message");
+
+    // Verify: Channel message text changed
+    let loaded_channel = message_repo.get(&msg_channel.id).unwrap().unwrap();
+    match &loaded_channel.content {
+        MessageContent::Text(t) => assert_eq!(t, "edited-channel"),
+        _ => panic!("Expected text"),
+    }
+
+    // Verify: ServerDm message text is untouched
+    let loaded_dm = message_repo.get(&msg_server_dm.id).unwrap().unwrap();
+    match &loaded_dm.content {
+        MessageContent::Text(t) => assert_eq!(
+            t, "original-server-dm",
+            "ServerDm message must NOT be affected by Channel update"
+        ),
+        _ => panic!("Expected text"),
+    }
+}
+
+/// Test 4: Two messages with same sent_at in different conversation types.
+/// update_delivery_status_by_timestamp for one type should leave the other unchanged.
+#[test]
+fn test_update_delivery_status_by_timestamp_type_collision() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+    let shared_ts = next_timestamp_ns();
+
+    let msg_mailbox = Message::new_text(
+        channel.id,
+        ConversationType::MailboxDm,
+        Some(sender),
+        "mailbox msg".to_string(),
+        shared_ts,
+    );
+    let msg_saved = Message::new_text(
+        channel.id,
+        ConversationType::SavedMessages,
+        Some(sender),
+        "saved msg".to_string(),
+        shared_ts,
+    );
+    message_repo.insert(&msg_mailbox).unwrap();
+    message_repo.insert(&msg_saved).unwrap();
+
+    // Update delivery status for MailboxDm only
+    let updated = message_repo
+        .update_delivery_status_by_timestamp(
+            &channel.id,
+            &ConversationType::MailboxDm,
+            shared_ts,
+            "delivered",
+        )
+        .unwrap();
+    assert!(updated, "Should update MailboxDm row");
+
+    // MailboxDm should be "delivered"
+    let loaded_mailbox = message_repo.get(&msg_mailbox.id).unwrap().unwrap();
+    assert_eq!(loaded_mailbox.delivery_status, "delivered");
+
+    // SavedMessages should still be empty
+    let loaded_saved = message_repo.get(&msg_saved.id).unwrap().unwrap();
+    assert_eq!(
+        loaded_saved.delivery_status, "",
+        "SavedMessages message must NOT be affected by MailboxDm delivery update"
+    );
+}
+
+/// Test 5: Insert unread messages in different conversation types, verify
+/// get_unread_count returns correct counts per type.
+#[test]
+fn test_get_unread_count_per_type_isolation() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Insert 3 unread Channel messages
+    for _ in 0..3 {
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::Channel,
+            Some(sender),
+            "channel unread".to_string(),
+            next_timestamp_ns(),
+        );
+        message_repo.insert(&msg).unwrap();
+    }
+
+    // Insert 5 unread MailboxDm messages (same channel_id)
+    for _ in 0..5 {
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::MailboxDm,
+            Some(sender),
+            "mailbox unread".to_string(),
+            next_timestamp_ns(),
+        );
+        message_repo.insert(&msg).unwrap();
+    }
+
+    // Insert 1 unread AnonDm message
+    let msg = Message::new_text(
+        channel.id,
+        ConversationType::AnonDm,
+        Some(sender),
+        "anon unread".to_string(),
+        next_timestamp_ns(),
+    );
+    message_repo.insert(&msg).unwrap();
+
+    // Verify per-type counts
+    let channel_count = message_repo
+        .get_unread_count(&channel.id, &ConversationType::Channel)
+        .unwrap();
+    assert_eq!(channel_count, 3, "Channel unread count should be 3");
+
+    let mailbox_count = message_repo
+        .get_unread_count(&channel.id, &ConversationType::MailboxDm)
+        .unwrap();
+    assert_eq!(mailbox_count, 5, "MailboxDm unread count should be 5");
+
+    let anon_count = message_repo
+        .get_unread_count(&channel.id, &ConversationType::AnonDm)
+        .unwrap();
+    assert_eq!(anon_count, 1, "AnonDm unread count should be 1");
+
+    // Types with no messages should return 0
+    let server_dm_count = message_repo
+        .get_unread_count(&channel.id, &ConversationType::ServerDm)
+        .unwrap();
+    assert_eq!(server_dm_count, 0, "ServerDm unread count should be 0");
+}
+
+/// Test 6: Insert unread messages in two types, mark one type as read,
+/// verify the other type's messages are still unread.
+#[test]
+fn test_mark_conversation_read_per_type_isolation() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Insert 4 unread Channel messages
+    for _ in 0..4 {
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::Channel,
+            Some(sender),
+            "channel msg".to_string(),
+            next_timestamp_ns(),
+        );
+        message_repo.insert(&msg).unwrap();
+    }
+
+    // Insert 3 unread AnonGroup messages (same channel_id)
+    for _ in 0..3 {
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::AnonGroup,
+            Some(sender),
+            "anon-group msg".to_string(),
+            next_timestamp_ns(),
+        );
+        message_repo.insert(&msg).unwrap();
+    }
+
+    // Sanity: both should have unread counts
+    assert_eq!(
+        message_repo
+            .get_unread_count(&channel.id, &ConversationType::Channel)
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        message_repo
+            .get_unread_count(&channel.id, &ConversationType::AnonGroup)
+            .unwrap(),
+        3
+    );
+
+    // Mark Channel as read
+    message_repo
+        .mark_conversation_read(&channel.id, &ConversationType::Channel)
+        .unwrap();
+
+    // Channel should now be 0
+    assert_eq!(
+        message_repo
+            .get_unread_count(&channel.id, &ConversationType::Channel)
+            .unwrap(),
+        0,
+        "Channel unread count should be 0 after mark_conversation_read"
+    );
+
+    // AnonGroup should still be 3 (untouched)
+    assert_eq!(
+        message_repo
+            .get_unread_count(&channel.id, &ConversationType::AnonGroup)
+            .unwrap(),
+        3,
+        "AnonGroup unread count must NOT be affected by marking Channel as read"
+    );
+}
+
+/// Test 7: Add reactions to messages in different conversation types, verify
+/// get_reaction_counts_for_conversation returns only matching type.
+#[test]
+fn test_reaction_counts_per_type_isolation() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+    let reactor = UserId::new();
+
+    // Insert a Channel message and react to it
+    let ts_channel = next_timestamp_ns();
+    let msg_channel = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "channel msg".to_string(),
+        ts_channel,
+    );
+    message_repo.insert(&msg_channel).unwrap();
+    message_repo
+        .add_reaction(&msg_channel.id, &reactor, "fire")
+        .unwrap();
+
+    // Insert a MailboxDm message and react to it with a different emoji
+    let ts_dm = next_timestamp_ns();
+    let msg_dm = Message::new_text(
+        channel.id,
+        ConversationType::MailboxDm,
+        Some(sender),
+        "dm msg".to_string(),
+        ts_dm,
+    );
+    message_repo.insert(&msg_dm).unwrap();
+    message_repo
+        .add_reaction(&msg_dm.id, &reactor, "heart")
+        .unwrap();
+
+    // get_reaction_counts_for_conversation for Channel should only have "fire"
+    let channel_reactions = message_repo
+        .get_reaction_counts_for_conversation(&channel.id, &ConversationType::Channel)
+        .unwrap();
+    // Map is keyed by sent_at
+    assert!(
+        channel_reactions.contains_key(&ts_channel),
+        "Channel reactions should contain ts_channel key"
+    );
+    assert!(
+        !channel_reactions.contains_key(&ts_dm),
+        "Channel reactions must NOT contain MailboxDm timestamp key"
+    );
+    let channel_emojis: Vec<&String> = channel_reactions[&ts_channel]
+        .iter()
+        .map(|(emoji, _count)| emoji)
+        .collect();
+    assert!(channel_emojis.contains(&&"fire".to_string()));
+    assert!(!channel_emojis.contains(&&"heart".to_string()));
+
+    // get_reaction_counts_for_conversation for MailboxDm should only have "heart"
+    let dm_reactions = message_repo
+        .get_reaction_counts_for_conversation(&channel.id, &ConversationType::MailboxDm)
+        .unwrap();
+    assert!(
+        dm_reactions.contains_key(&ts_dm),
+        "MailboxDm reactions should contain ts_dm key"
+    );
+    assert!(
+        !dm_reactions.contains_key(&ts_channel),
+        "MailboxDm reactions must NOT contain Channel timestamp key"
+    );
+    let dm_emojis: Vec<&String> = dm_reactions[&ts_dm]
+        .iter()
+        .map(|(emoji, _count)| emoji)
+        .collect();
+    assert!(dm_emojis.contains(&&"heart".to_string()));
+    assert!(!dm_emojis.contains(&&"fire".to_string()));
+}
+
+/// Test 8: Insert messages across types, verify list_for_channel (which takes
+/// conversation_type) returns type-filtered results with correct pagination.
+#[test]
+fn test_pagination_isolation_across_types() {
+    let (_temp_dir, db) = setup_test_db();
+    let message_repo = MessageRepository::new(db.clone());
+    let channel_repo = ChannelRepository::new(db.clone());
+
+    let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
+
+    // Insert 5 Channel messages
+    let mut channel_msg_ids = Vec::new();
+    for i in 0..5 {
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::Channel,
+            Some(sender),
+            format!("channel-{}", i),
+            next_timestamp_ns(),
+        );
+        message_repo.insert(&msg).unwrap();
+        channel_msg_ids.push(msg.id);
+    }
+
+    // Insert 3 ServerDm messages (same channel_id)
+    let mut server_dm_msg_ids = Vec::new();
+    for i in 0..3 {
+        let msg = Message::new_text(
+            channel.id,
+            ConversationType::ServerDm,
+            Some(sender),
+            format!("server-dm-{}", i),
+            next_timestamp_ns(),
+        );
+        message_repo.insert(&msg).unwrap();
+        server_dm_msg_ids.push(msg.id);
+    }
+
+    // Page 1: get first 2 Channel messages (newest first)
+    let page1 = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, None, 2)
+        .unwrap();
+    assert_eq!(page1.len(), 2, "Page 1 should have 2 Channel messages");
+    for m in &page1 {
+        assert_eq!(m.conversation_type, ConversationType::Channel);
+    }
+
+    // Page 2: get next 2 Channel messages using cursor
+    let cursor = &page1.last().unwrap().id;
+    let page2 = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, Some(cursor), 2)
+        .unwrap();
+    assert_eq!(page2.len(), 2, "Page 2 should have 2 Channel messages");
+    for m in &page2 {
+        assert_eq!(m.conversation_type, ConversationType::Channel);
+    }
+
+    // Page 3: get the remaining 1 Channel message
+    let cursor2 = &page2.last().unwrap().id;
+    let page3 = message_repo
+        .list_for_channel(&channel.id, &ConversationType::Channel, Some(cursor2), 2)
+        .unwrap();
+    assert_eq!(page3.len(), 1, "Page 3 should have 1 remaining Channel message");
+    assert_eq!(page3[0].conversation_type, ConversationType::Channel);
+
+    // Total unique IDs across all pages should be 5 (no ServerDm leaks)
+    let all_ids: std::collections::HashSet<_> = page1.iter().chain(page2.iter()).chain(page3.iter()).map(|m| m.id).collect();
+    assert_eq!(all_ids.len(), 5, "Should have exactly 5 unique Channel messages across all pages");
+
+    // ServerDm pagination should be independent and return 3 total
+    let dm_all = message_repo
+        .list_for_channel(&channel.id, &ConversationType::ServerDm, None, 100)
+        .unwrap();
+    assert_eq!(dm_all.len(), 3, "ServerDm should have exactly 3 messages");
+    for m in &dm_all {
+        assert_eq!(m.conversation_type, ConversationType::ServerDm);
+    }
+}
