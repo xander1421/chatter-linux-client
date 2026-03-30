@@ -57,7 +57,7 @@ export component PrivateGroupListItem inherits Rectangle {
                 (touch.has-hover ? Colors.surface-hover : Colors.surface);
 
     // Use purple accent for private groups
-    property <color> accent-color: #9333ea;
+    property <color> accent-color: Colors.group-accent;
 
     // Expanded layout
     if !root.collapsed: HorizontalLayout {
