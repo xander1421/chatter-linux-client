@@ -327,9 +327,26 @@ pub async fn load_channel_into_ui(
                 channel_id_str
             });
 
+            // For DMs, look up peer's presence from DM sidebar model
+            let is_dm_type = channel_type == "dm";
+            if is_dm_type {
+                let conversations = w.get_dm_conversations();
+                let cid = channel_id_for_lookup.to_string();
+                for i in 0..conversations.row_count() {
+                    if let Some(item) = conversations.row_data(i) {
+                        if item.channel_id.as_str() == cid {
+                            w.set_header_presence_status(item.presence_status.clone());
+                            break;
+                        }
+                    }
+                }
+            } else {
+                w.set_header_presence_status("offline".into());
+            }
+
             w.set_channel_name(channel_name.into());
             w.set_channel_type(channel_type.into());
-            w.set_is_dm(channel_type == "dm");
+            w.set_is_dm(is_dm_type);
             w.set_member_count(member_count);
             w.set_topic(topic.into());
             w.set_is_archived(is_archived);

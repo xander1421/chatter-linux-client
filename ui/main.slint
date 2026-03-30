@@ -115,6 +115,7 @@ export component MainWindow inherits Window {
     in property <bool> is-archived <=> app.is-archived;
     in-out property <bool> is-dm <=> app.is-dm;
     in property <string> typing-indicator <=> app.typing-indicator;
+    in property <string> header-presence-status <=> app.header-presence-status;
     in property <[MessageItemData]> messages <=> app.messages;
     in property <bool> loading-messages <=> app.loading-messages;
     in property <int> scroll-to-message-index <=> app.scroll-to-message-index;

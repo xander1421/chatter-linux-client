@@ -326,7 +326,13 @@ async fn load_anon_dm_into_ui(
     let mut display_messages: Vec<crate::bin_ui::converters::MessageDisplayData> = Vec::with_capacity(messages.len());
     for msg in &messages {
         let sender_name = if let Some(sid) = msg.sender_id {
-            user_service.get_display_name(&sid)
+            let is_own = current_user_id.map(|uid| sid == uid).unwrap_or(false);
+            if is_own {
+                user_service.get_display_name(&sid)
+            } else {
+                // For anon DM peer, use conversation's peer_display_name (not user_repo)
+                peer_name.clone()
+            }
         } else {
             "Unknown".to_string()
         };
@@ -364,10 +370,24 @@ async fn load_anon_dm_into_ui(
             &resolved_attachments,
         );
 
-        // Resolve reply-to sender name if this is a reply/quote
+        // Resolve reply-to sender name: user repo first, then anon DM peer name
         if display_data.is_reply {
             if let Some(ref author_id) = msg.reply_to_author_id {
-                display_data.reply_to_sender_name = user_service.get_display_name(author_id);
+                let reply_name = user_service.get_display_name(author_id);
+                display_data.reply_to_sender_name = if reply_name == author_id.to_string() {
+                    // Not in user repo — check if it's the DM peer
+                    if *author_id == dm.peer_id {
+                        peer_name.clone()
+                    } else {
+                        // Might be ourselves
+                        current_user_id
+                            .filter(|uid| *uid == *author_id)
+                            .map(|uid| user_service.get_display_name(&uid))
+                            .unwrap_or(reply_name)
+                    }
+                } else {
+                    reply_name
+                };
             }
         }
 
@@ -409,6 +429,17 @@ async fn load_anon_dm_into_ui(
 
             // Set chat header info for anonymous DM
             // The header UI will show the lock icon based on channel-type
+            // Look up presence from sidebar model
+            let dms = w.get_dm_conversations();
+            let anon_dm_channel = format!("anon_dm:{}", dm_id_str);
+            for i in 0..dms.row_count() {
+                if let Some(item) = dms.row_data(i) {
+                    if item.channel_id == anon_dm_channel {
+                        w.set_header_presence_status(item.presence_status.clone());
+                        break;
+                    }
+                }
+            }
             w.set_channel_name(peer_name.clone().into());
             w.set_channel_type("anon-dm".into());
             w.set_is_dm(true);

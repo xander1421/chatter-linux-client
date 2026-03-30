@@ -101,23 +101,51 @@ pub(super) fn handle_presence_changed(
         chatter_core::proto::UserPresence::Offline | _ => "offline",
     };
 
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(_w) = weak.upgrade() {
-            // Update user presence in UI
-            // This could update:
-            // 1. Sidebar DM status indicator
-            // 2. Chat header presence indicator
-            // 3. User profile presence status
+    let presence_slint: slint::SharedString = presence_str.into();
 
-            // TODO: Implement UI updates when the Slint UI has presence indicators
-            // For now, just log the update
-            tracing::debug!(
-                user_id = %user_id_str,
-                presence = presence_str,
-                timestamp,
-                "Would update presence in UI (not yet implemented)"
-            );
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+
+        // 1. Update sidebar DM presence dots
+        let dms = w.get_dm_conversations();
+        for i in 0..dms.row_count() {
+            if let Some(dm) = dms.row_data(i) {
+                if dm.user_id == user_id_str {
+                    let mut updated = dm.clone();
+                    updated.presence_status = presence_slint.clone();
+                    if let Some(model) = dms.as_any().downcast_ref::<slint::VecModel<crate::DMListItemData>>() {
+                        model.set_row_data(i, updated);
+                    }
+                    break;
+                }
+            }
         }
+
+        // 2. Update chat header presence indicator for active DM
+        if w.get_is_dm() {
+            let selected_dm = w.get_selected_dm_id().to_string();
+            // Check if the active DM belongs to this user
+            for i in 0..dms.row_count() {
+                if let Some(dm) = dms.row_data(i) {
+                    if dm.channel_id == selected_dm && dm.user_id == user_id_str {
+                        w.set_header_presence_status(presence_slint.clone());
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 3. Update profile modal presence if showing this user
+        if w.get_profile_user_id() == user_id_str {
+            w.set_profile_presence(presence_slint.clone());
+        }
+
+        tracing::debug!(
+            user_id = %user_id_str,
+            presence = presence_str,
+            timestamp,
+            "Updated presence in UI"
+        );
     });
 
     tracing::info!(

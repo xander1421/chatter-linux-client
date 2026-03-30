@@ -152,6 +152,7 @@ export component App inherits Rectangle {
     in property <string> topic: "";
     in property <bool> is-archived: false;
     in property <string> typing-indicator: "";
+    in property <string> header-presence-status: "offline";
     in property <[MessageItemData]> messages: [];
     in property <bool> loading-messages: false;
     in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
@@ -902,8 +903,8 @@ export component App inherits Rectangle {
                 user-initials: root.user-initials;
                 user-presence-status: root.user-presence-status;
                 user-custom-status: root.user-custom-status;
-                collapsed: root.is-mobile-screen ? true : (root.is-small-screen || root.sidebar-collapsed);
-                hidden: root.is-mobile-screen ? true : root.sidebar-hidden;
+                collapsed: root.is-mobile-screen ? false : (root.is-small-screen || root.sidebar-collapsed);
+                hidden: root.is-mobile-screen ? (root.mobile-active-tab != "chats" || root.has-active-conversation) : root.sidebar-hidden;
                 pending-friend-requests: root.friends-received-requests.length;
                 pending-message-requests: root.pending-message-requests;
                 pending-group-invites: root.pending-group-invites;
@@ -962,6 +963,19 @@ export component App inherits Rectangle {
                 manage-org-clicked => {
                     root.manage-org-clicked();
                 }
+                search-clicked => {
+                    root.search-clicked();
+                }
+                jarvis-clicked => {
+                    root.jarvis-panel-visible = !root.jarvis-panel-visible;
+                    if !root.jarvis-panel-visible {
+                        root.jarvis-panel-close();
+                    }
+                }
+                settings-clicked => {
+                    root.active-modal = "settings";
+                    root.settings-clicked();
+                }
             }
 
             // Right side area (Chat + Panels)
@@ -993,6 +1007,7 @@ export component App inherits Rectangle {
                     topic: root.topic;
                     is-archived: root.is-archived;
                     typing-indicator: root.typing-indicator;
+                    presence-status: root.header-presence-status;
                     jarvis-thinking: root.jarvis-thinking;
                     messages: root.messages;
                     loading-messages: root.loading-messages;
@@ -1186,76 +1201,6 @@ export component App inherits Rectangle {
             }
             send(text) => { root.jarvis-send(text); }
             clear => { root.jarvis-clear(); }
-        }
-    }
-
-    // ========== Bottom-left floating buttons ==========
-    // Only show in main view on desktop (mobile uses bottom nav instead)
-    if root.current-view == "main" && !root.is-mobile-screen: Rectangle {
-        // Vertical stack of buttons (bottom-left)
-        VerticalLayout {
-            x: Spacing.md;
-            y: parent.height - 108px - Spacing.md;
-            spacing: 12px;
-
-            // Jarvis button (top)
-            Rectangle {
-                width: 48px;
-                height: 48px;
-                border-radius: 24px;
-                background: root.jarvis-panel-visible ? Colors.primary : (jarvis-btn-touch.has-hover ? Colors.surface-hover : Colors.surface);
-                drop-shadow-blur: 8px;
-                drop-shadow-color: Colors.background.with-alpha(0.4);
-                drop-shadow-offset-y: 2px;
-
-                // Jarvis AI icon
-                Image {
-                    source: Icons.jarvis;
-                    width: 24px;
-                    height: 24px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: root.jarvis-panel-visible ? Colors.text-primary : Colors.text-secondary;
-                }
-
-                jarvis-btn-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.jarvis-panel-visible = !root.jarvis-panel-visible;
-                        if !root.jarvis-panel-visible {
-                            root.jarvis-panel-close();
-                        }
-                    }
-                }
-            }
-
-            // Settings button (bottom)
-            Rectangle {
-                width: 48px;
-                height: 48px;
-                border-radius: 24px;
-                background: settings-btn-touch.has-hover ? Colors.surface-hover : Colors.surface;
-                drop-shadow-blur: 8px;
-                drop-shadow-color: Colors.background.with-alpha(0.4);
-                drop-shadow-offset-y: 2px;
-
-                Image {
-                    source: Icons.settings;
-                    width: 22px;
-                    height: 22px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: settings-btn-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
-                }
-
-                settings-btn-touch := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.active-modal = "settings";
-                        root.settings-clicked();
-                    }
-                }
-            }
         }
     }
 

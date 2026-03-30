@@ -15,6 +15,10 @@
 use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;
+use chatter_core::domain::anon_dm::AnonDmId;
+use chatter_core::domain::anon_group::AnonGroupId;
+use chatter_core::domain::ids::UserId;
+use chatter_core::domain::message::{ConversationType, Message};
 use chatter_core::domain::notification::NotificationPriority;
 use chatter_core::inbox::handlers::DomainEvent;
 use crate::MainWindow;
@@ -31,6 +35,7 @@ pub fn wire(_window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let event_bus = ui_ctx.event_bus().clone();
     let auth_state = ui_ctx.auth_state().clone();
     let chat_state = ui_ctx.chat_state().clone();
+    let ui_ctx = ui_ctx.clone();
 
     let mut domain_rx = event_bus.subscribe_domain();
 
@@ -61,7 +66,7 @@ pub fn wire(_window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
 
                     let sender_name = message.sender_id
-                        .map(|id| id.to_string());
+                        .map(|id| resolve_sender_name(&ui_ctx, &id, message));
 
                     let preview = message.as_text();
 
@@ -91,4 +96,38 @@ pub fn wire(_window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
         }
     });
+}
+
+/// Resolve a sender's display name, checking conversation-specific sources.
+///
+/// Falls back through: user profile → anon DM peer name → anon group member name → UUID.
+fn resolve_sender_name(ui_ctx: &ChatterClient, sender_id: &UserId, message: &Message) -> String {
+    let name = ui_ctx.users().get_display_name(sender_id);
+
+    // If get_display_name returned the UUID string, try conversation-specific lookups
+    if name == sender_id.to_string() {
+        match message.conversation_type {
+            ConversationType::AnonDm => {
+                let dm_id = AnonDmId::from_uuid(*message.conversation_id.as_uuid());
+                if let Ok(Some(dm)) = ui_ctx.anon_dms().get_conversation(&dm_id) {
+                    if let Some(peer_name) = dm.peer_display_name.as_ref().filter(|n| !n.is_empty()) {
+                        return peer_name.clone();
+                    }
+                }
+                name
+            }
+            ConversationType::AnonGroup => {
+                let group_id = AnonGroupId::from_uuid(*message.conversation_id.as_uuid());
+                if let Ok(Some(member_name)) = ui_ctx.anon_groups().get_member_display_name(&group_id, sender_id) {
+                    if !member_name.is_empty() {
+                        return member_name;
+                    }
+                }
+                name
+            }
+            _ => name,
+        }
+    } else {
+        name
+    }
 }

@@ -26,6 +26,7 @@ export component ChatLayout inherits Rectangle {
     in property <string> topic: "";
     in property <bool> is-archived: false;
     in property <string> typing-indicator: "";
+    in property <string> presence-status: "offline";
 
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;
@@ -152,6 +153,7 @@ export component ChatLayout inherits Rectangle {
             topic: root.topic;
             is-archived: root.is-archived;
             typing-indicator: root.typing-indicator;
+            presence-status: root.presence-status;
             jarvis-thinking: root.jarvis-thinking;
             has-any-pinned: root.pinned-total-count > 0;
             show-back-button: root.show-back-button;

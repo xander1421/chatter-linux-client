@@ -16,6 +16,7 @@ export struct ChatHeaderData {
     topic: string,
     is-archived: bool,
     typing-indicator: string,
+    presence-status: string,  // "online", "away", "dnd", "offline" — shown for DMs only
 }
 
 // Reusable icon button component — 44px minimum touch target for mobile
@@ -54,6 +55,7 @@ export component ChatHeader inherits Rectangle {
     in property <string> topic: "";
     in property <bool> is-archived: false;
     in property <string> typing-indicator: "";
+    in property <string> presence-status: "offline";
 
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;
@@ -150,11 +152,25 @@ export component ChatHeader inherits Rectangle {
                 }
             }
 
-            if is-dm: Text {
-                text: "@";
-                color: Colors.text-muted;
-                font-size: Typography.lg;
-                vertical-alignment: center;
+            if is-dm: HorizontalLayout {
+                spacing: 4px;
+                alignment: center;
+                Text {
+                    text: "@";
+                    color: Colors.text-muted;
+                    font-size: Typography.lg;
+                    vertical-alignment: center;
+                }
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    y: (parent.height - self.height) / 2;
+                    background: root.presence-status == "online" ? Colors.online
+                             : root.presence-status == "away" ? Colors.away
+                             : root.presence-status == "dnd" ? Colors.dnd
+                             : Colors.offline;
+                }
             }
 
             if is-anon-dm: Rectangle {

@@ -592,6 +592,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_channel_name(peer_name.into());
                             w.set_channel_type("dm".into());
                             w.set_is_dm(true);
+                            w.set_header_presence_status(w.get_profile_presence());
                             w.set_member_count(2);
                             w.set_topic("".into());
                             // Clear messages for new conversation
