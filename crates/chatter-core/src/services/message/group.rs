@@ -91,12 +91,13 @@ impl MessageService {
                                 timestamp,
                             };
 
-                            // Create a fresh message client for the anonymous send
-                            let mut message_client = self.grpc_pool.message_client();
+                            // Use anonymous client (no AuthInterceptor) to avoid
+                            // multi-auth rejection — GRA-434
+                            let mut anon_client = self.grpc_pool.anonymous_message_client();
 
                             // Send with anonymous credential (NDSS '21 blind signature)
-                            match message_client
-                                .send_sealed_message_with_credential(
+                            match anon_client
+                                .send_with_anonymous_credential(
                                     &member_id,
                                     0, // All devices
                                     sealed_message,
@@ -244,10 +245,12 @@ impl MessageService {
             timestamp,
         };
 
-        let mut message_client = self.grpc_pool.message_client();
+        // Use anonymous client (no AuthInterceptor) to avoid
+        // multi-auth rejection — GRA-434
+        let mut anon_client = self.grpc_pool.anonymous_message_client();
 
-        message_client
-            .send_sealed_message_with_credential(
+        anon_client
+            .send_with_anonymous_credential(
                 &to_member_id.to_string(),
                 0, // All devices
                 sealed_message,
@@ -354,12 +357,13 @@ impl MessageService {
                                 timestamp,
                             };
 
-                            // Create a fresh message client for the anonymous send
-                            let mut message_client = self.grpc_pool.message_client();
+                            // Use anonymous client (no AuthInterceptor) to avoid
+                            // multi-auth rejection — GRA-434
+                            let mut anon_client = self.grpc_pool.anonymous_message_client();
 
                             // Send with anonymous credential (NDSS '21 blind signature)
-                            match message_client
-                                .send_sealed_message_with_credential(
+                            match anon_client
+                                .send_with_anonymous_credential(
                                     &member_id,
                                     0, // All devices
                                     sealed_message,
@@ -498,12 +502,13 @@ impl MessageService {
             timestamp,
         };
 
-        // Create a fresh message client for the anonymous send
-        let mut message_client = self.grpc_pool.message_client();
+        // Use anonymous client (no AuthInterceptor) to avoid
+        // multi-auth rejection — GRA-434
+        let mut anon_client = self.grpc_pool.anonymous_message_client();
 
         // Send with anonymous credential (NDSS '21 blind signature)
-        message_client
-            .send_sealed_message_with_credential(
+        anon_client
+            .send_with_anonymous_credential(
                 &member_id_str,
                 0, // All devices
                 sealed_message,
@@ -591,12 +596,13 @@ impl MessageService {
             timestamp,
         };
 
-        // Create a fresh message client for the anonymous send
-        let mut message_client = self.grpc_pool.message_client();
+        // Use anonymous client (no AuthInterceptor) to avoid
+        // multi-auth rejection — GRA-434
+        let mut anon_client = self.grpc_pool.anonymous_message_client();
 
         // Send with anonymous credential (NDSS '21 blind signature)
-        message_client
-            .send_sealed_message_with_credential(
+        anon_client
+            .send_with_anonymous_credential(
                 &target_id_str,
                 0, // All devices
                 sealed_message,
