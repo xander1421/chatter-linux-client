@@ -323,7 +323,7 @@ export component MessageItem inherits Rectangle {
                                     x: 4px;
                                     text: "AI";
                                     color: Colors.text-primary;
-                                    font-size: 10px;
+                                    font-size: Typography.xs;
                                     font-weight: Typography.semibold;
                                     vertical-alignment: center;
                                 }
@@ -491,7 +491,7 @@ export component MessageItem inherits Rectangle {
                                     Text {
                                         text: root.link-preview.domain;
                                         color: Colors.text-muted;
-                                        font-size: 10px;
+                                        font-size: Typography.xs;
                                         overflow: elide;
                                     }
 
@@ -726,7 +726,7 @@ export component MessageItem inherits Rectangle {
                                         Text {
                                             text: is-this-playing ? root.audio-elapsed + " / " + attachment.duration-display : attachment.duration-display;
                                             color: Colors.text-muted;
-                                            font-size: 10px;
+                                            font-size: Typography.xs;
                                         }
                                     }
                                 }
@@ -773,7 +773,7 @@ export component MessageItem inherits Rectangle {
                                         Text {
                                             text: attachment.size-display;
                                             color: Colors.text-muted;
-                                            font-size: 10px;
+                                            font-size: Typography.xs;
                                             horizontal-alignment: center;
                                         }
                                     }
@@ -853,7 +853,7 @@ export component MessageItem inherits Rectangle {
                                             Text {
                                                 text: attachment.size-display;
                                                 color: Colors.text-muted;
-                                                font-size: 10px;
+                                                font-size: Typography.xs;
                                             }
                                         }
 
@@ -925,13 +925,13 @@ export component MessageItem inherits Rectangle {
                                 Text {
                                     text: root.timestamp;
                                     color: Colors.text-muted;
-                                    font-size: 10px;
+                                    font-size: Typography.xs;
                                 }
 
                                 if root.is-edited: Text {
                                     text: "edited";
                                     color: Colors.text-muted;
-                                    font-size: 10px;
+                                    font-size: Typography.xs;
                                     font-italic: true;
                                 }
 
@@ -939,7 +939,7 @@ export component MessageItem inherits Rectangle {
                                 Text {
                                     text: root.delivery-status == "sent" ? "✓" : "✓✓";
                                     color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
-                                    font-size: 10px;
+                                    font-size: Typography.xs;
                                 }
                             }
 
@@ -957,14 +957,14 @@ export component MessageItem inherits Rectangle {
                                 if root.is-edited: Text {
                                     text: "edited";
                                     color: Colors.text-muted;
-                                    font-size: 10px;
+                                    font-size: Typography.xs;
                                     font-italic: true;
                                 }
 
                                 Text {
                                     text: root.timestamp;
                                     color: Colors.text-muted;
-                                    font-size: 10px;
+                                    font-size: Typography.xs;
                                 }
                             }
                         }
@@ -998,14 +998,14 @@ export component MessageItem inherits Rectangle {
 
                             Text {
                                 text: reaction.emoji;
-                                font-size: 12px;
+                                font-size: Typography.xs;
                                 vertical-alignment: center;
                             }
 
                             if reaction.count > 1: Text {
                                 text: reaction.count;
                                 color: Colors.text-secondary;
-                                font-size: 10px;
+                                font-size: Typography.xs;
                                 vertical-alignment: center;
                             }
                         }
