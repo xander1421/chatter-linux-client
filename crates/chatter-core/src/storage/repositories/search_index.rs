@@ -13,8 +13,8 @@ use std::sync::Arc;
 pub struct SearchResult {
     /// The matching message ID.
     pub message_id: MessageId,
-    /// The channel containing the message.
-    pub channel_id: ChannelId,
+    /// The conversation containing the message (channel ID, group ID, etc.).
+    pub conversation_id: ChannelId,
     /// BM25 relevance score (lower is better match).
     pub score: f64,
 }
@@ -59,9 +59,9 @@ impl SearchIndex {
 
         let results = if let Some(cid) = channel_id {
             let mut stmt = conn.prepare(
-                "SELECT message_id, channel_id, bm25(messages_fts) as score
+                "SELECT message_id, conversation_id, bm25(messages_fts) as score
                  FROM messages_fts
-                 WHERE messages_fts MATCH ?1 AND channel_id = ?2
+                 WHERE messages_fts MATCH ?1 AND conversation_id = ?2
                  ORDER BY score
                  LIMIT ?3",
             )?;
@@ -69,7 +69,7 @@ impl SearchIndex {
             collect_results(&mut rows)?
         } else {
             let mut stmt = conn.prepare(
-                "SELECT message_id, channel_id, bm25(messages_fts) as score
+                "SELECT message_id, conversation_id, bm25(messages_fts) as score
                  FROM messages_fts
                  WHERE messages_fts MATCH ?1
                  ORDER BY score
@@ -94,10 +94,10 @@ impl SearchIndex {
 
         // Reindex all searchable messages (content_type 0, 5, 6)
         let count = conn.execute(
-            "INSERT INTO messages_fts(message_id, channel_id, content)
+            "INSERT INTO messages_fts(message_id, conversation_id, content)
              SELECT
                  id,
-                 channel_id,
+                 conversation_id,
                  CASE content_type
                      WHEN 0 THEN json_extract(content_json, '$')
                      WHEN 5 THEN json_extract(content_json, '$.AI.text')
@@ -139,16 +139,16 @@ fn collect_results(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<SearchResult>, S
     let mut results = Vec::new();
     while let Some(row) = rows.next()? {
         let message_id: String = row.get(0)?;
-        let channel_id: String = row.get(1)?;
+        let conversation_id: String = row.get(1)?;
         let score: f64 = row.get(2)?;
 
         results.push(SearchResult {
             message_id: message_id
                 .parse()
                 .map_err(|_| StorageError::InvalidData("Invalid message ID".into()))?,
-            channel_id: channel_id
+            conversation_id: conversation_id
                 .parse()
-                .map_err(|_| StorageError::InvalidData("Invalid channel ID".into()))?,
+                .map_err(|_| StorageError::InvalidData("Invalid conversation ID".into()))?,
             score,
         });
     }

@@ -112,7 +112,7 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 // Get channel name
                 let channel_name = channel_service
-                    .get_channel_local(&result.channel_id)
+                    .get_channel_local(&result.conversation_id)
                     .ok()
                     .flatten()
                     .map(|c| c.name)
@@ -136,7 +136,7 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 display_results.push(crate::SearchResult {
                     message_id: result.message_id.to_string().into(),
-                    channel_id: result.channel_id.to_string().into(),
+                    channel_id: result.conversation_id.to_string().into(),
                     channel_name: channel_name.into(),
                     sender_name: sender_name.into(),
                     content_preview: content_preview.into(),
