@@ -285,6 +285,8 @@ impl AnonGroupService {
     }
 
     /// Add a reaction to a message in the DB.
+    ///
+    /// Uses timestamp-based identification (Signal-style) — no separate message lookup needed.
     pub fn add_reaction(
         &self,
         group_id: &AnonGroupId,
@@ -293,15 +295,13 @@ impl AnonGroupService {
         emoji: &str,
     ) -> Result<bool, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let msg = self.message_service.message_repo
-            .get_by_conversation_timestamp(&channel_id, sent_timestamp)?;
-        match msg {
-            Some(m) => Ok(self.message_service.message_repo.add_reaction(&m.id, user_id, emoji)?),
-            None => Ok(false),
-        }
+        Ok(self.message_service.message_repo
+            .add_reaction_by_timestamp(&channel_id, sent_timestamp, user_id, emoji)?)
     }
 
     /// Remove a reaction from a message in the DB.
+    ///
+    /// Uses timestamp-based identification (Signal-style) — no separate message lookup needed.
     pub fn remove_reaction(
         &self,
         group_id: &AnonGroupId,
@@ -310,12 +310,8 @@ impl AnonGroupService {
         emoji: &str,
     ) -> Result<bool, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let msg = self.message_service.message_repo
-            .get_by_conversation_timestamp(&channel_id, sent_timestamp)?;
-        match msg {
-            Some(m) => Ok(self.message_service.message_repo.remove_reaction(&m.id, user_id, emoji)?),
-            None => Ok(false),
-        }
+        Ok(self.message_service.message_repo
+            .remove_reaction_by_timestamp(&channel_id, sent_timestamp, user_id, emoji)?)
     }
 
     /// Get all reaction counts for a group's messages.

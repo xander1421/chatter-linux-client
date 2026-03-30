@@ -504,6 +504,113 @@ impl UnifiedMessageRepository {
         Ok(true)
     }
 
+    /// Add a reaction by (conversation_id, sent_at) tuple — Signal-style identification.
+    ///
+    /// Uses a SQL subquery to resolve the message, avoiding a separate lookup round-trip.
+    /// Returns `true` if a new reaction was added.
+    pub fn add_reaction_by_timestamp(
+        &self,
+        conversation_id: &ChannelId,
+        sent_at: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let reaction_id = ReactionId::new();
+        let now = Utc::now().to_rfc3339();
+
+        // Resolve message_id via subquery and insert in one statement.
+        let inserted = conn.execute(
+            "INSERT OR IGNORE INTO unified_reactions (id, message_id, user_id, emoji, created_at)
+             SELECT ?1, m.id, ?2, ?3, ?4
+             FROM messages m
+             WHERE m.conversation_id = ?5 AND m.sent_at = ?6 AND m.is_deleted = 0
+             LIMIT 1",
+            params![
+                reaction_id.to_string(),
+                user_id.to_string(),
+                emoji,
+                now,
+                conversation_id.to_string(),
+                sent_at as i64,
+            ],
+        )?;
+
+        if inserted == 0 {
+            return Ok(false); // Message not found or reaction already exists
+        }
+
+        // Look up the resolved message_id to rebuild blobs.
+        let message_id = self.resolve_message_id(&conn, conversation_id, sent_at)?;
+        if let Some(mid) = message_id {
+            self.rebuild_reaction_blobs_with_conn(&conn, &mid, user_id)?;
+        }
+        Ok(true)
+    }
+
+    /// Remove a reaction by (conversation_id, sent_at) tuple — Signal-style identification.
+    ///
+    /// Returns `true` if a reaction was actually removed.
+    pub fn remove_reaction_by_timestamp(
+        &self,
+        conversation_id: &ChannelId,
+        sent_at: u64,
+        user_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+
+        let deleted = conn.execute(
+            "DELETE FROM unified_reactions
+             WHERE user_id = ?1 AND emoji = ?2
+               AND message_id IN (
+                   SELECT id FROM messages
+                   WHERE conversation_id = ?3 AND sent_at = ?4 AND is_deleted = 0
+               )",
+            params![
+                user_id.to_string(),
+                emoji,
+                conversation_id.to_string(),
+                sent_at as i64,
+            ],
+        )?;
+
+        if deleted == 0 {
+            return Ok(false);
+        }
+
+        let message_id = self.resolve_message_id(&conn, conversation_id, sent_at)?;
+        if let Some(mid) = message_id {
+            self.rebuild_reaction_blobs_with_conn(&conn, &mid, user_id)?;
+        }
+        Ok(true)
+    }
+
+    /// Resolve a message UUID from (conversation_id, sent_at).
+    fn resolve_message_id(
+        &self,
+        conn: &rusqlite::Connection,
+        conversation_id: &ChannelId,
+        sent_at: u64,
+    ) -> Result<Option<MessageId>, StorageError> {
+        match conn.query_row(
+            "SELECT id FROM messages WHERE conversation_id = ?1 AND sent_at = ?2 AND is_deleted = 0 LIMIT 1",
+            params![conversation_id.to_string(), sent_at as i64],
+            |row| {
+                let id_str: String = row.get(0)?;
+                Ok(id_str)
+            },
+        ) {
+            Ok(id_str) => {
+                let mid: MessageId = id_str.parse()
+                    .map_err(|_| StorageError::InvalidData(format!("Invalid message UUID: {}", id_str)))?;
+                Ok(Some(mid))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
     /// Get all reactions on a message.
     pub fn get_reactions(&self, message_id: &MessageId) -> Result<Vec<Reaction>, StorageError> {
         let conn = self.db.read_connection()?;

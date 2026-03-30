@@ -147,6 +147,8 @@ impl AnonDmService {
     }
 
     /// Add a reaction to an anon DM message in the DB.
+    ///
+    /// Uses timestamp-based identification (Signal-style) — no separate message lookup needed.
     pub fn add_reaction(
         &self,
         conversation_id: &AnonDmId,
@@ -155,14 +157,12 @@ impl AnonDmService {
         emoji: &str,
     ) -> Result<bool, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        let msg = self.message_repo.get_by_conversation_timestamp(&channel_id, sent_timestamp)?;
-        match msg {
-            Some(m) => Ok(self.message_repo.add_reaction(&m.id, user_id, emoji)?),
-            None => Ok(false),
-        }
+        Ok(self.message_repo.add_reaction_by_timestamp(&channel_id, sent_timestamp, user_id, emoji)?)
     }
 
     /// Remove a reaction from an anon DM message in the DB.
+    ///
+    /// Uses timestamp-based identification (Signal-style) — no separate message lookup needed.
     pub fn remove_reaction(
         &self,
         conversation_id: &AnonDmId,
@@ -171,11 +171,7 @@ impl AnonDmService {
         emoji: &str,
     ) -> Result<bool, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        let msg = self.message_repo.get_by_conversation_timestamp(&channel_id, sent_timestamp)?;
-        match msg {
-            Some(m) => Ok(self.message_repo.remove_reaction(&m.id, user_id, emoji)?),
-            None => Ok(false),
-        }
+        Ok(self.message_repo.remove_reaction_by_timestamp(&channel_id, sent_timestamp, user_id, emoji)?)
     }
 
     /// Get all reaction counts for an anon DM conversation's messages.
