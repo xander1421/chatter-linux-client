@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use slint::{Model, VecModel, Weak};
+use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
@@ -13,6 +13,16 @@ use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::UserId;
 use chatter_core::domain::message::{ConversationType, Message};
 use crate::{MainWindow, MessageItemData};
+
+/// Get a member's display name, trying the group profile first, then falling back to user profile.
+fn get_anon_member_name(ui_ctx: &Arc<ChatterClient>, group_id: &AnonGroupId, user_id: &UserId) -> String {
+    if let Ok(Some(name)) = ui_ctx.anon_groups().get_member_display_name(group_id, user_id) {
+        if !name.is_empty() {
+            return name;
+        }
+    }
+    ui_ctx.users().get_display_name(user_id)
+}
 
 // =========================================================================
 // Unified Message Received (from DomainEvent::MessageReceived)
@@ -50,14 +60,29 @@ fn handle_dm_message_unified(
     let conversation_id = AnonDmId::from_uuid(*message.conversation_id.as_uuid());
     let sender_id = message.sender_id.unwrap_or_else(UserId::new);
 
-    let sender_name = ui_ctx.users().get_display_name(&sender_id);
-
     let dm = ui_ctx.anon_dms().get_conversation(&conversation_id).ok().flatten();
     let current_user_id = ui_ctx.sessions().current_user_id();
     let is_own = current_user_id.map(|uid| sender_id == uid).unwrap_or(false);
     let current_user_id_str = current_user_id
         .map(|uid| uid.to_string())
         .unwrap_or_default();
+
+    // Resolve sender name: try user repo first, then anon DM peer name
+    let sender_name = {
+        let name = ui_ctx.users().get_display_name(&sender_id);
+        // If user repo returned the UUID (peer not registered locally), use DM peer name
+        if name == sender_id.to_string() {
+            if is_own {
+                ui_ctx.users().get_display_name(&sender_id)
+            } else {
+                dm.as_ref()
+                    .and_then(|d| d.peer_display_name.as_ref().filter(|n| !n.is_empty()).cloned())
+                    .unwrap_or(name)
+            }
+        } else {
+            name
+        }
+    };
 
     let sender_avatar = if is_own {
         ui_ctx.anon_dms().get_my_avatar()
@@ -77,10 +102,25 @@ fn handle_dm_message_unified(
         &resolved_attachments,
     );
 
-    // Resolve reply-to sender name if this is a reply/quote
+    // Resolve reply-to sender name: try user repo, then anon DM peer name
     if display_data.is_reply {
         if let Some(ref author_id) = message.reply_to_author_id {
-            display_data.reply_to_sender_name = ui_ctx.users().get_display_name(author_id);
+            let reply_name = ui_ctx.users().get_display_name(author_id);
+            display_data.reply_to_sender_name = if reply_name == author_id.to_string() {
+                // Author not in user repo — check if it's the DM peer
+                dm.as_ref()
+                    .filter(|d| d.peer_id == *author_id)
+                    .and_then(|d| d.peer_display_name.as_ref().filter(|n| !n.is_empty()).cloned())
+                    .or_else(|| {
+                        // Check if it's ourselves
+                        current_user_id
+                            .filter(|uid| *uid == *author_id)
+                            .map(|uid| ui_ctx.users().get_display_name(&uid))
+                    })
+                    .unwrap_or(reply_name)
+            } else {
+                reply_name
+            };
         }
     }
 
@@ -172,7 +212,7 @@ fn handle_group_message_unified(
     let group_id = AnonGroupId::from_uuid(*message.conversation_id.as_uuid());
     let sender_id = message.sender_id.unwrap_or_else(UserId::new);
 
-    let sender_name = super::super::anon_group_handlers::get_anon_member_name(ui_ctx, &group_id, &sender_id);
+    let sender_name = get_anon_member_name(ui_ctx, &group_id, &sender_id);
     let group_id_str = group_id.to_string();
 
     let sender_avatar = ui_ctx.anon_groups()
@@ -193,10 +233,16 @@ fn handle_group_message_unified(
         &resolved_attachments,
     );
 
-    // Resolve reply-to sender name if this is a reply/quote
+    // Resolve reply-to sender name: try user repo, then anon group member name
     if display_data.is_reply {
         if let Some(ref author_id) = message.reply_to_author_id {
-            display_data.reply_to_sender_name = ui_ctx.users().get_display_name(author_id);
+            let reply_name = ui_ctx.users().get_display_name(author_id);
+            display_data.reply_to_sender_name = if reply_name == author_id.to_string() {
+                // Author not in user repo — look up group member display name
+                get_anon_member_name(ui_ctx, &group_id, author_id)
+            } else {
+                reply_name
+            };
         }
     }
 
@@ -361,25 +407,226 @@ pub(super) fn handle_group_joined(
 }
 
 pub(super) fn handle_group_member_joined(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
     user_id: UserId,
-    display_name: Option<String>,
 ) {
+    let member_name = get_anon_member_name(ui_ctx, &group_id, &user_id);
+    let group_id_str = group_id.to_string();
+    let weak = window.clone();
+
     tracing::info!(
-        group_id = %group_id, user_id = %user_id, display_name = ?display_name,
-        "Member joined anon group"
+        group_id = %group_id_str,
+        user_id = %user_id,
+        member_name = %member_name,
+        "ANON_GROUP_MEMBER: Member joined"
     );
+
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+
+        let selected_group = w.get_selected_private_group_id().to_string();
+        if selected_group != group_id_str {
+            return;
+        }
+
+        let messages = w.get_messages();
+        if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+            let timestamp_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+            let system_msg = MessageItemData {
+                message_id: format!("system-join-{}", timestamp_ns).into(),
+                sender_id: "".into(),
+                sender_name: "".into(),
+                sender_initials: "".into(),
+                sender_avatar_url: "".into(),
+                sender_avatar_source: slint::Image::default(),
+                has_avatar: false,
+                content: format!("{} joined the group", member_name).into(),
+                timestamp: chrono::Utc::now().format("%H:%M").to_string().into(),
+                timestamp_ns: timestamp_ns.to_string().into(),
+                is_own: false,
+                is_edited: false,
+                is_deleted: false,
+                is_system: true,
+                is_ai: false,
+                has_attachments: false,
+                attachment_count: 0,
+                attachments: slint::ModelRc::default(),
+                has_reactions: false,
+                reaction_summary: "".into(),
+                reactions: ModelRc::default(),
+                reply_count: 0,
+                reply_count_text: "".into(),
+                is_thread_reply: false,
+                is_reply: false,
+                reply_to_sender_name: "".into(),
+                reply_to_preview: "".into(),
+                show_sender: false,
+                delivery_status: "".into(),
+                is_pinned: false,
+                is_call: false,
+                call_type: "".into(),
+                call_duration: "".into(),
+                date_separator_text: Default::default(),
+                is_continuation: false,
+                show_date_separator: false,
+                has_link_preview: false,
+                link_preview: Default::default(),
+            };
+            model.push(system_msg);
+        }
+    });
 }
 
-pub(super) fn handle_group_member_left(group_id: AnonGroupId, user_id: UserId) {
-    tracing::info!(group_id = %group_id, user_id = %user_id, "Member left anon group");
+pub(super) fn handle_group_member_left(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    group_id: AnonGroupId,
+    user_id: UserId,
+) {
+    let member_name = get_anon_member_name(ui_ctx, &group_id, &user_id);
+    let group_id_str = group_id.to_string();
+    let weak = window.clone();
+
+    tracing::info!(
+        group_id = %group_id_str,
+        user_id = %user_id,
+        member_name = %member_name,
+        "ANON_GROUP_MEMBER: Member left"
+    );
+
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+
+        let selected_group = w.get_selected_private_group_id().to_string();
+        if selected_group != group_id_str {
+            return;
+        }
+
+        let messages = w.get_messages();
+        if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+            let timestamp_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+            let system_msg = MessageItemData {
+                message_id: format!("system-leave-{}", timestamp_ns).into(),
+                sender_id: "".into(),
+                sender_name: "".into(),
+                sender_initials: "".into(),
+                sender_avatar_url: "".into(),
+                sender_avatar_source: slint::Image::default(),
+                has_avatar: false,
+                content: format!("{} left the group", member_name).into(),
+                timestamp: chrono::Utc::now().format("%H:%M").to_string().into(),
+                timestamp_ns: timestamp_ns.to_string().into(),
+                is_own: false,
+                is_edited: false,
+                is_deleted: false,
+                is_system: true,
+                is_ai: false,
+                has_attachments: false,
+                attachment_count: 0,
+                attachments: slint::ModelRc::default(),
+                has_reactions: false,
+                reaction_summary: "".into(),
+                reactions: ModelRc::default(),
+                reply_count: 0,
+                reply_count_text: "".into(),
+                is_thread_reply: false,
+                is_reply: false,
+                reply_to_sender_name: "".into(),
+                reply_to_preview: "".into(),
+                show_sender: false,
+                delivery_status: "".into(),
+                is_pinned: false,
+                is_call: false,
+                call_type: "".into(),
+                call_duration: "".into(),
+                date_separator_text: Default::default(),
+                is_continuation: false,
+                show_date_separator: false,
+                has_link_preview: false,
+                link_preview: Default::default(),
+            };
+            model.push(system_msg);
+        }
+    });
 }
 
-pub(super) fn handle_group_member_kicked(group_id: AnonGroupId, user_id: UserId, kicked_by: UserId) {
+pub(super) fn handle_group_member_kicked(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    group_id: AnonGroupId,
+    user_id: UserId,
+    kicked_by: UserId,
+) {
+    let member_name = get_anon_member_name(ui_ctx, &group_id, &user_id);
+    let kicker_name = get_anon_member_name(ui_ctx, &group_id, &kicked_by);
+    let group_id_str = group_id.to_string();
+    let weak = window.clone();
+
     tracing::info!(
-        group_id = %group_id, user_id = %user_id, kicked_by = %kicked_by,
-        "Member kicked from anon group"
+        group_id = %group_id_str,
+        user_id = %user_id,
+        member_name = %member_name,
+        kicked_by = %kicked_by,
+        kicker_name = %kicker_name,
+        "ANON_GROUP_MEMBER: Member kicked"
     );
+
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+
+        let selected_group = w.get_selected_private_group_id().to_string();
+        if selected_group != group_id_str {
+            return;
+        }
+
+        let messages = w.get_messages();
+        if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+            let timestamp_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+            let system_msg = MessageItemData {
+                message_id: format!("system-kick-{}", timestamp_ns).into(),
+                sender_id: "".into(),
+                sender_name: "".into(),
+                sender_initials: "".into(),
+                sender_avatar_url: "".into(),
+                sender_avatar_source: slint::Image::default(),
+                has_avatar: false,
+                content: format!("{} was removed by {}", member_name, kicker_name).into(),
+                timestamp: chrono::Utc::now().format("%H:%M").to_string().into(),
+                timestamp_ns: timestamp_ns.to_string().into(),
+                is_own: false,
+                is_edited: false,
+                is_deleted: false,
+                is_system: true,
+                is_ai: false,
+                has_attachments: false,
+                attachment_count: 0,
+                attachments: slint::ModelRc::default(),
+                has_reactions: false,
+                reaction_summary: "".into(),
+                reactions: ModelRc::default(),
+                reply_count: 0,
+                reply_count_text: "".into(),
+                is_thread_reply: false,
+                is_reply: false,
+                reply_to_sender_name: "".into(),
+                reply_to_preview: "".into(),
+                show_sender: false,
+                delivery_status: "".into(),
+                is_pinned: false,
+                is_call: false,
+                call_type: "".into(),
+                call_duration: "".into(),
+                date_separator_text: Default::default(),
+                is_continuation: false,
+                show_date_separator: false,
+                has_link_preview: false,
+                link_preview: Default::default(),
+            };
+            model.push(system_msg);
+        }
+    });
 }
 
 pub(super) fn handle_group_bootstrap_complete(group_id: AnonGroupId) {

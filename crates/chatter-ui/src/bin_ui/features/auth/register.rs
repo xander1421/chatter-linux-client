@@ -224,7 +224,6 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let _ = slint::invoke_from_event_loop(move || {
                                 // Spawn UI event handlers (must be on UI thread)
                                 crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
-                                crate::bin_ui::features::auth::inbox::spawn_anon_group_event_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
                                 crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
 
                                 if let Some(w) = weak_for_ui.upgrade() {
@@ -241,7 +240,6 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         } else {
                             let _ = slint::invoke_from_event_loop(move || {
                                 crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
-                                crate::bin_ui::features::auth::inbox::spawn_anon_group_event_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
                                 crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
 
                                 if let Some(w) = weak_for_ui.upgrade() {

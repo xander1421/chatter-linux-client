@@ -71,7 +71,6 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(_result) => {
                     // Spawn UI-only event handlers (need slint::Weak<MainWindow>)
                     crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);
-                    crate::bin_ui::features::auth::inbox::spawn_anon_group_event_handler(weak.clone(), &ui_ctx);
                     crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak.clone(), &ui_ctx);
 
                     // Subscribe to DomainEvent for UI updates
@@ -193,7 +192,6 @@ fn wire_sso_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(_result) => {
                     // Same post-login setup as password login
                     crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak.clone(), &ui_ctx);
-                    crate::bin_ui::features::auth::inbox::spawn_anon_group_event_handler(weak.clone(), &ui_ctx);
                     crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak.clone(), &ui_ctx);
 
                     // Subscribe to domain events

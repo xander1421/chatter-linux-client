@@ -234,7 +234,6 @@ pub async fn app_init() -> AppState {
         let weak_window = window.as_weak();
         bin_ui::features::modals::spawn_anon_dm_request_handler(weak_window.clone(), &ui_ctx);
         bin_ui::features::modals::spawn_anon_group_invite_handler(weak_window.clone(), &ui_ctx);
-        bin_ui::features::auth::inbox::spawn_anon_group_event_handler(weak_window.clone(), &ui_ctx);
 
         {
             let mut domain_rx = ui_ctx.event_bus().subscribe_domain();

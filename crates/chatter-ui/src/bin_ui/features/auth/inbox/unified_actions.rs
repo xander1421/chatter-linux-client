@@ -1,7 +1,7 @@
 //! Unified UI action handlers for all conversation types.
 //!
-//! These handlers replace the duplicated dm/actions.rs, anon_dm_actions.rs,
-//! and anon_group_handlers.rs for common message actions (typing, reaction,
+//! These handlers replace the duplicated dm/actions.rs and anon_dm_actions.rs
+//! for common message actions (typing, reaction,
 //! pin, edit, delete). Each handler checks if the event is for the currently
 //! active conversation using `ChatState::active_conversation()`.
 
