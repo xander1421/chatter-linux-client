@@ -245,6 +245,7 @@ impl ChatHandler {
             message_id,
             author_id,
             channel_id,
+            target_sent_timestamp: delete.target_sent_timestamp,
         });
 
         tracing::debug!(?message_id, "Delete event emitted");

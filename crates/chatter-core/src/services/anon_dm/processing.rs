@@ -132,6 +132,7 @@ impl AnonDmService {
                         message_id: MessageId::from_timestamp(delete.target_sent_timestamp),
                         author_id: *sender_id,
                         channel_id: Some((*conversation_id).into()),
+                        target_sent_timestamp: delete.target_sent_timestamp,
                     });
                     return Ok(events);
                 }

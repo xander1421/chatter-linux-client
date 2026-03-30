@@ -770,6 +770,7 @@ impl InboxEventProcessor {
                         message_id: msg.id,
                         author_id: *peer_id,
                         channel_id: Some(msg.conversation_id),
+                        target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
                 false
@@ -781,6 +782,7 @@ impl InboxEventProcessor {
                         message_id: msg.id,
                         author_id: *sender_id,
                         channel_id: Some(*channel_id),
+                        target_sent_timestamp: *target_sent_timestamp,
                     });
                 }
                 false

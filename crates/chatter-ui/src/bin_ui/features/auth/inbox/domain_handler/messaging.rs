@@ -315,15 +315,19 @@ pub(super) fn handle_delivery_status_update(
 }
 
 /// Update a reaction on a message in the active message list.
+///
+/// Matches by Signal-style (sender_id, sent_at_ns) composite key — the canonical
+/// message identifier per Signal Protocol spec.
 pub(super) fn handle_reaction_update(
     window: &Weak<MainWindow>,
-    message_id: &str,
+    sender_id: &str,
+    sent_at_ns: u64,
     emoji: &str,
     remove: bool,
-    timestamp: u64,
 ) {
     let weak = window.clone();
-    let message_id = message_id.to_string();
+    let sender_id = sender_id.to_string();
+    let sent_at_ns_str = sent_at_ns.to_string();
     let emoji = emoji.to_string();
 
     let _ = slint::invoke_from_event_loop(move || {
@@ -332,9 +336,7 @@ pub(super) fn handle_reaction_update(
 
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                // Match by message_id (channels/DMs use UUID) OR by timestamp_ns
-                // (anon groups use timestamp-based MessageId which doesn't match the UUID in the model)
-                if msg.message_id.as_str() == message_id || (timestamp > 0 && msg.timestamp_ns.as_str() == timestamp.to_string().as_str()) {
+                if msg.sender_id.as_str() == sender_id && msg.timestamp_ns.as_str() == sent_at_ns_str {
                     let mut updated = msg.clone();
                     let new_summary = super::super::utils::update_reaction_summary(
                         &msg.reaction_summary.to_string(), &emoji, remove,
@@ -382,12 +384,11 @@ pub(super) fn refresh_sidebar_for_reaction(
     });
 }
 
-/// Update a message's content after an edit, with timestamp fallback.
+/// Update a message's content after an edit.
 ///
-/// Tries message_id match first. If no match found, falls back to timestamp_ns
-/// matching. This handles cases where the receiver's UI model message_id doesn't
-/// match the edit event's message_id.
-pub(super) fn handle_message_edit_with_fallback(
+/// Matches by timestamp_ns (Signal-style) first. Falls back to message_id (UUID)
+/// only for legacy messages that may lack a timestamp.
+pub(super) fn handle_message_edit(
     window: &Weak<MainWindow>,
     message_id: &str,
     target_sent_timestamp: u64,
@@ -402,28 +403,13 @@ pub(super) fn handle_message_edit_with_fallback(
         let Some(w) = weak.upgrade() else { return };
         let messages = w.get_messages();
 
-        // First pass: try to match by message_id (preferred)
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if msg.message_id.as_str() == message_id {
-                    let mut updated = msg.clone();
-                    updated.content = new_text.into();
-                    updated.is_edited = true;
-                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
-                        model.set_row_data(i, updated);
-                    }
-                    return;
-                }
-            }
-        }
-
-        // Second pass: fallback to timestamp_ns matching
+        // Primary: match by timestamp_ns (Signal-style canonical identifier)
         if target_sent_timestamp > 0 {
             for i in 0..messages.row_count() {
                 if let Some(msg) = messages.row_data(i) {
                     if msg.timestamp_ns.as_str() == ts_str {
                         let mut updated = msg.clone();
-                        updated.content = new_text.clone().into();
+                        updated.content = new_text.into();
                         updated.is_edited = true;
                         if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
                             model.set_row_data(i, updated);
@@ -433,16 +419,36 @@ pub(super) fn handle_message_edit_with_fallback(
                 }
             }
         }
+
+        // Fallback: match by message_id (UUID) for legacy messages
+        for i in 0..messages.row_count() {
+            if let Some(msg) = messages.row_data(i) {
+                if msg.message_id.as_str() == message_id {
+                    let mut updated = msg.clone();
+                    updated.content = new_text.clone().into();
+                    updated.is_edited = true;
+                    if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
+                        model.set_row_data(i, updated);
+                    }
+                    return;
+                }
+            }
+        }
     });
 }
 
 /// Remove a message from the active message list (delete for everyone).
+///
+/// Matches by timestamp_ns (Signal-style) first. Falls back to message_id (UUID)
+/// for legacy messages.
 pub(super) fn handle_message_delete(
     window: &Weak<MainWindow>,
     message_id: &str,
+    target_sent_timestamp: u64,
 ) {
     let weak = window.clone();
     let message_id = message_id.to_string();
+    let ts_str = target_sent_timestamp.to_string();
 
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
@@ -451,7 +457,13 @@ pub(super) fn handle_message_delete(
         let mut new_messages = Vec::new();
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.message_id.as_str() != message_id {
+                // Primary: match by timestamp_ns (Signal-style)
+                let is_target = if target_sent_timestamp > 0 {
+                    msg.timestamp_ns.as_str() == ts_str
+                } else {
+                    msg.message_id.as_str() == message_id
+                };
+                if !is_target {
                     new_messages.push(msg);
                 }
             }

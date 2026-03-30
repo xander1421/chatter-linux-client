@@ -203,6 +203,7 @@ pub(super) fn handle_delete<S: AnonContentService>(
         message_id,
         author_id: sender_id,
         channel_id: Some(id.into()),
+        target_sent_timestamp,
     });
 
     Ok(HandlerOutcome::Processed)

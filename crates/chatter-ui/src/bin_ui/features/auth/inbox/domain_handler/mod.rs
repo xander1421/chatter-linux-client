@@ -158,14 +158,13 @@ pub async fn handle_domain_event(
         }
 
         // Reaction UI updates: update emoji summary on the message bubble + sidebar
-        DomainEvent::ReactionAdded { sender_id, sent_at_ns, emoji, timestamp, .. } => {
-            let msg_key = format!("{}:{}", sender_id, sent_at_ns);
-            messaging::handle_reaction_update(window, &msg_key, &emoji, false, timestamp);
+        // Uses Signal-style (sender_id, sent_at_ns) composite key for matching.
+        DomainEvent::ReactionAdded { sender_id, sent_at_ns, emoji, .. } => {
+            messaging::handle_reaction_update(window, &sender_id.to_string(), sent_at_ns, &emoji, false);
             messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, false);
         }
-        DomainEvent::ReactionRemoved { sender_id, sent_at_ns, emoji, timestamp, .. } => {
-            let msg_key = format!("{}:{}", sender_id, sent_at_ns);
-            messaging::handle_reaction_update(window, &msg_key, &emoji, true, timestamp);
+        DomainEvent::ReactionRemoved { sender_id, sent_at_ns, emoji, .. } => {
+            messaging::handle_reaction_update(window, &sender_id.to_string(), sent_at_ns, &emoji, true);
             messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, true);
         }
 
@@ -178,18 +177,15 @@ pub async fn handle_domain_event(
                 MessageContent::AI(ai) => ai.text.clone(),
                 _ => String::new(),
             };
-            // Try message_id match first, then fall back to timestamp match.
-            // The timestamp fallback handles cases where the receiver's message_id
-            // doesn't match the edit event's message_id (e.g. anon conversations,
-            // or when the message was stored before the canonical ID was assigned).
-            messaging::handle_message_edit_with_fallback(
+            // Timestamp-primary matching (Signal-style). UUID fallback for legacy.
+            messaging::handle_message_edit(
                 window, &message_id.to_string(), target_sent_timestamp, &new_text,
             );
         }
 
-        // Delete UI update: remove message from visible list
-        DomainEvent::MessageDeleted { message_id, .. } => {
-            messaging::handle_message_delete(window, &message_id.to_string());
+        // Delete UI update: remove message from visible list (timestamp-primary matching)
+        DomainEvent::MessageDeleted { message_id, target_sent_timestamp, .. } => {
+            messaging::handle_message_delete(window, &message_id.to_string(), target_sent_timestamp);
         }
 
         // State store handles these (no Slint model update needed)

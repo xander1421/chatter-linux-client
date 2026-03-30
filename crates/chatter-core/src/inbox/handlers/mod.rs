@@ -265,6 +265,9 @@ pub enum DomainEvent {
         /// Channel containing the message.
         /// None for DM deletes where channel is derived from author_id.
         channel_id: Option<ChannelId>,
+        /// Target message's original sent timestamp in nanoseconds.
+        /// Used for Signal-style (sender, timestamp) UI matching.
+        target_sent_timestamp: u64,
     },
     /// Attachment metadata ready (needs download).
     AttachmentReady {

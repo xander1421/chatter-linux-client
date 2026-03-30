@@ -224,6 +224,30 @@ impl MessageState {
         });
     }
 
+    /// Update a message by Signal-style (sender_id, sent_at_ns) composite key.
+    ///
+    /// Searches all cached channels for a message matching the composite key.
+    /// This is the preferred lookup method per Signal Protocol spec.
+    pub fn update_message_by_sender_timestamp<F>(
+        &self,
+        sender_id: &crate::domain::ids::UserId,
+        sent_at_ns: u64,
+        f: F,
+    ) where
+        F: FnOnce(&mut Message),
+    {
+        self.store.update(|state| {
+            for messages in state.messages.values_mut() {
+                if let Some(message) = messages.iter_mut().find(|m| {
+                    m.sender_id.as_ref() == Some(sender_id) && m.sent_at == sent_at_ns
+                }) {
+                    f(message);
+                    return;
+                }
+            }
+        });
+    }
+
     /// Find which channel contains a message.
     ///
     /// Searches all cached channels for a message with the given ID.

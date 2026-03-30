@@ -243,6 +243,7 @@ impl EventHandlers {
                 message_id,
                 author_id,
                 channel_id,
+                ..
             } => {
                 tracing::info!(
                     ?message_id,
@@ -998,6 +999,7 @@ mod tests {
             message_id,
             author_id,
             channel_id: Some(channel_id),
+            target_sent_timestamp: 1704067200_000_000_000,
         });
 
         assert!(handlers.message_state.get_messages(&channel_id).is_empty());

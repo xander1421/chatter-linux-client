@@ -446,15 +446,10 @@ pub fn spawn_anon_dm_request_handler(
                     );
                 }
                 DomainEvent::MessageDeleted {
-                    message_id,
                     channel_id: Some(channel_id),
+                    target_sent_timestamp,
                     ..
                 } => {
-                    let target_sent_timestamp = message_id.as_bytes()
-                        .get(..8)
-                        .and_then(|b| b.try_into().ok())
-                        .map(u64::from_be_bytes)
-                        .unwrap_or(0);
                     unified_actions::handle_delete(
                         &weak_window, &chat_state,
                         EventSource::Channel(channel_id),
