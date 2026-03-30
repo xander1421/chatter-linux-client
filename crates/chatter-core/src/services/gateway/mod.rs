@@ -166,6 +166,17 @@ impl MessageGateway {
             .map(|ptr| crate::domain::ids::AttachmentId::from_cdn_key(&ptr.cdn_key))
             .collect();
 
+        // Extract quote/reply context from DataMessage so reply bubbles survive reload
+        let reply_to = data_message.quote.as_ref()
+            .map(|q| MessageId::from_timestamp(q.id));
+        let reply_to_author_id = data_message.quote.as_ref()
+            .and_then(|q| {
+                if q.author_aci.is_empty() { None } else { q.author_aci.parse().ok() }
+            });
+        let reply_to_text = data_message.quote.as_ref()
+            .map(|q| q.text.clone())
+            .filter(|t| !t.is_empty());
+
         // Create domain message with sender's timestamp for Signal-style dedup
         let message = Message {
             id: message_id,
@@ -176,9 +187,9 @@ impl MessageGateway {
             content,
             encrypted_content: None,
             thread_id: None,
-            reply_to: None,
-            reply_to_author_id: None,
-            reply_to_text: None,
+            reply_to,
+            reply_to_author_id,
+            reply_to_text,
             attachments,
             is_pinned: false,
             is_edited: false,

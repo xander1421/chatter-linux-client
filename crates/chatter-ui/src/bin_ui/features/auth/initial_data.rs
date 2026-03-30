@@ -673,7 +673,15 @@ async fn load_channel_into_ui_from_services(
             })
             .collect();
 
-        let display_data = message_to_display_data(msg, &sender_name, &resolved_attachments);
+        let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments);
+
+        // Resolve reply-to sender name (converter leaves it empty for later resolution)
+        if display_data.is_reply {
+            if let Some(ref author_id) = msg.reply_to_author_id {
+                display_data.reply_to_sender_name = ui_ctx.users().get_display_name(author_id);
+            }
+        }
+
         display_messages.push(display_data);
     }
 

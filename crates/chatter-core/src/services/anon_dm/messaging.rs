@@ -117,6 +117,17 @@ impl AnonDmService {
             ))
         };
 
+        // Extract reply context from quote so reply bubbles survive reload
+        let reply_to = quote.as_ref()
+            .map(|q| MessageId::from_timestamp(q.id));
+        let reply_to_author_id = quote.as_ref()
+            .and_then(|q| {
+                if q.author_aci.is_empty() { None } else { q.author_aci.parse().ok() }
+            });
+        let reply_to_text = quote.as_ref()
+            .map(|q| q.text.clone())
+            .filter(|t| !t.is_empty());
+
         let message = Message {
             id: message_id,
             conversation_id: channel_id,
@@ -126,9 +137,9 @@ impl AnonDmService {
             content,
             encrypted_content: None,
             thread_id: None,
-            reply_to: None,
-            reply_to_author_id: None,
-            reply_to_text: None,
+            reply_to,
+            reply_to_author_id,
+            reply_to_text,
             attachments: attachment_ids.clone(),
             is_pinned: false,
             is_edited: false,

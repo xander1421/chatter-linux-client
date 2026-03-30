@@ -77,7 +77,13 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                 for msg in &replies {
                     let sender_name = msg.sender_id.as_ref().map(|id| user_service.get_display_name(id)).unwrap_or_else(|| "Anonymous".to_string());
                     let resolved: Vec<_> = msg.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
-                    display.push(message_to_display_data(msg, &sender_name, &resolved));
+                    let mut display_data = message_to_display_data(msg, &sender_name, &resolved);
+                    if display_data.is_reply {
+                        if let Some(ref author_id) = msg.reply_to_author_id {
+                            display_data.reply_to_sender_name = user_service.get_display_name(author_id);
+                        }
+                    }
+                    display.push(display_data);
                 }
                 // Get current user ID for is_own calculation
                 let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
@@ -114,7 +120,13 @@ pub fn load_thread_data(
             for msg in &replies {
                 let reply_sender_name = msg.sender_id.as_ref().map(|id| user_service.get_display_name(id)).unwrap_or_else(|| "Anonymous".to_string());
                 let resolved: Vec<_> = msg.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
-                display.push(message_to_display_data(msg, &reply_sender_name, &resolved));
+                let mut display_data = message_to_display_data(msg, &reply_sender_name, &resolved);
+                if display_data.is_reply {
+                    if let Some(ref author_id) = msg.reply_to_author_id {
+                        display_data.reply_to_sender_name = user_service.get_display_name(author_id);
+                    }
+                }
+                display.push(display_data);
             }
             // Get current user ID for is_own calculation
             let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();

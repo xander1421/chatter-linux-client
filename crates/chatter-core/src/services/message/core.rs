@@ -604,6 +604,12 @@ impl MessageService {
         message.reply_to = Some(*reply_to_id);
         message.attachments = attachment_ids;
 
+        // Populate reply quote context so reply bubbles survive reload
+        if let Ok(Some(original)) = self.message_repo.get(reply_to_id) {
+            message.reply_to_author_id = original.sender_id;
+            message.reply_to_text = original.as_text().map(|t| t.to_string());
+        }
+
         // IMPORTANT: Ensure channel_id matches (server might return different format)
         if message.conversation_id != *channel_id {
             tracing::warn!(

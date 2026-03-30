@@ -602,7 +602,16 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
                     .collect();
 
-                display_messages.push(message_to_display_data(msg, &sender_name, &resolved_attachments));
+                let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments);
+
+                // Resolve reply-to sender name
+                if display_data.is_reply {
+                    if let Some(ref author_id) = msg.reply_to_author_id {
+                        display_data.reply_to_sender_name = user_service.get_display_name(author_id);
+                    }
+                }
+
+                display_messages.push(display_data);
             }
 
             // Reverse to get chronological order (oldest first)
