@@ -200,6 +200,7 @@ component CustomSectionHeader inherits Rectangle {
                     height: 10px;
                     colorize: Colors.text-muted;
                     transform-rotation: root.is-expanded ? 90deg : 0deg;
+                    animate transform-rotation { duration: 150ms; easing: ease-out; }
                 }
 
                 // Emoji icon
