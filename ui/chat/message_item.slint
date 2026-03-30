@@ -81,8 +81,8 @@ export component MessageItem inherits Rectangle {
     in property <string> reply-to-sender-name: "";
     in property <string> reply-to-preview: "";
 
-    // Internal hover state
-    property <bool> is-hovered: touch.has-hover || action-buttons-touch.has-hover;
+    // Internal hover state — touch covers entire message row
+    property <bool> is-hovered: touch.has-hover;
 
     // Callbacks
     callback reply-clicked(string, string);
@@ -101,112 +101,6 @@ export component MessageItem inherits Rectangle {
         mouse-cursor: pointer;
         clicked => {
             root.message-clicked(root.message-id);
-        }
-    }
-
-    // Action buttons overlay - positioned based on bubble location
-    action-buttons-touch := TouchArea {
-        x: root.is-own ? Spacing.md : parent.width - action-buttons.width - Spacing.md;
-        y: Spacing.sm;
-        width: action-buttons.width;
-        height: action-buttons.height;
-        visible: !root.is-system && !root.is-deleted && !root.is-call;
-
-        action-buttons := Rectangle {
-            height: 28px;
-            width: 80px;
-            background: Colors.surface;
-            border-radius: Spacing.radius-sm;
-            border-width: 1px;
-            border-color: Colors.surface-hover;
-            opacity: root.is-hovered ? 1.0 : 0.0;
-
-            HorizontalLayout {
-                padding: 2px;
-                spacing: 2px;
-                alignment: center;
-
-                // Reply button
-                Rectangle {
-                    height: 24px;
-                    width: 24px;
-                    background: reply-touch.has-hover ? Colors.surface-hover : transparent;
-                    border-radius: Spacing.radius-sm;
-                    accessible-role: button;
-                    accessible-label: "Reply to message";
-
-                    Image {
-                        width: 14px;
-                        height: 14px;
-                        source: Icons.reply;
-                        colorize: Colors.text-secondary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    reply-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.reply-clicked(root.sender-id, root.timestamp-ns);
-                        }
-                    }
-                }
-
-                // React button
-                Rectangle {
-                    height: 24px;
-                    width: 24px;
-                    background: react-touch.has-hover ? Colors.surface-hover : transparent;
-                    border-radius: Spacing.radius-sm;
-                    accessible-role: button;
-                    accessible-label: "Add reaction";
-
-                    Image {
-                        width: 14px;
-                        height: 14px;
-                        source: Icons.smile;
-                        colorize: Colors.text-secondary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    react-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.react-clicked(root.sender-id, root.timestamp-ns);
-                        }
-                    }
-                }
-
-                // More button
-                more-btn := Rectangle {
-                    height: 24px;
-                    width: 24px;
-                    background: more-touch.has-hover ? Colors.surface-hover : transparent;
-                    border-radius: Spacing.radius-sm;
-                    accessible-role: button;
-                    accessible-label: "More message actions";
-
-                    Image {
-                        width: 14px;
-                        height: 14px;
-                        source: Icons.more-horizontal;
-                        colorize: Colors.text-secondary;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    more-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            // Pass absolute position of button for menu placement
-                            root.more-clicked(root.sender-id, root.timestamp-ns,
-                                more-btn.absolute-position.x,
-                                more-btn.absolute-position.y + more-btn.height);
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -993,6 +887,112 @@ export component MessageItem inherits Rectangle {
                     TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
+                    }
+                }
+                // Action buttons — anchored to top-right of bubble
+                Rectangle {
+                    x: bubble.width - action-btns.width;
+                    y: -action-btns.height / 2;
+                    width: action-btns.width;
+                    height: action-btns.height;
+                    visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;
+
+                    action-btns := Rectangle {
+                        height: 28px;
+                        width: 80px;
+                        background: Colors.surface;
+                        border-radius: Spacing.radius-sm;
+                        border-width: 1px;
+                        border-color: Colors.surface-hover;
+                        drop-shadow-blur: 4px;
+                        drop-shadow-color: Colors.background.with-alpha(0.3);
+                        drop-shadow-offset-y: 1px;
+
+                        HorizontalLayout {
+                            padding: 2px;
+                            spacing: 2px;
+                            alignment: center;
+
+                            // Reply button
+                            Rectangle {
+                                height: 24px;
+                                width: 24px;
+                                background: reply-touch.has-hover ? Colors.surface-hover : transparent;
+                                border-radius: Spacing.radius-sm;
+                                accessible-role: button;
+                                accessible-label: "Reply to message";
+
+                                Image {
+                                    width: 14px;
+                                    height: 14px;
+                                    source: Icons.reply;
+                                    colorize: Colors.text-secondary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                reply-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.reply-clicked(root.sender-id, root.timestamp-ns);
+                                    }
+                                }
+                            }
+
+                            // React button
+                            Rectangle {
+                                height: 24px;
+                                width: 24px;
+                                background: react-btn-touch.has-hover ? Colors.surface-hover : transparent;
+                                border-radius: Spacing.radius-sm;
+                                accessible-role: button;
+                                accessible-label: "Add reaction";
+
+                                Image {
+                                    width: 14px;
+                                    height: 14px;
+                                    source: Icons.smile;
+                                    colorize: Colors.text-secondary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                react-btn-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.react-clicked(root.sender-id, root.timestamp-ns);
+                                    }
+                                }
+                            }
+
+                            // More button
+                            more-btn := Rectangle {
+                                height: 24px;
+                                width: 24px;
+                                background: more-touch.has-hover ? Colors.surface-hover : transparent;
+                                border-radius: Spacing.radius-sm;
+                                accessible-role: button;
+                                accessible-label: "More message actions";
+
+                                Image {
+                                    width: 14px;
+                                    height: 14px;
+                                    source: Icons.more-horizontal;
+                                    colorize: Colors.text-secondary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+
+                                more-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.more-clicked(root.sender-id, root.timestamp-ns,
+                                            more-btn.absolute-position.x,
+                                            more-btn.absolute-position.y + more-btn.height);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 } // end wrapper
