@@ -8,6 +8,7 @@ export component Modal inherits Rectangle {
     in property <bool> show: false;
     in property <string> title: "";
     in property <length> modal-width: 480px;
+    in property <length> max-modal-height: 600px;
 
     callback close();
 
@@ -27,19 +28,21 @@ export component Modal inherits Rectangle {
         }
     }
 
-    // Modal container - centered, responsive to viewport
+    // Modal container - centered card with content-based sizing
     modal-container := Rectangle {
         accessible-role: none;
         accessible-description: root.title;
         // Responsive: cap at viewport width minus 32px padding for mobile
         width: min(root.modal-width, parent.width - 32px);
-        // Use min/max constraints instead of explicit height to allow sizing to content
-        min-height: 200px;
-        max-height: min(parent.height - 48px, modal-layout.preferred-height + 1px);
+        // Size to content, capped at max-modal-height or viewport
+        height: max(200px, min(modal-layout.preferred-height, min(root.max-modal-height, parent.height - 48px)));
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
+        clip: true;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: #00000040;
 
         // Block clicks on modal from closing
         TouchArea {
@@ -96,7 +99,7 @@ export component Modal inherits Rectangle {
                 }
             }
 
-            // Content area - sized to content
+            // Content area
             Rectangle {
                 @children
             }

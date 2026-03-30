@@ -29,15 +29,17 @@ export component RecoveryCodesModal inherits Rectangle {
         height: 100%;
     }
 
-    // Modal container (responsive for mobile)
+    // Modal container — centered card with content-based sizing
     Rectangle {
         width: min(480px, parent.width - 32px);
-        min-height: 200px;
-        max-height: min(parent.height - 48px, content-layout.preferred-height + 1px);
+        height: max(200px, min(content-layout.preferred-height, min(600px, parent.height - 48px)));
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
+        clip: true;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: #00000040;
 
         // Block clicks from passing through
         TouchArea {
