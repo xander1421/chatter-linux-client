@@ -43,11 +43,16 @@ export component EmojiPicker inherits Rectangle {
     visible: root.show;
     opacity: root.show ? 1 : 0;
 
-    // Picker container
+    // Picker container — responsive: never exceed parent width
     in property <length> max-picker-width: 280px;
     in property <length> max-picker-height: 320px;
-    width: root.max-picker-width;
+    width: min(root.max-picker-width, parent.width);
     height: root.max-picker-height;
+
+    // Dynamic grid columns based on available width
+    property <length> grid-content-width: root.width - 2 * Spacing.sm;
+    property <int> emoji-columns: max(4, Math.floor(grid-content-width / 46px));
+    property <length> emoji-cell-stride: grid-content-width / emoji-columns;
     background: Colors.surface;
     border-radius: Spacing.radius-lg;
 
@@ -181,10 +186,10 @@ export component EmojiPicker inherits Rectangle {
             vertical-alignment: center;
         }
 
-        // Emoji grid
+        // Emoji grid — columns adapt to available width
         Flickable {
             vertical-stretch: 1;
-            viewport-height: Math.ceil(root.emoji-list.length / 6) * 44px;
+            viewport-height: Math.ceil(root.emoji-list.length / root.emoji-columns) * 44px;
 
             // Grid container
             Rectangle {
@@ -192,10 +197,10 @@ export component EmojiPicker inherits Rectangle {
                 height: parent.viewport-height;
 
                 for emoji-data[index] in root.emoji-list: Rectangle {
-                    property <int> grid-row: Math.floor(index / 6);
-                    property <int> grid-col: mod(index, 6);
+                    property <int> grid-row: Math.floor(index / root.emoji-columns);
+                    property <int> grid-col: mod(index, root.emoji-columns);
 
-                    x: grid-col * 46px + 1px;
+                    x: grid-col * root.emoji-cell-stride + (root.emoji-cell-stride - 44px) / 2;
                     y: grid-row * 44px;
                     width: 44px;
                     height: 44px;
