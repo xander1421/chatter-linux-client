@@ -11,7 +11,7 @@ import { Icons } from "../theme/icons.slint";
 export struct ChatHeaderData {
     channel-id: string,
     channel-name: string,
-    channel-type: string,  // "public", "private", "dm", "anon-dm", "private-group"
+    channel-type: string,  // "public", "private", "dm", "anon-dm", "private-group", "saved"
     member-count: int,
     topic: string,
     is-archived: bool,
@@ -50,7 +50,7 @@ export component ChatHeader inherits Rectangle {
     // Properties from ChatHeaderData
     in property <string> channel-id: "";
     in property <string> channel-name: "";
-    in property <string> channel-type: "public";  // "public", "private", "dm", "anon-dm", "private-group"
+    in property <string> channel-type: "public";  // "public", "private", "dm", "anon-dm", "private-group", "saved"
     in property <int> member-count: 0;
     in property <string> topic: "";
     in property <bool> is-archived: false;
@@ -81,6 +81,7 @@ export component ChatHeader inherits Rectangle {
     property <bool> is-dm: channel-type == "dm";
     property <bool> is-anon-dm: channel-type == "anon-dm";
     property <bool> is-private-group: channel-type == "private-group";
+    property <bool> is-saved: channel-type == "saved";
 
     // Show member count for channels and private groups (not DMs)
     property <bool> show-member-count: (channel-type == "public" || channel-type == "private" || is-private-group) && member-count > 0;
@@ -193,6 +194,20 @@ export component ChatHeader inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 Image {
                     source: Icons.users;
+                    width: 16px;
+                    height: 16px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Colors.primary;
+                }
+            }
+
+            if is-saved: Rectangle {
+                width: 20px;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+                Image {
+                    source: Icons.bookmark;
                     width: 16px;
                     height: 16px;
                     x: (parent.width - self.width) / 2;
@@ -320,10 +335,6 @@ export component ChatHeader inherits Rectangle {
                     icon: Icons.pin;
                     icon-color: Colors.primary;
                     clicked => { root.pin-clicked(); }
-                }
-                IconButton {
-                    icon: Icons.search;
-                    clicked => { root.search-clicked(); }
                 }
                 if root.show-settings: IconButton {
                     icon: Icons.settings;
