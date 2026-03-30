@@ -55,6 +55,10 @@ pub struct DraftId(pub Uuid);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct SavedMessageId(pub Uuid);
 
+/// Unique identifier for a custom sidebar section (UUID v4).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+pub struct SectionId(pub Uuid);
+
 /// Unique identifier for a thread (same as MessageId of root message).
 pub type ThreadId = MessageId;
 
@@ -153,7 +157,8 @@ impl_uuid_id!(
     IntegrationId,
     NotificationId,
     DraftId,
-    SavedMessageId
+    SavedMessageId,
+    SectionId
 );
 
 // ============================================================================

@@ -46,6 +46,7 @@ pub mod v044_unified_reactions;
 pub mod v045_unified_messages;
 pub mod v046_reply_quote_persistence;
 pub mod v047_fix_search_fts;
+pub mod v048_custom_sections;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -95,6 +96,7 @@ pub use v044_unified_reactions::V044UnifiedReactions;
 pub use v045_unified_messages::V045UnifiedMessages;
 pub use v046_reply_quote_persistence::V046ReplyQuotePersistence;
 pub use v047_fix_search_fts::V047FixSearchFts;
+pub use v048_custom_sections::V048CustomSections;
 
 /// Trait for database migrations.
 ///
@@ -259,4 +261,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V045UnifiedMessages)
         .register(V046ReplyQuotePersistence)
         .register(V047FixSearchFts)
+        .register(V048CustomSections)
 }

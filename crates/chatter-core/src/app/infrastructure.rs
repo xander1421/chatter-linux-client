@@ -16,7 +16,7 @@ use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::network::streaming::{ReactionAggregator, TypingAggregator};
-use crate::storage::repositories::{AnonDmRepository, AnonGroupRepository, JarvisGraphRepository, JarvisMemoryRepository};
+use crate::storage::repositories::{AnonDmRepository, AnonGroupRepository, JarvisGraphRepository, JarvisMemoryRepository, SectionRepository};
 use crate::storage::{
     AttachmentRepository, ChannelRepository, Database, DraftRepository, KeyStore,
     MessageRepository, ReactionRepository, SearchIndex, SettingsRepository, UserRepository,
@@ -27,7 +27,7 @@ use super::ContextError;
 
 /// Default server URL if CHATTER_SERVER_URL is not set.
 // Tunnel: "https://seeker-dance-ignored-clusters.trycloudflare.com"
-pub(crate) const DEFAULT_SERVER_URL: &str = "https://seeker-dance-ignored-clusters.trycloudflare.com";
+pub(crate) const DEFAULT_SERVER_URL: &str = "https://helped-pope-reno-vacation.trycloudflare.com";
 
 /// Environment variable for server URL.
 pub(crate) const SERVER_URL_ENV: &str = "CHATTER_SERVER_URL";
@@ -79,6 +79,8 @@ pub struct InfrastructureContainer {
     pub(crate) jarvis_memory_repo: Arc<JarvisMemoryRepository>,
     /// Jarvis graph repository.
     pub(crate) jarvis_graph_repo: Arc<JarvisGraphRepository>,
+    /// Custom sidebar section repository.
+    pub(crate) section_repo: Arc<SectionRepository>,
 
     // Crypto managers - pub(crate)
     /// Identity key management.
@@ -159,7 +161,10 @@ impl InfrastructureContainer {
         // Run migrations
         database.run_migrations()?;
 
-        // 5b. Ensure attachments directory exists for filesystem-based storage
+        // 5b. Set attachments base dir (critical for Android where dirs::data_local_dir is read-only)
+        crate::services::attachment::set_attachments_base_dir(directories.data_dir().to_path_buf());
+
+        // 5c. Ensure attachments directory exists for filesystem-based storage
         if let Err(e) = crate::services::attachment::ensure_attachments_dir() {
             tracing::warn!("Failed to create attachments directory: {}", e);
         }
@@ -182,6 +187,7 @@ impl InfrastructureContainer {
         let anon_dm_repo = Arc::new(AnonDmRepository::new(database.clone()));
         let jarvis_memory_repo = Arc::new(JarvisMemoryRepository::new(database.clone()));
         let jarvis_graph_repo = Arc::new(JarvisGraphRepository::new(database.clone()));
+        let section_repo = Arc::new(SectionRepository::new(database.clone()));
 
         // 8. Create crypto managers
         let identity_manager = Arc::new(IdentityKeyManager::new(key_store.clone()));
@@ -243,6 +249,7 @@ impl InfrastructureContainer {
             anon_dm_repo,
             jarvis_memory_repo,
             jarvis_graph_repo,
+            section_repo,
             event_bus: crate::events::EventBus::new(),
             group_fanout: Arc::new(std::sync::OnceLock::new()),
         })

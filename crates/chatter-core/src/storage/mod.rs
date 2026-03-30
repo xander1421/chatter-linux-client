@@ -22,4 +22,5 @@ pub use repositories::SearchIndex;
 pub use repositories::SearchResult;
 pub use repositories::SettingsRepository;
 pub use repositories::UserRepository;
+pub use repositories::SectionRepository;
 pub use repositories::settings_keys;

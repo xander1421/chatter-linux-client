@@ -38,6 +38,7 @@ pub mod anon_dm_repo;
 pub(crate) mod repo_utils;
 pub mod jarvis_memory_repo;
 pub mod jarvis_graph_repo;
+pub mod section_repo;
 pub mod unified_message_repo;
 
 pub use attachment_repo::AttachmentRepository;
@@ -56,3 +57,4 @@ pub use anon_group_repo::AnonGroupRepository;
 pub use anon_dm_repo::AnonDmRepository;
 pub use jarvis_memory_repo::JarvisMemoryRepository;
 pub use jarvis_graph_repo::JarvisGraphRepository;
+pub use section_repo::SectionRepository;
