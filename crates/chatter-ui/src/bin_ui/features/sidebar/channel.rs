@@ -6,6 +6,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
+use chatter_core::domain::message::ConversationType;
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::services::attachment::AttachmentService;
 use chatter_core::services::channel::ChannelService;
@@ -185,8 +186,15 @@ pub async fn load_channel_into_ui(
         }
     };
 
+    // Map ChannelType -> ConversationType for unified message queries
+    let conversation_type = match channel.channel_type {
+        ChannelType::DirectMessage => ConversationType::ServerDm,
+        ChannelType::SavedMessages => ConversationType::SavedMessages,
+        _ => ConversationType::Channel,
+    };
+
     // Fetch recent messages (limit 50)
-    let messages = match message_service.get_messages_local(channel_id, None, 50) {
+    let messages = match message_service.get_messages_local(channel_id, &conversation_type, None, 50) {
         Ok(msgs) => {
             tracing::info!(
                 channel_id = %channel_id,

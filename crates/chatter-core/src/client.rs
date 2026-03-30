@@ -14,7 +14,7 @@ use crate::app::context::{AppContext, ContextError};
 use crate::app::core_services::CoreServices;
 use crate::domain::attachment::Attachment;
 use crate::domain::channel::{Channel, ChannelType};
-use crate::domain::message::Message;
+use crate::domain::message::{ConversationType, Message};
 use crate::error::{CryptoError, NetworkError};
 use crate::events::{DomainEvent, EventBus};
 use crate::services::auth_service::{AuthError, LoginResult};
@@ -1856,8 +1856,14 @@ impl ChatterClient {
         limit: u32,
     ) -> Result<Vec<Message>, crate::services::message::MessageError> {
         match conversation {
-            ActiveConversation::Channel(id) | ActiveConversation::MailboxDm { channel_id: id, .. } | ActiveConversation::ServerDm { channel_id: id, .. } => {
-                self.messages().get_messages_local(id, None, limit)
+            ActiveConversation::Channel(id) => {
+                self.messages().get_messages_local(id, &ConversationType::Channel, None, limit)
+            }
+            ActiveConversation::ServerDm { channel_id: id, .. } => {
+                self.messages().get_messages_local(id, &ConversationType::ServerDm, None, limit)
+            }
+            ActiveConversation::MailboxDm { channel_id: id, .. } => {
+                self.messages().get_messages_local(id, &ConversationType::MailboxDm, None, limit)
             }
             // Anon paths use their own message types — return empty for now.
             // SDK consumers should use anon_dms().get_messages() / anon_groups().get_messages()

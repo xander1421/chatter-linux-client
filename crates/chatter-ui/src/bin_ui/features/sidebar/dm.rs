@@ -7,6 +7,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::channel::ChannelType;
+use chatter_core::domain::message::ConversationType;
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::services::user::UserService;
 
@@ -226,7 +227,7 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                         let my_user_id = auth_state.get().current_user_id.clone();
 
                         // Get recent messages to find the peer and their message timestamps
-                        if let Ok(messages) = message_service.get_messages_local(&channel_id, None, 50) {
+                        if let Ok(messages) = message_service.get_messages_local(&channel_id, &ConversationType::ServerDm, None, 50) {
                             // Find peer ID (sender that isn't us)
                             let peer_id = messages
                                 .iter()

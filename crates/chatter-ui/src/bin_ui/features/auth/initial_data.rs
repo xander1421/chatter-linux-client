@@ -8,6 +8,7 @@ use slint::{ComponentHandle, Image, ModelRc, SharedString, VecModel, Weak, Model
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
+use chatter_core::domain::message::ConversationType;
 use chatter_core::domain::ids::ChannelId;
 use chatter_core::services::user::FriendRequestFilter;
 
@@ -85,7 +86,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
                 // Get the most recent message for this DM to populate preview
                 let (last_message, timestamp) =
-                    match ui_ctx.messages().get_messages_local(&channel.id, None, 1) {
+                    match ui_ctx.messages().get_messages_local(&channel.id, &ConversationType::ServerDm, None, 1) {
                         Ok(messages) if !messages.is_empty() => {
                             let msg = &messages[0];
                             let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
@@ -621,8 +622,15 @@ async fn load_channel_into_ui_from_services(
         }
     };
 
+    // Map ChannelType -> ConversationType for unified message queries
+    let conversation_type = match channel.channel_type {
+        ChannelType::DirectMessage => ConversationType::ServerDm,
+        ChannelType::SavedMessages => ConversationType::SavedMessages,
+        _ => ConversationType::Channel,
+    };
+
     // Fetch recent messages (limit 50)
-    let messages = match ui_ctx.messages().get_messages_local(channel_id, None, 50) {
+    let messages = match ui_ctx.messages().get_messages_local(channel_id, &conversation_type, None, 50) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to get messages for channel {}: {}", channel_id, e);
@@ -752,7 +760,7 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 
                 // Get the most recent message
                 let (last_message, timestamp) = 
-                    match ui_ctx.messages().get_messages_local(&channel.id, None, 1) {
+                    match ui_ctx.messages().get_messages_local(&channel.id, &ConversationType::ServerDm, None, 1) {
                         Ok(messages) if !messages.is_empty() => {
                             let msg = &messages[0];
                             let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);

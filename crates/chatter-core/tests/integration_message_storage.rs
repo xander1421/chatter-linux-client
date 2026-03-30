@@ -122,7 +122,7 @@ fn test_dm_message_received_storage() {
     assert!(!duplicate_inserted, "Duplicate message should be ignored");
 
     // Verify only one message exists
-    let messages = message_repo.list_for_channel(&dm_channel.id, None, 100).unwrap();
+    let messages = message_repo.list_for_channel(&dm_channel.id, &ConversationType::MailboxDm, None, 100).unwrap();
     assert_eq!(messages.len(), 1);
 }
 
@@ -162,11 +162,11 @@ fn test_dm_messages_list_by_channel() {
     message_repo.insert(&msg3).unwrap();
 
     // List messages for Alice-Bob channel
-    let ab_messages = message_repo.list_for_channel(&dm_ab.id, None, 100).unwrap();
+    let ab_messages = message_repo.list_for_channel(&dm_ab.id, &ConversationType::MailboxDm, None, 100).unwrap();
     assert_eq!(ab_messages.len(), 2);
 
     // List messages for Alice-Charlie channel
-    let ac_messages = message_repo.list_for_channel(&dm_ac.id, None, 100).unwrap();
+    let ac_messages = message_repo.list_for_channel(&dm_ac.id, &ConversationType::MailboxDm, None, 100).unwrap();
     assert_eq!(ac_messages.len(), 1);
 }
 
@@ -223,7 +223,7 @@ fn test_channel_message_deduplication() {
     assert!(!second);
 
     // Only one message in database
-    let messages = message_repo.list_for_channel(&channel.id, None, 100).unwrap();
+    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
     assert_eq!(messages.len(), 1);
 }
 
@@ -302,6 +302,8 @@ fn test_system_message_user_joined() {
         encrypted_content: None,
         thread_id: None,
         reply_to: None,
+        reply_to_author_id: None,
+        reply_to_text: None,
         attachments: Vec::new(),
         is_pinned: false,
         is_edited: false,
@@ -352,6 +354,8 @@ fn test_system_message_user_left() {
         encrypted_content: None,
         thread_id: None,
         reply_to: None,
+        reply_to_author_id: None,
+        reply_to_text: None,
         attachments: Vec::new(),
         is_pinned: false,
         is_edited: false,
@@ -509,7 +513,7 @@ fn test_messages_ordered_by_timestamp() {
     message_repo.insert(&msg3).unwrap();
 
     // Retrieve and verify order
-    let messages = message_repo.list_for_channel(&channel.id, None, 100).unwrap();
+    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
     assert_eq!(messages.len(), 3);
 
     // Messages are returned in descending order (newest first) for pagination
@@ -543,7 +547,7 @@ fn test_bulk_message_storage() {
     }
 
     // Verify all stored
-    let messages = message_repo.list_for_channel(&channel.id, None, 200).unwrap();
+    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 200).unwrap();
     assert_eq!(messages.len(), 100);
 }
 
@@ -571,7 +575,7 @@ fn test_concurrent_dm_channels() {
 
     // Verify each channel has exactly one message
     for (channel, _) in &channels {
-        let messages = message_repo.list_for_channel(&channel.id, None, 100).unwrap();
+        let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
         assert_eq!(messages.len(), 1);
     }
 }
@@ -737,7 +741,7 @@ fn test_signal_style_deduplication_same_sender_timestamp() {
     assert!(!second, "Duplicate (sender_id, sent_at) should be ignored");
 
     // Verify only one message exists
-    let messages = message_repo.list_for_channel(&channel.id, None, 100).unwrap();
+    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
     assert_eq!(messages.len(), 1);
 
     // And it should be the original one
@@ -772,7 +776,7 @@ fn test_signal_style_allows_different_senders_same_timestamp() {
     assert!(second, "Bob's message should be inserted (different sender)");
 
     // Verify both messages exist
-    let messages = message_repo.list_for_channel(&channel.id, None, 100).unwrap();
+    let messages = message_repo.list_for_channel(&channel.id, &ConversationType::Channel, None, 100).unwrap();
     assert_eq!(messages.len(), 2);
 }
 

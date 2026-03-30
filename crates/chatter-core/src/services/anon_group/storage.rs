@@ -230,7 +230,7 @@ impl AnonGroupService {
         pinned: bool,
     ) -> Result<bool, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        Ok(self.message_service.message_repo.set_pinned_by_timestamp(&channel_id, sent_timestamp, pinned)?)
+        Ok(self.message_service.message_repo.set_pinned_by_timestamp(&channel_id, &ConversationType::AnonGroup, sent_timestamp, pinned)?)
     }
 
     /// List all pinned messages for a group.
@@ -245,7 +245,7 @@ impl AnonGroupService {
     /// Mark all messages as read for a group.
     pub fn mark_as_read(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        self.message_service.message_repo.mark_conversation_read(&channel_id)?;
+        self.message_service.message_repo.mark_conversation_read(&channel_id, &ConversationType::AnonGroup)?;
         Ok(())
     }
 
@@ -278,7 +278,7 @@ impl AnonGroupService {
                 return Ok(false);
             }
             Ok(self.message_service.message_repo
-                .update_text_by_timestamp(&channel_id, sent_timestamp, new_text)?)
+                .update_text_by_timestamp(&channel_id, &ConversationType::AnonGroup, sent_timestamp, new_text)?)
         } else {
             Ok(false)
         }
@@ -326,7 +326,7 @@ impl AnonGroupService {
         group_id: &AnonGroupId,
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        Ok(self.message_service.message_repo.get_reaction_counts_for_conversation(&channel_id)?)
+        Ok(self.message_service.message_repo.get_reaction_counts_for_conversation(&channel_id, &ConversationType::AnonGroup)?)
     }
 
     // ========================================================================

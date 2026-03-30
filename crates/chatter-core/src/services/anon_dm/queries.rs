@@ -137,7 +137,7 @@ impl AnonDmService {
         pinned: bool,
     ) -> Result<bool, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.set_pinned_by_timestamp(&channel_id, sent_timestamp, pinned)?)
+        Ok(self.message_repo.set_pinned_by_timestamp(&channel_id, &ConversationType::AnonDm, sent_timestamp, pinned)?)
     }
 
     /// List all pinned messages for a conversation.
@@ -186,6 +186,6 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.get_reaction_counts_for_conversation(&channel_id)?)
+        Ok(self.message_repo.get_reaction_counts_for_conversation(&channel_id, &ConversationType::AnonDm)?)
     }
 }

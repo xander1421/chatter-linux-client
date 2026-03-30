@@ -2,6 +2,7 @@
 
 use crate::domain::anon_group::AnonGroupId;
 use crate::domain::ids::ChannelId;
+use crate::domain::message::ConversationType;
 use crate::services::{
     build_delete_for_everyone_content, build_edit_content, build_pin_content,
     build_reaction_content, build_typing_content,
@@ -94,7 +95,7 @@ impl AnonGroupService {
         let channel_id: ChannelId = (*group_id).into();
         self.message_service
             .message_repo
-            .update_text_by_timestamp(&channel_id, target_sent_timestamp, new_text)?;
+            .update_text_by_timestamp(&channel_id, &ConversationType::AnonGroup, target_sent_timestamp, new_text)?;
 
         Ok(())
     }

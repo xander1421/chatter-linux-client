@@ -694,7 +694,7 @@ impl AnonDmService {
         status: &str,
     ) -> Result<usize, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.update_delivery_status_by_timestamps(&channel_id, timestamps, status)?)
+        Ok(self.message_repo.update_delivery_status_by_timestamps(&channel_id, &ConversationType::AnonDm, timestamps, status)?)
     }
 
     /// Update message text (for handling edits from peer).
@@ -713,7 +713,7 @@ impl AnonDmService {
         let channel_id: ChannelId = (*conversation_id).into();
         if let Some(existing) = self.message_repo.get_by_conversation_sender_timestamp(&channel_id, sender_id, sent_timestamp)? {
             // Sender matches - update the text
-            self.message_repo.update_text_by_timestamp(&channel_id, sent_timestamp, new_text)?;
+            self.message_repo.update_text_by_timestamp(&channel_id, &ConversationType::AnonDm, sent_timestamp, new_text)?;
             let _ = existing; // Confirm message existed and sender matched
             Ok(true)
         } else {

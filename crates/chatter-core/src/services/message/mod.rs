@@ -248,10 +248,11 @@ impl MessageService {
     pub fn get_messages_local(
         &self,
         channel_id: &ChannelId,
+        conversation_type: &ConversationType,
         before: Option<&crate::domain::ids::MessageId>,
         limit: u32,
     ) -> Result<Vec<Message>, MessageError> {
-        let messages = self.message_repo.list_for_channel(channel_id, before, limit)?;
+        let messages = self.message_repo.list_for_channel(channel_id, conversation_type, before, limit)?;
         Ok(messages)
     }
 
@@ -387,11 +388,12 @@ impl MessageService {
     pub fn update_delivery_status(
         &self,
         channel_id: &ChannelId,
+        conversation_type: &ConversationType,
         sent_at: u64,
         status: &str,
     ) -> Result<bool, MessageError> {
         self.message_repo
-            .update_delivery_status(channel_id, sent_at, status)
+            .update_delivery_status(channel_id, conversation_type, sent_at, status)
             .map_err(MessageError::from)
     }
 

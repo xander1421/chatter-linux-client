@@ -412,11 +412,15 @@ impl UnifiedMessageRepository {
     }
 
     /// Mark all messages in a conversation as read.
-    pub fn mark_conversation_read(&self, conversation_id: &ChannelId) -> Result<(), StorageError> {
+    pub fn mark_conversation_read(
+        &self,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "UPDATE messages SET is_read = 1 WHERE conversation_id = ?1 AND is_read = 0",
-            params![conversation_id.to_string()],
+            "UPDATE messages SET is_read = 1              WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_read = 0",
+            params![conversation_id.to_string(), conversation_type.as_str()],
         )?;
         Ok(())
     }
@@ -542,17 +546,18 @@ impl UnifiedMessageRepository {
     pub fn get_reaction_counts_for_conversation(
         &self,
         conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
     ) -> Result<std::collections::HashMap<u64, Vec<(String, u32)>>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT m.sent_at, r.emoji, COUNT(*) as cnt
              FROM unified_reactions r
              INNER JOIN messages m ON r.message_id = m.id
-             WHERE m.conversation_id = ?1 AND m.is_deleted = 0
+             WHERE m.conversation_id = ?1 AND m.conversation_type = ?2 AND m.is_deleted = 0
              GROUP BY m.sent_at, r.emoji
              ORDER BY m.sent_at, cnt DESC",
         )?;
-        let mut rows = stmt.query(params![conversation_id.to_string()])?;
+        let mut rows = stmt.query(params![conversation_id.to_string(), conversation_type.as_str()])?;
         let mut map: std::collections::HashMap<u64, Vec<(String, u32)>> =
             std::collections::HashMap::new();
         while let Some(row) = rows.next()? {
@@ -667,14 +672,21 @@ impl UnifiedMessageRepository {
     pub fn update_delivery_status(
         &self,
         conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
         sent_at: u64,
         status: &str,
     ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE messages SET delivery_status = ?1, updated_at = ?2
-             WHERE conversation_id = ?3 AND sent_at = ?4",
-            params![status, Utc::now().to_rfc3339(), conversation_id.to_string(), sent_at as i64],
+             WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5",
+            params![
+                status,
+                Utc::now().to_rfc3339(),
+                conversation_id.to_string(),
+                conversation_type.as_str(),
+                sent_at as i64,
+            ],
         )?;
         Ok(rows > 0)
     }
@@ -704,6 +716,7 @@ impl UnifiedMessageRepository {
     pub fn update_text_by_timestamp(
         &self,
         conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
         sent_at: u64,
         new_text: &str,
     ) -> Result<bool, StorageError> {
@@ -713,8 +726,14 @@ impl UnifiedMessageRepository {
             .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
         let rows = conn.execute(
             "UPDATE messages SET content_json = ?1, is_edited = 1, updated_at = ?2
-             WHERE conversation_id = ?3 AND sent_at = ?4",
-            params![content_json, Utc::now().to_rfc3339(), conversation_id.to_string(), sent_at as i64],
+             WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5",
+            params![
+                content_json,
+                Utc::now().to_rfc3339(),
+                conversation_id.to_string(),
+                conversation_type.as_str(),
+                sent_at as i64,
+            ],
         )?;
         Ok(rows > 0)
     }
@@ -723,14 +742,21 @@ impl UnifiedMessageRepository {
     pub fn set_pinned_by_timestamp(
         &self,
         conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
         sent_at: u64,
         pinned: bool,
     ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE messages SET is_pinned = ?1, updated_at = ?2
-             WHERE conversation_id = ?3 AND sent_at = ?4 AND is_deleted = 0",
-            params![pinned as i32, Utc::now().to_rfc3339(), conversation_id.to_string(), sent_at as i64],
+             WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5 AND is_deleted = 0",
+            params![
+                pinned as i32,
+                Utc::now().to_rfc3339(),
+                conversation_id.to_string(),
+                conversation_type.as_str(),
+                sent_at as i64,
+            ],
         )?;
         Ok(rows > 0)
     }
@@ -779,13 +805,14 @@ impl UnifiedMessageRepository {
     // Compatibility methods (matching MessageRepository API)
     // ========================================================================
 
-    /// List messages for a channel with cursor-based pagination (no conversation_type filter).
+    /// List messages for a channel with cursor-based pagination.
     ///
     /// Returns messages in reverse chronological order (newest first).
     /// Use `before` to paginate - pass the last message's ID to get the next page.
     pub fn list_for_channel(
         &self,
         channel_id: &ChannelId,
+        conversation_type: &ConversationType,
         before: Option<&MessageId>,
         limit: u32,
     ) -> Result<Vec<Message>, StorageError> {
@@ -794,23 +821,23 @@ impl UnifiedMessageRepository {
             let aliased = format!("m.{}", MSG_COLS.replace(", ", ", m."));
             let mut stmt = conn.prepare(&format!(
                 "SELECT {} FROM messages m \
-                 WHERE m.conversation_id = ?1 \
-                   AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?2) \
+                 WHERE m.conversation_id = ?1 AND m.conversation_type = ?2 \
+                   AND (m.sent_at, m.sender_id) < (SELECT sent_at, sender_id FROM messages WHERE id = ?3) \
                  ORDER BY m.sent_at DESC, m.sender_id DESC \
-                 LIMIT ?3",
+                 LIMIT ?4",
                 aliased,
             ))?;
-            let mut rows = stmt.query(params![channel_id.to_string(), before_id.to_string(), limit])?;
+            let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str(), before_id.to_string(), limit])?;
             collect_messages(&mut rows)
         } else {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {} FROM messages \
-                 WHERE conversation_id = ?1 \
+                 WHERE conversation_id = ?1 AND conversation_type = ?2 \
                  ORDER BY sent_at DESC, sender_id DESC \
-                 LIMIT ?2",
+                 LIMIT ?3",
                 MSG_COLS,
             ))?;
-            let mut rows = stmt.query(params![channel_id.to_string(), limit])?;
+            let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str(), limit])?;
             collect_messages(&mut rows)
         }
     }
@@ -966,6 +993,7 @@ impl UnifiedMessageRepository {
     pub fn update_delivery_status_by_timestamps(
         &self,
         channel_id: &ChannelId,
+        conversation_type: &ConversationType,
         timestamps: &[u64],
         status: &str,
     ) -> Result<usize, StorageError> {
@@ -978,8 +1006,8 @@ impl UnifiedMessageRepository {
         for &ts in timestamps {
             let rows = conn.execute(
                 "UPDATE messages SET delivery_status = ?1, updated_at = ?2
-                 WHERE conversation_id = ?3 AND sent_at = ?4",
-                params![status, now, channel_id.to_string(), ts as i64],
+                 WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5",
+                params![status, now, channel_id.to_string(), conversation_type.as_str(), ts as i64],
             )?;
             total += rows;
         }

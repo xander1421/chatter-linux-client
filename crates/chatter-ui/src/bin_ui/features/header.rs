@@ -532,10 +532,18 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         // Load messages in background thread (DB queries are sync)
         std::thread::spawn(move || {
-            let channel_id = match chat_state.get().active_channel_id {
+            let state = chat_state.get();
+            let channel_id = match state.active_channel_id {
                 Some(id) => id,
                 None => {
                     tracing::warn!("Cannot load more: no active channel");
+                    return;
+                }
+            };
+            let conversation_type = match state.active_conversation.conversation_type() {
+                Some(ct) => ct,
+                None => {
+                    tracing::warn!("Cannot load more: no active conversation type");
                     return;
                 }
             };
@@ -557,7 +565,7 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let before = cursor.and_then(|c| c.oldest_message_id);
 
-            let older_messages = match message_service.get_messages_local(&channel_id, before.as_ref(), 50) {
+            let older_messages = match message_service.get_messages_local(&channel_id, &conversation_type, before.as_ref(), 50) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to load more messages: {}", e);

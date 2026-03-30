@@ -373,6 +373,7 @@ fn test_message_state_append_and_retrieve() {
     // Set messages for a channel using the new_text constructor
     let msg = Message::new_text(
         channel_id,
+        ConversationType::Channel,
         Some(UserId::new()),
         "Test message".to_string(),
         1234567890,

@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::client::ChatterClient;
 use crate::domain::ids::{ChannelId, UserId};
+use crate::domain::message::ConversationType;
 use crate::state::ActiveConversation;
 
 /// Unified error type for conversation operations.
@@ -577,10 +578,20 @@ impl ConversationHandle {
                 }
                 Ok(())
             }
-            ActiveConversation::MailboxDm { channel_id, .. }
-            | ActiveConversation::ServerDm { channel_id, .. } => {
+            ActiveConversation::MailboxDm { channel_id, .. } => {
                 let my_user_id = self.client.auth_state().get().current_user_id;
-                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, None, 50) {
+                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, &ConversationType::MailboxDm, None, 50) {
+                    let timestamps: Vec<u64> = messages.iter()
+                        .filter(|m| m.sender_id.as_ref() != my_user_id.as_ref())
+                        .map(|m| m.sent_at)
+                        .collect();
+                    self.send_read_receipt(&timestamps).await?;
+                }
+                Ok(())
+            }
+            ActiveConversation::ServerDm { channel_id, .. } => {
+                let my_user_id = self.client.auth_state().get().current_user_id;
+                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, &ConversationType::ServerDm, None, 50) {
                     let timestamps: Vec<u64> = messages.iter()
                         .filter(|m| m.sender_id.as_ref() != my_user_id.as_ref())
                         .map(|m| m.sent_at)
@@ -591,7 +602,7 @@ impl ConversationHandle {
             }
             ActiveConversation::Channel(channel_id) => {
                 let my_user_id = self.client.auth_state().get().current_user_id.map(|id| id.to_string());
-                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, None, 50) {
+                if let Ok(messages) = self.client.messages().get_messages_local(channel_id, &ConversationType::Channel, None, 50) {
                     let timestamps: Vec<u64> = messages.iter()
                         .filter(|m| m.sender_id.as_ref().map(|id| id.to_string()).as_ref() != my_user_id.as_ref())
                         .map(|m| m.sent_at)

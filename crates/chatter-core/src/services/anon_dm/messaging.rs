@@ -168,7 +168,7 @@ impl AnonDmService {
         // Mark as "sent" for delivery status indicator
         let channel_id_for_status: ChannelId = (*conversation_id).into();
         let _ = self.message_repo.update_delivery_status_by_timestamps(
-            &channel_id_for_status, &[sent_at], "sent",
+            &channel_id_for_status, &ConversationType::AnonDm, &[sent_at], "sent",
         );
 
         Ok((message_id, sent_at))
@@ -563,7 +563,7 @@ impl AnonDmService {
 
         // Update message locally
         let channel_id: ChannelId = (*conversation_id).into();
-        self.message_repo.update_text_by_timestamp(&channel_id, target_sent_timestamp, new_text)?;
+        self.message_repo.update_text_by_timestamp(&channel_id, &ConversationType::AnonDm, target_sent_timestamp, new_text)?;
 
         Ok(())
     }

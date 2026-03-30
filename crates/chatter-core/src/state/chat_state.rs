@@ -79,6 +79,21 @@ impl ActiveConversation {
     pub fn is_dm(&self) -> bool {
         matches!(self, Self::ServerDm { .. } | Self::MailboxDm { .. } | Self::AnonDm(_))
     }
+
+    /// Get the ConversationType for this active conversation.
+    ///
+    /// Returns None for ActiveConversation::None.
+    pub fn conversation_type(&self) -> Option<crate::domain::message::ConversationType> {
+        use crate::domain::message::ConversationType;
+        match self {
+            Self::Channel(_) => Some(ConversationType::Channel),
+            Self::ServerDm { .. } => Some(ConversationType::ServerDm),
+            Self::MailboxDm { .. } => Some(ConversationType::MailboxDm),
+            Self::AnonDm(_) => Some(ConversationType::AnonDm),
+            Self::AnonGroup(_) => Some(ConversationType::AnonGroup),
+            Self::None => None,
+        }
+    }
 }
 
 /// Maximum number of concurrent thread panels allowed.
