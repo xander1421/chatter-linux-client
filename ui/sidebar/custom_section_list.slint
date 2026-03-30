@@ -289,13 +289,13 @@ export component CustomSectionList inherits Rectangle {
     VerticalLayout {
         spacing: 0px;
 
-        // "+ New Section" button
-        Rectangle {
+        // "+ New Section" button — hidden in collapsed mode to avoid duplicate + icons
+        if !root.collapsed: Rectangle {
             height: 28px;
             background: new-sec-touch.has-hover ? Colors.surface-hover : transparent;
             border-radius: Spacing.radius-sm;
 
-            if !root.collapsed: HorizontalLayout {
+            HorizontalLayout {
                 padding-left: Spacing.sm;
                 spacing: 6px;
                 alignment: start;
@@ -312,24 +312,6 @@ export component CustomSectionList inherits Rectangle {
                     font-size: 11px;
                     font-weight: 500;
                     vertical-alignment: center;
-                }
-            }
-
-            if root.collapsed: TooltipArea {
-                width: 44px;
-                height: 100%;
-                x: (parent.width - self.width) / 2;
-                tooltip-text: "New Section";
-                tooltip-enabled: true;
-                placement: "right";
-                HorizontalLayout {
-                    alignment: center;
-                    Image {
-                        source: Icons.plus;
-                        width: 14px;
-                        height: 14px;
-                        colorize: Colors.text-muted;
-                    }
                 }
             }
 

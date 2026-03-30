@@ -509,6 +509,8 @@ export component MainWindow inherits Window {
 
     // ========== Custom sections callbacks ==========
     callback create-section-clicked <=> app.create-section-clicked;
+    callback create-section(/* name */ string, /* emoji */ string) <=> app.create-section;
+    callback rename-section(/* section-id */ string, /* name */ string, /* emoji */ string) <=> app.rename-section;
     callback section-toggle-expanded <=> app.section-toggle-expanded;
     callback section-conversation-selected <=> app.section-conversation-selected;
     callback delete-section-clicked <=> app.delete-section-clicked;

@@ -98,7 +98,11 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
-    window.on_create_section_clicked(move || {
+    // on_create_section_clicked just opens the modal (handled by Slint).
+    // on_create_section is called when the modal's "Create" button is pressed.
+    window.on_create_section(move |name: SharedString, emoji: SharedString| {
+        let name_str = name.to_string();
+        let emoji_str = emoji.to_string();
         let section_service = ui_ctx.sections().clone();
         let channel_service = ui_ctx.channels().clone();
         let anon_dm_service = ui_ctx.anon_dms().clone();
@@ -106,9 +110,16 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak.clone();
 
         tokio::spawn(async move {
-            match section_service.create_section("New Section", "\u{1F4C1}") {
+            match section_service.create_section(&name_str, &emoji_str) {
                 Ok(section) => {
-                    tracing::info!(section_id = %section.id, "Created custom section");
+                    tracing::info!(section_id = %section.id, name = %name_str, "Created custom section");
+                    // Close the modal and refresh sidebar
+                    let weak_close = weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak_close.upgrade() {
+                            w.set_active_modal("none".into());
+                        }
+                    });
                     refresh_sections_ui(
                         &weak,
                         &section_service,
