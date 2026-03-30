@@ -972,8 +972,8 @@ export component MessageItem inherits Rectangle {
                 }
                 // Action buttons — float above top-right of bubble
                 Rectangle {
-                    x: bubble.width - action-btns.width;
-                    y: -action-btns.height - 4px;
+                    x: bubble.width - action-btns.width - 8px;
+                    y: -action-btns.height - 8px;
                     width: action-btns.width;
                     height: action-btns.height;
                     visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;
