@@ -81,7 +81,7 @@ fn test_dm_message_storage_roundtrip() {
 
     // Store a sent message (Alice -> Bob)
     let sent_at = next_timestamp_ns();
-    let sent_msg = Message::new_text(dm_channel.id, Some(alice), "Hello Bob!".to_string(), sent_at);
+    let sent_msg = Message::new_text(dm_channel.id, ConversationType::MailboxDm, Some(alice), "Hello Bob!".to_string(), sent_at);
     message_repo.insert(&sent_msg).unwrap();
 
     // Verify message is stored
@@ -111,7 +111,7 @@ fn test_dm_message_received_storage() {
 
     // Simulate receiving a message from Bob
     let sent_at = next_timestamp_ns();
-    let received_msg = Message::new_text(dm_channel.id, Some(bob), "Hi Alice!".to_string(), sent_at);
+    let received_msg = Message::new_text(dm_channel.id, ConversationType::MailboxDm, Some(bob), "Hi Alice!".to_string(), sent_at);
 
     // Use insert_or_ignore like the polling code does
     let inserted = message_repo.insert_or_ignore(&received_msg).unwrap();
@@ -153,9 +153,9 @@ fn test_dm_messages_list_by_channel() {
     let dm_ac = create_dm_channel(&channel_repo, &alice, &charlie);
 
     // Store messages in both channels
-    let msg1 = Message::new_text(dm_ab.id, Some(alice), "Hi Bob".to_string(), next_timestamp_ns());
-    let msg2 = Message::new_text(dm_ab.id, Some(bob), "Hi Alice".to_string(), next_timestamp_ns());
-    let msg3 = Message::new_text(dm_ac.id, Some(alice), "Hi Charlie".to_string(), next_timestamp_ns());
+    let msg1 = Message::new_text(dm_ab.id, ConversationType::MailboxDm, Some(alice), "Hi Bob".to_string(), next_timestamp_ns());
+    let msg2 = Message::new_text(dm_ab.id, ConversationType::MailboxDm, Some(bob), "Hi Alice".to_string(), next_timestamp_ns());
+    let msg3 = Message::new_text(dm_ac.id, ConversationType::MailboxDm, Some(alice), "Hi Charlie".to_string(), next_timestamp_ns());
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
@@ -186,7 +186,7 @@ fn test_channel_message_storage() {
 
     // Store a channel message
     let sent_at = next_timestamp_ns();
-    let msg = Message::new_text(channel.id, Some(sender), "Hello channel!".to_string(), sent_at);
+    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Hello channel!".to_string(), sent_at);
     message_repo.insert(&msg).unwrap();
 
     // Verify storage
@@ -211,7 +211,7 @@ fn test_channel_message_deduplication() {
     // Create message with specific ID
     let msg_id = MessageId::new();
     let sent_at = next_timestamp_ns();
-    let mut msg = Message::new_text(channel.id, Some(sender), "Test message".to_string(), sent_at);
+    let mut msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Test message".to_string(), sent_at);
     msg.id = msg_id;
 
     // First insert should succeed
@@ -236,7 +236,7 @@ fn test_private_channel_message_storage() {
     let channel = create_test_channel(&channel_repo, ChannelType::Private);
     let sender = UserId::new();
 
-    let msg = Message::new_text(channel.id, Some(sender), "Private message".to_string(), next_timestamp_ns());
+    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Private message".to_string(), next_timestamp_ns());
     message_repo.insert(&msg).unwrap();
 
     let loaded = message_repo.get(&msg.id).unwrap().unwrap();
@@ -266,7 +266,7 @@ fn test_saved_messages_storage() {
     channel_repo.insert(&channel).unwrap();
 
     // Store a saved message
-    let msg = Message::new_text(channel_id, Some(user), "Note to self".to_string(), next_timestamp_ns());
+    let msg = Message::new_text(channel_id, ConversationType::SavedMessages, Some(user), "Note to self".to_string(), next_timestamp_ns());
     message_repo.insert(&msg).unwrap();
 
     // Verify storage
@@ -393,7 +393,7 @@ fn test_message_update() {
     let sender = UserId::new();
 
     // Insert original message
-    let mut msg = Message::new_text(channel.id, Some(sender), "Original text".to_string(), next_timestamp_ns());
+    let mut msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Original text".to_string(), next_timestamp_ns());
     message_repo.insert(&msg).unwrap();
 
     // Update the message
@@ -420,7 +420,7 @@ fn test_message_soft_delete() {
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
     let sender = UserId::new();
 
-    let mut msg = Message::new_text(channel.id, Some(sender), "To be deleted".to_string(), next_timestamp_ns());
+    let mut msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "To be deleted".to_string(), next_timestamp_ns());
     message_repo.insert(&msg).unwrap();
 
     // Soft delete
@@ -493,9 +493,9 @@ fn test_messages_ordered_by_timestamp() {
     // Create messages with different sent_at timestamps
     let base_ts = 1_700_000_000_000_000_000u64;
 
-    let mut msg1 = Message::new_text(channel.id, Some(sender), "First".to_string(), base_ts);
-    let mut msg2 = Message::new_text(channel.id, Some(sender), "Second".to_string(), base_ts + 5_000_000_000);
-    let mut msg3 = Message::new_text(channel.id, Some(sender), "Third".to_string(), base_ts + 10_000_000_000);
+    let mut msg1 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "First".to_string(), base_ts);
+    let mut msg2 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Second".to_string(), base_ts + 5_000_000_000);
+    let mut msg3 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Third".to_string(), base_ts + 10_000_000_000);
 
     // Also set created_at to ensure they differ
     let now = chrono::Utc::now();
@@ -538,7 +538,7 @@ fn test_bulk_message_storage() {
 
     // Insert 100 messages
     for i in 0..100 {
-        let msg = Message::new_text(channel.id, Some(sender), format!("Message {}", i), next_timestamp_ns());
+        let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), format!("Message {}", i), next_timestamp_ns());
         message_repo.insert(&msg).unwrap();
     }
 
@@ -565,7 +565,7 @@ fn test_concurrent_dm_channels() {
 
     // Store messages in each channel
     for (channel, peer) in &channels {
-        let msg = Message::new_text(channel.id, Some(*peer), "Hello!".to_string(), next_timestamp_ns());
+        let msg = Message::new_text(channel.id, ConversationType::Channel, Some(*peer), "Hello!".to_string(), next_timestamp_ns());
         message_repo.insert(&msg).unwrap();
     }
 
@@ -591,7 +591,7 @@ fn test_get_by_sender_timestamp_basic() {
 
     // Create message with known timestamp
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, Some(sender), "Signal-style test".to_string(), sent_at);
+    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Signal-style test".to_string(), sent_at);
     message_repo.insert(&msg).unwrap();
 
     // Lookup by (sender_id, sent_at) - Signal-style
@@ -618,7 +618,7 @@ fn test_get_by_sender_timestamp_not_found() {
 
     // Create message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, Some(sender), "Test message".to_string(), sent_at);
+    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Test message".to_string(), sent_at);
     message_repo.insert(&msg).unwrap();
 
     // Try to find with wrong timestamp
@@ -646,8 +646,8 @@ fn test_get_by_sender_timestamp_multiple_senders() {
     let alice_ts = 1_700_000_001_000_000_000u64;
     let bob_ts = 1_700_000_002_000_000_000u64;
 
-    let alice_msg = Message::new_text(channel.id, Some(alice), "Hello from Alice".to_string(), alice_ts);
-    let bob_msg = Message::new_text(channel.id, Some(bob), "Hello from Bob".to_string(), bob_ts);
+    let alice_msg = Message::new_text(channel.id, ConversationType::Channel, Some(alice), "Hello from Alice".to_string(), alice_ts);
+    let bob_msg = Message::new_text(channel.id, ConversationType::Channel, Some(bob), "Hello from Bob".to_string(), bob_ts);
 
     message_repo.insert(&alice_msg).unwrap();
     message_repo.insert(&bob_msg).unwrap();
@@ -678,9 +678,9 @@ fn test_get_by_sender_timestamp_same_sender_different_times() {
     let ts2 = 1_700_000_002_000_000_000u64;
     let ts3 = 1_700_000_003_000_000_000u64;
 
-    let msg1 = Message::new_text(channel.id, Some(sender), "First".to_string(), ts1);
-    let msg2 = Message::new_text(channel.id, Some(sender), "Second".to_string(), ts2);
-    let msg3 = Message::new_text(channel.id, Some(sender), "Third".to_string(), ts3);
+    let msg1 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "First".to_string(), ts1);
+    let msg2 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Second".to_string(), ts2);
+    let msg3 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Third".to_string(), ts3);
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
@@ -722,10 +722,10 @@ fn test_signal_style_deduplication_same_sender_timestamp() {
     // This simulates the same message arriving twice with different server-assigned IDs
     let sent_at = 1_700_000_001_234_567_890u64;
 
-    let mut msg1 = Message::new_text(channel.id, Some(sender), "Original message".to_string(), sent_at);
+    let mut msg1 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Original message".to_string(), sent_at);
     let original_id = msg1.id;
 
-    let mut msg2 = Message::new_text(channel.id, Some(sender), "Duplicate delivery".to_string(), sent_at);
+    let mut msg2 = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Duplicate delivery".to_string(), sent_at);
     msg2.id = MessageId::new(); // Different message ID
 
     // First insert should succeed
@@ -761,8 +761,8 @@ fn test_signal_style_allows_different_senders_same_timestamp() {
     // Two different senders can have the same timestamp
     let same_ts = 1_700_000_001_234_567_890u64;
 
-    let alice_msg = Message::new_text(channel.id, Some(alice), "From Alice".to_string(), same_ts);
-    let bob_msg = Message::new_text(channel.id, Some(bob), "From Bob".to_string(), same_ts);
+    let alice_msg = Message::new_text(channel.id, ConversationType::Channel, Some(alice), "From Alice".to_string(), same_ts);
+    let bob_msg = Message::new_text(channel.id, ConversationType::Channel, Some(bob), "From Bob".to_string(), same_ts);
 
     // Both should be inserted successfully
     let first = message_repo.insert_or_ignore(&alice_msg).unwrap();
@@ -791,7 +791,7 @@ fn test_edit_message_via_signal_style_lookup() {
 
     // Create original message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, Some(sender), "Original text".to_string(), sent_at);
+    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Original text".to_string(), sent_at);
     message_repo.insert(&msg).unwrap();
 
     // Simulate edit action: lookup by (sender_id, sent_at) and update
@@ -821,7 +821,7 @@ fn test_delete_message_via_signal_style_lookup() {
 
     // Create message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, Some(sender), "To be deleted".to_string(), sent_at);
+    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "To be deleted".to_string(), sent_at);
     message_repo.insert(&msg).unwrap();
 
     // Simulate delete action: lookup by (sender_id, sent_at) and soft delete
@@ -845,7 +845,7 @@ fn test_pin_message_via_signal_style_lookup() {
 
     // Create message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, Some(sender), "Pin this message".to_string(), sent_at);
+    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Pin this message".to_string(), sent_at);
     message_repo.insert(&msg).unwrap();
 
     // Simulate pin action: lookup by (sender_id, sent_at) and pin
@@ -878,7 +878,7 @@ fn test_reaction_via_signal_style_lookup() {
 
     // Create message
     let sent_at = 1_700_000_001_234_567_890u64;
-    let msg = Message::new_text(channel.id, Some(sender), "React to this".to_string(), sent_at);
+    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "React to this".to_string(), sent_at);
     message_repo.insert(&msg).unwrap();
 
     // Simulate reaction: lookup by (sender_id, sent_at) and add reaction
@@ -917,8 +917,8 @@ fn test_signal_style_lookup_across_channels() {
     let ts1 = 1_700_000_001_000_000_000u64;
     let ts2 = 1_700_000_002_000_000_000u64;
 
-    let msg1 = Message::new_text(channel1.id, Some(sender), "In channel 1".to_string(), ts1);
-    let msg2 = Message::new_text(channel2.id, Some(sender), "In channel 2".to_string(), ts2);
+    let msg1 = Message::new_text(channel1.id, ConversationType::Channel, Some(sender), "In channel 1".to_string(), ts1);
+    let msg2 = Message::new_text(channel2.id, ConversationType::Channel, Some(sender), "In channel 2".to_string(), ts2);
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
@@ -952,8 +952,8 @@ fn test_delivery_status_update_cross_conversation_isolation() {
 
     // Insert messages with the SAME timestamp in different conversations
     let same_timestamp = next_timestamp_ns();
-    let msg1 = Message::new_text(channel1.id, Some(sender), "Msg in channel 1".to_string(), same_timestamp);
-    let msg2 = Message::new_text(channel2.id, Some(sender), "Msg in channel 2".to_string(), same_timestamp);
+    let msg1 = Message::new_text(channel1.id, ConversationType::Channel, Some(sender), "Msg in channel 1".to_string(), same_timestamp);
+    let msg2 = Message::new_text(channel2.id, ConversationType::Channel, Some(sender), "Msg in channel 2".to_string(), same_timestamp);
 
     message_repo.insert(&msg1).unwrap();
     message_repo.insert(&msg2).unwrap();
@@ -996,7 +996,7 @@ fn test_delivery_status_update_with_lookup_updates_by_id() {
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
 
     let ts = next_timestamp_ns();
-    let msg = Message::new_text(channel.id, Some(sender), "Test".to_string(), ts);
+    let msg = Message::new_text(channel.id, ConversationType::Channel, Some(sender), "Test".to_string(), ts);
     message_repo.insert(&msg).unwrap();
 
     // Use the lookup-based update

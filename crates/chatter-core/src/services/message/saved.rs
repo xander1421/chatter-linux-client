@@ -9,7 +9,7 @@
 use prost::Message as ProstMessage;
 
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
-use crate::domain::message::Message;
+use crate::domain::message::{ConversationType, Message};
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::current_user::CurrentUserProvider;
@@ -46,7 +46,7 @@ impl MessageService {
         // Create and store the message locally
         let channel_id = ChannelId::from(sender_id); // SavedMessages channel_id = user_id
         let sent_at = TimestampNanos::now().as_u64();
-        let mut message = Message::new_text(channel_id, Some(sender_id), trimmed_text.to_string(), sent_at);
+        let mut message = Message::new_text(channel_id, ConversationType::SavedMessages, Some(sender_id), trimmed_text.to_string(), sent_at);
         message.attachments = attachment_ids.clone();
         self.message_repo.insert(&message)?;
 
@@ -190,7 +190,7 @@ impl MessageService {
             .map(|s| AttachmentId::from_cdn_key(s))
             .collect();
 
-        let mut message = Message::new_text(channel_id, Some(sender_id), text.to_string(), sent_at);
+        let mut message = Message::new_text(channel_id, ConversationType::SavedMessages, Some(sender_id), text.to_string(), sent_at);
         message.id = parsed_id;
         message.attachments = att_ids;
 

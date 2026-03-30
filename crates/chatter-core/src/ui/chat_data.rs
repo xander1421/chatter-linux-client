@@ -560,7 +560,7 @@ pub fn initials_from_name(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::domain::ids::{ChannelId, UserId};
-    use crate::domain::message::{Message, MessageContent, ReactionCount};
+    use crate::domain::message::{ConversationType, Message, MessageContent, ReactionCount};
     use crate::domain::SystemMessage;
 
     #[test]
@@ -645,7 +645,7 @@ mod tests {
     fn test_message_to_item_data() {
         let channel_id = ChannelId::new();
         let sender_id = UserId::new();
-        let msg = Message::new_text(channel_id, Some(sender_id), "Test message".to_string(), 0);
+        let msg = Message::new_text(channel_id, ConversationType::Channel, Some(sender_id), "Test message".to_string(), 0);
 
         let item = message_to_item_data(
             &msg,

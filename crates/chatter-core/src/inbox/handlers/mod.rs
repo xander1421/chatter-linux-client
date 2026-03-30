@@ -1171,7 +1171,7 @@ mod tests {
         assert!(typing.is_transient());
 
         let msg = DomainEvent::MessageReceived {
-            message: Message::new_text(channel_id, Some(user_id), "test".to_string(), 0),
+            message: Message::new_text(channel_id, ConversationType::Channel, Some(user_id), "test".to_string(), 0),
         };
         assert!(!msg.is_transient());
     }
@@ -1182,7 +1182,7 @@ mod tests {
         let user_id = UserId::new();
 
         let msg = DomainEvent::MessageReceived {
-            message: Message::new_text(channel_id, Some(user_id), "test".to_string(), 0),
+            message: Message::new_text(channel_id, ConversationType::Channel, Some(user_id), "test".to_string(), 0),
         };
         assert_eq!(msg.channel_id(), Some(channel_id));
 

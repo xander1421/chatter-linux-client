@@ -178,7 +178,7 @@ impl std::fmt::Debug for EventBus {
 mod tests {
     use super::*;
     use crate::domain::ids::{ChannelId, UserId};
-    use crate::domain::message::Message;
+    use crate::domain::message::{ConversationType, Message};
 
     #[test]
     fn test_event_bus_new() {
@@ -311,7 +311,7 @@ mod tests {
 
         let channel_id = ChannelId::new();
         let user_id = UserId::new();
-        let message = Message::new_text(channel_id, Some(user_id), "Hello!".to_string(), 0);
+        let message = Message::new_text(channel_id, ConversationType::Channel, Some(user_id), "Hello!".to_string(), 0);
         let msg_id = message.id;
 
         bus.emit_domain(DomainEvent::MessageReceived {

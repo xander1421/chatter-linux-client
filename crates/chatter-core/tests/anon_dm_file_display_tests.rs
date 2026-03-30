@@ -23,8 +23,7 @@ use tokio::sync::broadcast;
 /// Helper to create a unified Message for anon DM tests.
 fn make_anon_dm_message(conversation_id: AnonDmId, sender_id: UserId, sent_at: u64) -> Message {
     let mut msg = Message::new_text(
-        conversation_id.into(),
-        Some(sender_id),
+        conversation_id.into(), ConversationType::AnonDm, Some(sender_id),
         String::new(),
         sent_at,
     );

@@ -3,6 +3,7 @@
 //! Represents chat messages, threads, and message content.
 
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
+use crate::error::StorageError;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -44,15 +45,20 @@ impl ConversationType {
     }
 
     /// Parse from database string representation.
-    pub fn from_str_value(s: &str) -> Self {
+    ///
+    /// Returns an error for unknown conversation types instead of silently
+    /// falling back to `Channel`.
+    pub fn from_str_value(s: &str) -> Result<Self, StorageError> {
         match s {
-            "channel" => Self::Channel,
-            "server_dm" => Self::ServerDm,
-            "mailbox_dm" => Self::MailboxDm,
-            "anon_dm" => Self::AnonDm,
-            "anon_group" => Self::AnonGroup,
-            "saved_messages" => Self::SavedMessages,
-            _ => Self::Channel, // Default fallback
+            "channel" => Ok(Self::Channel),
+            "server_dm" => Ok(Self::ServerDm),
+            "mailbox_dm" => Ok(Self::MailboxDm),
+            "anon_dm" => Ok(Self::AnonDm),
+            "anon_group" => Ok(Self::AnonGroup),
+            "saved_messages" => Ok(Self::SavedMessages),
+            _ => Err(StorageError::InvalidData(format!(
+                "Unknown conversation type: {s}"
+            ))),
         }
     }
 }
@@ -138,6 +144,7 @@ impl Message {
     #[must_use]
     pub fn new_text(
         conversation_id: ChannelId,
+        conversation_type: ConversationType,
         sender_id: Option<UserId>,
         text: String,
         sent_at: u64,
@@ -154,7 +161,7 @@ impl Message {
         Self {
             id: MessageId::new(),
             conversation_id,
-            conversation_type: ConversationType::Channel,
+            conversation_type,
             sender_id,
             device_id: None,
             content: MessageContent::Text(text),
@@ -586,7 +593,7 @@ mod tests {
     fn test_message_new_text() {
         let conversation_id = ChannelId::new();
         let sender_id = Some(UserId::new());
-        let msg = Message::new_text(conversation_id, sender_id, "Hello, world!".to_string(), 0);
+        let msg = Message::new_text(conversation_id, ConversationType::Channel, sender_id, "Hello, world!".to_string(), 0);
 
         assert_eq!(msg.conversation_id, conversation_id);
         assert_eq!(msg.sender_id, sender_id);
@@ -601,16 +608,16 @@ mod tests {
         let conversation_id = ChannelId::new();
 
         // Text content
-        let text_msg = Message::new_text(conversation_id, None, "Test".to_string(), 0);
+        let text_msg = Message::new_text(conversation_id, ConversationType::Channel, None, "Test".to_string(), 0);
         assert_eq!(text_msg.as_text(), Some("Test"));
 
         // Mixed content
-        let mut mixed_msg = Message::new_text(conversation_id, None, "".to_string(), 0);
+        let mut mixed_msg = Message::new_text(conversation_id, ConversationType::Channel, None, "".to_string(), 0);
         mixed_msg.content = MessageContent::Mixed(MixedContent::text_only("Mixed text".to_string()));
         assert_eq!(mixed_msg.as_text(), Some("Mixed text"));
 
         // Encrypted content (no text extraction)
-        let mut enc_msg = Message::new_text(conversation_id, None, "".to_string(), 0);
+        let mut enc_msg = Message::new_text(conversation_id, ConversationType::Channel, None, "".to_string(), 0);
         enc_msg.content = MessageContent::Encrypted(EncryptedContent::new(
             vec![1, 2, 3],
             EncryptedMessageType::Signal,
@@ -674,7 +681,7 @@ mod tests {
     #[test]
     fn test_reaction_count() {
         let conversation_id = ChannelId::new();
-        let mut msg = Message::new_text(conversation_id, None, "Test".to_string(), 0);
+        let mut msg = Message::new_text(conversation_id, ConversationType::Channel, None, "Test".to_string(), 0);
         msg.reaction_counts.push(ReactionCount::new("👍".to_string(), 5));
         msg.reaction_counts.push(ReactionCount::new("❤️".to_string(), 3));
 

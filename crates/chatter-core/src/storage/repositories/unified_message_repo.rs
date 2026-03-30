@@ -1174,7 +1174,10 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
             .get::<_, String>(1)?
             .parse()
             .map_err(|_| rusqlite::Error::InvalidParameterName("Invalid UUID".into()))?,
-        conversation_type: ConversationType::from_str_value(&conversation_type_str),
+        conversation_type: match ConversationType::from_str_value(&conversation_type_str) {
+            Ok(ct) => ct,
+            Err(e) => return Ok(Err(e)),
+        },
         sender_id: sender_id
             .map(|s| s.parse())
             .transpose()

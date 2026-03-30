@@ -352,7 +352,7 @@ fn test_chat_state_active_conversation() {
 ///     └─ Update typing/receipt/presence state
 #[test]
 fn test_message_state_append_and_retrieve() {
-    use chatter_core::domain::message::Message;
+    use chatter_core::domain::message::{ConversationType, Message};
 
     let result = chatter_core::client::ChatterClient::builder()
         .server_url("http://localhost:50051")

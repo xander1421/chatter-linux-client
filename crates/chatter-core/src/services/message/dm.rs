@@ -10,7 +10,7 @@ use prost::Message as ProstMessage;
 
 use crate::crypto::encrypt_dm_bytes;
 use crate::domain::ids::{ChannelId, UserId};
-use crate::domain::message::Message;
+use crate::domain::message::{ConversationType, Message};
 use crate::mailbox::dm::DmConversationManager;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
@@ -194,7 +194,7 @@ impl MessageService {
         // Store the message locally
         let our_user_id = self.settings_repo.current_user_id()?;
         if let Ok(Some(dm_channel)) = self.channel_repo.get_dm_channel_by_peer(&our_user_id, peer_id) {
-            let message = Message::new_text(dm_channel.id, Some(our_user_id), text.to_string(), sent_at);
+            let message = Message::new_text(dm_channel.id, ConversationType::MailboxDm, Some(our_user_id), text.to_string(), sent_at);
             if let Err(e) = self.message_repo.insert(&message) {
                 tracing::warn!(peer_id = %peer_id, error = %e, "Failed to store sent text DM");
             }
@@ -265,7 +265,7 @@ impl MessageService {
 
         // Build the message for storage
         let current_user_id = self.settings_repo.current_user_id()?;
-        let mut message = Message::new_text(*dm_channel_id, Some(current_user_id), text.to_string(), sent_at);
+        let mut message = Message::new_text(*dm_channel_id, ConversationType::MailboxDm, Some(current_user_id), text.to_string(), sent_at);
         message.attachments = attachment_ids;
 
         // Handle send result - save to DB for both success and bootstrap cases
@@ -390,7 +390,7 @@ impl MessageService {
         
         // Store the message locally
         let our_user_id = self.settings_repo.current_user_id()?;
-        let mut message = Message::new_text(*dm_channel_id, Some(our_user_id), text.to_string(), sent_at);
+        let mut message = Message::new_text(*dm_channel_id, ConversationType::MailboxDm, Some(our_user_id), text.to_string(), sent_at);
         message.attachments = attachment_ids.clone();
         
         // Store in database

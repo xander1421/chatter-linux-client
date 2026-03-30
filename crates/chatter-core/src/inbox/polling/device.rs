@@ -13,7 +13,7 @@ use sha2::Digest;
 use tokio::sync::broadcast;
 
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
-use crate::domain::message::Message;
+use crate::domain::message::{ConversationType, Message};
 use crate::domain::UserId;
 use crate::error::ServiceError;
 use crate::inbox::events::InboxEvent;
@@ -388,7 +388,7 @@ fn process_decrypted_data_message(
             // Create domain message with sender's timestamp for Signal-style dedup
             // created_at is derived from sent_at in Message::new_text()
             let mut message =
-                Message::new_text(channel_id, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
+                Message::new_text(channel_id, ConversationType::Channel, Some(*sender_id), data_message.body.clone(), data_message.timestamp);
             message.id = message_id;
 
             // Add attachment IDs to message (attachments are stored separately in attachment_repo)

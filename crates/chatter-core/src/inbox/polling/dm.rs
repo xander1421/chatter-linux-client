@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 
 use crate::crypto::envelope_crypto::decrypt_envelope;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
-use crate::domain::message::Message;
+use crate::domain::message::{ConversationType, Message};
 use crate::domain::UserId;
 use crate::error::MailboxError;
 use crate::inbox::events::InboxEvent;
@@ -371,7 +371,7 @@ fn dispatch_dm_content(
                     peer_id = %peer_id,
                     "dispatch_dm_content: timestamp selection"
                 );
-                let mut message = Message::new_text(dm_channel_id, Some(*sender_id), body.clone(), sent_at);
+                let mut message = Message::new_text(dm_channel_id, ConversationType::MailboxDm, Some(*sender_id), body.clone(), sent_at);
                 message.id = msg_id;
 
                 // Add attachment IDs to message (attachments are stored separately in attachment_repo)

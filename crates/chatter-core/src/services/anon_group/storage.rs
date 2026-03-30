@@ -25,8 +25,7 @@ impl AnonGroupService {
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
         let content = Self::content_from_type_and_json(content_type, content_json);
-        let mut message = Message::new_text(channel_id, Some(*sender_id), String::new(), sent_at);
-        message.conversation_type = ConversationType::AnonGroup;
+        let mut message = Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), String::new(), sent_at);
         message.content = content;
 
         let msg_id_str = message.id.to_string();
@@ -52,8 +51,7 @@ impl AnonGroupService {
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let mut message = Message::new_text(channel_id, Some(*sender_id), text.to_string(), sent_at);
-        message.conversation_type = ConversationType::AnonGroup;
+        let message = Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), text.to_string(), sent_at);
 
         let msg_id_str = message.id.to_string();
         self.message_service.message_repo.insert(&message)?;
@@ -81,8 +79,7 @@ impl AnonGroupService {
         let channel_id: ChannelId = (*group_id).into();
         let content = Self::build_message_content(text, attachment_ids);
 
-        let mut message = Message::new_text(channel_id, Some(*sender_id), String::new(), sent_at);
-        message.conversation_type = ConversationType::AnonGroup;
+        let mut message = Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), String::new(), sent_at);
         message.content = content;
         message.attachments = attachment_ids.to_vec();
 
@@ -111,8 +108,7 @@ impl AnonGroupService {
         let channel_id: ChannelId = (*group_id).into();
         let content = Self::content_from_type_and_json(content_type, content_json);
 
-        let mut message = Message::new_text(channel_id, Some(*sender_id), String::new(), sent_at);
-        message.conversation_type = ConversationType::AnonGroup;
+        let mut message = Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), String::new(), sent_at);
         message.content = content;
         message.attachments = attachment_ids.to_vec();
 

@@ -372,9 +372,10 @@ impl std::fmt::Debug for MessageState {
 mod tests {
     use super::*;
     use crate::domain::ids::UserId;
+    use crate::domain::message::ConversationType;
 
     fn create_test_message(channel_id: ChannelId) -> Message {
-        Message::new_text(channel_id, Some(UserId::new()), "Test message".to_string(), 0)
+        Message::new_text(channel_id, ConversationType::Channel, Some(UserId::new()), "Test message".to_string(), 0)
     }
 
     #[test]

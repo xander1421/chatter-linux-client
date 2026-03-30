@@ -479,8 +479,8 @@ mod tests {
             },
         ];
         let server_results = vec![
-            Message::new_text(ChannelId::new(), None, "test".to_string(), 0),
-            Message::new_text(ChannelId::new(), None, "test2".to_string(), 0),
+            Message::new_text(ChannelId::new(), ConversationType::Channel, None, "test".to_string(), 0),
+            Message::new_text(ChannelId::new(), ConversationType::Channel, None, "test2".to_string(), 0),
         ];
 
         let local_count = local_results.len();
