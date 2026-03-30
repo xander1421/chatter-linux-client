@@ -24,6 +24,7 @@ pub mod anon_dm;
 pub mod anon_dm_init;
 pub mod private_friend_code;
 pub mod jarvis;
+pub mod section;
 
 // Re-export core types for convenience
 pub use ids::{
@@ -64,6 +65,7 @@ pub use anon_dm::{
 };
 pub use anon_dm_init::{AnonDmInitMessage, InitMessageError};
 pub use private_friend_code::{PrivateFriendCode, PrivateFriendCodeError};
+pub use section::{CustomSection, SectionConversation};
 pub use jarvis::{
     ContextType, EntityKnowledge, EntityType, JarvisContext, JarvisConversation,
     JarvisConversationId, JarvisEntity, JarvisEntityId, JarvisEntityMention,

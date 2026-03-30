@@ -26,6 +26,7 @@ use crate::services::reaction_service::ReactionService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
 use crate::services::typing_service::TypingService;
+use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
 
 use crate::state::OrgState;
@@ -91,6 +92,8 @@ pub struct ServiceContainer {
     pub local_ai_service: Arc<LocalAIService>,
     /// Jarvis AI assistant service.
     pub jarvis_service: Arc<JarvisService>,
+    /// Section service for custom sidebar sections.
+    pub section_service: Arc<SectionService>,
     /// Organization state (shared with AuthService for org context).
     pub org_state: OrgState,
 }
@@ -278,6 +281,13 @@ impl ServiceContainer {
             infra.group_mailbox_manager.clone(),
         ));
 
+        // 23. Section service for custom sidebar sections
+        let section_service = Arc::new(SectionService::new(
+            infra.section_repo.clone(),
+            infra.channel_repo.clone(),
+            infra.anon_dm_repo.clone(),
+        ));
+
         tracing::info!("Services initialized");
 
         Ok(Self {
@@ -304,6 +314,7 @@ impl ServiceContainer {
             jarvis_service,
             typing_service,
             channel_bootstrap_service,
+            section_service,
             org_state,
         })
     }

@@ -46,6 +46,7 @@ pub mod forward_service;
 pub mod mention_service;
 pub mod embed_service;
 // Removed - gif_service.rs file was deleted
+pub mod section_service;
 pub mod signal;
 pub mod channel_event_service;
 pub mod dm_bootstrap_service;
@@ -159,3 +160,6 @@ pub use jarvis::{JarvisError, JarvisService, JarvisBackground, JarvisBackgroundB
 
 // Re-exports for SVR backup service
 pub use svr_backup_service::{SvrBackupError, SvrBackupService, RestoreResult};
+
+// Re-exports for section service
+pub use section_service::{SectionError, SectionService};

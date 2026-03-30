@@ -31,6 +31,7 @@ use crate::services::pin_service::PinService;
 use crate::services::reaction_service::ReactionService;
 use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
+use crate::services::section_service::SectionService;
 use crate::services::user::UserService;
 use crate::services::typing_service::TypingService;
 use crate::state::{
@@ -77,6 +78,7 @@ pub struct CoreServices {
     pub local_ai_service: Arc<LocalAIService>,
     pub jarvis_service: Arc<JarvisService>,
     pub notification_service: Arc<NotificationService>,
+    pub section_service: Arc<SectionService>,
 
     // State stores
     pub ui_state: UIState,
@@ -157,6 +159,7 @@ impl CoreServices {
                 }
                 Arc::new(svc)
             },
+            section_service: services.section_service.clone(),
 
             // State stores
             ui_state: UIState::new(),
