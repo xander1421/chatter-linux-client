@@ -9,6 +9,7 @@ mod utils;
 mod channel;
 mod attachment;
 mod message;
+pub(crate) mod markdown;
 
 pub use utils::*;
 pub use channel::*;

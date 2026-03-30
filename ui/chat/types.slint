@@ -44,6 +44,17 @@ export struct LinkPreviewData {
     preview-image: image,   // OG image thumbnail
 }
 
+// Styled text span for markdown-parsed message rendering.
+// Each span has at most one style flag set (bold, italic, etc.).
+export struct RichTextSpan {
+    text: string,
+    bold: bool,
+    italic: bool,
+    strikethrough: bool,
+    code: bool,         // inline code (monospace)
+    code-block: bool,   // fenced code block (monospace + background)
+}
+
 // Data struct for message items (mirrors Rust MessageItemData)
 export struct MessageItemData {
     message-id: string,
@@ -54,6 +65,7 @@ export struct MessageItemData {
     sender-avatar-source: image,
     has-avatar: bool,
     content: string,
+    rich-content: [RichTextSpan],  // Parsed markdown spans for styled rendering
     timestamp: string,
     timestamp-ns: string,  // Nanosecond timestamp as string for event matching (reactions, edits, pins)
     is-own: bool,

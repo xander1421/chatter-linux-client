@@ -90,6 +90,7 @@ pub fn build_own_message_item(
         sender_avatar_source: slint::Image::default(),
         has_avatar: false,
         content: text.into(),
+        rich_content: slint::ModelRc::default(),
         timestamp: timestamp.into(),
         timestamp_ns: timestamp_ns.to_string().into(),
         is_own: true,

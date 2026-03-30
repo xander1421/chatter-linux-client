@@ -9,7 +9,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Avatar } from "../components/avatar.slint";
-import { MessageAttachmentData, ReactionEntry, LinkPreviewData } from "types.slint";
+import { MessageAttachmentData, ReactionEntry, LinkPreviewData, RichTextSpan } from "types.slint";
 import { Icons } from "../theme/icons.slint";
 
 export component MessageItem inherits Rectangle {
@@ -27,6 +27,7 @@ export component MessageItem inherits Rectangle {
 
     // Content
     in property <string> content: "";
+    in property <[RichTextSpan]> rich-content: [];
     in property <string> timestamp: "";
 
     // Flags
@@ -369,13 +370,93 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
-                        // Message content
-                        if root.content != "": Text {
+                        // Message content — rich text rendering
+                        // Uses parsed markdown spans when available, falls back to plain text
+                        if root.content != "" && root.rich-content.length > 0: VerticalLayout {
+                            spacing: 4px;
+                            max-width: root.width * 0.7 - Spacing.sm * 2;
+
+                            for span in root.rich-content: VerticalLayout {
+                                // Code block: monospace + dark background
+                                if span.code-block: Rectangle {
+                                    background: root.is-own ? #00000020 : #1e1e2e;
+                                    border-radius: 4px;
+
+                                    VerticalLayout {
+                                        padding: 8px;
+
+                                        Text {
+                                            text: span.text;
+                                            color: span.code-block && !root.is-own ? #d4d4d4 : Colors.text-primary;
+                                            font-family: "monospace";
+                                            font-size: Typography.xs;
+                                            wrap: word-wrap;
+                                            max-width: root.width * 0.7 - Spacing.sm * 2 - 16px;
+                                        }
+                                    }
+                                }
+
+                                // Inline code: monospace + subtle background
+                                if span.code && !span.code-block: HorizontalLayout {
+                                    alignment: start;
+
+                                    Rectangle {
+                                        background: root.is-own ? #00000015 : Colors.surface-hover;
+                                        border-radius: 3px;
+                                        width: code-text.preferred-width + 8px;
+                                        height: code-text.preferred-height + 4px;
+
+                                        code-text := Text {
+                                            x: 4px;
+                                            y: 2px;
+                                            text: span.text;
+                                            color: Colors.text-primary;
+                                            font-family: "monospace";
+                                            font-size: Typography.xs;
+                                        }
+                                    }
+                                }
+
+                                // Strikethrough: text with line-through overlay
+                                if span.strikethrough && !span.code && !span.code-block: Rectangle {
+                                    height: strike-text.preferred-height;
+                                    width: strike-text.preferred-width;
+
+                                    strike-text := Text {
+                                        text: span.text;
+                                        color: Colors.text-secondary;
+                                        font-size: Typography.sm;
+                                        wrap: word-wrap;
+                                        max-width: root.width * 0.7 - Spacing.sm * 2;
+                                    }
+
+                                    Rectangle {
+                                        y: parent.height / 2;
+                                        height: 1px;
+                                        width: strike-text.preferred-width;
+                                        background: Colors.text-secondary;
+                                    }
+                                }
+
+                                // Normal / bold / italic text
+                                if !span.code && !span.code-block && !span.strikethrough: Text {
+                                    text: span.text;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    font-weight: span.bold ? 700 : 400;
+                                    font-italic: span.italic;
+                                    wrap: word-wrap;
+                                    max-width: root.width * 0.7 - Spacing.sm * 2;
+                                }
+                            }
+                        }
+
+                        // Fallback: plain text when rich-content is empty
+                        if root.content != "" && root.rich-content.length == 0: Text {
                             text: root.content;
                             color: Colors.text-primary;
                             font-size: Typography.sm;
                             wrap: word-wrap;
-                            // Max width for text wrapping
                             max-width: root.width * 0.7 - Spacing.sm * 2;
                         }
 

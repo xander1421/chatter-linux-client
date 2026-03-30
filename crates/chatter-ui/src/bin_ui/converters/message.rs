@@ -7,9 +7,10 @@ use chatter_core::domain::anon_group::AnonGroupMessage;
 use chatter_core::domain::attachment::Attachment;
 use chatter_core::domain::message::{Message, MessageContent};
 
-use crate::MessageItemData;
+use crate::{MessageItemData, RichTextSpan};
 
 use super::attachment::{attachment_to_display_data, AttachmentDisplayData};
+use super::markdown::{parse_markdown, strip_markdown};
 use super::utils::{
     avatar_bytes_to_image, extract_quote_from_content_json, format_count, get_initials,
     insert_word_breaks, parse_reaction_summary_to_entries,
@@ -131,6 +132,23 @@ impl MessageDisplayData {
             (slint::Image::default(), false)
         };
 
+    // Parse markdown for rich rendering
+    let trimmed_content = self.content.trim();
+    let md_spans = parse_markdown(trimmed_content);
+    let rich_content: Vec<RichTextSpan> = md_spans
+        .iter()
+        .map(|s| RichTextSpan {
+            text: s.text.clone().into(),
+            bold: s.bold,
+            italic: s.italic,
+            strikethrough: s.strikethrough,
+            code: s.code,
+            code_block: s.code_block,
+        })
+        .collect();
+    // Stripped content for empty checks and system message fallback
+    let clean_content = strip_markdown(trimmed_content);
+
     MessageItemData {
         message_id: self.message_id.clone().into(),
         sender_id: self.sender_id.clone().into(),
@@ -139,7 +157,8 @@ impl MessageDisplayData {
         sender_avatar_url: SharedString::default(),
         sender_avatar_source,
         has_avatar,
-        content: insert_word_breaks(self.content.trim()).into(),
+        content: insert_word_breaks(&clean_content).into(),
+        rich_content: ModelRc::new(VecModel::from(rich_content)),
         timestamp: self.timestamp.clone().into(),
         timestamp_ns: self.timestamp_ns.clone().into(),
         is_own,
