@@ -102,11 +102,12 @@ impl SealedSenderService {
             timestamp,
         };
 
-        // 4. Send with credential
-        let mut message_client = self.grpc_pool.message_client();
+        // 4. Send with credential via anonymous client (no AuthInterceptor)
+        // to avoid dual-auth rejection — GRA-436
+        let mut anon_client = self.grpc_pool.anonymous_message_client();
 
-        message_client
-            .send_sealed_message_with_credential(
+        anon_client
+            .send_with_anonymous_credential(
                 &recipient_id_str,
                 0, // device_id for routing
                 sealed_message,

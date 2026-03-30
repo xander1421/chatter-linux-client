@@ -14,7 +14,6 @@ use crate::mailbox::dm::{
 use crate::mailbox::TokenManager;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
-use crate::network::grpc::message_client::MessageClient;
 use crate::network::grpc::MailboxClient;
 use crate::proto::chat_v1::SealedSenderMessage;
 use crate::services::current_user::CurrentUserProvider;
@@ -265,10 +264,9 @@ impl MessageService {
                 let token = self.get_or_request_token(&token_manager, peer_id, grpc_pool).await;
 
                 if let Some(token) = token {
-                    let mut message_client = MessageClient::new(
-                        grpc_pool.channel(),
-                        grpc_pool.auth_clone(),
-                    );
+                    // Use anonymous client (no AuthInterceptor) to avoid
+                    // dual-auth rejection — GRA-436
+                    let mut anon_client = grpc_pool.anonymous_message_client();
 
                     let sealed_msg = SealedSenderMessage {
                         sealed_body: sealed_ciphertext,
@@ -276,7 +274,7 @@ impl MessageService {
                         timestamp: TimestampNanos::now().as_u64(),
                     };
 
-                    if let Err(e) = message_client.send_sealed_message_with_credential(
+                    if let Err(e) = anon_client.send_with_anonymous_credential(
                         &peer_id_str,
                         peer_device_id,
                         sealed_msg,
@@ -353,8 +351,9 @@ impl MessageService {
             Err(e) => return Err(MessageError::DmError(format!("Failed to get anonymous token: {}", e))),
         };
 
-        // Send to peer's device inbox via MessageClient
-        let mut message_client = grpc_pool.message_client();
+        // Send to peer's device inbox via anonymous client (no AuthInterceptor)
+        // to avoid dual-auth rejection — GRA-436
+        let mut anon_client = grpc_pool.anonymous_message_client();
 
         let sealed_msg = SealedSenderMessage {
             sealed_body: sealed_ciphertext,
@@ -362,8 +361,8 @@ impl MessageService {
             timestamp: TimestampNanos::now().as_u64(),
         };
 
-        message_client
-            .send_sealed_message_with_credential(
+        anon_client
+            .send_with_anonymous_credential(
                 &peer_id_str,
                 peer_device_id,
                 sealed_msg,

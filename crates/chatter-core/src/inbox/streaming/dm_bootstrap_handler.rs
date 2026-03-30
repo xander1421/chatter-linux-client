@@ -285,7 +285,6 @@ async fn handle_bootstrap_request_async(
 ) -> Result<(), String> {
     use crate::mailbox::dm::DmConversationManager;
     use crate::mailbox::TokenManager;
-    use crate::network::grpc::message_client::MessageClient;
     use crate::proto::chat_v1::SealedSenderMessage;
 
     // Check if we already have a session or pending bootstrap
@@ -394,8 +393,9 @@ async fn handle_bootstrap_request_async(
         }
     };
 
-    // Send to peer's device inbox
-    let mut message_client = MessageClient::new(channel, auth_interceptor);
+    // Send to peer's device inbox via anonymous client (no AuthInterceptor)
+    // to avoid dual-auth rejection — GRA-436
+    let mut anon_client = grpc_pool.anonymous_message_client();
 
     let sealed_msg = SealedSenderMessage {
         sealed_body: sealed_ciphertext,
@@ -403,8 +403,8 @@ async fn handle_bootstrap_request_async(
         timestamp: TimestampNanos::now().as_u64(),
     };
 
-    message_client
-        .send_sealed_message_with_credential(
+    anon_client
+        .send_with_anonymous_credential(
             &peer_id_str,
             peer_device_id,
             sealed_msg,
