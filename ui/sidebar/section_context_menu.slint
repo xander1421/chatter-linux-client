@@ -1,0 +1,171 @@
+// Section context menu for sidebar conversations
+//
+// Right-click a channel, DM, or private group to move it into a custom section.
+// Uses full-screen backdrop pattern (same as MessageContextMenu).
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
+import { CustomSectionData } from "custom_section_list.slint";
+
+// Reusable menu item (icon + label, hover highlight)
+component MenuItem inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <string> emoji: "";
+    in property <bool> destructive: false;
+    callback clicked();
+
+    height: 36px;
+    background: touch.has-hover ? Colors.surface-hover : transparent;
+    border-radius: Spacing.radius-sm;
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.sm;
+        alignment: start;
+
+        // Emoji takes priority over icon
+        if root.emoji != "": Text {
+            text: root.emoji;
+            font-size: 14px;
+            vertical-alignment: center;
+            width: 20px;
+            horizontal-alignment: center;
+        }
+
+        if root.emoji == "": Image {
+            source: root.icon;
+            width: 16px;
+            height: 16px;
+            y: (parent.height - self.height) / 2;
+            colorize: root.destructive ? Colors.error : Colors.text-secondary;
+        }
+
+        Text {
+            text: root.label;
+            color: root.destructive ? Colors.error : Colors.text-primary;
+            font-size: Typography.sm;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component SectionContextMenu inherits Rectangle {
+    // Visibility & position
+    in property <bool> show: false;
+    in property <length> position-x: 0;
+    in property <length> position-y: 0;
+
+    // Conversation being acted on
+    in property <string> conversation-id: "";
+    in property <string> conversation-type: "";   // "channel", "dm", "private_group"
+    in property <string> current-section-id: "";   // non-empty => already in a section
+
+    // Available sections
+    in property <[CustomSectionData]> sections: [];
+
+    // Callbacks
+    callback move-to-section(/* conv-id */ string, /* conv-type */ string, /* section-id */ string);
+    callback remove-from-section(/* conv-id */ string);
+    callback create-section-clicked();
+    callback close();
+
+    visible: root.show;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    // Backdrop — click anywhere outside to close
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.close(); }
+    }
+
+    // Menu card
+    menu-container := Rectangle {
+        x: min(root.position-x, parent.width - self.width - Spacing.md);
+        y: min(root.position-y, parent.height - self.height - Spacing.md);
+        width: 220px;
+        height: menu-layout.preferred-height + Spacing.sm * 2;
+        background: Colors.surface;
+        border-radius: Spacing.radius-md;
+        border-width: 1px;
+        border-color: Colors.text-muted.with-alpha(0.2);
+        drop-shadow-blur: 12px;
+        drop-shadow-color: Colors.background.with-alpha(0.6);
+        drop-shadow-offset-y: 4px;
+
+        // Block backdrop clicks on menu area
+        TouchArea { }
+
+        menu-layout := VerticalLayout {
+            padding: Spacing.sm;
+            spacing: 2px;
+
+            // Header label
+            Rectangle {
+                height: 24px;
+                HorizontalLayout {
+                    padding-left: Spacing.md;
+                    Text {
+                        text: "Move to section";
+                        color: Colors.text-muted;
+                        font-size: 11px;
+                        font-weight: 600;
+                        letter-spacing: 0.5px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Section items
+            for section in root.sections: MenuItem {
+                emoji: section.icon-emoji;
+                icon: Icons.folder;
+                label: section.name;
+                clicked => {
+                    root.move-to-section(root.conversation-id, root.conversation-type, section.section-id);
+                    root.close();
+                }
+            }
+
+            // Separator
+            Rectangle {
+                height: 1px;
+                background: Colors.text-muted.with-alpha(0.15);
+            }
+
+            // New section
+            MenuItem {
+                icon: Icons.plus;
+                label: "New section...";
+                clicked => {
+                    root.create-section-clicked();
+                    root.close();
+                }
+            }
+
+            // Remove from section (only if already in one)
+            if root.current-section-id != "": MenuItem {
+                icon: Icons.x;
+                label: "Remove from section";
+                destructive: true;
+                clicked => {
+                    root.remove-from-section(root.conversation-id);
+                    root.close();
+                }
+            }
+        }
+    }
+}

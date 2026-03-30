@@ -20,6 +20,7 @@ import { DMList, DMListItemData } from "dm_list.slint";
 import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
 import { OrgSwitcher, OrgListItemData } from "org_switcher.slint";
 import { CustomSectionList, CustomSectionData, SectionConversationData } from "custom_section_list.slint";
+import { SectionContextMenu } from "section_context_menu.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 
@@ -81,10 +82,20 @@ export component Sidebar inherits Rectangle {
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
     callback delete-section-clicked(/* section-id */ string);
     callback rename-section-clicked(/* section-id */ string);
+    callback move-to-section(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string);
+    callback remove-from-section(/* conversation-id */ string);
 
     // ── Internal state ──
     property <bool> channels-expanded: true;
     property <bool> messages-expanded: true;
+
+    // Context menu state
+    property <bool> ctx-menu-show: false;
+    property <length> ctx-menu-x: 0;
+    property <length> ctx-menu-y: 0;
+    property <string> ctx-menu-conv-id: "";
+    property <string> ctx-menu-conv-type: "";
+    property <string> ctx-menu-current-section-id: "";
 
     // ── Sizing ──
     width: root.mobile-mode ? root.mobile-width
@@ -414,6 +425,14 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                     show-header: false;
                     conversation-selected(id) => { root.dm-selected(id); }
+                    dm-context-menu-requested(id, x, y) => {
+                        root.ctx-menu-conv-id = id;
+                        root.ctx-menu-conv-type = "dm";
+                        root.ctx-menu-x = x;
+                        root.ctx-menu-y = y;
+                        root.ctx-menu-current-section-id = "";
+                        root.ctx-menu-show = true;
+                    }
                 }
 
                 // 4b. CUSTOM SECTIONS (user-created, between Messages and Channels)
@@ -496,6 +515,14 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                     show-header: false;
                     channel-selected(id) => { root.channel-selected(id); }
+                    channel-context-menu-requested(id, x, y) => {
+                        root.ctx-menu-conv-id = id;
+                        root.ctx-menu-conv-type = "channel";
+                        root.ctx-menu-x = x;
+                        root.ctx-menu-y = y;
+                        root.ctx-menu-current-section-id = "";
+                        root.ctx-menu-show = true;
+                    }
                 }
 
                 if root.channels-expanded && root.private-groups.length > 0: PrivateGroupList {
@@ -505,6 +532,14 @@ export component Sidebar inherits Rectangle {
                     collapsed: root.collapsed;
                     show-header: false;
                     group-selected(id) => { root.private-group-selected(id); }
+                    group-context-menu-requested(id, x, y) => {
+                        root.ctx-menu-conv-id = id;
+                        root.ctx-menu-conv-type = "private_group";
+                        root.ctx-menu-x = x;
+                        root.ctx-menu-y = y;
+                        root.ctx-menu-current-section-id = "";
+                        root.ctx-menu-show = true;
+                    }
                 }
 
                 Rectangle { vertical-stretch: 1; }
@@ -580,6 +615,30 @@ export component Sidebar inherits Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    // Section context menu overlay (renders on top of all sidebar content)
+    SectionContextMenu {
+        show: root.ctx-menu-show;
+        position-x: root.ctx-menu-x;
+        position-y: root.ctx-menu-y;
+        conversation-id: root.ctx-menu-conv-id;
+        conversation-type: root.ctx-menu-conv-type;
+        current-section-id: root.ctx-menu-current-section-id;
+        sections: root.custom-sections;
+
+        close => {
+            root.ctx-menu-show = false;
+        }
+        move-to-section(conv-id, conv-type, section-id) => {
+            root.move-to-section(conv-id, conv-type, section-id);
+        }
+        remove-from-section(conv-id) => {
+            root.remove-from-section(conv-id);
+        }
+        create-section-clicked => {
+            root.create-section-clicked();
         }
     }
 }

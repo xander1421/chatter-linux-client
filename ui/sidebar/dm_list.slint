@@ -36,6 +36,7 @@ export component DMList inherits Rectangle {
     // Callbacks
     callback conversation-selected(string);
     callback add-friend-clicked();
+    callback dm-context-menu-requested(/* channel-id */ string, /* x */ length, /* y */ length);
     // Tooltip callbacks removed — DMListItem now uses self-contained TooltipArea
 
     // Layout
@@ -97,6 +98,9 @@ export component DMList inherits Rectangle {
 
                     clicked => {
                         root.conversation-selected(item.channel-id);
+                    }
+                    context-menu-requested(x, y) => {
+                        root.dm-context-menu-requested(item.channel-id, x, y);
                     }
                 }
             }

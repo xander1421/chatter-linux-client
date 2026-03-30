@@ -22,6 +22,7 @@ export component PrivateGroupListItem inherits Rectangle {
     in property <bool> collapsed: false;
 
     callback clicked();
+    callback context-menu-requested(/* x */ length, /* y */ length);
 
     // Typing animation (0.0 to 1.0 cycling)
     property <float> typing-animation-progress: 0.0;
@@ -237,5 +238,12 @@ export component PrivateGroupListItem inherits Rectangle {
     touch := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                root.context-menu-requested(
+                    self.absolute-position.x + self.mouse-x,
+                    self.absolute-position.y + self.mouse-y);
+            }
+        }
     }
 }

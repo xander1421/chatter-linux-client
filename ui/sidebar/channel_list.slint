@@ -31,6 +31,7 @@ export component ChannelList inherits Rectangle {
     callback channel-selected(string);
     callback create-channel-clicked();
     callback join-channel-clicked();
+    callback channel-context-menu-requested(/* channel-id */ string, /* x */ length, /* y */ length);
     // Tooltip callbacks removed — ChannelListItem now uses self-contained TooltipArea
 
     // Layout
@@ -183,6 +184,9 @@ export component ChannelList inherits Rectangle {
 
                     clicked => {
                         root.channel-selected(item.channel-id);
+                    }
+                    context-menu-requested(x, y) => {
+                        root.channel-context-menu-requested(item.channel-id, x, y);
                     }
                 }
             }

@@ -31,6 +31,7 @@ export component PrivateGroupList inherits Rectangle {
     // Callbacks
     callback group-selected(string);
     callback create-group-clicked();
+    callback group-context-menu-requested(/* group-id */ string, /* x */ length, /* y */ length);
     // Tooltip callbacks removed — PrivateGroupListItem now uses self-contained TooltipArea
 
     // Layout
@@ -88,6 +89,9 @@ export component PrivateGroupList inherits Rectangle {
 
                     clicked => {
                         root.group-selected(item.group-id);
+                    }
+                    context-menu-requested(x, y) => {
+                        root.group-context-menu-requested(item.group-id, x, y);
                     }
                 }
             }
