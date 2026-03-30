@@ -67,6 +67,9 @@ export component App inherits Rectangle {
     in property <length> safe-area-bottom: 0px;  // Android nav bar / gesture area
 
     // ========== Mobile navigation ==========
+    // True only on actual mobile devices (Android) — set by Rust at startup.
+    // Desktop narrow windows should NOT trigger mobile mode.
+    in property <bool> is-mobile-platform: false;
     // Active bottom nav tab on mobile: "chats", "calls", "contacts", "settings"
     in-out property <string> mobile-active-tab: "chats";
     // True when a conversation is open (channel/DM/group selected)
@@ -757,8 +760,9 @@ export component App inherits Rectangle {
     // ========== Responsive sidebar auto-collapse ==========
     // Auto-collapse sidebar on smaller screens (< 800px width)
     property <bool> is-small-screen: root.width < 800px;
-    // Fully hide sidebar on mobile-sized screens (< 480px width)
-    property <bool> is-mobile-screen: root.width < 480px;
+    // Mobile layout: only on actual mobile devices (Android) with narrow screens.
+    // Desktop narrow windows keep the collapsed sidebar instead of going fullscreen.
+    property <bool> is-mobile-screen: root.is-mobile-platform && root.width < 480px;
     // Track whether the user manually toggled collapse (vs auto-collapse on resize)
     property <bool> sidebar-user-collapsed: false;
 

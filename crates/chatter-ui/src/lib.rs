@@ -200,6 +200,11 @@ pub async fn app_init() -> AppState {
 
     let window = MainWindow::new().expect("Failed to create window");
 
+    // Android: flag as mobile platform so the UI uses mobile layout (full-screen
+    // sidebar, bottom nav, etc.) when the screen is narrow.
+    #[cfg(target_os = "android")]
+    window.set_is_mobile_platform(true);
+
     // Desktop: explicitly zero safe-area insets (only Android sets non-zero values
     // via JNI inset polling). Prevents any stale or default-mismatch values from
     // pushing the content area away from window edges.
