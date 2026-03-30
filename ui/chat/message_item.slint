@@ -970,10 +970,10 @@ export component MessageItem inherits Rectangle {
                         clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
                     }
                 }
-                // Action buttons — anchored to top-right of bubble
+                // Action buttons — float above top-right of bubble
                 Rectangle {
                     x: bubble.width - action-btns.width;
-                    y: -action-btns.height / 2;
+                    y: -action-btns.height - 4px;
                     width: action-btns.width;
                     height: action-btns.height;
                     visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;
