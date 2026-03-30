@@ -5,6 +5,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 
 // Pending attachment data for the attachment tray
 export struct PendingAttachmentData {
@@ -682,11 +683,13 @@ export component MessageComposer inherits Rectangle {
                 accessible-role: button;
                 accessible-label: "Emoji picker";
 
-                Text {
-                    text: "\u{1F600}\u{FE0F}";
-                    font-size: Typography.lg;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: Icons.smile;
+                    width: 20px;
+                    height: 20px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: emoji-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
                 }
 
                 emoji-touch := TouchArea {
@@ -710,8 +713,8 @@ export component MessageComposer inherits Rectangle {
 
                 Text {
                     text: "GIF";
-                    color: Colors.text-secondary;
-                    font-size: 11px;
+                    color: gif-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                    font-size: Typography.xs;
                     font-weight: Typography.bold;
                     horizontal-alignment: center;
                     vertical-alignment: center;
