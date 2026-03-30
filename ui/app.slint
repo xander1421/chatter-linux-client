@@ -36,6 +36,7 @@ import { SearchModal, SearchResult } from "modals/search_modal.slint";
 import { ChannelSettingsModal, ChannelMemberData } from "modals/channel_settings.slint";
 import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
 import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
+import { CreateSectionModal } from "modals/create_section.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
@@ -315,7 +316,7 @@ export component App inherits Rectangle {
     callback load-more-thread-replies();
 
     // ========== Modal state ==========
-    // Modals: "none", "settings", "create-channel", "join-channel", "user-profile", "friend-requests", "friends", "forward-message", "sessions", "search"
+    // Modals: "none", "settings", "create-channel", "join-channel", "user-profile", "friend-requests", "friends", "forward-message", "sessions", "search", "create-section"
     in-out property <string> active-modal: "none";
 
     // Create channel modal properties
@@ -348,6 +349,13 @@ export component App inherits Rectangle {
     in-out property <[InviteUser]> invite-member-users: [];
     in-out property <int> invite-member-selected-count: 0;
     in property <bool> invite-member-loading: false;
+
+    // Create/rename section modal properties
+    in-out property <bool> create-section-rename-mode: false;
+    in-out property <string> create-section-name: "";
+    in-out property <string> create-section-emoji: "📁";
+    in-out property <string> create-section-id: "";  // set for rename
+    in property <bool> create-section-loading: false;
 
     // Join channel modal properties
     in-out property <string> join-channel-search-query: "";
@@ -545,6 +553,8 @@ export component App inherits Rectangle {
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
     callback delete-section-clicked(/* section-id */ string);
     callback rename-section-clicked(/* section-id */ string);
+    callback move-to-section(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string);
+    callback remove-from-section(/* conversation-id */ string);
 
     // ========== Org management properties ==========
     in property <[OrgMemberData]> org-members: [];
@@ -619,6 +629,10 @@ export component App inherits Rectangle {
     callback invite-to-private-group([PrivateGroupFriend]);
     callback toggle-invite-friend-selection(int);
     callback toggle-invite-friend-role(int);  // toggle role for invite modal
+
+    // Create/rename section
+    callback create-section(/* name */ string, /* emoji */ string);
+    callback rename-section(/* section-id */ string, /* name */ string, /* emoji */ string);
 
     // Join channel
     callback search-channels(string);
@@ -983,7 +997,11 @@ export component App inherits Rectangle {
                     root.manage-org-clicked();
                 }
                 create-section-clicked => {
-                    root.create-section-clicked();
+                    root.create-section-rename-mode = false;
+                    root.create-section-name = "";
+                    root.create-section-emoji = "📁";
+                    root.create-section-id = "";
+                    root.active-modal = "create-section";
                 }
                 section-toggle-expanded(id) => {
                     root.section-toggle-expanded(id);
@@ -995,7 +1013,17 @@ export component App inherits Rectangle {
                     root.delete-section-clicked(id);
                 }
                 rename-section-clicked(id) => {
+                    root.create-section-rename-mode = true;
+                    root.create-section-id = id;
+                    // Rust side should set name/emoji before opening
                     root.rename-section-clicked(id);
+                    root.active-modal = "create-section";
+                }
+                move-to-section(conv-id, conv-type, section-id) => {
+                    root.move-to-section(conv-id, conv-type, section-id);
+                }
+                remove-from-section(conv-id) => {
+                    root.remove-from-section(conv-id);
                 }
                 search-clicked => {
                     root.search-clicked();
@@ -1668,6 +1696,26 @@ export component App inherits Rectangle {
         }
         delete-channel => {
             root.channel-settings-delete();
+        }
+    }
+
+    // Create/Rename Section Modal
+    CreateSectionModal {
+        show-modal: root.active-modal == "create-section";
+        rename-mode: root.create-section-rename-mode;
+        section-name <=> root.create-section-name;
+        selected-emoji <=> root.create-section-emoji;
+        section-id: root.create-section-id;
+        loading: root.create-section-loading;
+
+        close => {
+            root.active-modal = "none";
+        }
+        create-section(name, emoji) => {
+            root.create-section(name, emoji);
+        }
+        rename-section(id, name, emoji) => {
+            root.rename-section(id, name, emoji);
         }
     }
 

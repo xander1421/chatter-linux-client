@@ -1,0 +1,187 @@
+// CreateSectionModal — Create or rename a custom sidebar section
+//
+// Supports two modes:
+//   - Create: empty name + default emoji, "Create" button
+//   - Rename: pre-filled name + emoji, "Save" button
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
+
+// Common section emoji icons (~50 items)
+global SectionEmojis {
+    out property <[string]> icons: [
+        "📁", "📂", "⭐", "🏠", "💼", "🎯", "🔥", "💡", "🎨", "🎮",
+        "🎵", "📚", "🔧", "⚙️", "🛡️", "🔒", "💬", "📢", "🌍", "🚀",
+        "💰", "📊", "📈", "🧪", "🔬", "🏗️", "🎓", "📝", "✅", "❤️",
+        "💎", "🌟", "🏆", "👥", "🤝", "📌", "🔖", "🏷️", "📎", "✨",
+        "🌈", "☁️", "⚡", "🎲", "🧩", "🎪", "🌱", "🍀", "🔔", "🎁",
+    ];
+}
+
+export component CreateSectionModal inherits Rectangle {
+    // true = rename mode, false = create mode
+    in property <bool> rename-mode: false;
+    in property <bool> show-modal: false;
+    in property <bool> loading: false;
+
+    in-out property <string> section-name: "";
+    in-out property <string> selected-emoji: "📁";
+
+    // For rename: the section being renamed
+    in property <string> section-id: "";
+
+    callback close();
+    callback create-section(/* name */ string, /* emoji */ string);
+    callback rename-section(/* section-id */ string, /* name */ string, /* emoji */ string);
+
+    // Track whether emoji picker is expanded
+    property <bool> picker-open: false;
+
+    // Reset state when modal closes
+    changed show-modal => {
+        if !show-modal {
+            section-name = "";
+            selected-emoji = "📁";
+            picker-open = false;
+        }
+    }
+
+    Modal {
+        show: root.show-modal;
+        title: root.rename-mode ? "Rename Section" : "New Section";
+        modal-width: 400px;
+
+        close => {
+            root.close();
+        }
+
+        VerticalLayout {
+            spacing: Spacing.md;
+
+            // ── Emoji + Name row ──────────────────────────────────
+            HorizontalLayout {
+                spacing: Spacing.sm;
+
+                // Emoji button — click to toggle picker
+                Rectangle {
+                    width: 44px;
+                    height: 44px;
+                    border-radius: Spacing.radius-md;
+                    border-width: 1px;
+                    border-color: root.picker-open ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                    background: emoji-touch.has-hover ? Colors.surface-hover : Colors.surface;
+
+                    Text {
+                        text: root.selected-emoji;
+                        font-size: Typography.xl;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    emoji-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.picker-open = !root.picker-open;
+                        }
+                    }
+                }
+
+                // Name input
+                Input {
+                    horizontal-stretch: 1;
+                    placeholder: "Section name";
+                    text <=> root.section-name;
+                }
+            }
+
+            // ── Inline emoji grid (shown when picker-open) ────────
+            if root.picker-open: Rectangle {
+                height: 200px;
+                background: Colors.background;
+                border-radius: Spacing.radius-md;
+                border-width: 1px;
+                border-color: Colors.text-muted.with-alpha(0.2);
+
+                Flickable {
+                    viewport-height: Math.ceil(SectionEmojis.icons.length / 7) * 40px + Spacing.sm * 2;
+                    viewport-width: parent.width;
+
+                    Rectangle {
+                        width: parent.width;
+                        height: parent.viewport-height;
+
+                        for icon[index] in SectionEmojis.icons: Rectangle {
+                            property <int> grid-row: Math.floor(index / 7);
+                            property <int> grid-col: mod(index, 7);
+
+                            x: Spacing.sm + grid-col * 44px;
+                            y: Spacing.sm + grid-row * 40px;
+                            width: 40px;
+                            height: 36px;
+                            border-radius: Spacing.radius-sm;
+                            background: icon == root.selected-emoji
+                                ? Colors.primary.with-alpha(0.25)
+                                : (icon-touch.has-hover ? Colors.surface-hover : transparent);
+
+                            Text {
+                                text: icon;
+                                font-size: Typography.lg;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            icon-touch := TouchArea {
+                                width: 100%;
+                                height: 100%;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.selected-emoji = icon;
+                                    root.picker-open = false;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── Footer buttons ────────────────────────────────────
+            HorizontalLayout {
+                spacing: Spacing.md;
+                height: 40px;
+
+                // Spacer
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Button {
+                    text: "Cancel";
+                    variant: "secondary";
+                    clicked => { root.close(); }
+                }
+
+                Button {
+                    text: root.loading ? "" :
+                        (root.rename-mode ? "Save" : "Create");
+                    variant: "primary";
+                    disabled: root.section-name == "" || root.loading;
+                    loading: root.loading;
+
+                    clicked => {
+                        if root.section-name != "" && !root.loading {
+                            if root.rename-mode {
+                                root.rename-section(root.section-id, root.section-name, root.selected-emoji);
+                            } else {
+                                root.create-section(root.section-name, root.selected-emoji);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
