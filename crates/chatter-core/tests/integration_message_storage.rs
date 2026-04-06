@@ -443,20 +443,37 @@ fn test_message_soft_delete() {
 fn test_channel_unread_count_increment() {
     let (_temp_dir, db) = setup_test_db();
     let channel_repo = ChannelRepository::new(db.clone());
+    let message_repo = MessageRepository::new(db.clone());
 
     let channel = create_test_channel(&channel_repo, ChannelType::Public);
+    let sender = UserId::new();
 
     // Initial count should be 0
     let loaded = channel_repo.get(&channel.id).unwrap().unwrap();
     assert_eq!(loaded.unread_count, 0);
 
-    // Increment
-    let new_count = channel_repo.increment_unread_count(&channel.id).unwrap();
-    assert_eq!(new_count, 1);
+    // Unread count is computed from unread messages in the messages table
+    let msg1 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "unread message 1".to_string(),
+        next_timestamp_ns(),
+    );
+    message_repo.insert(&msg1).unwrap();
 
-    // Increment again
-    let new_count = channel_repo.increment_unread_count(&channel.id).unwrap();
-    assert_eq!(new_count, 2);
+    let loaded = channel_repo.get(&channel.id).unwrap().unwrap();
+    assert_eq!(loaded.unread_count, 1);
+
+    // Add another unread message
+    let msg2 = Message::new_text(
+        channel.id,
+        ConversationType::Channel,
+        Some(sender),
+        "unread message 2".to_string(),
+        next_timestamp_ns(),
+    );
+    message_repo.insert(&msg2).unwrap();
 
     // Verify in database
     let loaded = channel_repo.get(&channel.id).unwrap().unwrap();
@@ -467,15 +484,31 @@ fn test_channel_unread_count_increment() {
 fn test_dm_channel_unread_count() {
     let (_temp_dir, db) = setup_test_db();
     let channel_repo = ChannelRepository::new(db.clone());
+    let message_repo = MessageRepository::new(db.clone());
 
     let alice = UserId::new();
     let bob = UserId::new();
 
     let dm_channel = create_dm_channel(&channel_repo, &alice, &bob);
 
-    // Increment for received messages
-    channel_repo.increment_unread_count(&dm_channel.id).unwrap();
-    channel_repo.increment_unread_count(&dm_channel.id).unwrap();
+    // Add unread received messages
+    let msg1 = Message::new_text(
+        dm_channel.id,
+        ConversationType::Channel,
+        Some(bob),
+        "hey alice".to_string(),
+        next_timestamp_ns(),
+    );
+    message_repo.insert(&msg1).unwrap();
+
+    let msg2 = Message::new_text(
+        dm_channel.id,
+        ConversationType::Channel,
+        Some(bob),
+        "are you there?".to_string(),
+        next_timestamp_ns(),
+    );
+    message_repo.insert(&msg2).unwrap();
 
     let loaded = channel_repo.get(&dm_channel.id).unwrap().unwrap();
     assert_eq!(loaded.unread_count, 2);

@@ -34,8 +34,8 @@ impl AnonDmRepository {
     pub fn insert_conversation(&self, dm: &AnonDm) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO anon_dm_conversations (id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, last_message_at, unread_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO anon_dm_conversations (id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 dm.id.to_string(),
                 dm.peer_id.to_string(),
@@ -47,8 +47,6 @@ impl AnonDmRepository {
                 dm.peer_avatar.as_deref(),
                 dm.created_at.to_rfc3339(),
                 dm.updated_at.to_rfc3339(),
-                dm.last_message_at.as_ref().map(|t| t.to_rfc3339()),
-                dm.unread_count,
             ],
         )?;
         Ok(())
@@ -58,7 +56,9 @@ impl AnonDmRepository {
     pub fn get_conversation(&self, id: &AnonDmId) -> Result<Option<AnonDm>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, last_message_at, unread_count
+            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
+             (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_message_at, \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
              FROM anon_dm_conversations WHERE id = ?1",
         )?;
 
@@ -75,7 +75,9 @@ impl AnonDmRepository {
     pub fn get_conversation_by_peer(&self, peer_id: &UserId) -> Result<Option<AnonDm>, StorageError> {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, last_message_at, unread_count
+            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
+             (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_message_at, \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
              FROM anon_dm_conversations WHERE peer_id = ?1",
         )?;
 
@@ -92,8 +94,8 @@ impl AnonDmRepository {
     pub fn update_conversation(&self, dm: &AnonDm) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE anon_dm_conversations SET status = ?1, peer_mailbox_pk = ?2, peer_profile_key = ?3, peer_display_name = ?4, peer_avatar = ?5, updated_at = ?6, last_message_at = ?7, unread_count = ?8
-             WHERE id = ?9",
+            "UPDATE anon_dm_conversations SET status = ?1, peer_mailbox_pk = ?2, peer_profile_key = ?3, peer_display_name = ?4, peer_avatar = ?5, updated_at = ?6
+             WHERE id = ?7",
             params![
                 dm.status.to_i32(),
                 dm.peer_mailbox_pk.as_ref().map(|k| k.as_slice()),
@@ -101,8 +103,6 @@ impl AnonDmRepository {
                 dm.peer_display_name.as_deref(),
                 dm.peer_avatar.as_deref(),
                 dm.updated_at.to_rfc3339(),
-                dm.last_message_at.as_ref().map(|t| t.to_rfc3339()),
-                dm.unread_count,
                 dm.id.to_string(),
             ],
         )?;
@@ -215,8 +215,10 @@ impl AnonDmRepository {
     pub fn list_conversations(&self) -> Result<Vec<AnonDm>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, last_message_at, unread_count
-             FROM anon_dm_conversations ORDER BY last_message_at DESC NULLS LAST, updated_at DESC",
+            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
+             (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
+             FROM anon_dm_conversations ORDER BY last_msg_at DESC NULLS LAST, updated_at DESC",
         )?;
 
         let mut rows = stmt.query([])?;
@@ -233,8 +235,10 @@ impl AnonDmRepository {
     pub fn list_active_conversations(&self) -> Result<Vec<AnonDm>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, last_message_at, unread_count
-             FROM anon_dm_conversations WHERE status = ?1 ORDER BY last_message_at DESC NULLS LAST, updated_at DESC",
+            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
+             (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
+             FROM anon_dm_conversations WHERE status = ?1 ORDER BY last_msg_at DESC NULLS LAST, updated_at DESC",
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Active.to_i32()])?;
@@ -251,8 +255,10 @@ impl AnonDmRepository {
     pub fn list_message_requests(&self) -> Result<Vec<AnonDm>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, last_message_at, unread_count
-             FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 0 ORDER BY created_at DESC",
+            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
+             (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
+             FROM anon_dm_conversations WHERE status = ?1 ORDER BY created_at DESC",
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Pending.to_i32()])?;
@@ -269,8 +275,10 @@ impl AnonDmRepository {
     pub fn list_outgoing_requests(&self) -> Result<Vec<AnonDm>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, last_message_at, unread_count
-             FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 1 ORDER BY created_at DESC",
+            "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
+             (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
+             FROM anon_dm_conversations WHERE status = ?1 ORDER BY created_at DESC",
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Pending.to_i32()])?;
@@ -287,7 +295,12 @@ impl AnonDmRepository {
     pub fn get_total_unread_count(&self) -> Result<u32, StorageError> {
         let conn = self.db.read_connection()?;
         let count: i64 = conn.query_row(
-            "SELECT COALESCE(SUM(unread_count), 0) FROM anon_dm_conversations WHERE status = ?1",
+            "SELECT COUNT(*) FROM messages m \
+             JOIN anon_dm_conversations c ON m.conversation_id = c.id \
+             WHERE m.conversation_type = 'anon_dm' \
+               AND c.status = ?1 \
+               AND m.is_read = 0 \
+               AND m.is_deleted = 0",
             params![AnonDmStatus::Active.to_i32()],
             |row| row.get(0),
         )?;
@@ -295,23 +308,19 @@ impl AnonDmRepository {
     }
 
     /// Increment unread count for a conversation.
-    pub fn increment_unread(&self, id: &AnonDmId) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute(
-            "UPDATE anon_dm_conversations SET unread_count = unread_count + 1, updated_at = ?1 WHERE id = ?2",
-            params![Utc::now().to_rfc3339(), id.to_string()],
-        )?;
+    pub fn increment_unread(&self, _id: &AnonDmId) -> Result<(), StorageError> {
+        // No-op: unread count is computed dynamically from the messages table
         Ok(())
     }
 
     /// Reset unread count for a conversation.
-    ///
-    /// Note: Message-level is_read updates are handled by the unified MessageRepository.
     pub fn mark_as_read(&self, id: &AnonDmId) -> Result<(), StorageError> {
+        // Mark messages as read in the unified messages table
         let conn = self.db.connection()?;
         conn.execute(
-            "UPDATE anon_dm_conversations SET unread_count = 0, updated_at = ?1 WHERE id = ?2",
-            params![Utc::now().to_rfc3339(), id.to_string()],
+            "UPDATE messages SET is_read = 1 \
+             WHERE conversation_id = ?1 AND conversation_type = 'anon_dm' AND is_read = 0",
+            params![id.to_string()],
         )?;
         Ok(())
     }

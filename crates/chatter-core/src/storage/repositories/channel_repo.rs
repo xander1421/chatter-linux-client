@@ -38,8 +38,8 @@ impl ChannelRepository {
                 id, channel_type, name, description, image_url, owner_id,
                 persistence, max_members, default_ttl_seconds,
                 allow_reactions, allow_threads, allow_attachments, require_encryption,
-                created_at, updated_at, archived, unread_count, last_message_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                created_at, updated_at, archived
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 channel.id.to_string(),
                 channel_type_to_i32(channel.channel_type),
@@ -57,8 +57,6 @@ impl ChannelRepository {
                 channel.created_at.to_rfc3339(),
                 channel.updated_at.to_rfc3339(),
                 channel.archived as i32,
-                channel.unread_count,
-                channel.last_message_at.map(|dt| dt.to_rfc3339()),
             ],
         )?;
         Ok(())
@@ -74,8 +72,8 @@ impl ChannelRepository {
                 id, channel_type, name, description, image_url, owner_id,
                 persistence, max_members, default_ttl_seconds,
                 allow_reactions, allow_threads, allow_attachments, require_encryption,
-                created_at, updated_at, archived, unread_count, last_message_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                created_at, updated_at, archived
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 channel.id.to_string(),
                 channel_type_to_i32(channel.channel_type),
@@ -93,8 +91,6 @@ impl ChannelRepository {
                 channel.created_at.to_rfc3339(),
                 channel.updated_at.to_rfc3339(),
                 channel.archived as i32,
-                channel.unread_count,
-                channel.last_message_at.map(|dt| dt.to_rfc3339()),
             ],
         )?;
         Ok(rows > 0)
@@ -107,7 +103,9 @@ impl ChannelRepository {
             "SELECT id, channel_type, name, description, image_url, owner_id,
                     persistence, max_members, default_ttl_seconds,
                     allow_reactions, allow_threads, allow_attachments, require_encryption,
-                    created_at, updated_at, archived, unread_count, last_message_at
+                    created_at, updated_at, archived,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
+                    (SELECT MAX(created_at) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at
              FROM channels WHERE id = ?1",
         )?;
 
@@ -128,8 +126,8 @@ impl ChannelRepository {
                 channel_type = ?1, name = ?2, description = ?3, image_url = ?4, owner_id = ?5,
                 persistence = ?6, max_members = ?7, default_ttl_seconds = ?8,
                 allow_reactions = ?9, allow_threads = ?10, allow_attachments = ?11, require_encryption = ?12,
-                updated_at = ?13, archived = ?14, unread_count = ?15, last_message_at = ?16
-             WHERE id = ?17",
+                updated_at = ?13, archived = ?14
+             WHERE id = ?15",
             params![
                 channel_type_to_i32(channel.channel_type),
                 channel.name,
@@ -145,8 +143,6 @@ impl ChannelRepository {
                 channel.config.require_encryption as i32,
                 channel.updated_at.to_rfc3339(),
                 channel.archived as i32,
-                channel.unread_count,
-                channel.last_message_at.map(|dt| dt.to_rfc3339()),
                 channel.id.to_string(),
             ],
         )?;
@@ -166,8 +162,8 @@ impl ChannelRepository {
                 id, channel_type, name, description, image_url, owner_id,
                 persistence, max_members, default_ttl_seconds,
                 allow_reactions, allow_threads, allow_attachments, require_encryption,
-                created_at, updated_at, archived, unread_count, last_message_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
+                created_at, updated_at, archived
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
             ON CONFLICT(id) DO UPDATE SET
                 channel_type = excluded.channel_type,
                 name = excluded.name,
@@ -182,9 +178,7 @@ impl ChannelRepository {
                 allow_attachments = excluded.allow_attachments,
                 require_encryption = excluded.require_encryption,
                 updated_at = excluded.updated_at,
-                archived = excluded.archived,
-                unread_count = excluded.unread_count,
-                last_message_at = excluded.last_message_at",
+                archived = excluded.archived",
             params![
                 channel.id.to_string(),
                 channel_type_to_i32(channel.channel_type),
@@ -202,8 +196,6 @@ impl ChannelRepository {
                 channel.created_at.to_rfc3339(),
                 channel.updated_at.to_rfc3339(),
                 channel.archived as i32,
-                channel.unread_count,
-                channel.last_message_at.map(|dt| dt.to_rfc3339()),
             ],
         )?;
         Ok(())
@@ -251,11 +243,13 @@ impl ChannelRepository {
             "SELECT c.id, c.channel_type, c.name, c.description, c.image_url, c.owner_id,
                     c.persistence, c.max_members, c.default_ttl_seconds,
                     c.allow_reactions, c.allow_threads, c.allow_attachments, c.require_encryption,
-                    c.created_at, c.updated_at, c.archived, c.unread_count, c.last_message_at
+                    c.created_at, c.updated_at, c.archived,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
+                    (SELECT MAX(created_at) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at
              FROM channels c
              INNER JOIN memberships m ON c.id = m.channel_id
              WHERE m.user_id = ?1
-             ORDER BY c.last_message_at DESC NULLS LAST
+             ORDER BY last_message_at DESC NULLS LAST
              LIMIT ?2 OFFSET ?3",
         )?;
 
@@ -283,7 +277,9 @@ impl ChannelRepository {
             "SELECT c.id, c.channel_type, c.name, c.description, c.image_url, c.owner_id,
                     c.persistence, c.max_members, c.default_ttl_seconds,
                     c.allow_reactions, c.allow_threads, c.allow_attachments, c.require_encryption,
-                    c.created_at, c.updated_at, c.archived, c.unread_count, c.last_message_at
+                    c.created_at, c.updated_at, c.archived,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
+                    (SELECT MAX(created_at) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at
              FROM channels c
              INNER JOIN memberships m1 ON c.id = m1.channel_id AND m1.user_id = ?1
              INNER JOIN memberships m2 ON c.id = m2.channel_id AND m2.user_id = ?2
@@ -313,7 +309,9 @@ impl ChannelRepository {
             "SELECT id, channel_type, name, description, image_url, owner_id,
                     persistence, max_members, default_ttl_seconds,
                     allow_reactions, allow_threads, allow_attachments, require_encryption,
-                    created_at, updated_at, archived, unread_count, last_message_at
+                    created_at, updated_at, archived,
+                    (SELECT COUNT(*) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
+                    (SELECT MAX(created_at) FROM messages WHERE conversation_id = channels.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at
              FROM channels WHERE channel_type = ?1
              ORDER BY last_message_at DESC NULLS LAST",
         )?;
@@ -333,60 +331,25 @@ impl ChannelRepository {
     // ========================================================================
 
     /// Update the unread count for a channel.
-    pub fn update_unread_count(&self, id: &ChannelId, count: u32) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "UPDATE channels SET unread_count = ?1 WHERE id = ?2",
-            params![count, id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("Channel {}", id)));
-        }
+    pub fn update_unread_count(&self, _id: &ChannelId, _count: u32) -> Result<(), StorageError> {
+        // No-op: unread count is computed dynamically from the messages table
         Ok(())
     }
 
     /// Increment the unread count for a channel by 1.
-    ///
-    /// Returns the new unread count, or creates the channel with count 1 if it doesn't exist.
-    pub fn increment_unread_count(&self, id: &ChannelId) -> Result<u32, StorageError> {
-        let conn = self.db.connection()?;
-
-        // Atomically increment unread_count
-        let rows = conn.execute(
-            "UPDATE channels SET unread_count = unread_count + 1 WHERE id = ?1",
-            params![id.to_string()],
-        )?;
-
-        if rows == 0 {
-            // Channel doesn't exist in local storage - this is expected for DMs
-            // where we might receive messages before the channel is synced
-            return Ok(1);
-        }
-
-        // Get the new count
-        let count: u32 = conn.query_row(
-            "SELECT unread_count FROM channels WHERE id = ?1",
-            params![id.to_string()],
-            |row| row.get(0),
-        )?;
-
-        Ok(count)
+    pub fn increment_unread_count(&self, _id: &ChannelId) -> Result<u32, StorageError> {
+        // No-op: unread count is computed dynamically from the messages table
+        // Return 0 as we don't have the current count here and it shouldn't be relied upon
+        Ok(0)
     }
 
     /// Update the last message timestamp for a channel.
     pub fn update_last_message(
         &self,
-        id: &ChannelId,
-        at: DateTime<Utc>,
+        _id: &ChannelId,
+        _at: DateTime<Utc>,
     ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "UPDATE channels SET last_message_at = ?1 WHERE id = ?2",
-            params![at.to_rfc3339(), id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("Channel {}", id)));
-        }
+        // No-op: last message timestamp is computed dynamically from the messages table
         Ok(())
     }
 
@@ -779,9 +742,7 @@ mod tests {
                     require_encryption INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    archived INTEGER NOT NULL DEFAULT 0,
-                    unread_count INTEGER NOT NULL DEFAULT 0,
-                    last_message_at TEXT
+                    archived INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS memberships (
                     channel_id TEXT NOT NULL,
@@ -793,6 +754,14 @@ mod tests {
                     muted_until TEXT,
                     notification_preference INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (channel_id, user_id)
+                );
+                CREATE TABLE IF NOT EXISTS messages (
+                    id TEXT PRIMARY KEY,
+                    conversation_type TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    is_read INTEGER NOT NULL DEFAULT 0,
+                    is_deleted INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
                 );
                 "#,
             )
