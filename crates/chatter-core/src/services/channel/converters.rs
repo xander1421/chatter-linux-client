@@ -57,6 +57,7 @@ pub fn proto_to_domain_channel(proto: &chat_v1::Channel) -> Result<Channel, Chan
         archived: proto.archived,
         unread_count: 0,       // Local state, not from server
         last_message_at: None, // Local state, not from server
+        member_count: proto.members.len() as u32,
     })
 }
 

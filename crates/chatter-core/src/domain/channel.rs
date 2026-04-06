@@ -68,6 +68,8 @@ pub struct Channel {
     pub unread_count: u32,
     /// Last message timestamp for sorting
     pub last_message_at: Option<DateTime<Utc>>,
+    /// Number of members in this channel
+    pub member_count: u32,
 }
 
 impl Channel {
@@ -88,6 +90,7 @@ impl Channel {
             archived: false,
             unread_count: 0,
             last_message_at: None,
+            member_count: 0,
         }
     }
 

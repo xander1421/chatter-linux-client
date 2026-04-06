@@ -1696,6 +1696,14 @@ impl ChatterClient {
         self.channels().get_channels_for_user()
     }
 
+    /// List channel members with profile information.
+    pub fn list_members_with_profiles(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<Vec<crate::domain::channel::MemberWithProfile>, crate::services::channel::ChannelError> {
+        self.channels().list_members_with_profiles(channel_id)
+    }
+
     /// List all DM channels.
     pub fn list_dms(&self) -> Result<Vec<Channel>, crate::services::channel::ChannelError> {
         let all = self.channels().get_channels_for_user()?;
