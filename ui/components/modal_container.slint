@@ -8,8 +8,11 @@ export component ModalContainer inherits Rectangle {
     in property <bool> show: false;
     in property <length> modal-width: 480px;
     in property <length> max-modal-height: 600px;
-    
+
     callback close();
+
+    // Forward focus into the modal's keyboard scope for tab trapping
+    forward-focus: modal-keys;
 
     // Only show when visible
     opacity: root.show ? 1 : 0;
@@ -27,8 +30,9 @@ export component ModalContainer inherits Rectangle {
         }
     }
 
-    // Keyboard handler — Escape to close
-    FocusScope {
+    // Keyboard handler — Escape to close, Tab trapped within modal
+    modal-keys := FocusScope {
+        enabled: root.show;
         key-pressed(event) => {
             if (event.text == Key.Escape) {
                 root.close();
@@ -40,7 +44,7 @@ export component ModalContainer inherits Rectangle {
 
     // Modal card - centered and sized to content
     Rectangle {
-        accessible-role: none;
+        accessible-role: groupbox;
         accessible-label: "Modal dialog";
         
         // Responsive width: cap at viewport width minus padding
