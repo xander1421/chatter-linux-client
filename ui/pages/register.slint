@@ -172,6 +172,8 @@ export component RegisterPage inherits Rectangle {
                                 spacing: Spacing.md;
 
                                 Rectangle {
+                                    accessible-role: button;
+                                    accessible-label: "Upload custom avatar";
                                     width: 80px;
                                     height: 80px;
                                     border-radius: 40px;
@@ -196,6 +198,8 @@ export component RegisterPage inherits Rectangle {
                                     { color: Colors.info, letter: "B" },
                                     { color: Colors.group-accent, letter: "C" },
                                 ]: Rectangle {
+                                    accessible-role: button;
+                                    accessible-label: "Default avatar " + preset.letter;
                                     width: 44px;
                                     height: 44px;
                                     border-radius: 22px;

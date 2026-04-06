@@ -27,9 +27,21 @@ export component ModalContainer inherits Rectangle {
         }
     }
 
+    // Keyboard handler — Escape to close
+    FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Escape) {
+                root.close();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     // Modal card - centered and sized to content
     Rectangle {
         accessible-role: none;
+        accessible-label: "Modal dialog";
         
         // Responsive width: cap at viewport width minus padding
         width: min(root.modal-width, parent.width - 32px);

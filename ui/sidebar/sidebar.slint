@@ -239,6 +239,8 @@ export component Sidebar inherits Rectangle {
 
                 // INVITE BANNERS (conditional)
                 if root.pending-message-requests > 0: Rectangle {
+                    accessible-role: button;
+                    accessible-label: root.pending-message-requests == 1 ? "1 message request" : root.pending-message-requests + " message requests";
                     height: 38px;
                     border-radius: Spacing.radius-sm;
                     background: mreq-touch.has-hover ? Colors.surface-hover : Colors.surface;
@@ -311,6 +313,8 @@ export component Sidebar inherits Rectangle {
                 }
 
                 if root.pending-group-invites > 0: Rectangle {
+                    accessible-role: button;
+                    accessible-label: root.pending-group-invites == 1 ? "1 group invite" : root.pending-group-invites + " group invites";
                     height: 38px;
                     border-radius: Spacing.radius-sm;
                     background: ginv-touch.has-hover ? Colors.surface-hover : Colors.surface;
