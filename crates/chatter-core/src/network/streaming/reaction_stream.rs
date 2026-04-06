@@ -32,12 +32,17 @@ pub struct ReactionEvent {
     pub user_id: String,
 }
 
+/// Build a cache key from Signal-style (author, timestamp) tuple.
+pub fn reaction_cache_key(target_author_aci: &str, target_sent_timestamp: u64) -> String {
+    format!("{}:{}", target_author_aci, target_sent_timestamp)
+}
+
 /// Reaction stream handler with per-message aggregation.
 ///
 /// Tracks recent reaction changes and provides efficient
 /// queries for UI components.
 pub struct ReactionAggregator {
-    /// Recent reaction events (message_id -> reactions).
+    /// Recent reaction events keyed by (target_author_aci:target_sent_timestamp).
     recent: Arc<RwLock<ReactionCache>>,
 
     /// Broadcast for reaction added events.
@@ -48,9 +53,9 @@ pub struct ReactionAggregator {
 
 /// LRU cache for recent reactions with per-message limits.
 struct ReactionCache {
-    /// Map of message_id -> list of recent reaction events.
+    /// Map of cache key -> list of recent reaction events.
     entries: HashMap<String, Vec<ReactionEvent>>,
-    /// LRU order of message IDs for eviction (most recent at back).
+    /// LRU order of cache keys for eviction (most recent at back).
     lru: VecDeque<String>,
     capacity: usize,
 }
@@ -141,7 +146,10 @@ impl ReactionAggregator {
     pub fn process_added(&self, event: ReactionEvent) {
         self.recent
             .write()
-            .add(event.update.message_id.clone(), event.clone());
+            .add(
+                format!("{}:{}", event.update.target_author_aci, event.update.target_sent_timestamp),
+                event.clone(),
+            );
         let _ = self.added.send(event);
     }
 
@@ -150,11 +158,13 @@ impl ReactionAggregator {
         let _ = self.removed.send(event);
     }
 
-    /// Get recent reactions for a message.
-    pub fn get_recent_reactions(&self, message_id: &str) -> Vec<ReactionEvent> {
+    /// Get recent reactions for a message by cache key.
+    ///
+    /// Use `reaction_cache_key(author_aci, sent_timestamp)` to build the key.
+    pub fn get_recent_reactions(&self, key: &str) -> Vec<ReactionEvent> {
         self.recent
             .read()
-            .get(message_id)
+            .get(key)
             .cloned()
             .unwrap_or_default()
     }
@@ -183,18 +193,22 @@ pub type ReactionStream = ReactionAggregator;
 mod tests {
     use super::*;
 
-    fn make_update(message_id: &str, emoji: &str, add: bool) -> ReactionUpdate {
+    const TEST_AUTHOR: &str = "550e8400-e29b-41d4-a716-446655440000";
+    const TEST_TIMESTAMP: u64 = 1704067200_000_000_000;
+
+    fn make_update(target_author_aci: &str, target_sent_timestamp: u64, emoji: &str, add: bool) -> ReactionUpdate {
         ReactionUpdate {
-            message_id: message_id.to_string(),
+            target_author_aci: target_author_aci.to_string(),
+            target_sent_timestamp,
             emoji: emoji.to_string(),
             add,
             proof_of_work: vec![],
         }
     }
 
-    fn make_event(message_id: &str, user_id: &str, emoji: &str) -> ReactionEvent {
+    fn make_event(target_author_aci: &str, target_sent_timestamp: u64, user_id: &str, emoji: &str) -> ReactionEvent {
         ReactionEvent {
-            update: make_update(message_id, emoji, true),
+            update: make_update(target_author_aci, target_sent_timestamp, emoji, true),
             user_id: user_id.to_string(),
         }
     }
@@ -204,9 +218,10 @@ mod tests {
         let agg = ReactionAggregator::new();
         let _rx = agg.on_reaction_added();
 
-        agg.process(make_update("msg-1", "\u{1f44d}", true), "user-1".to_string());
+        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
 
-        let reactions = agg.get_recent_reactions("msg-1");
+        let key = reaction_cache_key(TEST_AUTHOR, TEST_TIMESTAMP);
+        let reactions = agg.get_recent_reactions(&key);
         assert_eq!(reactions.len(), 1);
         assert_eq!(reactions[0].update.emoji, "\u{1f44d}");
         assert_eq!(reactions[0].user_id, "user-1");
@@ -217,10 +232,11 @@ mod tests {
         let agg = ReactionAggregator::new();
         let _rx = agg.on_reaction_added();
 
-        agg.process(make_update("msg-1", "\u{1f44d}", true), "user-1".to_string());
-        agg.process(make_update("msg-1", "\u{2764}", true), "user-2".to_string());
+        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
+        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{2764}", true), "user-2".to_string());
 
-        let reactions = agg.get_recent_reactions("msg-1");
+        let key = reaction_cache_key(TEST_AUTHOR, TEST_TIMESTAMP);
+        let reactions = agg.get_recent_reactions(&key);
         assert_eq!(reactions.len(), 2);
     }
 
@@ -229,10 +245,11 @@ mod tests {
         let agg = ReactionAggregator::new();
         let mut rx = agg.on_reaction_added();
 
-        agg.process(make_update("msg-1", "\u{1f44d}", true), "user-1".to_string());
+        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
 
         let received = rx.try_recv().unwrap();
-        assert_eq!(received.update.message_id, "msg-1");
+        assert_eq!(received.update.target_author_aci, TEST_AUTHOR);
+        assert_eq!(received.update.target_sent_timestamp, TEST_TIMESTAMP);
         assert_eq!(received.update.emoji, "\u{1f44d}");
         assert_eq!(received.user_id, "user-1");
     }
@@ -242,24 +259,28 @@ mod tests {
         let agg = ReactionAggregator::new();
         let mut rx = agg.on_reaction_removed();
 
-        agg.process(make_update("msg-1", "\u{1f44d}", false), "user-1".to_string());
+        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", false), "user-1".to_string());
 
         let received = rx.try_recv().unwrap();
-        assert_eq!(received.update.message_id, "msg-1");
+        assert_eq!(received.update.target_author_aci, TEST_AUTHOR);
     }
 
     #[test]
     fn test_cache_eviction() {
         let mut cache = ReactionCache::new(2);
 
-        cache.add("msg-1".to_string(), make_event("msg-1", "u", "\u{1f44d}"));
-        cache.add("msg-2".to_string(), make_event("msg-2", "u", "\u{1f44d}"));
-        cache.add("msg-3".to_string(), make_event("msg-3", "u", "\u{1f44d}"));
+        let key1 = reaction_cache_key("author-1", 100);
+        let key2 = reaction_cache_key("author-2", 200);
+        let key3 = reaction_cache_key("author-3", 300);
 
-        // msg-1 should be evicted
-        assert!(cache.get("msg-1").is_none());
-        assert!(cache.get("msg-2").is_some());
-        assert!(cache.get("msg-3").is_some());
+        cache.add(key1.clone(), make_event("author-1", 100, "u", "\u{1f44d}"));
+        cache.add(key2.clone(), make_event("author-2", 200, "u", "\u{1f44d}"));
+        cache.add(key3.clone(), make_event("author-3", 300, "u", "\u{1f44d}"));
+
+        // key1 should be evicted
+        assert!(cache.get(&key1).is_none());
+        assert!(cache.get(&key2).is_some());
+        assert!(cache.get(&key3).is_some());
     }
 
     #[test]
@@ -267,7 +288,7 @@ mod tests {
         let agg = ReactionAggregator::new();
         let _rx = agg.on_reaction_added();
 
-        agg.process(make_update("msg-1", "\u{1f44d}", true), "user-1".to_string());
+        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
         assert_eq!(agg.cache_size(), 1);
 
         agg.clear();
@@ -281,12 +302,12 @@ mod tests {
         let mut rem_rx = agg.on_reaction_removed();
 
         // Process an add
-        agg.process(make_update("msg-1", "\u{1f44d}", true), "user-1".to_string());
+        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", true), "user-1".to_string());
         assert!(add_rx.try_recv().is_ok());
         assert!(rem_rx.try_recv().is_err());
 
         // Process a remove
-        agg.process(make_update("msg-1", "\u{1f44d}", false), "user-1".to_string());
+        agg.process(make_update(TEST_AUTHOR, TEST_TIMESTAMP, "\u{1f44d}", false), "user-1".to_string());
         assert!(rem_rx.try_recv().is_ok());
     }
 }

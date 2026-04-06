@@ -341,7 +341,8 @@ mod tests {
         let mut rx = router.on_reaction_added();
 
         let reaction = ReactionUpdate {
-            message_id: "msg-123".to_string(),
+            target_author_aci: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            target_sent_timestamp: 1704067200_000_000_000,
             emoji: "👍".to_string(),
             add: true,
             proof_of_work: vec![],
@@ -351,7 +352,7 @@ mod tests {
         assert!(router.route(event));
 
         let received = rx.try_recv().unwrap();
-        assert_eq!(received.message_id, "msg-123");
+        assert_eq!(received.target_author_aci, "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(received.emoji, "👍");
     }
 

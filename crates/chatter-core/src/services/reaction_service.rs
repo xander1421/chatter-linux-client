@@ -307,9 +307,12 @@ impl ReactionService {
     ///
     /// # Arguments
     ///
-    /// * `message_id` - ID of the message to get recent reactions for
-    pub fn get_recent_reactions(&self, message_id: &str) -> Vec<ReactionEvent> {
-        self.reaction_aggregator.get_recent_reactions(message_id)
+    /// * `target_author_aci` - Target message author's ACI (UUID)
+    /// * `target_sent_timestamp` - Target message sent timestamp (nanoseconds)
+    pub fn get_recent_reactions(&self, target_author_aci: &str, target_sent_timestamp: u64) -> Vec<ReactionEvent> {
+        use crate::network::streaming::reaction_stream::reaction_cache_key;
+        let key = reaction_cache_key(target_author_aci, target_sent_timestamp);
+        self.reaction_aggregator.get_recent_reactions(&key)
     }
 }
 
@@ -526,6 +529,9 @@ mod tests {
         let _rx = service.subscribe_removed();
     }
 
+    const TEST_AUTHOR: &str = "550e8400-e29b-41d4-a716-446655440000";
+    const TEST_TIMESTAMP: u64 = 1704067200_000_000_000;
+
     #[test]
     fn test_process_reaction_event_delegates_to_aggregator() {
         let (service, aggregator, _temp_dir) = create_test_service();
@@ -534,7 +540,8 @@ mod tests {
         // Process an event
         service.process_reaction_event(
             ReactionUpdate {
-                message_id: "msg-1".to_string(),
+                target_author_aci: TEST_AUTHOR.to_string(),
+                target_sent_timestamp: TEST_TIMESTAMP,
                 emoji: "👍".to_string(),
                 add: true,
                 proof_of_work: vec![],
@@ -543,7 +550,7 @@ mod tests {
         );
 
         // Should have cached the reaction
-        let recent = service.get_recent_reactions("msg-1");
+        let recent = service.get_recent_reactions(TEST_AUTHOR, TEST_TIMESTAMP);
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].update.emoji, "👍");
         assert_eq!(recent[0].user_id, "user-1");
@@ -557,7 +564,8 @@ mod tests {
         // Add some reactions
         service.process_reaction_event(
             ReactionUpdate {
-                message_id: "msg-1".to_string(),
+                target_author_aci: TEST_AUTHOR.to_string(),
+                target_sent_timestamp: TEST_TIMESTAMP,
                 emoji: "👍".to_string(),
                 add: true,
                 proof_of_work: vec![],
@@ -578,7 +586,7 @@ mod tests {
         let (service, _aggregator, _temp_dir) = create_test_service();
 
         // Unknown message should return empty vec
-        let recent = service.get_recent_reactions("unknown-msg");
+        let recent = service.get_recent_reactions("unknown-author", 0);
         assert!(recent.is_empty());
     }
 
@@ -590,7 +598,8 @@ mod tests {
         // Process an add event
         service.process_reaction_event(
             ReactionUpdate {
-                message_id: "msg-1".to_string(),
+                target_author_aci: TEST_AUTHOR.to_string(),
+                target_sent_timestamp: TEST_TIMESTAMP,
                 emoji: "❤️".to_string(),
                 add: true,
                 proof_of_work: vec![],
@@ -600,7 +609,8 @@ mod tests {
 
         // Should receive the event
         let received = rx.try_recv().unwrap();
-        assert_eq!(received.update.message_id, "msg-1");
+        assert_eq!(received.update.target_author_aci, TEST_AUTHOR);
+        assert_eq!(received.update.target_sent_timestamp, TEST_TIMESTAMP);
         assert_eq!(received.update.emoji, "❤️");
         assert_eq!(received.user_id, "user-1");
     }
@@ -613,7 +623,8 @@ mod tests {
         // Process a remove event
         service.process_reaction_event(
             ReactionUpdate {
-                message_id: "msg-1".to_string(),
+                target_author_aci: TEST_AUTHOR.to_string(),
+                target_sent_timestamp: TEST_TIMESTAMP,
                 emoji: "👎".to_string(),
                 add: false,
                 proof_of_work: vec![],
@@ -623,7 +634,7 @@ mod tests {
 
         // Should receive the event
         let received = rx.try_recv().unwrap();
-        assert_eq!(received.update.message_id, "msg-1");
+        assert_eq!(received.update.target_author_aci, TEST_AUTHOR);
         assert_eq!(received.update.emoji, "👎");
         assert!(!received.update.add);
     }
@@ -634,10 +645,12 @@ mod tests {
             user_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             emoji: "🎉".to_string(),
             timestamp: 1234567890000,
+            target_author_aci: TEST_AUTHOR.to_string(),
+            target_sent_timestamp: TEST_TIMESTAMP,
         };
 
         let sender_id = UserId::new();
-        let sent_at_ns: u64 = 1704067200_000_000_000;
+        let sent_at_ns: u64 = TEST_TIMESTAMP;
         let reaction = proto_to_domain_reaction(&proto, &sender_id, sent_at_ns).unwrap();
 
         assert_eq!(reaction.sender_id, sender_id);
@@ -652,10 +665,12 @@ mod tests {
             user_id: "not-a-uuid".to_string(),
             emoji: "👍".to_string(),
             timestamp: 1234567890000,
+            target_author_aci: TEST_AUTHOR.to_string(),
+            target_sent_timestamp: TEST_TIMESTAMP,
         };
 
         let sender_id = UserId::new();
-        let sent_at_ns: u64 = 1704067200_000_000_000;
+        let sent_at_ns: u64 = TEST_TIMESTAMP;
         let result = proto_to_domain_reaction(&proto, &sender_id, sent_at_ns);
 
         assert!(matches!(result, Err(ReactionError::Storage(_))));

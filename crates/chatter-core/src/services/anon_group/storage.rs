@@ -4,13 +4,36 @@ use chrono::Utc;
 
 use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
 use crate::domain::ids::{ChannelId, MessageId};
-use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
+use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent, SystemMessage};
 use crate::domain::{AttachmentId, UserId};
 use crate::services::AttachmentService;
 
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
+    /// Store a system message (join, leave, kick) in a group.
+    pub fn store_system_message(
+        &self,
+        group_id: &AnonGroupId,
+        sender_id: Option<UserId>,
+        system_content: SystemMessage,
+        sent_at: u64,
+    ) -> Result<AnonGroupMessageId, AnonGroupError> {
+        let channel_id: ChannelId = (*group_id).into();
+        let mut message = Message::new_text(channel_id, ConversationType::AnonGroup, sender_id, String::new(), sent_at);
+        message.content = MessageContent::System(system_content);
+
+        let msg_id_str = message.id.to_string();
+        self.message_service.message_repo.insert(&message)?;
+        tracing::debug!(
+            "Stored system message {} in group {} at {}",
+            msg_id_str,
+            group_id,
+            sent_at
+        );
+        Ok(AnonGroupMessageId::from_string(msg_id_str))
+    }
+
     /// Store a message received from a group member.
     ///
     /// The `sent_at` parameter is the sender's timestamp (nanoseconds since epoch),

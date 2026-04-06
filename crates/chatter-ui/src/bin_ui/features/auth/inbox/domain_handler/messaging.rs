@@ -7,11 +7,13 @@ use slint::{Model, ModelRc, VecModel, Weak};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::{ChannelId, UserId};
-use chatter_core::domain::message::Message;
+use chatter_core::domain::message::{ConversationType, Message};
+use chatter_core::domain::anon_dm::AnonDmId;
+use chatter_core::domain::anon_group::AnonGroupId;
 use crate::MainWindow;
 use crate::MessageItemData;
 
-/// Handle an incoming message (DM or channel).
+/// Handle an incoming message (DM, channel, or anonymous).
 ///
 /// Resolves sender name + attachments, inserts into the Slint message model
 /// if the conversation is active, updates sidebar preview, and triggers
@@ -21,26 +23,46 @@ pub(super) fn handle_message_received(
     ui_ctx: &Arc<ChatterClient>,
     message: Message,
 ) {
-    let channel_id = message.conversation_id;
+    let conversation_id = message.conversation_id;
     let sender_id = message.sender_id;
     let timestamp = message.sent_at;
+    let conv_type = message.conversation_type.clone();
 
-    // Resolve sender display name (profile → user → UUID fallback)
-    let sender_name = sender_id
-        .and_then(|sid| {
-            ui_ctx.users()
-                .get_profile_local(&sid).ok().flatten()
-                .map(|p| p.display_name.clone())
-                .filter(|n| !n.is_empty())
-                .or_else(|| {
-                    ui_ctx.users()
-                        .get_user_local(&sid).ok().flatten()
-                        .map(|u| u.username.clone())
-                        .filter(|n| !n.is_empty())
-                })
-                .or_else(|| Some(sid.to_string()))
-        })
-        .unwrap_or_else(|| "Anonymous".to_string());
+    // Resolve sender display name and avatar
+    let (sender_name, sender_avatar) = match conv_type {
+        ConversationType::AnonDm => {
+            let dm_id = AnonDmId::from_uuid(*conversation_id.as_uuid());
+            let dm = ui_ctx.anon_dms().get_conversation(&dm_id).ok().flatten();
+            let is_own = ui_ctx.sessions().current_user_id().map(|uid| sender_id == Some(uid)).unwrap_or(false);
+            
+            let name = sender_id.map(|id| ui_ctx.users().get_display_name(&id)).unwrap_or_else(|| "Anonymous".to_string());
+            let final_name = if name == sender_id.map(|id| id.to_string()).unwrap_or_default() && !is_own {
+                dm.as_ref().and_then(|d| d.peer_display_name.as_ref().filter(|n| !n.is_empty()).cloned()).unwrap_or(name)
+            } else {
+                name
+            };
+
+            let avatar = if is_own {
+                ui_ctx.anon_dms().get_my_avatar()
+            } else {
+                dm.and_then(|d| d.peer_avatar)
+            };
+            (final_name, avatar)
+        }
+        ConversationType::AnonGroup => {
+            let group_id = AnonGroupId::from_uuid(*conversation_id.as_uuid());
+            let sid = sender_id.unwrap_or_else(UserId::new);
+            let name = super::helpers::get_anon_member_name(ui_ctx, &group_id, &sid);
+            let avatar = ui_ctx.anon_groups().get_member(&group_id, &sid).ok().flatten().and_then(|m| m.avatar);
+            (name, avatar)
+        }
+        _ => {
+            let name = sender_id
+                .map(|sid| ui_ctx.users().get_display_name(&sid))
+                .unwrap_or_else(|| "Anonymous".to_string());
+            (name, None)
+        }
+    };
 
     // Resolve attachments from attachment service
     let resolved_attachments: Vec<_> = message.attachments.iter()
@@ -48,38 +70,52 @@ pub(super) fn handle_message_received(
         .collect();
 
     // Build display data on this thread (before moving to UI thread)
+    // Uses unified converter that handles optional avatars
     let mut display_data = crate::bin_ui::converters::message_to_display_data(
-        &message, &sender_name, &resolved_attachments,
+        &message, &sender_name, &resolved_attachments, sender_avatar,
     );
     display_data.decode_attachment_thumbnails();
 
     // Resolve reply-to sender name if this is a reply/quote
     if display_data.is_reply {
         if let Some(ref author_id) = message.reply_to_author_id {
-            let reply_sender = ui_ctx.users()
-                .get_profile_local(author_id).ok().flatten()
-                .map(|p| p.display_name.clone())
-                .filter(|n| !n.is_empty())
-                .or_else(|| {
-                    ui_ctx.users()
-                        .get_user_local(author_id).ok().flatten()
-                        .map(|u| u.username.clone())
-                        .filter(|n| !n.is_empty())
-                })
-                .unwrap_or_else(|| author_id.to_string());
-            display_data.reply_to_sender_name = reply_sender;
+            let reply_name = ui_ctx.users().get_display_name(author_id);
+            display_data.reply_to_sender_name = match conv_type {
+                ConversationType::AnonDm => {
+                    if reply_name == author_id.to_string() {
+                        let dm_id = AnonDmId::from_uuid(*conversation_id.as_uuid());
+                        ui_ctx.anon_dms().get_conversation(&dm_id).ok().flatten()
+                            .filter(|d| d.peer_id == *author_id)
+                            .and_then(|d| d.peer_display_name.as_ref().filter(|n| !n.is_empty()).cloned())
+                            .unwrap_or(reply_name)
+                    } else {
+                        reply_name
+                    }
+                }
+                ConversationType::AnonGroup => {
+                    if reply_name == author_id.to_string() {
+                        let group_id = AnonGroupId::from_uuid(*conversation_id.as_uuid());
+                        super::helpers::get_anon_member_name(ui_ctx, &group_id, author_id)
+                    } else {
+                        reply_name
+                    }
+                }
+                _ => reply_name,
+            };
         }
     }
 
     let current_user_id = ui_ctx.auth_state().get().current_user_id
         .map(|id| id.to_string())
-        .unwrap_or_default();
+        .unwrap_or_else(|| ui_ctx.sessions().current_user_id().map(|id| id.to_string()).unwrap_or_default());
 
     // Build sidebar preview
     let text = message.as_text().unwrap_or_default();
     let att_count = message.attachments.len();
     let preview = if text.is_empty() && att_count > 0 {
         format!("\u{1F4CE} {} attachment{}", att_count, if att_count == 1 { "" } else { "s" })
+    } else if text.is_empty() {
+        "[Message]".to_string()
     } else if text.chars().count() > 50 {
         let truncated: String = text.chars().take(47).collect();
         format!("{}...", truncated)
@@ -90,22 +126,34 @@ pub(super) fn handle_message_received(
 
     // Determine if this conversation is currently active
     let is_active = ui_ctx.chat_state().get().active_channel_id
-        .map(|id| id == channel_id)
+        .map(|id| id == conversation_id)
         .unwrap_or(false);
 
     // Determine conversation type for sidebar update
-    let conversation = if let Ok(Some(channel)) = ui_ctx.channels().get_channel_local(&channel_id) {
-        if channel.channel_type == ChannelType::DirectMessage {
-            if let Some(sid) = sender_id {
-                chatter_core::state::ActiveConversation::MailboxDm { channel_id, peer_id: sid }
-            } else {
-                chatter_core::state::ActiveConversation::Channel(channel_id)
-            }
-        } else {
-            chatter_core::state::ActiveConversation::Channel(channel_id)
+    let sidebar_conversation = match conv_type {
+        ConversationType::AnonDm => {
+            let dm_id = AnonDmId::from_uuid(*conversation_id.as_uuid());
+            chatter_core::state::ActiveConversation::AnonDm(dm_id)
         }
-    } else {
-        chatter_core::state::ActiveConversation::Channel(channel_id)
+        ConversationType::AnonGroup => {
+            let group_id = AnonGroupId::from_uuid(*conversation_id.as_uuid());
+            chatter_core::state::ActiveConversation::AnonGroup(group_id)
+        }
+        _ => {
+            if let Ok(Some(channel)) = ui_ctx.channels().get_channel_local(&conversation_id) {
+                if channel.channel_type == ChannelType::DirectMessage {
+                    if let Some(sid) = sender_id {
+                        chatter_core::state::ActiveConversation::MailboxDm { channel_id: conversation_id, peer_id: sid }
+                    } else {
+                        chatter_core::state::ActiveConversation::Channel(conversation_id)
+                    }
+                } else {
+                    chatter_core::state::ActiveConversation::Channel(conversation_id)
+                }
+            } else {
+                chatter_core::state::ActiveConversation::Channel(conversation_id)
+            }
+        }
     };
 
     // Trigger attachment auto-download in background
@@ -117,7 +165,7 @@ pub(super) fn handle_message_received(
     if !downloadable.is_empty() {
         let ui_ctx_dl = ui_ctx.clone();
         let weak_dl = window.clone();
-        let conv_id = channel_id.to_string();
+        let conv_id = conversation_id.to_string();
         tokio::spawn(async move {
             super::super::attachment_download::download_attachments(
                 &downloadable,
@@ -145,7 +193,11 @@ pub(super) fn handle_message_received(
 
             // Build Slint message item
             let mut new_msg = display_data.to_slint_with_user(&current_user_id);
-            new_msg.delivery_status = "delivered".into();
+            
+            // Only non-anon messages get auto-delivered status (anon has its own delivery logic)
+            if conv_type != ConversationType::AnonDm && conv_type != ConversationType::AnonGroup {
+                new_msg.delivery_status = "delivered".into();
+            }
 
             // Deduplicate by (sender_id, timestamp_ns)
             let current_model = w.get_messages();
@@ -194,15 +246,17 @@ pub(super) fn handle_message_received(
 
         // Always update sidebar preview
         crate::bin_ui::features::sidebar::update_sidebar_preview(
-            &w, conversation, &preview, &timestamp_str, true,
+            &w, sidebar_conversation, &preview, &timestamp_str, true,
         );
 
-        // Create DM sidebar entry if new peer
-        if let Some(peer_id) = peer_id_opt {
-            if !crate::bin_ui::features::sidebar::sidebar_has_dm(&w, &peer_id) {
-                crate::bin_ui::features::sidebar::create_dm_sidebar_entry(
-                    &w, &ui_ctx_ui, &peer_id, &sender_name, &preview, &timestamp_str,
-                );
+        // Create DM sidebar entry if new peer (non-anon only)
+        if conv_type == ConversationType::ServerDm || conv_type == ConversationType::MailboxDm {
+            if let Some(peer_id) = peer_id_opt {
+                if !crate::bin_ui::features::sidebar::sidebar_has_dm(&w, &peer_id) {
+                    crate::bin_ui::features::sidebar::create_dm_sidebar_entry(
+                        &w, &ui_ctx_ui, &peer_id, &sender_name, &preview, &timestamp_str,
+                    );
+                }
             }
         }
     });
@@ -245,7 +299,7 @@ pub(super) fn handle_dm_bootstrap_completed(
     // Flush any pending messages for this peer
     let dm_bootstrap = ui_ctx.dm_bootstrap().clone();
     tokio::spawn(async move {
-        dm_bootstrap.flush_pending_ui_messages(&peer_id).await;
+        let _ = dm_bootstrap.flush_pending_ui_messages(&peer_id).await;
     });
 
     // Update UI: enable composer + flip delivery status
