@@ -1766,6 +1766,11 @@ impl ChatterClient {
         self.users().list_friends(100, 0).await
     }
 
+    /// List friends with their profile data (display name, avatar, etc.).
+    pub async fn list_friends_with_profiles(&self) -> Result<Vec<(crate::domain::user::Friendship, crate::domain::user::Profile)>, crate::services::user::UserError> {
+        self.users().list_friends_with_profiles(100, 0).await
+    }
+
     // ── Anon DM management ──────────────────────────────────────────
 
     /// Start an anonymous DM conversation with a user.

@@ -458,6 +458,63 @@ impl UserService {
         Ok(friendships)
     }
 
+    /// List accepted friends with their profile data.
+    ///
+    /// Returns `(Friendship, Profile)` pairs by converting the `UserProfile`
+    /// objects already present in the server response, avoiding extra RPCs.
+    pub async fn list_friends_with_profiles(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<(Friendship, Profile)>, UserError> {
+        let current_user = self.settings_repo.current_user_id()?;
+
+        let mut user_client = self.user_client();
+        let response = user_client
+            .list_friends(limit as i32, offset as i32)
+            .await?;
+
+        let mut results = Vec::with_capacity(response.friends.len());
+        for friend in &response.friends {
+            let friend_id: UserId = friend
+                .user_id
+                .parse()
+                .map_err(|_| UserError::InvalidInput("invalid friend user ID".to_string()))?;
+
+            let friendship = Friendship {
+                user_id: current_user,
+                friend_id,
+                status: FriendshipStatus::Accepted,
+                created_at: Utc::now(),
+            };
+
+            if self.user_repo.update_friendship(&friendship).is_err() {
+                let _ = self.user_repo.insert_friendship(&friendship);
+            }
+
+            // Build profile from the proto UserProfile already in the response.
+            let mut profile = proto_to_domain_profile(friend)?;
+            profile.display_name = self.try_decrypt_display_name(
+                &current_user,
+                &friend_id,
+                &friend.display_name,
+            ).unwrap_or_else(|| {
+                if friend.display_name.is_empty() || friend.display_name.len() > 50 {
+                    format!("User {}", &friend_id.to_string()[..8.min(friend_id.to_string().len())])
+                } else {
+                    friend.display_name.clone()
+                }
+            });
+
+            self.user_repo.ensure_user_exists(&friend_id).ok();
+            self.user_repo.upsert_profile(&profile).ok();
+
+            results.push((friendship, profile));
+        }
+
+        Ok(results)
+    }
+
     /// List friend requests with optional filtering.
     pub async fn list_friend_requests(
         &self,
