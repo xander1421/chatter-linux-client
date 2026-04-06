@@ -503,7 +503,28 @@ impl AnonDmHandler {
             conv.peer_display_name = Some(name.clone());
         }
 
-        // Store the updated conversation (avatar download happens async in UI layer)
+        // Decrypt and store avatar if present
+        let profile_key: Option<[u8; 32]> = profile_update.profile_key.as_ref().and_then(|pk| {
+            if pk.len() == 32 { Some(pk.as_slice().try_into().unwrap()) } else { None }
+        });
+        if let (Some(pk), Some(encrypted)) = (&profile_key, &profile_update.encrypted_avatar) {
+            if !encrypted.is_empty() {
+                match decrypt_avatar(pk, encrypted) {
+                    Ok(avatar) => {
+                        tracing::info!(
+                            avatar_size = avatar.len(),
+                            "Decrypted peer avatar from profile update"
+                        );
+                        conv.peer_avatar = Some(avatar);
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to decrypt avatar in profile update: {}", e);
+                    }
+                }
+            }
+        }
+
+        // Store the updated conversation
         if let Err(e) = self.service.anon_dm_repo.update_conversation(&conv) {
             tracing::warn!("Failed to update anon DM conversation with new profile: {}", e);
         }

@@ -255,6 +255,32 @@ pub fn spawn_anon_dm_request_handler(
                             );
                         }
                     });
+
+                    // Send our profile (avatar + display name) back to the responder.
+                    // The responder only received our ECIES init (no avatar due to no PFS).
+                    // Now that Double Ratchet is established, share our profile securely.
+                    let profile_service = anon_dm_service.clone();
+                    let profile_conv_id = conversation_id;
+                    let our_name = ui_ctx.auth_state().get().display_name.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = profile_service.send_profile_update(
+                            &profile_conv_id,
+                            our_name,
+                            None, // avatar_url not used — encrypted_avatar is sent inline
+                            None,
+                        ).await {
+                            tracing::warn!(
+                                conversation_id = %profile_conv_id,
+                                error = %e,
+                                "Failed to send profile back to responder after acceptance"
+                            );
+                        } else {
+                            tracing::info!(
+                                conversation_id = %profile_conv_id,
+                                "Sent profile (avatar + name) to responder after acceptance"
+                            );
+                        }
+                    });
                 }
                 DomainEvent::MessageReceived { ref message }
                     if message.conversation_type == chatter_core::domain::message::ConversationType::AnonDm =>

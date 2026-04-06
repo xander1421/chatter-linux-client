@@ -192,7 +192,8 @@ pub(super) fn handle_anon_dm_profile_updated(
         }
     });
 
-    // Download avatar from URL via service (handles HTTP + DB storage)
+    // Update avatar in sidebar — either download from URL or load from DB
+    // (inline encrypted avatars are already decrypted and stored by the inbox handler)
     if let Some(url) = avatar_url.clone() {
         let anon_dm_service = ui_ctx.anon_dms().clone();
         let weak_for_avatar = weak.clone();
@@ -215,24 +216,28 @@ pub(super) fn handle_anon_dm_profile_updated(
             // Update avatar in sidebar UI
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_for_avatar.upgrade() {
-                    let dms = w.get_dm_conversations();
-                    for i in 0..dms.row_count() {
-                        if let Some(mut dm) = dms.row_data(i) {
-                            if dm.channel_id == conv_id_for_avatar {
-                                if let Some(img) = crate::bin_ui::converters::avatar_bytes_to_image(&bytes) {
-                                    dm.avatar_source = img;
-                                    dm.has_avatar = true;
-                                    dms.set_row_data(i, dm);
-                                }
-                                break;
-                            }
-                        }
-                    }
+                    update_dm_avatar(&w, &conv_id_for_avatar, &bytes);
                 }
             });
 
             tracing::info!("Downloaded and stored avatar for anon DM");
         });
+    } else {
+        // No URL — check if the inbox handler stored inline avatar bytes in DB
+        let anon_dm_service = ui_ctx.anon_dms().clone();
+        let weak_for_avatar = weak.clone();
+        let conv_id_for_avatar = conversation_id_str.clone();
+
+        if let Ok(Some(dm)) = anon_dm_service.get_conversation(&conversation_id) {
+            if let Some(ref avatar_bytes) = dm.peer_avatar {
+                let bytes = avatar_bytes.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_for_avatar.upgrade() {
+                        update_dm_avatar(&w, &conv_id_for_avatar, &bytes);
+                    }
+                });
+            }
+        }
     }
 
     tracing::info!(
@@ -244,4 +249,21 @@ pub(super) fn handle_anon_dm_profile_updated(
         timestamp,
         "Anonymous DM profile updated"
     );
+}
+
+/// Update a DM's avatar in the sidebar. Must be called on the UI thread.
+fn update_dm_avatar(w: &MainWindow, channel_id: &str, bytes: &[u8]) {
+    let dms = w.get_dm_conversations();
+    for i in 0..dms.row_count() {
+        if let Some(mut dm) = dms.row_data(i) {
+            if dm.channel_id == channel_id {
+                if let Some(img) = crate::bin_ui::converters::avatar_bytes_to_image(bytes) {
+                    dm.avatar_source = img;
+                    dm.has_avatar = true;
+                    dms.set_row_data(i, dm);
+                }
+                break;
+            }
+        }
+    }
 }
