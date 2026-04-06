@@ -9,7 +9,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::state::ActiveConversation;
 
-use crate::bin_ui::converters::{message_to_display_data, MessageDisplayData};
+use crate::bin_ui::converters::messages_to_display_batch;
 use crate::MainWindow;
 
 /// Wire header callbacks.
@@ -586,38 +586,12 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
             message_state.set_cursor(channel_id, new_cursor);
 
-            // Convert older messages (come in DESC order from DB)
-            let mut display_messages: Vec<MessageDisplayData> = Vec::with_capacity(older_messages.len());
-            for msg in &older_messages {
-                let sender_name = if let Some(sender_id) = &msg.sender_id {
-                    user_service.get_display_name(sender_id)
-                } else {
-                    "Anonymous".to_string()
-                };
-
-                // Resolve attachments for this message
-                let resolved_attachments: Vec<_> = msg
-                    .attachments
-                    .iter()
-                    .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
-                    .collect();
-
-                let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments, None);
-
-                // Resolve reply-to sender name
-                if display_data.is_reply {
-                    if let Some(ref author_id) = msg.reply_to_author_id {
-                        display_data.reply_to_sender_name = user_service.get_display_name(author_id);
-                    }
-                }
-
-                display_messages.push(display_data);
-            }
-
-            // Pre-decode attachment thumbnails before UI thread
-            for msg in &mut display_messages {
-                msg.decode_attachment_thumbnails();
-            }
+            // Convert older messages to display data
+            let display_messages = messages_to_display_batch(
+                &older_messages,
+                |uid| user_service.get_display_name(uid),
+                |att_id| attachment_service.get(att_id).ok().flatten(),
+            );
 
             let msg_count = older_messages.len();
             // Get current user ID for is_own calculation

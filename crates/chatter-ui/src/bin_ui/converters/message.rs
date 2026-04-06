@@ -416,6 +416,58 @@ pub fn anon_group_message_to_display_data(
     message_to_display_data(msg, sender_name, resolved_attachments, sender_avatar)
 }
 
+/// Convert a batch of domain Messages to display data, resolving sender names,
+/// attachments, reply-to context, and pre-decoding thumbnails.
+///
+/// Eliminates duplicated message-to-display conversion loops across channel loading,
+/// pagination, thread loading, and initial data loading.
+///
+/// # Arguments
+/// - `messages`: slice of domain Messages to convert
+/// - `get_display_name`: resolves a `UserId` to a display name string
+/// - `resolve_attachment`: resolves an `AttachmentId` to an `Option<Attachment>`
+///   (callers should handle the `Result` → `Option` conversion themselves)
+pub fn messages_to_display_batch(
+    messages: &[Message],
+    get_display_name: impl Fn(&chatter_core::domain::UserId) -> String,
+    resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
+) -> Vec<MessageDisplayData> {
+    let mut display_messages = Vec::with_capacity(messages.len());
+
+    for msg in messages {
+        let sender_name = msg
+            .sender_id
+            .as_ref()
+            .map(|id| get_display_name(id))
+            .unwrap_or_else(|| "Anonymous".to_string());
+
+        let resolved_attachments: Vec<_> = msg
+            .attachments
+            .iter()
+            .filter_map(|att_id| resolve_attachment(att_id))
+            .collect();
+
+        let mut display_data =
+            message_to_display_data(msg, &sender_name, &resolved_attachments, None);
+
+        // Resolve reply-to sender name (converter leaves it empty for later resolution)
+        if display_data.is_reply {
+            if let Some(ref author_id) = msg.reply_to_author_id {
+                display_data.reply_to_sender_name = get_display_name(author_id);
+            }
+        }
+
+        display_messages.push(display_data);
+    }
+
+    // Pre-decode attachment thumbnails before UI thread
+    for msg in &mut display_messages {
+        msg.decode_attachment_thumbnails();
+    }
+
+    display_messages
+}
+
 /// Convert a unified Message (used for anon DM) to MessageDisplayData.
 pub fn anon_dm_message_to_display_data(
     msg: &Message,

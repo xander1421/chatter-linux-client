@@ -13,7 +13,7 @@ use chatter_core::services::channel::ChannelService;
 use chatter_core::services::message::MessageService;
 use chatter_core::services::user::UserService;
 
-use crate::bin_ui::converters::{channel_type_to_string, message_to_display_data, MessageDisplayData};
+use crate::bin_ui::converters::{channel_type_to_string, messages_to_display_batch};
 use chatter_core::services::conversation::ConversationHandle;
 use crate::MainWindow;
 
@@ -220,62 +220,11 @@ pub async fn load_channel_into_ui(
 
     // Convert messages to display data (thread-safe, can be sent to event loop)
     // Messages come from DB in DESC order (newest first), but chat UI shows oldest first
-    let mut display_messages: Vec<MessageDisplayData> = Vec::with_capacity(messages.len());
-    for msg in &messages {
-        let sender_name = if let Some(sender_id) = &msg.sender_id {
-            user_service.get_display_name(sender_id)
-        } else {
-            "Anonymous".to_string()
-        };
-
-        // Resolve attachments for this message
-        let resolved_attachments: Vec<_> = msg
-            .attachments
-            .iter()
-            .filter_map(|att_id| {
-                match attachment_service.get(att_id) {
-                    Ok(Some(att)) => {
-                        tracing::debug!(
-                            "Resolved attachment {} for message {}: local_path={:?}",
-                            att_id, msg.id, att.local_path
-                        );
-                        Some(att)
-                    }
-                    Ok(None) => {
-                        tracing::warn!("Attachment {} not found in repo for message {}", att_id, msg.id);
-                        None
-                    }
-                    Err(e) => {
-                        tracing::error!("Error fetching attachment {}: {}", att_id, e);
-                        None
-                    }
-                }
-            })
-            .collect();
-
-        if !msg.attachments.is_empty() {
-            tracing::debug!(
-                "Message {} has {} attachment IDs, resolved {} attachments",
-                msg.id, msg.attachments.len(), resolved_attachments.len()
-            );
-        }
-
-        let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments, None);
-
-        // Resolve reply-to sender name (converter leaves it empty for later resolution)
-        if display_data.is_reply {
-            if let Some(ref author_id) = msg.reply_to_author_id {
-                display_data.reply_to_sender_name = user_service.get_display_name(author_id);
-            }
-        }
-
-        display_messages.push(display_data);
-    }
-
-    // Pre-decode attachment thumbnails before UI thread
-    for msg in &mut display_messages {
-        msg.decode_attachment_thumbnails();
-    }
+    let display_messages = messages_to_display_batch(
+        &messages,
+        |uid| user_service.get_display_name(uid),
+        |att_id| attachment_service.get(att_id).ok().flatten(),
+    );
 
     // Update UI - special handling for SavedMessages and DMs
     let is_saved_messages = channel.channel_type == ChannelType::SavedMessages;

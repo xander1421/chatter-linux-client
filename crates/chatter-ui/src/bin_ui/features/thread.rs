@@ -12,7 +12,7 @@ use chatter_core::services::message::MessageService;
 use chatter_core::services::user::UserService;
 use chatter_core::state::ChatState;
 
-use crate::bin_ui::converters::message_to_display_data;
+use crate::bin_ui::converters::messages_to_display_batch;
 use crate::MainWindow;
 
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -73,24 +73,13 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
         tokio::spawn(async move {
             let thread = match chat_state.active_thread() { Some(t) => t, None => return };
             if let Ok(replies) = message_service.list_for_thread(&thread.root_message_id, None, 50) {
-                let mut display = Vec::new();
-                for msg in &replies {
-                    let sender_name = msg.sender_id.as_ref().map(|id| user_service.get_display_name(id)).unwrap_or_else(|| "Anonymous".to_string());
-                    let resolved: Vec<_> = msg.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
-                    let mut display_data = message_to_display_data(msg, &sender_name, &resolved, None);
-                    if display_data.is_reply {
-                        if let Some(ref author_id) = msg.reply_to_author_id {
-                            display_data.reply_to_sender_name = user_service.get_display_name(author_id);
-                        }
-                    }
-                    display.push(display_data);
-                }
+                let display = messages_to_display_batch(
+                    &replies,
+                    |uid| user_service.get_display_name(uid),
+                    |att_id| attachment_service.get(att_id).ok().flatten(),
+                );
                 // Get current user ID for is_own calculation
                 let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
-                // Pre-decode attachment thumbnails before UI thread
-                for msg in &mut display {
-                    msg.decode_attachment_thumbnails();
-                }
                 let _ = slint::invoke_from_event_loop(move || { if let Some(w) = weak.upgrade() {
                     let slint_messages: Vec<_> = display.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                     w.set_thread_replies(ModelRc::new(VecModel::from(slint_messages)));
@@ -116,24 +105,13 @@ pub fn load_thread_data(
             let content_preview = root_message.as_text().map(|t| if t.len() > 100 { format!("{}...", &t[..97]) } else { t.to_string() }).unwrap_or_else(|| "[Attachment]".to_string());
             let replies = message_service.list_for_thread(&root_message_id, None, 50).unwrap_or_default();
             let channel_name = channel_service.get_channel_local(&channel_id).ok().flatten().map(|c| c.name).unwrap_or_else(|| "Unknown".to_string());
-            let mut display = Vec::new();
-            for msg in &replies {
-                let reply_sender_name = msg.sender_id.as_ref().map(|id| user_service.get_display_name(id)).unwrap_or_else(|| "Anonymous".to_string());
-                let resolved: Vec<_> = msg.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect();
-                let mut display_data = message_to_display_data(msg, &reply_sender_name, &resolved, None);
-                if display_data.is_reply {
-                    if let Some(ref author_id) = msg.reply_to_author_id {
-                        display_data.reply_to_sender_name = user_service.get_display_name(author_id);
-                    }
-                }
-                display.push(display_data);
-            }
+            let display = messages_to_display_batch(
+                &replies,
+                |uid| user_service.get_display_name(uid),
+                |att_id| attachment_service.get(att_id).ok().flatten(),
+            );
             // Get current user ID for is_own calculation
             let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
-            // Pre-decode attachment thumbnails before UI thread
-            for msg in &mut display {
-                msg.decode_attachment_thumbnails();
-            }
             let _ = slint::invoke_from_event_loop(move || { if let Some(w) = window.upgrade() {
                 w.set_thread_panel_visible(true);
                 w.set_thread_root_message_id(root_message_id.to_string().into());

@@ -290,7 +290,7 @@ impl AnonDmService {
 
         // Encrypt avatar and display name with our own profile key
         let profile_key = self.get_my_profile_key();
-        let (encrypted_display_name, encrypted_avatar, pk_bytes) = if let Some(pk) = &profile_key {
+        let (_encrypted_display_name, encrypted_avatar, pk_bytes) = if let Some(pk) = &profile_key {
             let enc_name = display_name.as_deref().and_then(|name| {
                 crate::crypto::profile_crypto::encrypt_display_name(pk, name).ok()
             });

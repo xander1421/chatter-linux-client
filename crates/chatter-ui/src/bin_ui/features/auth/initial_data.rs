@@ -13,7 +13,7 @@ use chatter_core::domain::ids::ChannelId;
 use chatter_core::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{
-    channel_to_slint, dm_to_send_data, get_initials, message_to_display_data,
+    channel_to_slint, dm_to_send_data, get_initials, messages_to_display_batch,
     DMListItemSendData, FriendRequestSendData,
 };
 use crate::{ChannelListItemData, DMListItemData, FriendRequestData, MainWindow, PrivateGroupListItemData};
@@ -635,63 +635,14 @@ async fn load_channel_into_ui_from_services(
     };
 
     // Convert messages to display data
-    // Messages come from DB in DESC order (newest first), but chat UI shows oldest first
-    let mut display_messages = Vec::with_capacity(messages.len());
-    for msg in &messages {
-        let sender_name = if let Some(sender_id) = &msg.sender_id {
-            ui_ctx.users().get_display_name(sender_id)
-        } else {
-            "Anonymous".to_string()
-        };
-
-        // Resolve attachments for this message
-        let resolved_attachments: Vec<_> = msg
-            .attachments
-            .iter()
-            .filter_map(|att_id| match ui_ctx.attachments().get_metadata(att_id) {
-                Ok(Some(att)) => {
-                    tracing::debug!(
-                        "Resolved attachment {} for message {}: local_path={:?}",
-                        att_id,
-                        msg.id,
-                        att.local_path
-                    );
-                    Some(att)
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        "Attachment {} not found for message {}",
-                        att_id,
-                        msg.id
-                    );
-                    None
-                }
-                Err(e) => {
-                    tracing::error!("Error fetching attachment {}: {}", att_id, e);
-                    None
-                }
-            })
-            .collect();
-
-        let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments, None);
-
-        // Resolve reply-to sender name (converter leaves it empty for later resolution)
-        if display_data.is_reply {
-            if let Some(ref author_id) = msg.reply_to_author_id {
-                display_data.reply_to_sender_name = ui_ctx.users().get_display_name(author_id);
-            }
-        }
-
-        display_messages.push(display_data);
-    }
+    let display_messages = messages_to_display_batch(
+        &messages,
+        |uid| ui_ctx.users().get_display_name(uid),
+        |att_id| ui_ctx.attachments().get_metadata(att_id).ok().flatten(),
+    );
 
     // Get current user ID for is_own calculation in to_slint_with_user
     let current_user_id_for_slint = current_user_id.clone().unwrap_or_default();
-
-    // Pre-decode attachment thumbnails before UI thread
-    for msg in &mut display_messages {
-        msg.decode_attachment_thumbnails();
-    }
 
     // Update UI
     let channel_name = channel.name.clone();
