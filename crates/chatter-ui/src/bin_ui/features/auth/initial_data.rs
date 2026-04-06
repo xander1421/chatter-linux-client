@@ -18,6 +18,16 @@ use crate::bin_ui::converters::{
 };
 use crate::{ChannelListItemData, DMListItemData, FriendRequestData, MainWindow, PrivateGroupListItemData};
 
+/// Truncate text for sidebar preview (50 chars max, 47 + "...").
+fn truncate_sidebar_preview(text: &str) -> String {
+    if text.chars().count() > 50 {
+        let truncated: String = text.chars().take(47).collect();
+        format!("{}...", truncated)
+    } else {
+        text.to_string()
+    }
+}
+
 /// Load initial data after login or on startup.
 pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     tracing::info!("Loading initial data...");
@@ -94,12 +104,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                             let preview = msg
                                 .as_text()
                                 .map(|text| {
-                                    let mut display_text = text.to_string();
-                                    if display_text.chars().count() > 50 {
-                                        let truncated: String = display_text.chars().take(47).collect();
-                                        display_text = format!("{}...", truncated);
-                                    }
-                                    
+                                    let display_text = truncate_sidebar_preview(text);
                                     if is_own {
                                         format!("You: {}", display_text)
                                     } else {
@@ -280,14 +285,12 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                         let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
                         let preview = msg.as_text()
                             .map(|text| {
-                                let display_text = text.to_string();
-                                if display_text.chars().count() > 50 {
-                                    let truncated: String = display_text.chars().take(47).collect();
-                                    format!("{}...", truncated)
+                                if text.chars().count() > 50 {
+                                    truncate_sidebar_preview(text)
                                 } else if is_own {
-                                    format!("You: {}", display_text)
+                                    format!("You: {}", text)
                                 } else {
-                                    display_text
+                                    text.to_string()
                                 }
                             })
                             .unwrap_or_default();
@@ -397,14 +400,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 let (last_message, timestamp) = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
                     Ok(Some(msg)) => {
                         let preview = msg.as_text()
-                            .map(|text| {
-                                let mut display_text = text.to_string();
-                                if display_text.chars().count() > 50 {
-                                    let truncated: String = display_text.chars().take(47).collect();
-                                    display_text = format!("{}...", truncated);
-                                }
-                                format!("You: {}", display_text)
-                            })
+                            .map(|text| format!("You: {}", truncate_sidebar_preview(text)))
                             .unwrap_or_else(|| "Message request sent".to_string());
                         let ts = msg.created_at
                             .with_timezone(&chrono::Local)
@@ -453,14 +449,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 let (last_message, timestamp) = match ui_ctx.anon_groups().get_latest_message(&g.id) {
                     Ok(Some(msg)) => {
                         let preview = msg.as_text()
-                            .map(|text| {
-                                if text.chars().count() > 50 {
-                                    let truncated: String = text.chars().take(47).collect();
-                                    format!("{}...", truncated)
-                                } else {
-                                    text.to_string()
-                                }
-                            })
+                            .map(|text| truncate_sidebar_preview(text))
                             .unwrap_or_default();
                         let ts = msg.created_at
                             .with_timezone(&chrono::Local)
@@ -719,11 +708,7 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             
                             let preview = msg.as_text()
                                 .map(|text| {
-                                    let mut display_text = text.to_string();
-                                    if display_text.chars().count() > 50 {
-                                        let truncated: String = display_text.chars().take(47).collect();
-                                        display_text = format!("{}...", truncated);
-                                    }
+                                    let display_text = truncate_sidebar_preview(text);
                                     if is_own {
                                         format!("You: {}", display_text)
                                     } else {
@@ -840,14 +825,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let (last_message, timestamp) = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
                             Ok(Some(msg)) => {
                                 let preview = msg.as_text()
-                                    .map(|text| {
-                                        if text.chars().count() > 50 {
-                                            let truncated: String = text.chars().take(47).collect();
-                                            format!("{}...", truncated)
-                                        } else {
-                                            text.to_string()
-                                        }
-                                    })
+                                    .map(|text| truncate_sidebar_preview(text))
                                     .unwrap_or_else(|| "[Attachment]".to_string());
                                 
                                 let ts = msg.created_at
