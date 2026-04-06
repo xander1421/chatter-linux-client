@@ -427,12 +427,12 @@ export component MessageComposer inherits Rectangle {
                         border-radius: Spacing.radius-sm;
                         opacity: attachment.is-ready ? 1.0 : 0.7;
 
-                        property <color> category-bg: attachment.category == "image" ? #4ade80 :
-                                                      attachment.category == "video" ? #f472b6 :
-                                                      attachment.category == "audio" ? #a78bfa :
-                                                      attachment.category == "document" ? #60a5fa :
-                                                      attachment.category == "code" ? #fbbf24 :
-                                                      attachment.category == "archive" ? #fb923c :
+                        property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
+                                                      attachment.category == "video" ? Colors.cat-video :
+                                                      attachment.category == "audio" ? Colors.cat-audio :
+                                                      attachment.category == "document" ? Colors.cat-document :
+                                                      attachment.category == "code" ? Colors.cat-code :
+                                                      attachment.category == "archive" ? Colors.cat-archive :
                                                       Colors.text-muted;
 
                         property <string> category-emoji: attachment.category == "image" ? "\u{1F5BC}\u{FE0F}" :

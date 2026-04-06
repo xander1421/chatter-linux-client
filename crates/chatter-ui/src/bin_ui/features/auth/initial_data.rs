@@ -45,7 +45,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     }
 
     // Now get channels from local storage (which has been synced)
-    let channels = match ui_ctx.channels().get_channels_for_user() {
+    let channels = match ui_ctx.channels().get_unsectioned_channels_for_user() {
         Ok(ch) => ch,
         Err(e) => {
             tracing::error!(
@@ -673,7 +673,7 @@ async fn load_channel_into_ui_from_services(
             })
             .collect();
 
-        let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments);
+        let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments, None);
 
         // Resolve reply-to sender name (converter leaves it empty for later resolution)
         if display_data.is_reply {
@@ -733,7 +733,7 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let current_user_id = ui_ctx.auth_state().get().current_user_id;
         
         // Get channels from local storage
-        let channels = match ui_ctx.channels().get_channels_for_user() {
+        let channels = match ui_ctx.channels().get_unsectioned_channels_for_user() {
             Ok(ch) => ch,
             Err(e) => {
                 tracing::error!("Failed to refresh DM list: {}", e);
@@ -742,7 +742,7 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         };
         
         let mut dm_list: Vec<DMListItemSendData> = Vec::new();
-        
+
         // Process regular DMs
         for channel in &channels {
             if channel.channel_type == ChannelType::DirectMessage {

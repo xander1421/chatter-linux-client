@@ -99,9 +99,10 @@ export component MessageItem inherits Rectangle {
     background: transparent;
 
     // Wrap entire content in TouchArea for reliable hover detection.
-    // Previously touch was a sibling behind main-layout, which caused
-    // has-hover to get stuck when child TouchAreas intercepted events.
+    // Width/Height 100% ensures it covers the whole row.
     touch := TouchArea {
+        width: 100%;
+        height: 100%;
         mouse-cursor: pointer;
         clicked => {
             root.message-clicked(root.message-id);
@@ -1018,10 +1019,10 @@ export component MessageItem inherits Rectangle {
                         clicked => { root.react-clicked(root.sender-id, root.timestamp-ns); }
                     }
                 }
-                // Action buttons — float above top-right of bubble
+                // Action buttons — float above top corner of bubble on opposed side
                 Rectangle {
-                    x: (bubble.width - action-btns.width) / 2;
-                    y: 0px;
+                    x: root.is-own ? -action-btns.width + 8px : bubble.width - 8px;
+                    y: -14px; // Float halfway above the top edge
                     width: action-btns.width;
                     height: action-btns.height;
                     visible: root.is-hovered && !root.is-system && !root.is-deleted && !root.is-call;

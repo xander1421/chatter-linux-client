@@ -30,12 +30,12 @@ export component AttachmentItem inherits Rectangle {
     callback cancel-clicked(string);
 
     // Computed properties
-    property <color> category-bg: root.category == "image" ? #4ade80 :
-                                  root.category == "video" ? #f472b6 :
-                                  root.category == "audio" ? #a78bfa :
-                                  root.category == "document" ? #60a5fa :
-                                  root.category == "code" ? #fbbf24 :
-                                  root.category == "archive" ? #fb923c :
+    property <color> category-bg: root.category == "image" ? Colors.cat-image :
+                                  root.category == "video" ? Colors.cat-video :
+                                  root.category == "audio" ? Colors.cat-audio :
+                                  root.category == "document" ? Colors.cat-document :
+                                  root.category == "code" ? Colors.cat-code :
+                                  root.category == "archive" ? Colors.cat-archive :
                                   Colors.text-muted;
 
     property <string> category-emoji: root.category == "image" ? "\u{1F5BC}\u{FE0F}" :

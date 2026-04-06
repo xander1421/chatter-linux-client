@@ -108,6 +108,14 @@ impl GrpcClientPool {
             .initial_stream_window_size(2 * 1024 * 1024)
             .initial_connection_window_size(8 * 1024 * 1024);
 
+        // Configure TLS for HTTPS endpoints (required on Android where system CAs
+        // aren't automatically loaded by rustls)
+        if server_url.starts_with("https://") {
+            let tls_config = tonic::transport::ClientTlsConfig::new();
+            endpoint = endpoint.tls_config(tls_config)
+                .map_err(|e| NetworkError::ConnectionFailed(format!("TLS config error: {}", e)))?;
+        }
+
         if let Some(t) = timeout {
             endpoint = endpoint.timeout(t);
         }
@@ -329,6 +337,11 @@ impl GrpcClientPool {
     /// Create an authenticated IntegrationClient.
     pub fn integration_client(&self) -> super::IntegrationClient {
         super::IntegrationClient::new(self.channel(), self.auth_clone())
+    }
+
+    /// Create an authenticated MemoryClient for AI memory service.
+    pub fn memory_client(&self) -> super::MemoryClient {
+        super::MemoryClient::new(self.channel(), self.auth_clone())
     }
 
     /// Create an authenticated SvrClient for backup operations.

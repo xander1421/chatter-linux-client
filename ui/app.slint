@@ -105,8 +105,10 @@ export component App inherits Rectangle {
     in property <image> register-avatar-source;
     in property <bool> register-has-avatar: false;
     in-out property <int> register-selected-default-idx: -1;
+    in property <string> register-username-status: "none";
     callback register-select-avatar();
     callback register-select-default-avatar(int);
+    callback register-check-username(string);
 
     // ========== Recovery codes modal properties ==========
     in property <[string]> recovery-codes: [];
@@ -873,9 +875,13 @@ export component App inherits Rectangle {
             avatar-source: root.register-avatar-source;
             has-avatar: root.register-has-avatar;
             selected-default-idx <=> root.register-selected-default-idx;
+            username-status: root.register-username-status;
 
             register(u, p, d, pin, s) => {
                 root.register(u, p, d, pin, s);
+            }
+            check-username(u) => {
+                root.register-check-username(u);
             }
             select-avatar => {
                 root.register-select-avatar();

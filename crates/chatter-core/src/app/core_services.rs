@@ -79,6 +79,8 @@ pub struct CoreServices {
     pub jarvis_service: Arc<JarvisService>,
     pub notification_service: Arc<NotificationService>,
     pub section_service: Arc<SectionService>,
+    /// Unified conversation repository.
+    pub conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
 
     // State stores
     pub ui_state: UIState,
@@ -160,6 +162,7 @@ impl CoreServices {
                 Arc::new(svc)
             },
             section_service: services.section_service.clone(),
+            conversation_repo: services.conversation_repo.clone(),
 
             // State stores
             ui_state: UIState::new(),

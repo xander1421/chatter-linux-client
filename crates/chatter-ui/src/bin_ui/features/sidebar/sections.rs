@@ -57,18 +57,10 @@ impl SectionConvSendData {
 /// Load all custom sections from the database and set them on the window.
 pub(crate) fn load_sections(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let section_service = ui_ctx.sections().clone();
-    let channel_service = ui_ctx.channels().clone();
-    let anon_dm_service = ui_ctx.anon_dms().clone();
-    let anon_group_service = ui_ctx.anon_groups().clone();
 
     match section_service.list_sections_with_conversations() {
         Ok(sections) => {
-            let (section_models, send_data) = build_section_data(
-                &sections,
-                &channel_service,
-                &anon_dm_service,
-                &anon_group_service,
-            );
+            let (section_models, send_data) = build_section_data(&sections, &section_service);
 
             // On startup we're on the UI thread, so convert directly.
             let conversation_models: Vec<_> =
@@ -104,9 +96,6 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let name_str = name.to_string();
         let emoji_str = emoji.to_string();
         let section_service = ui_ctx.sections().clone();
-        let channel_service = ui_ctx.channels().clone();
-        let anon_dm_service = ui_ctx.anon_dms().clone();
-        let anon_group_service = ui_ctx.anon_groups().clone();
         let weak = weak.clone();
 
         tokio::spawn(async move {
@@ -120,13 +109,7 @@ fn wire_create_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_active_modal("none".into());
                         }
                     });
-                    refresh_sections_ui(
-                        &weak,
-                        &section_service,
-                        &channel_service,
-                        &anon_dm_service,
-                        &anon_group_service,
-                    );
+                    refresh_sections_ui(&weak, &section_service);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to create section");
@@ -143,9 +126,6 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_delete_section_clicked(move |section_id: SharedString| {
         let section_id_str = section_id.to_string();
         let section_service = ui_ctx.sections().clone();
-        let channel_service = ui_ctx.channels().clone();
-        let anon_dm_service = ui_ctx.anon_dms().clone();
-        let anon_group_service = ui_ctx.anon_groups().clone();
         let weak = weak.clone();
 
         tokio::spawn(async move {
@@ -158,13 +138,7 @@ fn wire_delete_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match section_service.delete_section(&id) {
                 Ok(()) => {
                     tracing::info!(section_id = %section_id_str, "Deleted custom section");
-                    refresh_sections_ui(
-                        &weak,
-                        &section_service,
-                        &channel_service,
-                        &anon_dm_service,
-                        &anon_group_service,
-                    );
+                    refresh_sections_ui(&weak, &section_service);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, section_id = %section_id_str, "Failed to delete section");
@@ -206,9 +180,6 @@ fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let name_str = name.to_string();
         let emoji_str = emoji.to_string();
         let section_service = ui_ctx.sections().clone();
-        let channel_service = ui_ctx.channels().clone();
-        let anon_dm_service = ui_ctx.anon_dms().clone();
-        let anon_group_service = ui_ctx.anon_groups().clone();
         let weak = weak.clone();
 
         tokio::spawn(async move {
@@ -239,13 +210,7 @@ fn wire_rename_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_active_modal("none".into());
                 }
             });
-            refresh_sections_ui(
-                &weak,
-                &section_service,
-                &channel_service,
-                &anon_dm_service,
-                &anon_group_service,
-            );
+            refresh_sections_ui(&weak, &section_service);
         });
     });
 }
@@ -257,9 +222,6 @@ fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_section_toggle_expanded(move |section_id: SharedString| {
         let section_id_str = section_id.to_string();
         let section_service = ui_ctx.sections().clone();
-        let channel_service = ui_ctx.channels().clone();
-        let anon_dm_service = ui_ctx.anon_dms().clone();
-        let anon_group_service = ui_ctx.anon_groups().clone();
         let weak = weak.clone();
 
         tokio::spawn(async move {
@@ -289,13 +251,7 @@ fn wire_toggle_expanded(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             }
 
-            refresh_sections_ui(
-                &weak,
-                &section_service,
-                &channel_service,
-                &anon_dm_service,
-                &anon_group_service,
-            );
+            refresh_sections_ui(&weak, &section_service);
         });
     });
 }
@@ -309,9 +265,6 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let conv_type_str = conv_type.to_string();
         let section_id_str = section_id.to_string();
         let section_service = ui_ctx.sections().clone();
-        let channel_service = ui_ctx.channels().clone();
-        let anon_dm_service = ui_ctx.anon_dms().clone();
-        let anon_group_service = ui_ctx.anon_groups().clone();
         let weak = weak.clone();
 
         tokio::spawn(async move {
@@ -333,13 +286,7 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         section_id = %section_id_str,
                         "Moved conversation to section"
                     );
-                    refresh_sections_ui(
-                        &weak,
-                        &section_service,
-                        &channel_service,
-                        &anon_dm_service,
-                        &anon_group_service,
-                    );
+                    refresh_sections_ui(&weak, &section_service);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to move conversation to section");
@@ -356,22 +303,13 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_remove_from_section(move |conv_id: SharedString| {
         let conv_id_str = conv_id.to_string();
         let section_service = ui_ctx.sections().clone();
-        let channel_service = ui_ctx.channels().clone();
-        let anon_dm_service = ui_ctx.anon_dms().clone();
-        let anon_group_service = ui_ctx.anon_groups().clone();
         let weak = weak.clone();
 
         tokio::spawn(async move {
             match section_service.remove_conversation_from_section(&conv_id_str) {
                 Ok(()) => {
                     tracing::info!(conversation_id = %conv_id_str, "Removed conversation from section");
-                    refresh_sections_ui(
-                        &weak,
-                        &section_service,
-                        &channel_service,
-                        &anon_dm_service,
-                        &anon_group_service,
-                    );
+                    refresh_sections_ui(&weak, &section_service);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to remove conversation from section");
@@ -417,9 +355,7 @@ fn wire_section_conversation_selected(window: &MainWindow, ui_ctx: &Arc<ChatterC
 /// Build Send-safe section and conversation data from domain objects.
 fn build_section_data(
     sections: &[chatter_core::domain::section::CustomSection],
-    channel_service: &Arc<chatter_core::services::channel::ChannelService>,
-    anon_dm_service: &Arc<chatter_core::services::anon_dm::AnonDmService>,
-    anon_group_service: &Arc<chatter_core::services::anon_group::AnonGroupService>,
+    section_service: &Arc<chatter_core::services::section_service::SectionService>,
 ) -> (Vec<CustomSectionData>, Vec<SectionConvSendData>) {
     let mut section_models = Vec::with_capacity(sections.len());
     let mut conversation_models = Vec::new();
@@ -438,9 +374,7 @@ fn build_section_data(
                 &conv.conversation_id,
                 &conv.conversation_type,
                 &section.id,
-                channel_service,
-                anon_dm_service,
-                anon_group_service,
+                section_service,
             ));
         }
     }
@@ -452,9 +386,6 @@ fn build_section_data(
 fn refresh_sections_ui(
     weak: &slint::Weak<MainWindow>,
     section_service: &Arc<chatter_core::services::section_service::SectionService>,
-    channel_service: &Arc<chatter_core::services::channel::ChannelService>,
-    anon_dm_service: &Arc<chatter_core::services::anon_dm::AnonDmService>,
-    anon_group_service: &Arc<chatter_core::services::anon_group::AnonGroupService>,
 ) {
     let sections = match section_service.list_sections_with_conversations() {
         Ok(s) => s,
@@ -464,8 +395,7 @@ fn refresh_sections_ui(
         }
     };
 
-    let (section_models, send_data) =
-        build_section_data(&sections, channel_service, anon_dm_service, anon_group_service);
+    let (section_models, send_data) = build_section_data(&sections, section_service);
 
     let weak = weak.clone();
     let _ = slint::invoke_from_event_loop(move || {
@@ -483,9 +413,7 @@ fn enrich_conversation_send(
     conversation_id: &str,
     conversation_type: &ConversationType,
     section_id: &SectionId,
-    channel_service: &Arc<chatter_core::services::channel::ChannelService>,
-    anon_dm_service: &Arc<chatter_core::services::anon_dm::AnonDmService>,
-    anon_group_service: &Arc<chatter_core::services::anon_group::AnonGroupService>,
+    section_service: &Arc<chatter_core::services::section_service::SectionService>,
 ) -> SectionConvSendData {
     let mut data = SectionConvSendData {
         conversation_id: conversation_id.to_string(),
@@ -499,41 +427,13 @@ fn enrich_conversation_send(
         unread_count: 0,
     };
 
-    match conversation_type {
-        ConversationType::Channel
-        | ConversationType::SavedMessages
-        | ConversationType::ServerDm
-        | ConversationType::MailboxDm => {
-            if let Ok(id) = conversation_id.parse() {
-                if let Ok(Some(channel)) = channel_service.get_channel_local(&id) {
-                    data.display_name = channel.name.clone();
-                    data.initials = get_initials(&channel.name);
-                    data.unread_count = channel.unread_count as i32;
-                }
-            }
-        }
-        ConversationType::AnonDm => {
-            if let Ok(id) = conversation_id.parse() {
-                if let Ok(Some(dm)) = anon_dm_service.get_conversation(&id) {
-                    let name = dm
-                        .peer_display_name
-                        .as_deref()
-                        .unwrap_or("Anonymous");
-                    data.display_name = name.to_string();
-                    data.initials = get_initials(name);
-                    data.unread_count = dm.unread_count as i32;
-                    data.avatar_bytes = dm.peer_avatar.clone();
-                }
-            }
-        }
-        ConversationType::AnonGroup => {
-            if let Ok(id) = conversation_id.parse() {
-                if let Ok(Some(group)) = anon_group_service.get_group(&id) {
-                    data.display_name = group.name.clone();
-                    data.initials = get_initials(&group.name);
-                }
-            }
-        }
+    if let Ok(Some(meta)) = section_service.get_conversation_metadata(conversation_id, conversation_type) {
+        data.display_name = meta.name.clone();
+        data.initials = get_initials(&meta.name);
+        data.unread_count = meta.unread_count as i32;
+
+        // TODO: Handle avatar_url or avatar_bytes conversion if needed
+        // For now we keep it simple as metadata doesn't include full blobs for performance
     }
 
     data

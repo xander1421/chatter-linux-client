@@ -27,7 +27,7 @@ impl Migration for V020AnonGroups {
         r#"
         -- Anonymous groups (local-only, server has NO knowledge)
         CREATE TABLE anon_groups (
-            id BLOB PRIMARY KEY,              -- 16 bytes UUID
+            id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             my_role INTEGER NOT NULL DEFAULT 0,  -- 0=Member, 1=Admin, 2=Owner
             bootstrap_complete INTEGER NOT NULL DEFAULT 0,
@@ -38,8 +38,8 @@ impl Migration for V020AnonGroups {
         -- Group members (our local view of membership)
         CREATE TABLE anon_group_members (
             id TEXT PRIMARY KEY,
-            group_id BLOB NOT NULL,
-            user_id BLOB NOT NULL,            -- 16 bytes UUID
+            group_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
             role INTEGER NOT NULL DEFAULT 0,  -- 0=Member, 1=Admin, 2=Owner
             mailbox_pk BLOB,                  -- 32 bytes Ed25519, NULL until JoinAck received
             joined_at TEXT NOT NULL,
@@ -52,7 +52,7 @@ impl Migration for V020AnonGroups {
         -- Our mailbox for each group (reuses blind signature infrastructure)
         CREATE TABLE anon_group_mailboxes (
             id TEXT PRIMARY KEY,
-            group_id BLOB NOT NULL UNIQUE,
+            group_id TEXT NOT NULL UNIQUE,
             mailbox_public_key BLOB NOT NULL,  -- 32 bytes Ed25519
             mailbox_private_key BLOB NOT NULL, -- 64 bytes Ed25519 keypair
             token_id TEXT NOT NULL,
@@ -64,8 +64,8 @@ impl Migration for V020AnonGroups {
         -- Pending actions (invites sent, waiting for ack)
         CREATE TABLE anon_group_pending (
             id TEXT PRIMARY KEY,
-            group_id BLOB NOT NULL,
-            user_id BLOB NOT NULL,
+            group_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
             action TEXT NOT NULL,              -- 'invite', 'kick'
             created_at TEXT NOT NULL,
             expires_at TEXT NOT NULL,

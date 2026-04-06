@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Icons } from "../theme/icons.slint";
 
 export component Input inherits Rectangle {
     in property <string> placeholder: "";
@@ -24,6 +25,7 @@ export component Input inherits Rectangle {
 
     // Internal state
     property <bool> focused: input.has-focus;
+    property <bool> show-password: false;
 
     // Computed border color
     property <color> border-col: {
@@ -55,7 +57,7 @@ export component Input inherits Rectangle {
             // Placeholder text (shown when empty, fades on focus)
             if root.text == "": Text {
                 x: Spacing.md;
-                width: parent.width - Spacing.md * 2;
+                width: parent.width - Spacing.md * 2 - (root.password ? 32px : 0px);
                 height: 100%;
                 text: root.placeholder;
                 color: Colors.text-muted;
@@ -68,12 +70,13 @@ export component Input inherits Rectangle {
             // Actual text input (full width for reliable touch targeting)
             input := TextInput {
                 x: Spacing.md;
-                width: parent.width - Spacing.md * 2;
+                width: parent.width - Spacing.md * 2 - (root.password ? 32px : 0px);
                 height: parent.height;
                 color: Colors.text-primary;
                 font-size: Typography.base;
                 text <=> root.text;
-                input-type: root.password ? InputType.password : InputType.text;
+                // Toggle between password and text type
+                input-type: root.password && !root.show-password ? InputType.password : InputType.text;
                 enabled: !root.disabled;
                 vertical-alignment: center;
 
@@ -85,8 +88,34 @@ export component Input inherits Rectangle {
                 }
             }
 
+            // Password visibility toggle
+            if root.password: Rectangle {
+                x: parent.width - 36px;
+                width: 32px;
+                height: 100%;
+
+                Image {
+                    source: root.show-password ? Icons.eye-off : Icons.eye;
+                    width: 18px;
+                    height: 18px;
+                    colorize: eye-touch.has-hover ? Colors.text-primary : Colors.text-muted;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                }
+
+                eye-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.show-password = !root.show-password;
+                        input.focus();
+                    }
+                }
+            }
+
             // Full-area touch target to ensure tapping anywhere focuses the input
+            // (Except on the eye toggle area)
             TouchArea {
+                width: parent.width - (root.password ? 36px : 0px);
                 enabled: !root.disabled;
                 clicked => { input.focus(); }
             }

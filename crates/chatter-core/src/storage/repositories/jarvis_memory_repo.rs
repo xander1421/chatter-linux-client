@@ -124,6 +124,20 @@ impl JarvisMemoryRepository {
     }
 
     /// Delete old conversations (for compression).
+    /// Delete all conversations for a specific context.
+    pub fn delete_conversations_for_context(
+        &self,
+        context: &JarvisContext,
+    ) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "DELETE FROM jarvis_conversations WHERE context_type = ?1 AND context_id = ?2",
+            params![context.context_type.to_string(), context.context_id],
+        )?;
+        Ok(rows as u32)
+    }
+
+    /// Delete conversations in a range of timestamps.
     pub fn delete_conversations_in_range(
         &self,
         context: &JarvisContext,

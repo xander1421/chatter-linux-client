@@ -25,12 +25,14 @@ pub mod anon_dm_init;
 pub mod private_friend_code;
 pub mod jarvis;
 pub mod section;
+pub mod unified_conversation;
 
 // Re-export core types for convenience
 pub use ids::{
     AttachmentId, CallId, ChannelId, DeviceId, DraftId, IntegrationId, MessageId, NotificationId,
     ReactionId, SavedMessageId, SessionId, ThreadId, UserId,
 };
+pub use unified_conversation::UnifiedConversation;
 pub use user::{Device, Friendship, FriendshipStatus, PresenceStatus, Profile, StatusMessage, User};
 pub use message::{
     AIMessage, CallMessage, CallMessageType, ConversationType, EncryptedContent,

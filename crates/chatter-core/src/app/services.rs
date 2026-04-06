@@ -8,6 +8,7 @@ use std::sync::Arc;
 use crate::services::ai::{LocalAIActorHandle, LocalAIService};
 use crate::services::jarvis::JarvisService;
 use crate::services::ai_service::AIService;
+use crate::services::memory_service::MemoryService;
 use crate::services::anon_dm::AnonDmService;
 use crate::services::anon_group::AnonGroupService;
 use crate::services::attachment::AttachmentService;
@@ -94,6 +95,10 @@ pub struct ServiceContainer {
     pub jarvis_service: Arc<JarvisService>,
     /// Section service for custom sidebar sections.
     pub section_service: Arc<SectionService>,
+    /// Memory service for AI memory operations (server + client-side extraction).
+    pub memory_service: Arc<MemoryService>,
+    /// Unified conversation repository (available to services).
+    pub(crate) conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
     /// Organization state (shared with AuthService for org context).
     pub org_state: OrgState,
 }
@@ -172,6 +177,7 @@ impl ServiceContainer {
             infra.grpc_pool.clone(),
             infra.settings_repo.clone(),
             infra.channel_repo.clone(),
+            infra.section_repo.clone(),
             signal_service.clone(),
             infra.group_coordinator.clone(),
         ));
@@ -260,11 +266,18 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
         ));
 
+        // 19b. Memory service (server memory RPCs + client-side E2E extraction)
+        let memory_service = Arc::new(MemoryService::new(
+            infra.grpc_pool.clone(),
+            local_ai.clone(),
+        ));
+
         // 20. Jarvis AI assistant service
         let jarvis_service = Arc::new(JarvisService::new(
             infra.jarvis_memory_repo.clone(),
             infra.jarvis_graph_repo.clone(),
             local_ai.clone(),
+            infra.event_bus.clone(),
         ));
 
         // 21. Typing service for typing indicators
@@ -284,9 +297,11 @@ impl ServiceContainer {
         // 23. Section service for custom sidebar sections
         let section_service = Arc::new(SectionService::new(
             infra.section_repo.clone(),
-            infra.channel_repo.clone(),
-            infra.anon_dm_repo.clone(),
+            infra.unified_conversation_repo.clone(),
         ));
+
+        // 24. Unified conversation repository
+        let conversation_repo = infra.unified_conversation_repo.clone();
 
         tracing::info!("Services initialized");
 
@@ -315,6 +330,8 @@ impl ServiceContainer {
             typing_service,
             channel_bootstrap_service,
             section_service,
+            memory_service,
+            conversation_repo,
             org_state,
         })
     }

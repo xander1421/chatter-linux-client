@@ -201,8 +201,35 @@ pub(crate) fn update_sidebar_preview(
                 }
             }
         }
-        ActiveConversation::AnonDm(_) | ActiveConversation::None => {
-            // AnonDm has no sidebar list; None is a no-op
+        ActiveConversation::AnonDm(anon_dm_id) => {
+            let channel_id_str = format!("anon_dm:{}", anon_dm_id);
+            let model = window.get_dm_conversations();
+            let mut others = Vec::new();
+            let mut updated = None;
+
+            for i in 0..model.row_count() {
+                if let Some(item) = model.row_data(i) {
+                    if item.channel_id.as_str() == channel_id_str {
+                        let mut u = item.clone();
+                        u.last_message = preview.into();
+                        u.timestamp = timestamp.into();
+                        if should_increment { u.unread_count += 1; }
+                        updated = Some(u);
+                    } else {
+                        others.push(item);
+                    }
+                }
+            }
+            if let Some(item) = updated {
+                others.insert(0, item);
+                window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(others)));
+                if should_increment {
+                    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window);
+                }
+            }
+        }
+        ActiveConversation::None => {
+            // None is a no-op
         }
     }
 }

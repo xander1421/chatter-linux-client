@@ -31,6 +31,7 @@ pub mod offline_queue;
 pub mod moderation_service;
 pub mod ai_service;
 pub mod local_ai_service;
+pub mod memory_service;
 pub mod ai_summarize;
 pub mod draft_service;
 pub mod pin_service;
@@ -95,6 +96,9 @@ pub use moderation_service::{ModerationError, ModerationService, proto_moderatio
 
 // Re-exports for AI service
 pub use ai_service::{AIError, AIService};
+
+// Re-exports for memory service
+pub use memory_service::{MemoryError, MemoryService};
 
 // Re-exports for AI summarization service
 pub use ai_summarize::{AISummarizeService, SummarizeError};

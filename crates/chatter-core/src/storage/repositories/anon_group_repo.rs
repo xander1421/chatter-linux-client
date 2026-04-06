@@ -38,9 +38,9 @@ impl AnonGroupRepository {
             "INSERT OR REPLACE INTO anon_groups (id, name, owner_id, my_role, bootstrap_complete, created_at, updated_at, status)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                group.id.as_bytes().as_slice(),
+                group.id.to_string(),
                 group.name,
-                group.owner_id.as_bytes().as_slice(),
+                group.owner_id.to_string(),
                 group.my_role.to_i32(),
                 group.bootstrap_complete as i32,
                 group.created_at.to_rfc3339(),
@@ -59,7 +59,7 @@ impl AnonGroupRepository {
              FROM anon_groups WHERE id = ?1",
         )?;
 
-        let result = stmt.query_row(params![id.as_bytes().as_slice()], row_to_group);
+        let result = stmt.query_row(params![id.to_string()], row_to_group);
 
         match result {
             Ok(group) => Ok(Some(group)),
@@ -80,8 +80,8 @@ impl AnonGroupRepository {
                 group.bootstrap_complete as i32,
                 group.updated_at.to_rfc3339(),
                 group.status.to_i32(),
-                group.owner_id.as_bytes().as_slice(),
-                group.id.as_bytes().as_slice(),
+                group.owner_id.to_string(),
+                group.id.to_string(),
             ],
         )?;
         if rows == 0 {
@@ -96,7 +96,7 @@ impl AnonGroupRepository {
         let now = chrono::Utc::now();
         let rows = conn.execute(
             "UPDATE anon_groups SET name = ?1, updated_at = ?2 WHERE id = ?3",
-            params![name, now.to_rfc3339(), id.as_bytes().as_slice()],
+            params![name, now.to_rfc3339(), id.to_string()],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("AnonGroup {}", id)));
@@ -109,7 +109,7 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "DELETE FROM anon_groups WHERE id = ?1",
-            params![id.as_bytes().as_slice()],
+            params![id.to_string()],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("AnonGroup {}", id)));
@@ -143,7 +143,7 @@ impl AnonGroupRepository {
             params![
                 complete as i32,
                 Utc::now().to_rfc3339(),
-                id.as_bytes().as_slice(),
+                id.to_string(),
             ],
         )?;
         if rows == 0 {
@@ -170,8 +170,8 @@ impl AnonGroupRepository {
                 avatar = COALESCE(excluded.avatar, avatar)",
             params![
                 member.id,
-                member.group_id.as_bytes().as_slice(),
-                member.user_id.as_bytes().as_slice(),
+                member.group_id.to_string(),
+                member.user_id.to_string(),
                 member.role.to_i32(),
                 member.mailbox_pk.as_ref().map(|pk| pk.as_slice()),
                 member.joined_at.to_rfc3339(),
@@ -189,8 +189,8 @@ impl AnonGroupRepository {
         let rows = conn.execute(
             "DELETE FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
             params![
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
         )?;
         if rows == 0 {
@@ -226,8 +226,8 @@ impl AnonGroupRepository {
              WHERE group_id = ?2 AND user_id = ?3",
             params![
                 mailbox_pk.as_slice(),
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
                 profile_key.as_ref().map(|pk| pk.as_slice()),
                 display_name,
                 avatar,
@@ -264,8 +264,8 @@ impl AnonGroupRepository {
                 profile_key.as_ref().map(|pk| pk.as_slice()),
                 display_name,
                 avatar,
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
         )?;
         if rows == 0 {
@@ -289,8 +289,8 @@ impl AnonGroupRepository {
             "UPDATE anon_group_members SET mailbox_pk = ?1 WHERE group_id = ?2 AND user_id = ?3",
             params![
                 mailbox_pk.as_slice(),
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
         )?;
         if rows == 0 {
@@ -314,8 +314,8 @@ impl AnonGroupRepository {
             "UPDATE anon_group_members SET role = ?1 WHERE group_id = ?2 AND user_id = ?3",
             params![
                 role.to_i32(),
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
         )?;
         if rows == 0 {
@@ -335,7 +335,7 @@ impl AnonGroupRepository {
              FROM anon_group_members WHERE group_id = ?1 ORDER BY joined_at",
         )?;
 
-        let mut rows = stmt.query(params![group_id.as_bytes().as_slice()])?;
+        let mut rows = stmt.query(params![group_id.to_string()])?;
         let mut members = Vec::new();
 
         while let Some(row) = rows.next()? {
@@ -354,7 +354,7 @@ impl AnonGroupRepository {
              ORDER BY joined_at",
         )?;
 
-        let mut rows = stmt.query(params![group_id.as_bytes().as_slice()])?;
+        let mut rows = stmt.query(params![group_id.to_string()])?;
         let mut members = Vec::new();
 
         while let Some(row) = rows.next()? {
@@ -374,8 +374,8 @@ impl AnonGroupRepository {
 
         let result = stmt.query_row(
             params![
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
             row_to_member,
         );
@@ -393,8 +393,8 @@ impl AnonGroupRepository {
         let count: i32 = conn.query_row(
             "SELECT COUNT(*) FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
             params![
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
             |row| row.get(0),
         )?;
@@ -407,8 +407,8 @@ impl AnonGroupRepository {
         let result: Result<i32, _> = conn.query_row(
             "SELECT role FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
             params![
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
             |row| row.get(0),
         );
@@ -426,8 +426,8 @@ impl AnonGroupRepository {
         let result: Result<Option<String>, _> = conn.query_row(
             "SELECT display_name FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
             params![
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
             |row| row.get(0),
         );
@@ -451,7 +451,7 @@ impl AnonGroupRepository {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 mailbox.id,
-                mailbox.group_id.as_bytes().as_slice(),
+                mailbox.group_id.to_string(),
                 mailbox.public_key.as_slice(),
                 mailbox.private_key.as_slice(),
                 mailbox.token_id,
@@ -470,7 +470,7 @@ impl AnonGroupRepository {
              FROM anon_group_mailboxes WHERE group_id = ?1",
         )?;
 
-        let result = stmt.query_row(params![group_id.as_bytes().as_slice()], row_to_mailbox);
+        let result = stmt.query_row(params![group_id.to_string()], row_to_mailbox);
 
         match result {
             Ok(mailbox) => Ok(Some(mailbox)),
@@ -484,7 +484,7 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         conn.execute(
             "DELETE FROM anon_group_mailboxes WHERE group_id = ?1",
-            params![group_id.as_bytes().as_slice()],
+            params![group_id.to_string()],
         )?;
         Ok(())
     }
@@ -501,8 +501,8 @@ impl AnonGroupRepository {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 pending.id,
-                pending.group_id.as_bytes().as_slice(),
-                pending.user_id.as_bytes().as_slice(),
+                pending.group_id.to_string(),
+                pending.user_id.to_string(),
                 pending.action.as_str(),
                 pending.created_at.to_rfc3339(),
                 pending.expires_at.to_rfc3339(),
@@ -520,7 +520,7 @@ impl AnonGroupRepository {
              FROM anon_group_pending WHERE group_id = ?1 ORDER BY created_at",
         )?;
 
-        let mut rows = stmt.query(params![group_id.as_bytes().as_slice()])?;
+        let mut rows = stmt.query(params![group_id.to_string()])?;
         let mut pending = Vec::new();
 
         while let Some(row) = rows.next()? {
@@ -541,8 +541,8 @@ impl AnonGroupRepository {
         conn.execute(
             "DELETE FROM anon_group_pending WHERE group_id = ?1 AND user_id = ?2 AND action = ?3",
             params![
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
                 action.as_str(),
             ],
         )?;
@@ -571,8 +571,8 @@ impl AnonGroupRepository {
             "UPDATE anon_group_pending SET retry_count = retry_count + 1
              WHERE group_id = ?1 AND user_id = ?2 AND action = ?3",
             params![
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
                 action.as_str(),
             ],
         )?;
@@ -596,7 +596,7 @@ impl AnonGroupRepository {
         let now = Utc::now();
         let rows = conn.execute(
             "UPDATE anon_groups SET status = ?1, updated_at = ?2 WHERE id = ?3",
-            params![status.to_i32(), now.to_rfc3339(), id.as_bytes().as_slice()],
+            params![status.to_i32(), now.to_rfc3339(), id.to_string()],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("AnonGroup {}", id)));
@@ -647,8 +647,8 @@ impl AnonGroupRepository {
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 blocked.id,
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
                 blocked.blocked_at.to_rfc3339(),
                 blocked.reason,
             ],
@@ -666,8 +666,8 @@ impl AnonGroupRepository {
         conn.execute(
             "DELETE FROM anon_group_blocked_users WHERE group_id = ?1 AND user_id = ?2",
             params![
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
         )?;
         Ok(())
@@ -683,8 +683,8 @@ impl AnonGroupRepository {
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM anon_group_blocked_users WHERE group_id = ?1 AND user_id = ?2",
             params![
-                group_id.as_bytes().as_slice(),
-                user_id.as_bytes().as_slice(),
+                group_id.to_string(),
+                user_id.to_string(),
             ],
             |row| row.get(0),
         )?;
@@ -701,14 +701,13 @@ impl AnonGroupRepository {
             "SELECT user_id FROM anon_group_blocked_users WHERE group_id = ?1",
         )?;
 
-        let mut rows = stmt.query(params![group_id.as_bytes().as_slice()])?;
+        let mut rows = stmt.query(params![group_id.to_string()])?;
         let mut users = Vec::new();
 
         while let Some(row) = rows.next()? {
-            let user_id_bytes: Vec<u8> = row.get(0)?;
-            if let Some(user_id) = UserId::try_from_slice(&user_id_bytes) {
-                users.push(user_id);
-            }
+            let user_id_str: String = row.get(0)?;
+            let user_id = user_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
+            users.push(user_id);
         }
 
         Ok(users)
@@ -745,16 +744,14 @@ use super::repo_utils::{parse_datetime, vec_to_array_32, require_array_32, requi
 fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroup> {
     use crate::domain::anon_group::AnonGroupStatus;
 
-    let id_bytes: Vec<u8> = row.get(0)?;
-    let id = AnonGroupId::try_from_slice(&id_bytes)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid group ID".into()))?;
+    let id_str: String = row.get(0)?;
+    let id = id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     // Status column may not exist in older schemas, default to Active
     let status: i32 = row.get(6).unwrap_or(0);
 
-    let owner_id_bytes: Vec<u8> = row.get(7)?;
-    let owner_id = UserId::try_from_slice(&owner_id_bytes)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid owner ID".into()))?;
+    let owner_id_str: String = row.get(7)?;
+    let owner_id = owner_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     Ok(AnonGroup {
         id,
@@ -769,13 +766,11 @@ fn row_to_group(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroup> {
 }
 
 fn row_to_member(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMember> {
-    let group_id_bytes: Vec<u8> = row.get(1)?;
-    let group_id = AnonGroupId::try_from_slice(&group_id_bytes)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid group ID".into()))?;
+    let group_id_str: String = row.get(1)?;
+    let group_id = group_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
 
-    let user_id_bytes: Vec<u8> = row.get(2)?;
-    let user_id = UserId::try_from_slice(&user_id_bytes)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid user ID".into()))?;
+    let user_id_str: String = row.get(2)?;
+    let user_id = user_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     let mailbox_pk = vec_to_array_32(row.get(4)?);
     let profile_key = vec_to_array_32(row.get(6)?);
@@ -794,9 +789,8 @@ fn row_to_member(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMember> {
 }
 
 fn row_to_mailbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMailbox> {
-    let group_id_bytes: Vec<u8> = row.get(1)?;
-    let group_id = AnonGroupId::try_from_slice(&group_id_bytes)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid group ID".into()))?;
+    let group_id_str: String = row.get(1)?;
+    let group_id = group_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     let pk_bytes: Vec<u8> = row.get(2)?;
     let sk_bytes: Vec<u8> = row.get(3)?;
@@ -818,13 +812,11 @@ fn row_to_mailbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMailbox>
 }
 
 fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupPending> {
-    let group_id_bytes: Vec<u8> = row.get(1)?;
-    let group_id = AnonGroupId::try_from_slice(&group_id_bytes)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid group ID".into()))?;
+    let group_id_str: String = row.get(1)?;
+    let group_id = group_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
 
-    let user_id_bytes: Vec<u8> = row.get(2)?;
-    let user_id = UserId::try_from_slice(&user_id_bytes)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName("Invalid user ID".into()))?;
+    let user_id_str: String = row.get(2)?;
+    let user_id = user_id_str.parse().map_err(|_| rusqlite::Error::InvalidQuery)?;
 
     let action_str: String = row.get(3)?;
     let action = PendingActionType::parse(&action_str)
@@ -840,4 +832,3 @@ fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupPending>
         retry_count: row.get(6)?,
     })
 }
-

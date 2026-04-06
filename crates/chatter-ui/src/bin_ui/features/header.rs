@@ -602,7 +602,7 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
                     .collect();
 
-                let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments);
+                let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments, None);
 
                 // Resolve reply-to sender name
                 if display_data.is_reply {

@@ -39,12 +39,14 @@ pub(crate) mod repo_utils;
 pub mod jarvis_memory_repo;
 pub mod jarvis_graph_repo;
 pub mod section_repo;
+pub mod unified_conversation_repo;
 pub mod unified_message_repo;
 
 pub use attachment_repo::AttachmentRepository;
 pub use channel_repo::ChannelRepository;
 pub use draft_repo::DraftRepository;
 pub use ephemeral_repo::EphemeralRepository;
+pub use unified_conversation_repo::UnifiedConversationRepository;
 /// Re-export `UnifiedMessageRepository` as `MessageRepository` — all code now uses the
 /// unified implementation. The old `message_repo` module is kept for step 5 deletion.
 pub use unified_message_repo::UnifiedMessageRepository as MessageRepository;

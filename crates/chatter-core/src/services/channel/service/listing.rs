@@ -160,6 +160,15 @@ impl ChannelService {
         Ok(channels)
     }
 
+    /// Get channels for the current user, excluding any that belong to a
+    /// custom sidebar section.
+    pub fn get_unsectioned_channels_for_user(&self) -> Result<Vec<Channel>, ChannelError> {
+        let channels = self.get_channels_for_user()?;
+        let sectioned = self.section_repo.all_conversation_ids()
+            .unwrap_or_default();
+        Ok(channels.into_iter().filter(|ch| !sectioned.contains(&ch.id.to_string())).collect())
+    }
+
     /// Get a channel from local storage (no network request).
     pub fn get_channel_local(
         &self,

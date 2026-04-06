@@ -2,6 +2,7 @@
 // Root component for the application
 
 import { App, ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData, CustomSectionData, SectionConversationData } from "app.slint";
+import { Typography } from "theme/typography.slint";
 
 // Re-export all types for Rust binding
 export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData, CustomSectionData, SectionConversationData }
@@ -14,7 +15,7 @@ export component MainWindow inherits Window {
     min-height: 480px;
     preferred-width: 800px;
     preferred-height: 600px;
-    default-font-family: "Inter";
+    default-font-family: Typography.font-family;
     default-font-size: 14px;
 
     // Expose App properties through MainWindow for Rust binding
@@ -51,8 +52,10 @@ export component MainWindow inherits Window {
     in property <image> register-avatar-source <=> app.register-avatar-source;
     in property <bool> register-has-avatar <=> app.register-has-avatar;
     in-out property <int> register-selected-default-idx <=> app.register-selected-default-idx;
+    in property <string> register-username-status <=> app.register-username-status;
     callback register-select-avatar <=> app.register-select-avatar;
     callback register-select-default-avatar <=> app.register-select-default-avatar;
+    callback register-check-username <=> app.register-check-username;
 
     // ========== Recovery codes modal properties ==========
     in property <[string]> recovery-codes <=> app.recovery-codes;

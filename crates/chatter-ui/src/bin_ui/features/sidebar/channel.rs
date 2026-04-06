@@ -260,7 +260,7 @@ pub async fn load_channel_into_ui(
             );
         }
 
-        let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments);
+        let mut display_data = message_to_display_data(msg, &sender_name, &resolved_attachments, None);
 
         // Resolve reply-to sender name (converter leaves it empty for later resolution)
         if display_data.is_reply {

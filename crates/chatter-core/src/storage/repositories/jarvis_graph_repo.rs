@@ -30,6 +30,15 @@ impl JarvisGraphRepository {
     // Entity CRUD
     // ========================================================================
 
+    /// Get the total number of entities in the knowledge graph.
+    pub fn count_entities(&self) -> Result<u32, StorageError> {
+        let conn = self.db.read_connection()?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM jarvis_entities", [], |row| {
+            row.get(0)
+        })?;
+        Ok(count as u32)
+    }
+
     /// Insert or update an entity.
     ///
     /// If an entity with the same normalized name exists, updates it.

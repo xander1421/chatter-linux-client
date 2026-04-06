@@ -20,9 +20,9 @@ impl Migration for V038AnonGroupOwnerId {
         r#"
         -- Add owner_id to anon_groups
         -- Data preservation is not required, so we make it NOT NULL.
-        -- We provide a zeroed default for the ALTER TABLE to succeed if 
+        -- We provide a default for the ALTER TABLE to succeed if 
         -- there were any stray rows, but new rows will require a real ID.
-        ALTER TABLE anon_groups ADD COLUMN owner_id BLOB NOT NULL DEFAULT (zeroblob(16));
+        ALTER TABLE anon_groups ADD COLUMN owner_id TEXT NOT NULL DEFAULT '';
         "#
     }
 

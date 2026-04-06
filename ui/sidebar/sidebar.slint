@@ -203,24 +203,6 @@ export component Sidebar inherits Rectangle {
                 // QUICK LINKS (top navigation)
                 Rectangle {
                     height: 34px;
-                    background: friends-touch.has-hover ? Colors.surface-hover : transparent;
-                    accessible-role: button;
-                    accessible-label: "Friends";
-                    if !root.collapsed: HorizontalLayout {
-                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        Image { source: Icons.users; width: 14px; height: 14px; colorize: Colors.text-secondary; }
-                        Text { text: "Friends"; color: Colors.text-secondary; font-size: 13px; vertical-alignment: center; }
-                    }
-                    if root.collapsed: TooltipArea {
-                        width: 44px; x: (parent.width - self.width) / 2; height: 100%;
-                        tooltip-text: "Friends"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; Image { source: Icons.users; width: 16px; height: 16px; colorize: Colors.text-secondary; } }
-                    }
-                    friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
-                }
-
-                Rectangle {
-                    height: 34px;
                     background: saved-touch.has-hover ? Colors.surface-hover : transparent;
                     accessible-role: button;
                     accessible-label: "Saved Messages";
@@ -235,6 +217,24 @@ export component Sidebar inherits Rectangle {
                         HorizontalLayout { alignment: center; Image { source: Icons.bookmark; width: 16px; height: 16px; colorize: Colors.text-secondary; } }
                     }
                     saved-touch := TouchArea { clicked => { root.saved-messages-clicked(); } }
+                }
+
+                Rectangle {
+                    height: 34px;
+                    background: friends-touch.has-hover ? Colors.surface-hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Friends";
+                    if !root.collapsed: HorizontalLayout {
+                        padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
+                        Image { source: Icons.users; width: 14px; height: 14px; colorize: Colors.text-secondary; }
+                        Text { text: "Friends"; color: Colors.text-secondary; font-size: 13px; vertical-alignment: center; }
+                    }
+                    if root.collapsed: TooltipArea {
+                        width: 44px; x: (parent.width - self.width) / 2; height: 100%;
+                        tooltip-text: "Friends"; tooltip-enabled: true; placement: "right";
+                        HorizontalLayout { alignment: center; Image { source: Icons.users; width: 16px; height: 16px; colorize: Colors.text-secondary; } }
+                    }
+                    friends-touch := TouchArea { clicked => { root.friends-clicked(); } }
                 }
 
                 // INVITE BANNERS (conditional)
@@ -382,99 +382,6 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
-                // 4. MESSAGES SECTION
-                Rectangle {
-                    height: 32px;
-                    if !root.collapsed: HorizontalLayout {
-                        padding-left: 6px;
-                        padding-right: 4px;
-                        TouchArea {
-                            horizontal-stretch: 1;
-                            mouse-cursor: pointer;
-                            clicked => { root.messages-expanded = !root.messages-expanded; }
-                            HorizontalLayout {
-                                padding-left: 2px;
-                                spacing: 4px;
-                                alignment: start;
-                                Image {
-                                    source: Icons.chevron-right;
-                                    width: 10px;
-                                    height: 10px;
-                                    colorize: Colors.text-muted;
-                                    transform-rotation: root.messages-expanded ? 90deg : 0deg;
-                                    animate transform-rotation { duration: 150ms; easing: ease-out; }
-                                }
-                                Text {
-                                    text: "Messages";
-                                    color: Colors.text-muted;
-                                    font-size: 11px;
-                                    font-weight: 600;
-                                    letter-spacing: 0.5px;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                        Rectangle {
-                            width: Spacing.touch-target-min;
-                            height: Spacing.touch-target-min;
-
-                            Rectangle {
-                                width: 24px;
-                                height: 24px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                border-radius: Spacing.radius-sm;
-                                background: add-dm-touch.has-hover ? Colors.surface-hover : transparent;
-
-                                Image {
-                                    source: Icons.plus;
-                                    width: 14px;
-                                    height: 14px;
-                                    x: (parent.width - self.width) / 2;
-                                    y: (parent.height - self.height) / 2;
-                                    colorize: add-dm-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                                }
-                            }
-
-                            add-dm-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.friends-clicked(); }
-                            }
-                        }
-                    }
-                }
-
-                if root.messages-expanded: DMList {
-                    vertical-stretch: 0;
-                    conversations: root.dm-conversations;
-                    selected-conversation-id: root.selected-dm-id;
-                    collapsed: root.collapsed;
-                    show-header: false;
-                    conversation-selected(id) => { root.dm-selected(id); }
-                    dm-context-menu-requested(id, x, y) => {
-                        root.ctx-menu-conv-id = id;
-                        root.ctx-menu-conv-type = "dm";
-                        root.ctx-menu-x = x;
-                        root.ctx-menu-y = y;
-                        root.ctx-menu-current-section-id = "";
-                        root.ctx-menu-show = true;
-                    }
-                }
-
-                // 4b. CUSTOM SECTIONS (user-created, between Messages and Channels)
-                CustomSectionList {
-                    vertical-stretch: 0;
-                    sections: root.custom-sections;
-                    section-conversations: root.section-conversations;
-                    selected-conversation-id: root.selected-dm-id;
-                    collapsed: root.collapsed;
-                    create-section-clicked => { root.create-section-clicked(); }
-                    section-toggle-expanded(id) => { root.section-toggle-expanded(id); }
-                    section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
-                    delete-section-clicked(id) => { root.delete-section-clicked(id); }
-                    rename-section-clicked(id) => { root.rename-section-clicked(id); }
-                }
-
                 // 5. CHANNELS SECTION
                 Rectangle {
                     height: 32px;
@@ -607,6 +514,100 @@ export component Sidebar inherits Rectangle {
                     }
                 }
 
+                // 4. MESSAGES SECTION
+                Rectangle {
+                    height: 32px;
+                    if !root.collapsed: HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 4px;
+                        TouchArea {
+                            horizontal-stretch: 1;
+                            mouse-cursor: pointer;
+                            clicked => { root.messages-expanded = !root.messages-expanded; }
+                            HorizontalLayout {
+                                padding-left: 2px;
+                                spacing: 4px;
+                                alignment: start;
+                                Image {
+                                    source: Icons.chevron-right;
+                                    width: 10px;
+                                    height: 10px;
+                                    colorize: Colors.text-muted;
+                                    transform-rotation: root.messages-expanded ? 90deg : 0deg;
+                                    animate transform-rotation { duration: 150ms; easing: ease-out; }
+                                }
+                                Text {
+                                    text: "Messages";
+                                    color: Colors.text-muted;
+                                    font-size: 11px;
+                                    font-weight: 600;
+                                    letter-spacing: 0.5px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                        Rectangle {
+                            width: Spacing.touch-target-min;
+                            height: Spacing.touch-target-min;
+
+                            Rectangle {
+                                width: 24px;
+                                height: 24px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                border-radius: Spacing.radius-sm;
+                                background: add-dm-touch.has-hover ? Colors.surface-hover : transparent;
+
+                                Image {
+                                    // Use user-plus instead of plus to distinguish from create channel/section
+                                    source: Icons.user-plus;
+                                    width: 14px;
+                                    height: 14px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: add-dm-touch.has-hover ? Colors.text-primary : Colors.text-muted;
+                                }
+                            }
+
+                            add-dm-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.friends-clicked(); }
+                            }
+                        }
+                    }
+                }
+
+                if root.messages-expanded: DMList {
+                    vertical-stretch: 0;
+                    conversations: root.dm-conversations;
+                    selected-conversation-id: root.selected-dm-id;
+                    collapsed: root.collapsed;
+                    show-header: false;
+                    conversation-selected(id) => { root.dm-selected(id); }
+                    dm-context-menu-requested(id, x, y) => {
+                        root.ctx-menu-conv-id = id;
+                        root.ctx-menu-conv-type = "dm";
+                        root.ctx-menu-x = x;
+                        root.ctx-menu-y = y;
+                        root.ctx-menu-current-section-id = "";
+                        root.ctx-menu-show = true;
+                    }
+                }
+
+                // 4b. CUSTOM SECTIONS (user-created, between Messages and Channels)
+                CustomSectionList {
+                    vertical-stretch: 0;
+                    sections: root.custom-sections;
+                    section-conversations: root.section-conversations;
+                    selected-conversation-id: root.selected-dm-id;
+                    collapsed: root.collapsed;
+                    create-section-clicked => { root.create-section-clicked(); }
+                    section-toggle-expanded(id) => { root.section-toggle-expanded(id); }
+                    section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
+                    delete-section-clicked(id) => { root.delete-section-clicked(id); }
+                    rename-section-clicked(id) => { root.rename-section-clicked(id); }
+                }
+
                 Rectangle { vertical-stretch: 1; }
             }
         }
@@ -615,69 +616,69 @@ export component Sidebar inherits Rectangle {
         Rectangle {
             height: root.collapsed ? 140px : 44px;
             background: Colors.background;
-            VerticalLayout {
-                alignment: end; padding-bottom: 4px; spacing: 4px;
-                if !root.collapsed: HorizontalLayout {
-                    height: 36px;
-                    padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm;
-                    TouchArea {
-                        horizontal-stretch: 1;
-                        mouse-cursor: pointer;
-                        clicked => { root.profile-clicked(); }
-                        HorizontalLayout {
-                            spacing: Spacing.sm; alignment: start;
-                            Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
-                                presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
-                            }
-                            Text { text: root.user-display-name; color: Colors.text-secondary; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+
+            // Expanded view: Profile + Jarvis + Settings on same row
+            if !root.collapsed: HorizontalLayout {
+                padding-left: Spacing.sm; padding-right: Spacing.sm; alignment: center; spacing: Spacing.sm;
+                TouchArea {
+                    horizontal-stretch: 1;
+                    mouse-cursor: pointer;
+                    clicked => { root.profile-clicked(); }
+                    HorizontalLayout {
+                        spacing: Spacing.sm; alignment: start;
+                        Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
+                            presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
                         }
-                    }
-                    Rectangle {
-                        width: 24px; height: 24px; border-radius: 4px;
-                        background: jarvis-touch.has-hover ? Colors.surface-hover : transparent;
-                        Image { source: Icons.jarvis; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
-                        jarvis-touch := TouchArea { clicked => { root.jarvis-clicked(); } }
-                    }
-                    Rectangle {
-                        width: 24px; height: 24px; border-radius: 4px;
-                        background: sett-touch.has-hover ? Colors.surface-hover : transparent;
-                        Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
-                    }
-                    Rectangle {
-                        width: 24px; height: 24px;
-                        Image { source: Icons.chevron-left; width: 14px; height: 14px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                        TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
+                        Text { text: root.user-display-name; color: Colors.text-secondary; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                 }
-                if root.collapsed: VerticalLayout {
-                    alignment: end; spacing: 8px; padding-bottom: 8px;
-                    TooltipArea {
-                        height: 32px; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Jarvis AI"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
-                            Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                            TouchArea { clicked => { root.jarvis-clicked(); } }
-                        } }
-                    }
-                    TooltipArea {
-                        height: 32px; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
-                        HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
-                            Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                            TouchArea { clicked => { root.settings-clicked(); } }
-                        } }
-                    }
-                    TouchArea {
-                        height: 32px; clicked => { root.profile-clicked(); }
-                        HorizontalLayout { alignment: center;
-                            Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
-                                presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
-                            }
+                Rectangle {
+                    width: 24px; height: 24px; border-radius: 4px;
+                    background: jarvis-touch.has-hover ? Colors.surface-hover : transparent;
+                    Image { source: Icons.jarvis; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
+                    jarvis-touch := TouchArea { clicked => { root.jarvis-clicked(); } }
+                }
+                Rectangle {
+                    width: 24px; height: 24px; border-radius: 4px;
+                    background: sett-touch.has-hover ? Colors.surface-hover : transparent;
+                    Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                    sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
+                }
+                Rectangle {
+                    width: 24px; height: 24px;
+                    Image { source: Icons.chevron-left; width: 14px; height: 14px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                    TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
+                }
+            }
+
+            // Collapsed view: Vertical stack of icons
+            if root.collapsed: VerticalLayout {
+                alignment: end; spacing: 8px; padding-bottom: 8px;
+                TooltipArea {
+                    height: 32px; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Jarvis AI"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
+                        Image { source: Icons.jarvis; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        TouchArea { clicked => { root.jarvis-clicked(); } }
+                    } }
+                }
+                TooltipArea {
+                    height: 32px; width: 44px; x: (parent.width - self.width) / 2; tooltip-text: "Settings"; tooltip-enabled: true; placement: "right";
+                    HorizontalLayout { alignment: center; Rectangle { width: 32px; height: 32px; border-radius: 16px; background: Colors.surface;
+                        Image { source: Icons.settings; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        TouchArea { clicked => { root.settings-clicked(); } }
+                    } }
+                }
+                TouchArea {
+                    height: 32px; clicked => { root.profile-clicked(); }
+                    HorizontalLayout { alignment: center;
+                        Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
+                            presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
                         }
                     }
-                    TouchArea {
-                        height: 24px; clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); }
-                        HorizontalLayout { alignment: center; Image { source: Icons.chevron-right; width: 14px; height: 14px; colorize: Colors.text-muted; } }
-                    }
+                }
+                TouchArea {
+                    height: 24px; clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); }
+                    HorizontalLayout { alignment: center; Image { source: Icons.chevron-right; width: 14px; height: 14px; colorize: Colors.text-muted; } }
                 }
             }
         }

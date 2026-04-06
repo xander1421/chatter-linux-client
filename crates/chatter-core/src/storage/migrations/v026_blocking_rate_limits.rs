@@ -26,8 +26,8 @@ impl Migration for V026BlockingRateLimits {
         -- Per-user blocking within anonymous groups
         CREATE TABLE anon_group_blocked_users (
             id TEXT PRIMARY KEY,
-            group_id BLOB NOT NULL,
-            user_id BLOB NOT NULL,              -- 16 bytes UUID of blocked user
+            group_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
             blocked_at TEXT NOT NULL,
             reason TEXT,                        -- Optional reason for block
             UNIQUE(group_id, user_id),
@@ -39,7 +39,7 @@ impl Migration for V026BlockingRateLimits {
         -- Per-user blocking in anonymous DMs (supplements conversation-level blocking)
         CREATE TABLE anon_dm_blocked_users (
             id TEXT PRIMARY KEY,
-            user_id BLOB NOT NULL UNIQUE,       -- 16 bytes UUID of blocked user
+            user_id TEXT NOT NULL UNIQUE,
             blocked_at TEXT NOT NULL,
             reason TEXT                         -- Optional reason for block
         );
@@ -50,7 +50,7 @@ impl Migration for V026BlockingRateLimits {
         CREATE TABLE anon_rate_limits (
             id TEXT PRIMARY KEY,
             entity_type TEXT NOT NULL,          -- 'dm' or 'group'
-            entity_id BLOB NOT NULL,            -- conversation_id or group_id
+            entity_id TEXT NOT NULL,            -- conversation_id or group_id
             window_start TEXT NOT NULL,         -- Start of current time window
             message_count INTEGER NOT NULL DEFAULT 0,
             last_message_at TEXT NOT NULL,
@@ -78,7 +78,7 @@ impl Migration for V026BlockingRateLimits {
             -- SQLite doesn't support DROP COLUMN in older versions
             -- We recreate the table without the status column
             CREATE TABLE anon_groups_new (
-                id BLOB PRIMARY KEY,
+                id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 my_role INTEGER NOT NULL DEFAULT 0,
                 bootstrap_complete INTEGER NOT NULL DEFAULT 0,

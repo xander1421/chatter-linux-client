@@ -222,6 +222,15 @@ impl AnonGroupHandler {
             tracing::warn!("Failed to handle join ack for {}: {}", sender_id, e);
         }
 
+        use crate::domain::message::SystemMessage;
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        let _ = self.service.store_system_message(
+            &group_id,
+            Some(sender_id),
+            SystemMessage::UserJoined(sender_id),
+            sent_at,
+        );
+
         // Emit event for UI
         ctx.emit(DomainEvent::AnonGroupMemberJoined {
             group_id,
@@ -317,6 +326,15 @@ impl AnonGroupHandler {
             tracing::warn!("Failed to handle leave from {}: {}", sender_id, e);
         }
 
+        use crate::domain::message::SystemMessage;
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        let _ = self.service.store_system_message(
+            &group_id,
+            Some(sender_id),
+            SystemMessage::UserLeft(sender_id),
+            sent_at,
+        );
+
         // Emit event for UI
         ctx.emit(DomainEvent::AnonGroupMemberLeft {
             group_id,
@@ -351,6 +369,15 @@ impl AnonGroupHandler {
         ) {
             tracing::warn!("Failed to handle kick: {}", e);
         }
+
+        use crate::domain::message::SystemMessage;
+        let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+        let _ = self.service.store_system_message(
+            &group_id,
+            Some(sender_id),
+            SystemMessage::UserRemoved { by: sender_id, removed: kicked_user_id },
+            sent_at,
+        );
 
         // Emit event for UI
         ctx.emit(DomainEvent::AnonGroupMemberKicked {

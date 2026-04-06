@@ -23,8 +23,8 @@ impl Migration for V021AnonGroupMessages {
         -- Anonymous group messages (separate from main messages table)
         CREATE TABLE anon_group_messages (
             id TEXT PRIMARY KEY,
-            group_id BLOB NOT NULL,
-            sender_id BLOB NOT NULL,           -- 16 bytes UUID
+            group_id TEXT NOT NULL,
+            sender_id TEXT NOT NULL,           -- UUID as TEXT
             content_type INTEGER NOT NULL,     -- Discriminant for filtering
             content_json TEXT NOT NULL,        -- Serialized message content
             attachments_blob BLOB NOT NULL DEFAULT X'0800000000000000',

@@ -700,10 +700,11 @@ impl MessageGateway {
                 })
             }
             Some(content::Content::AnonGroupUpdate(update)) => {
+                let timestamp = update.timestamp;
                 Ok(DmContent::AnonGroupUpdate {
                     group_id: update.group_id.clone(),
                     update,
-                    timestamp: 0, // TODO: Add timestamp to proto
+                    timestamp,
                 })
             }
             Some(content::Content::AnonGroupMessage(msg)) => {

@@ -41,12 +41,9 @@ impl Migration for V003Channels {
             -- Timestamps and state
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            archived INTEGER NOT NULL DEFAULT 0,
-            unread_count INTEGER NOT NULL DEFAULT 0,
-            last_message_at TEXT
+            archived INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX idx_channels_owner ON channels(owner_id);
-        CREATE INDEX idx_channels_last_message ON channels(last_message_at DESC);
 
         -- Channel memberships
         CREATE TABLE memberships (
@@ -69,7 +66,6 @@ impl Migration for V003Channels {
             r#"
             DROP INDEX IF EXISTS idx_memberships_user;
             DROP TABLE IF EXISTS memberships;
-            DROP INDEX IF EXISTS idx_channels_last_message;
             DROP INDEX IF EXISTS idx_channels_owner;
             DROP TABLE IF EXISTS channels;
             "#,

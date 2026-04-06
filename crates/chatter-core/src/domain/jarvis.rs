@@ -4,6 +4,7 @@
 //! Jarvis remembers conversations, learns facts about users and topics,
 //! and tracks entity relationships for context-aware responses.
 
+use std::fmt;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
@@ -217,6 +218,18 @@ impl ContextType {
 impl From<i32> for ContextType {
     fn from(value: i32) -> Self {
         Self::from_i32(value)
+    }
+}
+
+impl fmt::Display for ContextType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            Self::Channel => "channel",
+            Self::Dm => "dm",
+            Self::AnonDm => "anon_dm",
+            Self::AnonGroup => "anon_group",
+        };
+        write!(f, "{}", s)
     }
 }
 

@@ -954,6 +954,8 @@ mod tests {
             user_id: "user-123".to_string(),
             emoji: "👍".to_string(),
             timestamp: 1234567890000,
+            target_author_aci: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            target_sent_timestamp: 1704067200_000_000_000,
         };
 
         assert_eq!(reaction.user_id, "user-123");

@@ -13,6 +13,9 @@ use crate::domain::UserId;
 use crate::services::ai::{LocalAIActorHandle, SampleParams};
 use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
+use crate::events::EventBus;
+use crate::inbox::handlers::DomainEvent;
+
 use super::context_builder::ContextBuilder;
 use super::entity_extractor::{EntityExtractor, ExtractedEntity};
 use super::error::JarvisError;
@@ -29,6 +32,8 @@ pub struct JarvisService {
     graph_repo: Arc<JarvisGraphRepository>,
     /// Local AI actor handle.
     ai: LocalAIActorHandle,
+    /// Event bus for emitting events.
+    event_bus: EventBus,
     /// Entity extractor.
     extractor: EntityExtractor,
     /// Context builder.
@@ -43,15 +48,17 @@ impl JarvisService {
         memory_repo: Arc<JarvisMemoryRepository>,
         graph_repo: Arc<JarvisGraphRepository>,
         ai: LocalAIActorHandle,
+        event_bus: EventBus,
     ) -> Self {
         let extractor = EntityExtractor::new(ai.clone());
         let context_builder = ContextBuilder::new(memory_repo.clone(), graph_repo.clone());
-        let memory_manager = MemoryManager::new(memory_repo.clone(), ai.clone());
+        let memory_manager = MemoryManager::new(memory_repo.clone(), graph_repo.clone(), ai.clone());
 
         Self {
             memory_repo,
             graph_repo,
             ai,
+            event_bus,
             extractor,
             context_builder,
             memory_manager,
@@ -79,9 +86,14 @@ impl JarvisService {
     ) -> Result<bool, JarvisError> {
         // Check for /ask command
         if let Some(query) = text.strip_prefix("/ask ") {
-            let _response = self.ask(context, query, author_id).await?;
+            let response = self.ask(context, query, author_id).await?;
+            
             // Emit event for UI to display response
-            // TODO: Emit JarvisResponse event on EventBus
+            self.event_bus.emit_domain(DomainEvent::JarvisResponse {
+                text: response,
+                context_id: context.context_id.clone(),
+            });
+            
             tracing::info!("Jarvis handled /ask command");
             return Ok(true);
         }
@@ -92,8 +104,14 @@ impl JarvisService {
                 .trim_start_matches("@jarvis ")
                 .trim();
             if !query.is_empty() {
-                let _response = self.ask(context, query, author_id).await?;
-                // TODO: Emit JarvisResponse event on EventBus
+                let response = self.ask(context, query, author_id).await?;
+                
+                // Emit event for UI to display response
+                self.event_bus.emit_domain(DomainEvent::JarvisResponse {
+                    text: response,
+                    context_id: context.context_id.clone(),
+                });
+                
                 tracing::info!("Jarvis handled @mention");
                 return Ok(true);
             }
@@ -104,16 +122,30 @@ impl JarvisService {
             if let Some(cmd) = text.strip_prefix("/jarvis ") {
                 match cmd {
                     "stats" => {
-                        let _stats = self.memory_manager.get_stats(context)?;
-                        // TODO: Emit JarvisStats event
+                        let stats = self.memory_manager.get_stats(context)?;
+                        
+                        // Emit JarvisStats event
+                        self.event_bus.emit_domain(DomainEvent::JarvisStats {
+                            stats: format!(
+                                "Memory Stats:\n- Conversations: {}\n- Facts: {}\n- Entities: {}",
+                                stats.conversation_count,
+                                stats.fact_count,
+                                stats.entity_count
+                            ),
+                        });
+                        
                         tracing::info!("Jarvis handled stats command");
                         return Ok(true);
                     }
                     "clear" => {
-                        // TODO: Implement clear_context method in MemoryManager
-                        // self.memory_manager.clear_context(context)?;
-                        // TODO: Emit JarvisCleared event
-                        tracing::info!("Jarvis clear command not yet implemented");
+                        self.memory_manager.clear_context(context)?;
+                        
+                        // Emit JarvisCleared event
+                        self.event_bus.emit_domain(DomainEvent::JarvisCleared {
+                            context_id: context.context_id.clone(),
+                        });
+                        
+                        tracing::info!("Jarvis handled clear command");
                         return Ok(true);
                     }
                     _ => {

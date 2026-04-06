@@ -12,13 +12,14 @@ use crate::domain::jarvis::{
 };
 use crate::domain::UserId;
 use crate::services::ai::{LocalAIActorHandle, SampleParams};
-use crate::storage::repositories::JarvisMemoryRepository;
+use crate::storage::repositories::{JarvisGraphRepository, JarvisMemoryRepository};
 
 use super::error::JarvisError;
 
 /// Memory manager for Jarvis.
 pub struct MemoryManager {
     memory_repo: Arc<JarvisMemoryRepository>,
+    graph_repo: Arc<JarvisGraphRepository>,
     ai: LocalAIActorHandle,
 }
 
@@ -45,8 +46,16 @@ impl Default for CompressionConfig {
 
 impl MemoryManager {
     /// Create a new memory manager.
-    pub fn new(memory_repo: Arc<JarvisMemoryRepository>, ai: LocalAIActorHandle) -> Self {
-        Self { memory_repo, ai }
+    pub fn new(
+        memory_repo: Arc<JarvisMemoryRepository>,
+        graph_repo: Arc<JarvisGraphRepository>,
+        ai: LocalAIActorHandle,
+    ) -> Self {
+        Self {
+            memory_repo,
+            graph_repo,
+            ai,
+        }
     }
 
     /// Store a user message in memory.
@@ -91,6 +100,13 @@ impl MemoryManager {
         let pruned = self.memory_repo.apply_decay(threshold)?;
         tracing::info!(pruned = pruned, "Applied fact decay");
         Ok(pruned)
+    }
+
+    /// Clear all conversation history for a given context.
+    pub fn clear_context(&self, context: &JarvisContext) -> Result<u32, JarvisError> {
+        let deleted = self.memory_repo.delete_conversations_for_context(context)?;
+        tracing::info!(context_id = %context.context_id, deleted = deleted, "Cleared Jarvis context history");
+        Ok(deleted)
     }
 
     /// Compress old conversations into summaries.
@@ -207,9 +223,12 @@ Summary:"#,
     }
 
     /// Get memory statistics for a context.
+    /// Get memory statistics for a context.
     pub fn get_stats(&self, context: &JarvisContext) -> Result<MemoryStats, JarvisError> {
         let conversation_count = self.memory_repo.count_conversations(context)?;
         let summaries = self.memory_repo.get_summaries(context, 100)?;
+        let fact_count = self.memory_repo.search_facts("", 10000)?.len() as u32; // Rough count
+        let entity_count = self.graph_repo.count_entities()?;
 
         let total_summarized = summaries.iter().map(|s| s.message_count).sum();
 
@@ -217,6 +236,8 @@ Summary:"#,
             conversation_count,
             summary_count: summaries.len() as u32,
             total_messages_summarized: total_summarized,
+            fact_count,
+            entity_count,
         })
     }
 }
@@ -230,6 +251,10 @@ pub struct MemoryStats {
     pub summary_count: u32,
     /// Total messages that have been summarized.
     pub total_messages_summarized: u32,
+    /// Number of learned facts.
+    pub fact_count: u32,
+    /// Number of entities in knowledge graph.
+    pub entity_count: u32,
 }
 
 #[cfg(test)]

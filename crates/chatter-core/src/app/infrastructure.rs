@@ -16,7 +16,10 @@ use crate::mailbox::token_manager::TokenManager;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::network::streaming::{ReactionAggregator, TypingAggregator};
-use crate::storage::repositories::{AnonDmRepository, AnonGroupRepository, JarvisGraphRepository, JarvisMemoryRepository, SectionRepository};
+use crate::storage::repositories::{
+    AnonDmRepository, AnonGroupRepository, JarvisGraphRepository, JarvisMemoryRepository,
+    SectionRepository, UnifiedConversationRepository,
+};
 use crate::storage::{
     AttachmentRepository, ChannelRepository, Database, DraftRepository, KeyStore,
     MessageRepository, ReactionRepository, SearchIndex, SettingsRepository, UserRepository,
@@ -74,6 +77,8 @@ pub struct InfrastructureContainer {
     pub(crate) anon_group_repo: Arc<AnonGroupRepository>,
     /// Anonymous DM repository.
     pub(crate) anon_dm_repo: Arc<AnonDmRepository>,
+    /// Unified conversation repository.
+    pub(crate) unified_conversation_repo: Arc<UnifiedConversationRepository>,
     /// Jarvis memory repository.
     pub(crate) jarvis_memory_repo: Arc<JarvisMemoryRepository>,
     /// Jarvis graph repository.
@@ -184,6 +189,7 @@ impl InfrastructureContainer {
         let search_index = Arc::new(SearchIndex::new(database.clone()));
         let anon_group_repo = Arc::new(AnonGroupRepository::new(database.clone()));
         let anon_dm_repo = Arc::new(AnonDmRepository::new(database.clone()));
+        let unified_conversation_repo = Arc::new(UnifiedConversationRepository::new(database.clone()));
         let jarvis_memory_repo = Arc::new(JarvisMemoryRepository::new(database.clone()));
         let jarvis_graph_repo = Arc::new(JarvisGraphRepository::new(database.clone()));
         let section_repo = Arc::new(SectionRepository::new(database.clone()));
@@ -246,6 +252,7 @@ impl InfrastructureContainer {
             token_manager,
             anon_group_repo,
             anon_dm_repo,
+            unified_conversation_repo,
             jarvis_memory_repo,
             jarvis_graph_repo,
             section_repo,

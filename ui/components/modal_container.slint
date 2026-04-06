@@ -1,0 +1,60 @@
+// ModalContainer - Standard backdrop and centered card for all modals
+// Ensures modals are centered and have reasonable sizing (not full-screen)
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+export component ModalContainer inherits Rectangle {
+    in property <bool> show: false;
+    in property <length> modal-width: 480px;
+    in property <length> max-modal-height: 600px;
+    
+    callback close();
+
+    // Only show when visible
+    opacity: root.show ? 1 : 0;
+    visible: root.show;
+
+    // Backdrop - full parent coverage
+    background: Colors.overlay;
+
+    // Backdrop touch area for click-outside dismissal
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => {
+            root.close();
+        }
+    }
+
+    // Modal card - centered and sized to content
+    Rectangle {
+        accessible-role: none;
+        
+        // Responsive width: cap at viewport width minus padding
+        width: min(root.modal-width, parent.width - 32px);
+        
+        // Height: sized to content, but capped at max-modal-height or viewport
+        // Use preferred-height of the children (usually a VerticalLayout)
+        height: min(self.preferred-height, min(root.max-modal-height, parent.height - 48px));
+        
+        // Centering
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+        clip: true;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: Colors.shadow;
+
+        // Block clicks on modal from closing
+        TouchArea {
+            width: 100%;
+            height: 100%;
+        }
+
+        // The actual content provided by users of ModalContainer
+        @children
+    }
+}

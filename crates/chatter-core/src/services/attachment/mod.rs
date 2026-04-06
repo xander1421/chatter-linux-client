@@ -159,15 +159,29 @@ pub(crate) const CHUNK_SIZE: usize = 256 * 1024;
 // Filesystem Storage Helpers
 // ============================================================================
 
+/// Override for the attachments base directory.
+/// Set during init on Android where `dirs::data_local_dir()` is read-only.
+static ATTACHMENTS_BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Set the base directory for attachment storage.
+/// Call once during app init with the writable data directory.
+pub fn set_attachments_base_dir(dir: PathBuf) {
+    let _ = ATTACHMENTS_BASE.set(dir);
+}
+
 /// Get the attachments directory path.
 ///
-/// Returns `~/.local/share/chatter/attachments/` on Linux.
-/// Creates the directory structure if needed when `ensure_attachments_dir()` is called.
+/// Uses the override set by `set_attachments_base_dir()` if available,
+/// otherwise falls back to `~/.local/share/chatter/attachments/` on desktop.
 pub fn attachments_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("chatter")
-        .join("attachments")
+    if let Some(base) = ATTACHMENTS_BASE.get() {
+        base.join("attachments")
+    } else {
+        dirs::data_local_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("chatter")
+            .join("attachments")
+    }
 }
 
 /// Get the path for an encrypted attachment file.

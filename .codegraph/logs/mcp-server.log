@@ -1839,3 +1839,45 @@
 2026-03-26T21:54:17.919055Z  INFO 615:    💬 LLM insights: enabled
 2026-03-26T21:54:18.056257Z  INFO 239: client initialized
 2026-03-26T21:54:18.056279Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: Some(RootsCapabilities { list_changed: None }), sampling: None, elicitation: Some(ElicitationCapability { schema_validation: None }) }, client_info: Implementation { name: "claude-code", title: None, version: "2.1.84", icons: None, website_url: None } })
+2026-04-06T08:56:59.865771Z  INFO 591: 🔧 Loading CodeGraph configuration...
+2026-04-06T08:56:59.865880Z  INFO 605: ✅ Configuration loaded successfully
+2026-04-06T08:56:59.865881Z  INFO 607:    📄 Config file: /home/alex/.codegraph/config.toml
+2026-04-06T08:56:59.865883Z  INFO 611:    🤖 Embedding provider: ollama
+2026-04-06T08:56:59.865885Z  INFO 612:    🔧 Embedding model: Some("qwen3-embedding:8b")
+2026-04-06T08:56:59.865895Z  INFO 613:    📐 Embedding dimension: 4096
+2026-04-06T08:56:59.865896Z  INFO 614:    🌐 Ollama URL: http://localhost:11434
+2026-04-06T08:56:59.865897Z  INFO 615:    💬 LLM insights: enabled
+2026-04-06T08:56:59.941291Z  INFO 239: client initialized
+2026-04-06T08:56:59.941311Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: Some(RootsCapabilities { list_changed: None }), sampling: None, elicitation: Some(ElicitationCapability { schema_validation: None }) }, client_info: Implementation { name: "claude-code", title: None, version: "2.1.87", icons: None, website_url: None } })
+2026-04-06T08:57:30.596305Z  INFO 591: 🔧 Loading CodeGraph configuration...
+2026-04-06T08:57:30.596364Z  INFO 605: ✅ Configuration loaded successfully
+2026-04-06T08:57:30.596365Z  INFO 607:    📄 Config file: /home/alex/.codegraph/config.toml
+2026-04-06T08:57:30.596366Z  INFO 611:    🤖 Embedding provider: ollama
+2026-04-06T08:57:30.596367Z  INFO 612:    🔧 Embedding model: Some("qwen3-embedding:8b")
+2026-04-06T08:57:30.596373Z  INFO 613:    📐 Embedding dimension: 4096
+2026-04-06T08:57:30.596374Z  INFO 614:    🌐 Ollama URL: http://localhost:11434
+2026-04-06T08:57:30.596374Z  INFO 615:    💬 LLM insights: enabled
+2026-04-06T08:57:30.615732Z  INFO 239: client initialized
+2026-04-06T08:57:30.615754Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: Some(RootsCapabilities { list_changed: None }), sampling: None, elicitation: Some(ElicitationCapability { schema_validation: None }) }, client_info: Implementation { name: "claude-code", title: Some("Claude Code"), version: "2.1.92", icons: None, website_url: Some("https://claude.com/claude-code") } })
+2026-04-06T08:58:06.858567Z  INFO 591: 🔧 Loading CodeGraph configuration...
+2026-04-06T08:58:06.858628Z  INFO 605: ✅ Configuration loaded successfully
+2026-04-06T08:58:06.858629Z  INFO 607:    📄 Config file: /home/alex/.codegraph/config.toml
+2026-04-06T08:58:06.858630Z  INFO 611:    🤖 Embedding provider: ollama
+2026-04-06T08:58:06.858630Z  INFO 612:    🔧 Embedding model: Some("qwen3-embedding:8b")
+2026-04-06T08:58:06.858637Z  INFO 613:    📐 Embedding dimension: 4096
+2026-04-06T08:58:06.858637Z  INFO 614:    🌐 Ollama URL: http://localhost:11434
+2026-04-06T08:58:06.858638Z  INFO 615:    💬 LLM insights: enabled
+2026-04-06T08:58:06.880274Z  INFO 239: client initialized
+2026-04-06T08:58:06.880300Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: Some(RootsCapabilities { list_changed: None }), sampling: None, elicitation: Some(ElicitationCapability { schema_validation: None }) }, client_info: Implementation { name: "claude-code", title: Some("Claude Code"), version: "2.1.92", icons: None, website_url: Some("https://claude.com/claude-code") } })
+2026-04-06T08:58:30.566659Z  INFO serve_inner: 618: input stream terminated
+2026-04-06T08:58:30.566674Z  INFO serve_inner: 844: serve finished quit_reason=Closed
+2026-04-06T08:58:35.960060Z  INFO 591: 🔧 Loading CodeGraph configuration...
+2026-04-06T08:58:35.960120Z  INFO 605: ✅ Configuration loaded successfully
+2026-04-06T08:58:35.960121Z  INFO 607:    📄 Config file: /home/alex/.codegraph/config.toml
+2026-04-06T08:58:35.960122Z  INFO 611:    🤖 Embedding provider: ollama
+2026-04-06T08:58:35.960122Z  INFO 612:    🔧 Embedding model: Some("qwen3-embedding:8b")
+2026-04-06T08:58:35.960129Z  INFO 613:    📐 Embedding dimension: 4096
+2026-04-06T08:58:35.960129Z  INFO 614:    🌐 Ollama URL: http://localhost:11434
+2026-04-06T08:58:35.960130Z  INFO 615:    💬 LLM insights: enabled
+2026-04-06T08:58:36.104853Z  INFO 239: client initialized
+2026-04-06T08:58:36.104871Z  INFO serve_inner: 562: Service initialized as server peer_info=Some(InitializeRequestParam { protocol_version: ProtocolVersion("2025-11-25"), capabilities: ClientCapabilities { experimental: None, roots: Some(RootsCapabilities { list_changed: None }), sampling: None, elicitation: Some(ElicitationCapability { schema_validation: None }) }, client_info: Implementation { name: "claude-code", title: Some("Claude Code"), version: "2.1.92", icons: None, website_url: Some("https://claude.com/claude-code") } })

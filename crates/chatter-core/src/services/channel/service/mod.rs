@@ -29,6 +29,7 @@ use crate::network::grpc::AnonymousMailboxClient;
 use crate::proto::chat_v1::{self, channel_event};
 use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::channel_repo::ChannelRepository;
+use crate::storage::repositories::section_repo::SectionRepository;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
 use super::converters::{
@@ -46,6 +47,7 @@ pub struct ChannelService {
     pub(crate) grpc_pool: Arc<GrpcClientPool>,
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) channel_repo: Arc<ChannelRepository>,
+    pub(crate) section_repo: Arc<SectionRepository>,
     pub(crate) signal_service: Arc<crate::services::signal_service::SignalService>,
     pub(crate) group_coordinator: Arc<GroupCoordinator>,
 }
@@ -56,6 +58,7 @@ impl ChannelService {
         grpc_pool: Arc<GrpcClientPool>,
         settings_repo: Arc<SettingsRepository>,
         channel_repo: Arc<ChannelRepository>,
+        section_repo: Arc<SectionRepository>,
         signal_service: Arc<crate::services::signal_service::SignalService>,
         group_coordinator: Arc<GroupCoordinator>,
     ) -> Self {
@@ -63,6 +66,7 @@ impl ChannelService {
             grpc_pool,
             settings_repo,
             channel_repo,
+            section_repo,
             signal_service,
             group_coordinator,
         }

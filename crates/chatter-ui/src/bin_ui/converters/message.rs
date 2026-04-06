@@ -28,6 +28,7 @@ pub struct MessageDisplayData {
     pub timestamp_ns: String,  // Nanosecond timestamp as string for event matching
     pub is_edited: bool,
     pub is_deleted: bool,
+    pub is_system: bool,
     pub is_ai: bool,
     pub has_attachments: bool,
     pub attachment_count: i32,
@@ -164,7 +165,7 @@ impl MessageDisplayData {
         is_own,
         is_edited: self.is_edited,
         is_deleted: self.is_deleted,
-        is_system: false,
+        is_system: self.is_system,
         is_ai: self.is_ai,
         has_attachments: !slint_attachments.is_empty() || self.has_attachments,
         attachment_count: (slint_attachments.len() as i32).max(self.attachment_count),
@@ -206,8 +207,9 @@ pub fn message_to_display_data(
     msg: &Message,
     sender_name: &str,
     resolved_attachments: &[Attachment],
+    sender_avatar: Option<Vec<u8>>,
 ) -> MessageDisplayData {
-    message_to_display_data_with_replies(msg, sender_name, resolved_attachments, None)
+    message_to_display_data_with_replies(msg, sender_name, resolved_attachments, None, sender_avatar)
 }
 
 /// Convert a domain Message to thread-safe MessageDisplayData with reply count.
@@ -216,6 +218,7 @@ pub fn message_to_display_data_with_replies(
     sender_name: &str,
     resolved_attachments: &[Attachment],
     reply_count: Option<i32>,
+    sender_avatar: Option<Vec<u8>>,
 ) -> MessageDisplayData {
     let attachment_data: Vec<AttachmentDisplayData> = resolved_attachments
         .iter()
@@ -245,12 +248,20 @@ pub fn message_to_display_data_with_replies(
             (false, String::new(), String::new(), String::new())
         };
 
+    // Extract content and system flag
+    let (content, is_system) = match &msg.content {
+        MessageContent::System(sys) => {
+            (format!("{} {}", sender_name, sys.description()), true)
+        }
+        _ => (msg.as_text().unwrap_or("").to_string(), false),
+    };
+
     MessageDisplayData {
         message_id: msg.id.to_string(),
         sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
         sender_name: sender_name.to_string(),
         sender_initials: get_initials(sender_name),
-        content: msg.as_text().unwrap_or("").to_string(),
+        content,
         timestamp: {
             // Convert UTC to local time for display (consistent with sidebar)
             use chrono::Local;
@@ -259,6 +270,7 @@ pub fn message_to_display_data_with_replies(
         timestamp_ns: msg.sent_at.to_string(),
         is_edited: msg.is_edited,
         is_deleted: msg.is_deleted,
+        is_system,
         is_ai: msg.targets_ai_bot,
         has_attachments: msg.has_attachments(),
         attachment_count: msg.attachments.len() as i32,
@@ -270,8 +282,8 @@ pub fn message_to_display_data_with_replies(
             .map(|r| format!("{} {}", r.emoji, r.count))
             .collect::<Vec<_>>()
             .join("  "),
-        sender_avatar_bytes: None,  // TODO: Add avatar support for anonymous groups
-        sender_avatar_decoded: None,  // TODO: Add avatar support for anonymous groups
+        sender_avatar_bytes: sender_avatar,
+        sender_avatar_decoded: None,
         reply_count,
         reply_count_text,
         is_thread_reply: msg.is_thread_reply(),
@@ -365,6 +377,7 @@ pub fn anon_message_to_display_data(
         timestamp_ns: msg.sent_at().to_string(),
         is_edited: msg.is_edited(),
         is_deleted: msg.is_deleted(),
+        is_system: false,
         is_ai: false,
         has_attachments: !attachment_data.is_empty(),
         attachment_count: attachment_data.len() as i32,
@@ -400,7 +413,7 @@ pub fn anon_group_message_to_display_data(
     sender_avatar: Option<Vec<u8>>,
     resolved_attachments: &[Attachment],
 ) -> MessageDisplayData {
-    anon_dm_message_to_display_data(msg, sender_name, sender_avatar, resolved_attachments)
+    message_to_display_data(msg, sender_name, resolved_attachments, sender_avatar)
 }
 
 /// Convert a unified Message (used for anon DM) to MessageDisplayData.
@@ -410,52 +423,5 @@ pub fn anon_dm_message_to_display_data(
     sender_avatar: Option<Vec<u8>>,
     resolved_attachments: &[Attachment],
 ) -> MessageDisplayData {
-    use chrono::Local;
-
-    let content = msg.as_text().unwrap_or_default().to_string();
-    let attachment_data: Vec<AttachmentDisplayData> = resolved_attachments
-        .iter()
-        .map(attachment_to_display_data)
-        .collect();
-
-    let sender_id_str = msg.sender_id
-        .map(|id| id.to_string())
-        .unwrap_or_default();
-
-    MessageDisplayData {
-        message_id: msg.id.to_string(),
-        sender_id: sender_id_str,
-        sender_name: sender_name.to_string(),
-        sender_initials: get_initials(sender_name),
-        content: content.to_string(),
-        timestamp: msg.created_at.with_timezone(&Local).format("%H:%M").to_string(),
-        timestamp_ns: msg.sent_at.to_string(),
-        is_edited: msg.is_edited,
-        is_deleted: msg.is_deleted,
-        is_ai: false,
-        has_attachments: !attachment_data.is_empty(),
-        attachment_count: attachment_data.len() as i32,
-        attachments: attachment_data,
-        has_reactions: !msg.reaction_counts.is_empty(),
-        reaction_summary: msg
-            .reaction_counts
-            .iter()
-            .map(|r| format!("{} {}", r.emoji, r.count))
-            .collect::<Vec<_>>()
-            .join("  "),
-        reply_count: 0,
-        reply_count_text: String::new(),
-        is_thread_reply: false,
-        is_reply: msg.reply_to.is_some(),
-        reply_to_sender_name: String::new(),  // Resolved by caller after conversion
-        reply_to_preview: msg.reply_to_text.clone().unwrap_or_default(),
-        delivery_status: msg.delivery_status.clone(),
-        sender_avatar_bytes: sender_avatar,
-        sender_avatar_decoded: None,
-        is_pinned: msg.is_pinned,
-        is_call: false,
-        call_message_type: String::new(),
-        call_initiator_id: String::new(),
-        call_duration: String::new(),
-    }
+    message_to_display_data(msg, sender_name, resolved_attachments, sender_avatar)
 }

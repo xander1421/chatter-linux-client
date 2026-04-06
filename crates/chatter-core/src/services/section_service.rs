@@ -8,9 +8,8 @@ use crate::domain::ids::SectionId;
 use crate::domain::message::ConversationType;
 use crate::domain::section::{CustomSection, SectionConversation};
 use crate::error::StorageError;
-use crate::storage::repositories::anon_dm_repo::AnonDmRepository;
-use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::section_repo::SectionRepository;
+use crate::storage::repositories::unified_conversation_repo::UnifiedConversationRepository;
 
 /// Section service errors.
 #[derive(Debug, thiserror::Error)]
@@ -30,21 +29,18 @@ pub enum SectionError {
 /// computed from the underlying conversation repositories.
 pub struct SectionService {
     section_repo: Arc<SectionRepository>,
-    channel_repo: Arc<ChannelRepository>,
-    anon_dm_repo: Arc<AnonDmRepository>,
+    conversation_repo: Arc<UnifiedConversationRepository>,
 }
 
 impl SectionService {
     /// Create a new SectionService with dependencies.
     pub fn new(
         section_repo: Arc<SectionRepository>,
-        channel_repo: Arc<ChannelRepository>,
-        anon_dm_repo: Arc<AnonDmRepository>,
+        conversation_repo: Arc<UnifiedConversationRepository>,
     ) -> Self {
         Self {
             section_repo,
-            channel_repo,
-            anon_dm_repo,
+            conversation_repo,
         }
     }
 
@@ -103,6 +99,7 @@ impl SectionService {
     }
 
     /// List all sections with their conversations and computed unread counts.
+    /// List all custom sections with their conversations and unread counts.
     pub fn list_sections_with_conversations(&self) -> Result<Vec<CustomSection>, SectionError> {
         let sections = self.section_repo.list_sections()?;
         let mut result = Vec::with_capacity(sections.len());
@@ -114,10 +111,12 @@ impl SectionService {
             let conversations: Vec<SectionConversation> = memberships
                 .into_iter()
                 .map(|m| {
-                    unread_count += self.get_conversation_unread(
+                    if let Ok(Some(conv)) = self.conversation_repo.get_conversation(
                         &m.conversation_id,
                         &m.conversation_type,
-                    );
+                    ) {
+                        unread_count += conv.unread_count;
+                    }
                     SectionConversation {
                         conversation_id: m.conversation_id,
                         conversation_type: m.conversation_type,
@@ -137,6 +136,15 @@ impl SectionService {
         }
 
         Ok(result)
+    }
+
+    /// Get unified metadata for a specific conversation.
+    pub fn get_conversation_metadata(
+        &self,
+        conversation_id: &str,
+        conversation_type: &ConversationType,
+    ) -> Result<Option<crate::domain::UnifiedConversation>, SectionError> {
+        Ok(self.conversation_repo.get_conversation(conversation_id, conversation_type)?)
     }
 
     /// Move a conversation into a section.
@@ -169,6 +177,19 @@ impl SectionService {
             })
     }
 
+    /// Check whether a conversation belongs to any custom section.
+    pub fn is_in_section(&self, conversation_id: &str) -> Result<bool, SectionError> {
+        Ok(self
+            .section_repo
+            .get_conversation_section(conversation_id)?
+            .is_some())
+    }
+
+    /// Return the set of all conversation IDs that belong to any section.
+    pub fn all_sectioned_conversation_ids(&self) -> Result<std::collections::HashSet<String>, SectionError> {
+        Ok(self.section_repo.all_conversation_ids()?)
+    }
+
     /// Remove a conversation from whichever section it belongs to.
     pub fn remove_conversation_from_section(
         &self,
@@ -179,38 +200,5 @@ impl SectionService {
                 .remove_from_section(&section_id, conversation_id)?;
         }
         Ok(())
-    }
-
-    /// Look up the unread count for a conversation by type.
-    fn get_conversation_unread(
-        &self,
-        conversation_id: &str,
-        conversation_type: &ConversationType,
-    ) -> u32 {
-        match conversation_type {
-            ConversationType::Channel
-            | ConversationType::ServerDm
-            | ConversationType::MailboxDm
-            | ConversationType::SavedMessages => {
-                if let Ok(id) = conversation_id.parse() {
-                    if let Ok(Some(channel)) = self.channel_repo.get(&id) {
-                        return channel.unread_count;
-                    }
-                }
-                0
-            }
-            ConversationType::AnonDm => {
-                if let Ok(id) = conversation_id.parse() {
-                    if let Ok(Some(dm)) = self.anon_dm_repo.get_conversation(&id) {
-                        return dm.unread_count;
-                    }
-                }
-                0
-            }
-            ConversationType::AnonGroup => {
-                // Anon groups don't track unread counts in their domain type
-                0
-            }
-        }
     }
 }

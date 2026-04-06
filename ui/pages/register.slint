@@ -1,4 +1,4 @@
-// Register page component with validation and password confirmation
+// Register page component with multi-step onboarding flow
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -16,355 +16,462 @@ export component RegisterPage inherits Rectangle {
     in-out property <string> pin: "";
     in-out property <string> confirm-pin: "";
     in-out property <string> server-url;
+    
     in property <bool> loading: false;
     in property <string> error: "";
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
     in property <int> selected-default-idx: -1;
+    
+    // Task 1: Username availability
+    in property <string> username-status: "none"; // "none", "checking", "available", "taken"
+    
+    // Internal navigation state (Task 2)
+    // Steps: 1: Profile, 2: Password, 3: PIN, 4: Server/Review
+    property <int> current-step: 1;
+    property <int> total-steps: 4;
 
     property <bool> submitted: false;
     property <bool> passwords-match: password == confirm-password;
     property <bool> pins-match: pin == confirm-pin;
+    
+    // Password strength (Task 9: 4 segments)
+    property <int> password-length: password.character-count;
+    property <bool> has-upper: false; // Would need regex or Rust help for real check
+    property <bool> has-special: false;
+    property <int> password-strength: {
+        if password-length == 0 { 0 }
+        else if password-length < 6 { 1 }
+        else if password-length < 10 { 2 }
+        else if password-length < 14 { 3 }
+        else { 4 }
+    };
+
     property <int> pin-length: pin.character-count;
     property <bool> pin-is-weak: pin-length > 0 && pin-length < 4;
     property <bool> pin-is-medium: pin-length >= 4 && pin-length < 6;
     property <bool> pin-is-strong: pin-length >= 6;
+    
     property <bool> show-advanced: false;
 
     callback register(string, string, string, string, string);
+    callback check-username(string);
     callback select-avatar();
     callback select-default-avatar(int);
     callback go-to-login();
 
     background: Colors.background;
 
-    Flickable {
-        width: 100%;
-        height: 100%;
-        viewport-height: content.preferred-height;
-        // Only allow scrolling when content overflows the screen.
-        // Prevents Flickable from stealing touch events from buttons on Android
-        // (Flickable's 100ms gesture disambiguation swallows taps with finger wobble).
-        interactive: content.preferred-height > self.height;
-
-        content := VerticalLayout {
-            padding: Spacing.lg;
-            spacing: 0px;
-
-            // Top spacer (pushes form down a bit, collapses when scrolling)
-            Rectangle { height: Spacing.xl; }
-
+    VerticalLayout {
+        // TopAppBar / Header (Task 2)
+        Rectangle {
+            height: 56px;
+            background: Colors.surface;
+            
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                spacing: Spacing.md;
+                
+                // Back button (shown after step 1)
+                if current-step > 1: Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 20px;
+                    background: back-touch.has-hover ? Colors.surface-hover : transparent;
+                    
+                    Image {
+                        source: Icons.arrow-left;
+                        width: 20px;
+                        height: 20px;
+                        colorize: Colors.text-primary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    
+                    back-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            current-step -= 1;
+                        }
+                    }
+                }
+                
+                if current-step == 1: Rectangle { width: 40px; } // Spacer
+                
+                Text {
+                    text: "Create Account";
+                    color: Colors.text-primary;
+                    font-size: Typography.lg;
+                    font-weight: Typography.semibold;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                
+                Text {
+                    text: "Step \{current-step} of \{total-steps}";
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                }
+            }
+            
+            // Progress bar
             Rectangle {
-                max-width: 400px;
-                horizontal-stretch: 0;
-                background: Colors.surface;
-                border-radius: Spacing.radius-lg;
+                y: parent.height - 2px;
+                height: 2px;
+                width: 100%;
+                background: Colors.border;
+                
+                Rectangle {
+                    x: 0;
+                    height: 100%;
+                    width: parent.width * (current-step / total-steps);
+                    background: Colors.primary;
+                    animate width { duration: 300ms; easing: ease-in-out; }
+                }
+            }
+        }
 
-                VerticalLayout {
-                    spacing: Spacing.md;
-                    padding: Spacing.lg;
+        Flickable {
+            viewport-height: content.preferred-height;
+            interactive: content.preferred-height > self.height;
 
-                    Text {
-                        text: "Chatter";
-                        color: Colors.primary;
-                        font-size: Typography.xxxl;
-                        font-weight: Typography.bold;
-                        horizontal-alignment: center;
-                    }
+            content := VerticalLayout {
+                padding: Spacing.lg;
+                spacing: 0px;
 
-                    Text {
-                        text: "Create your account";
-                        color: Colors.text-secondary;
-                        font-size: Typography.base;
-                        horizontal-alignment: center;
-                    }
+                Rectangle { height: Spacing.xl; }
 
-                    // Avatar selection
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: Spacing.md;
+                Rectangle {
+                    max-width: 400px;
+                    horizontal-stretch: 0;
+                    background: Colors.surface;
+                    border-radius: Spacing.radius-lg;
 
-                        Rectangle {
-                            width: 72px;
-                            height: 72px;
-                            border-radius: 36px;
-                            background: Colors.surface-hover;
-                            clip: true;
-
-                            Avatar {
-                                size: 72px;
-                                source: root.has-avatar ? root.avatar-source : @image-url("../../assets/icon-256.png");
-                                fallback-text: "+";
-                            }
-
-                            TouchArea {
-                                enabled: !root.loading;
-                                clicked => { root.select-avatar(); }
-                            }
-                        }
-
-                        // Default avatar color presets (letter-based, professional)
-                        for preset[i] in [
-                            { color: #0d9488, letter: "A" },
-                            { color: #3b82f6, letter: "B" },
-                            { color: #8b5cf6, letter: "C" },
-                        ]: Rectangle {
-                            width: 40px;
-                            height: 40px;
-                            border-radius: 20px;
-                            background: preset.color;
-                            border-width: 2px;
-                            border-color: root.selected-default-idx == i ? Colors.text-primary : transparent;
-
-                            Text {
-                                text: preset.letter;
-                                color: Colors.text-primary;
-                                font-size: 16px;
-                                font-weight: Typography.semibold;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                                width: 100%;
-                                height: 100%;
-                            }
-
-                            TouchArea {
-                                enabled: !root.loading;
-                                clicked => { root.select-default-avatar(i); }
-                            }
-                        }
-                    }
-
-                    // Display name
-                    Input {
-                        placeholder: "Display name";
-                        text <=> root.display-name;
-                        disabled: root.loading;
-                    }
-
-                    // Username
-                    Input {
-                        placeholder: "Username";
-                        text <=> root.username;
-                        disabled: root.loading;
-                    }
-
-                    // Password
-                    Input {
-                        placeholder: "Password";
-                        password: true;
-                        text <=> root.password;
-                        disabled: root.loading;
-                    }
-
-                    // Confirm password
-                    Input {
-                        placeholder: "Confirm password";
-                        password: true;
-                        text <=> root.confirm-password;
-                        disabled: root.loading;
-                    }
-
-                    // PIN section with explanation
                     VerticalLayout {
-                        spacing: Spacing.xs;
+                        spacing: Spacing.lg;
+                        padding: Spacing.lg;
 
-                        // Explanation of what PIN protects
-                        HorizontalLayout {
-                            spacing: 4px;
-                            alignment: start;
-
+                        // --- STEP 1: PROFILE ---
+                        if current-step == 1: VerticalLayout {
+                            spacing: Spacing.md;
+                            
                             Text {
-                                text: "\u{1F512}";
-                                font-size: Typography.xs;
-                                vertical-alignment: center;
+                                text: "Set up your profile";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.bold;
+                                horizontal-alignment: center;
+                            }
+
+                            // Avatar selection
+                            HorizontalLayout {
+                                alignment: center;
+                                spacing: Spacing.md;
+
+                                Rectangle {
+                                    width: 80px;
+                                    height: 80px;
+                                    border-radius: 40px;
+                                    background: Colors.surface-hover;
+                                    clip: true;
+
+                                    Avatar {
+                                        size: 80px;
+                                        source: root.has-avatar ? root.avatar-source : @image-url("../../assets/icon-256.png");
+                                        fallback-text: "+";
+                                    }
+
+                                    TouchArea {
+                                        enabled: !root.loading;
+                                        clicked => { root.select-avatar(); }
+                                    }
+                                }
+
+                                // Default avatar color presets
+                                for preset[i] in [
+                                    { color: Colors.primary, letter: "A" },
+                                    { color: Colors.info, letter: "B" },
+                                    { color: Colors.group-accent, letter: "C" },
+                                ]: Rectangle {
+                                    width: 44px;
+                                    height: 44px;
+                                    border-radius: 22px;
+                                    background: preset.color;
+                                    border-width: 2px;
+                                    border-color: root.selected-default-idx == i ? Colors.text-primary : transparent;
+
+                                    Text {
+                                        text: preset.letter;
+                                        color: Colors.text-primary;
+                                        font-size: 18px;
+                                        font-weight: Typography.semibold;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        width: 100%;
+                                        height: 100%;
+                                    }
+
+                                    TouchArea {
+                                        enabled: !root.loading;
+                                        clicked => { root.select-default-avatar(i); }
+                                    }
+                                }
+                            }
+
+                            // Display name
+                            Input {
+                                placeholder: "Display name";
+                                text <=> root.display-name;
+                                disabled: root.loading;
+                            }
+
+                            // Username with availability check (Task 1)
+                            VerticalLayout {
+                                spacing: Spacing.xs;
+                                
+                                Input {
+                                    placeholder: "Username";
+                                    text <=> root.username;
+                                    disabled: root.loading;
+                                    edited(text) => { root.check-username(text); }
+                                }
+                                
+                                if username != "": HorizontalLayout {
+                                    spacing: 4px;
+                                    alignment: start;
+                                    
+                                    if username-status == "checking": Text {
+                                        text: "Checking availability...";
+                                        color: Colors.text-muted;
+                                        font-size: 10px;
+                                    }
+                                    if username-status == "available": Text {
+                                        text: "\u{2713} Available";
+                                        color: Colors.success;
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                    }
+                                    if username-status == "taken": Text {
+                                        text: "\u{2715} Already taken";
+                                        color: Colors.error;
+                                        font-size: 10px;
+                                        font-weight: 600;
+                                    }
+                                }
+                            }
+
+                            Button {
+                                text: "Continue";
+                                variant: "primary";
+                                disabled: display-name == "" || username == "" || username-status == "taken";
+                                clicked => { current-step = 2; }
+                            }
+                        }
+
+                        // --- STEP 2: PASSWORD ---
+                        if current-step == 2: VerticalLayout {
+                            spacing: Spacing.md;
+                            
+                            Text {
+                                text: "Secure your account";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.bold;
+                                horizontal-alignment: center;
+                            }
+
+                            // Password
+                            Input {
+                                placeholder: "Password";
+                                password: true;
+                                text <=> root.password;
+                                disabled: root.loading;
+                            }
+
+                            // Task 9: Password strength meter (4 segments)
+                            if root.password-length > 0: VerticalLayout {
+                                spacing: 4px;
+                                HorizontalLayout {
+                                    spacing: Spacing.xs;
+                                    height: 6px;
+                                    
+                                    for i in 4: Rectangle {
+                                        horizontal-stretch: 1;
+                                        height: 4px;
+                                        border-radius: 2px;
+                                        background: i < root.password-strength ? 
+                                            (root.password-strength == 1 ? Colors.error : 
+                                             root.password-strength == 2 ? Colors.warning :
+                                             root.password-strength == 3 ? Colors.info : Colors.success) : 
+                                            Colors.surface-hover;
+                                    }
+                                }
+                                Text {
+                                    text: root.password-strength == 1 ? "Weak" :
+                                          root.password-strength == 2 ? "Fair" :
+                                          root.password-strength == 3 ? "Good" : "Strong";
+                                    color: root.password-strength == 1 ? Colors.error : 
+                                           root.password-strength == 2 ? Colors.warning :
+                                           root.password-strength == 3 ? Colors.info : Colors.success;
+                                    font-size: 10px;
+                                }
+                            }
+
+                            // Confirm password
+                            Input {
+                                placeholder: "Confirm password";
+                                password: true;
+                                text <=> root.confirm-password;
+                                disabled: root.loading;
+                                error: password != "" && confirm-password != "" && !passwords-match;
+                                error-message: "Passwords do not match";
+                            }
+
+                            Button {
+                                text: "Continue";
+                                variant: "primary";
+                                disabled: password == "" || !passwords-match || password-strength < 2;
+                                clicked => { current-step = 3; }
+                            }
+                        }
+
+                        // --- STEP 3: PIN ---
+                        if current-step == 3: VerticalLayout {
+                            spacing: Spacing.md;
+                            
+                            Text {
+                                text: "Create recovery PIN";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.bold;
+                                horizontal-alignment: center;
                             }
 
                             Text {
-                                text: "Your PIN protects your encryption key backup. If you lose your device, you'll need this PIN to recover your messages.";
+                                text: "Your PIN protects your encryption key backup. You'll need it to recover messages if you lose this device.";
                                 color: Colors.text-muted;
-                                font-size: Typography.xs;
+                                font-size: Typography.sm;
+                                horizontal-alignment: center;
                                 wrap: word-wrap;
                             }
+
+                            Input {
+                                placeholder: "Create a PIN (at least 4 digits)";
+                                password: true;
+                                text <=> root.pin;
+                                disabled: root.loading;
+                            }
+
+                            // PIN strength
+                            if root.pin-length > 0: HorizontalLayout {
+                                spacing: Spacing.xs;
+                                height: 8px;
+                                Rectangle {
+                                    horizontal-stretch: 1; height: 4px; border-radius: 2px;
+                                    background: root.pin-is-weak ? Colors.error : (root.pin-is-medium ? Colors.warning : Colors.success);
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1; height: 4px; border-radius: 2px;
+                                    background: root.pin-is-medium || root.pin-is-strong ? (root.pin-is-strong ? Colors.success : Colors.warning) : Colors.surface-hover;
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1; height: 4px; border-radius: 2px;
+                                    background: root.pin-is-strong ? Colors.success : Colors.surface-hover;
+                                }
+                            }
+
+                            // Confirm PIN
+                            Input {
+                                placeholder: "Confirm PIN";
+                                password: true;
+                                text <=> root.confirm-pin;
+                                disabled: root.loading;
+                                error: pin != "" && confirm-pin != "" && !root.pins-match;
+                                error-message: "PINs do not match";
+                            }
+
+                            Button {
+                                text: "Continue";
+                                variant: "primary";
+                                disabled: pin == "" || !pins-match || pin-is-weak;
+                                clicked => { current-step = 4; }
+                            }
                         }
 
-                        Input {
-                            placeholder: "Create a PIN (at least 4 digits)";
-                            password: true;
-                            text <=> root.pin;
-                            disabled: root.loading;
-                        }
-
-                        // PIN strength indicator
-                        if root.pin-length > 0: HorizontalLayout {
-                            spacing: Spacing.xs;
-                            height: 8px;
-
-                            // Strength bar
-                            Rectangle {
-                                horizontal-stretch: 1;
-                                height: 4px;
-                                border-radius: 2px;
-                                background: root.pin-is-weak ? Colors.error : (root.pin-is-medium ? Colors.warning : Colors.success);
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
-                                height: 4px;
-                                border-radius: 2px;
-                                background: root.pin-is-medium || root.pin-is-strong ? (root.pin-is-strong ? Colors.success : Colors.warning) : Colors.surface-hover;
-                            }
-
-                            Rectangle {
-                                horizontal-stretch: 1;
-                                height: 4px;
-                                border-radius: 2px;
-                                background: root.pin-is-strong ? Colors.success : Colors.surface-hover;
-                            }
-
+                        // --- STEP 4: REVIEW & SERVER ---
+                        if current-step == 4: VerticalLayout {
+                            spacing: Spacing.md;
+                            
                             Text {
-                                text: root.pin-is-weak ? "Weak" : (root.pin-is-medium ? "Good" : "Strong");
-                                color: root.pin-is-weak ? Colors.error : (root.pin-is-medium ? Colors.warning : Colors.success);
-                                font-size: 10px;
-                                vertical-alignment: center;
+                                text: "Finalize Registration";
+                                color: Colors.text-primary;
+                                font-size: Typography.xl;
+                                font-weight: Typography.bold;
+                                horizontal-alignment: center;
+                            }
+
+                            // Server selection
+                            Input {
+                                placeholder: "Server URL";
+                                text <=> root.server-url;
+                                disabled: root.loading;
+                            }
+
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+                                Rectangle {
+                                    height: 32px; horizontal-stretch: 1; background: Colors.surface-hover; border-radius: Spacing.radius-sm;
+                                    Text { text: "Localhost"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
+                                    TouchArea { clicked => { root.server-url = "http://localhost:50051"; } }
+                                }
+                                Rectangle {
+                                    height: 32px; horizontal-stretch: 1; background: Colors.surface-hover; border-radius: Spacing.radius-sm;
+                                    Text { text: "Official"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
+                                    TouchArea { clicked => { root.server-url = "https://api.chatter.example.com"; } }
+                                }
+                            }
+
+                            if error != "": Text {
+                                text: root.error;
+                                color: Colors.error;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                            }
+
+                            Button {
+                                text: loading ? "" : "Create Account";
+                                variant: "primary";
+                                loading: root.loading;
+                                disabled: root.loading || server-url == "";
+
+                                clicked => {
+                                    root.register(root.username, root.password, root.display-name, root.pin, root.server-url);
+                                }
                             }
                         }
 
-                        // Confirm PIN
-                        Input {
-                            placeholder: "Confirm PIN";
-                            password: true;
-                            text <=> root.confirm-pin;
-                            disabled: root.loading;
-                            error: root.submitted && root.confirm-pin != "" && !root.pins-match;
-                            error-message: "PINs do not match";
-                        }
-                    }
-
-                    // Advanced settings toggle
-                    HorizontalLayout {
-                        alignment: start;
-                        spacing: 4px;
-
-                        Image {
-                            source: root.show-advanced ? Icons.chevron-left : Icons.chevron-right;
-                            width: 12px;
-                            height: 12px;
-                            colorize: Colors.text-muted;
-                            y: (parent.height - self.height) / 2;
-                            transform-rotation: root.show-advanced ? -90deg : 0deg;
-                        }
-
-                        Text {
-                            text: "Advanced";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                            vertical-alignment: center;
-
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => { root.show-advanced = !root.show-advanced; }
-                            }
-                        }
-                    }
-
-                    // Server URL (hidden behind Advanced)
-                    if root.show-advanced: Input {
-                        placeholder: "Server URL";
-                        text <=> root.server-url;
-                        disabled: root.loading;
-                    }
-
-                    if root.show-advanced: HorizontalLayout {
-                        spacing: Spacing.sm;
-
-                        Rectangle {
-                            height: 28px;
-                            horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "Localhost"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = "http://localhost:50051"; } }
-                        }
-
-                        Rectangle {
-                            height: 28px;
-                            horizontal-stretch: 1;
-                            background: Colors.surface-hover;
-                            border-radius: Spacing.radius-sm;
-                            Text { text: "LAN"; font-size: Typography.xs; color: Colors.text-secondary; horizontal-alignment: center; vertical-alignment: center; }
-                            TouchArea { clicked => { root.server-url = "http://192.168.0.7:50051"; } }
-                        }
-
-                    }
-
-                    // Validation errors
-                    if submitted && !passwords-match: Text {
-                        text: "Passwords do not match";
-                        color: Colors.error;
-                        font-size: Typography.sm;
-                    }
-
-                    if submitted && !pins-match && confirm-pin != "": Text {
-                        text: "PINs do not match";
-                        color: Colors.error;
-                        font-size: Typography.sm;
-                    }
-
-                    if submitted && pin-is-weak: Text {
-                        text: "PIN must be at least 4 digits";
-                        color: Colors.error;
-                        font-size: Typography.sm;
-                    }
-
-                    if error != "": Text {
-                        text: root.error;
-                        color: Colors.error;
-                        font-size: Typography.sm;
-                        wrap: word-wrap;
-                    }
-
-                    // Register button
-                    Button {
-                        text: loading ? "" : "Create Account";
-                        variant: "primary";
-                        loading: root.loading;
-                        disabled: root.loading;
-
-                        clicked => {
-                            submitted = true;
-                            if display-name != "" && username != "" && password != "" && confirm-password != "" && pin != "" && confirm-pin != "" && server-url != "" && passwords-match && pins-match && !pin-is-weak {
-                                root.register(root.username, root.password, root.display-name, root.pin, root.server-url);
-                            }
-                        }
-                    }
-
-                    // Login link
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: Spacing.xs;
-
-                        Text {
-                            text: "Already have an account?";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                        }
-
-                        Text {
-                            text: "Sign in";
-                            color: Colors.primary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-
-                            TouchArea {
-                                clicked => { root.go-to-login(); }
+                        // Login link (only on first step)
+                        if current-step == 1: HorizontalLayout {
+                            alignment: center;
+                            spacing: Spacing.xs;
+                            Text { text: "Already have an account?"; color: Colors.text-secondary; font-size: Typography.sm; }
+                            Text {
+                                text: "Sign in";
+                                color: Colors.primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.medium;
+                                TouchArea { clicked => { root.go-to-login(); } }
                             }
                         }
                     }
                 }
-            }
 
-            // Bottom spacer
-            Rectangle { height: Spacing.xl; }
+                // Bottom spacer
+                Rectangle { height: Spacing.xl; }
+            }
         }
     }
 }

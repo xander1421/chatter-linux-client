@@ -264,6 +264,20 @@ impl SectionRepository {
             Err(e) => Err(StorageError::Database(e)),
         }
     }
+
+    /// Return the set of all conversation IDs that belong to any section.
+    pub fn all_conversation_ids(&self) -> Result<std::collections::HashSet<String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT conversation_id FROM section_memberships",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut ids = std::collections::HashSet::new();
+        for row in rows {
+            ids.insert(row.map_err(StorageError::Database)?);
+        }
+        Ok(ids)
+    }
 }
 
 // ============================================================================
