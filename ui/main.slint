@@ -220,9 +220,11 @@ export component MainWindow inherits Window {
     in property <[EmojiData]> composer-emoji-list <=> app.composer-emoji-list;
     in-out property <int> composer-emoji-category <=> app.composer-emoji-category;
     in-out property <string> composer-emoji-search <=> app.composer-emoji-search;
+    in-out property <int> composer-emoji-skin-tone <=> app.composer-emoji-skin-tone;
     callback composer-emoji-selected <=> app.composer-emoji-selected;
     callback composer-emoji-category-changed <=> app.composer-emoji-category-changed;
     callback composer-emoji-search-changed <=> app.composer-emoji-search-changed;
+    callback composer-emoji-skin-tone-changed <=> app.composer-emoji-skin-tone-changed;
 
     // ========== GIF picker state ==========
     in-out property <bool> composer-gif-picker-visible <=> app.composer-gif-picker-visible;

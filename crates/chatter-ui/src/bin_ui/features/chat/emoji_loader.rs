@@ -1,13 +1,48 @@
 //! Shared emoji loading logic for composer and reactions.
 
+use std::sync::Arc;
+
 use slint::{ComponentHandle, ModelRc, VecModel};
+
+use chatter_core::client::ChatterClient;
+use chatter_core::ui::recent_emoji::RecentEmojiStore;
+
 use crate::{EmojiData, MainWindow};
 
+/// Category index reserved for "Recent" emoji (displayed as first tab).
+const RECENT_CATEGORY: i32 = -1;
+
+/// Fitzpatrick skin tone modifiers (indices 1-5). Index 0 = no modifier (default yellow).
+const SKIN_TONE_MODIFIERS: [&str; 5] = [
+    "\u{1F3FB}", // Light
+    "\u{1F3FC}", // Medium-Light
+    "\u{1F3FD}", // Medium
+    "\u{1F3FE}", // Medium-Dark
+    "\u{1F3FF}", // Dark
+];
+
+/// Apply a skin tone modifier to an emoji if it supports it (People & Body category).
+fn apply_skin_tone(emoji: &str, tone: i32) -> String {
+    if tone == 0 || tone < 0 || tone > 5 {
+        return emoji.to_string();
+    }
+    let modifier = SKIN_TONE_MODIFIERS[(tone - 1) as usize];
+    // Insert modifier after the base emoji character (before any variant selectors)
+    let mut chars = emoji.chars();
+    if let Some(first) = chars.next() {
+        let rest: String = chars.collect();
+        format!("{first}{modifier}{rest}")
+    } else {
+        emoji.to_string()
+    }
+}
+
 /// Wire emoji loader callbacks.
-pub fn wire_emoji_loader(window: &MainWindow) {
+pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let store = Arc::new(RecentEmojiStore::load(ui_ctx.directories().data_dir()));
     let weak = window.as_weak();
 
-    // Initial load
+    // Initial load — show smileys (category 0) by default
     if let Some(w) = weak.upgrade() {
         let emojis = get_emoji_list(0);
         w.set_composer_emoji_list(ModelRc::new(VecModel::from(emojis.clone())));
@@ -16,9 +51,15 @@ pub fn wire_emoji_loader(window: &MainWindow) {
 
     window.on_composer_emoji_category_changed({
         let weak = weak.clone();
+        let store = store.clone();
         move |category| {
             if let Some(w) = weak.upgrade() {
-                let emojis = get_emoji_list(category);
+                let tone = w.get_composer_emoji_skin_tone();
+                let emojis = if category == RECENT_CATEGORY {
+                    recent_to_emoji_data(&store)
+                } else {
+                    get_emoji_list_with_tone(category, tone)
+                };
                 w.set_composer_emoji_list(ModelRc::new(VecModel::from(emojis)));
             }
         }
@@ -26,10 +67,16 @@ pub fn wire_emoji_loader(window: &MainWindow) {
 
     window.on_composer_emoji_search_changed({
         let weak = weak.clone();
+        let store = store.clone();
         move |query| {
             if let Some(w) = weak.upgrade() {
                 if query.is_empty() {
-                    let emojis = get_emoji_list(w.get_composer_emoji_category());
+                    let cat = w.get_composer_emoji_category();
+                    let emojis = if cat == RECENT_CATEGORY {
+                        recent_to_emoji_data(&store)
+                    } else {
+                        get_emoji_list(cat)
+                    };
                     w.set_composer_emoji_list(ModelRc::new(VecModel::from(emojis)));
                 } else {
                     let emojis = search_emojis(&query);
@@ -42,9 +89,14 @@ pub fn wire_emoji_loader(window: &MainWindow) {
     // Reaction picker emoji callbacks
     window.on_reaction_picker_category_changed({
         let weak = weak.clone();
+        let store = store.clone();
         move |category| {
             if let Some(w) = weak.upgrade() {
-                let emojis = get_emoji_list(category);
+                let emojis = if category == RECENT_CATEGORY {
+                    recent_to_emoji_data(&store)
+                } else {
+                    get_emoji_list(category)
+                };
                 w.set_reaction_picker_emojis(ModelRc::new(VecModel::from(emojis)));
             }
         }
@@ -52,10 +104,16 @@ pub fn wire_emoji_loader(window: &MainWindow) {
 
     window.on_reaction_picker_search_changed({
         let weak = weak.clone();
+        let store = store.clone();
         move |query| {
             if let Some(w) = weak.upgrade() {
                 if query.is_empty() {
-                    let emojis = get_emoji_list(w.get_reaction_picker_selected_category());
+                    let cat = w.get_reaction_picker_selected_category();
+                    let emojis = if cat == RECENT_CATEGORY {
+                        recent_to_emoji_data(&store)
+                    } else {
+                        get_emoji_list(cat)
+                    };
                     w.set_reaction_picker_emojis(ModelRc::new(VecModel::from(emojis)));
                 } else {
                     let emojis = search_emojis(&query);
@@ -64,6 +122,64 @@ pub fn wire_emoji_loader(window: &MainWindow) {
             }
         }
     });
+
+    // Track emoji usage + insert into composer text + close picker
+    window.on_composer_emoji_selected({
+        let weak = weak.clone();
+        let store = store.clone();
+        move |emoji| {
+            store.record(&emoji);
+            let emoji_str = emoji.to_string();
+            if let Some(w) = weak.upgrade() {
+                let current_text = w.get_composer_text().to_string();
+                let new_text = format!("{current_text}{emoji_str}");
+                w.set_composer_text(new_text.into());
+                w.set_composer_emoji_picker_visible(false);
+            }
+        }
+    });
+
+    // Skin tone changed — reload People category with selected tone
+    window.on_composer_emoji_skin_tone_changed({
+        let weak = weak.clone();
+        move |tone| {
+            if let Some(w) = weak.upgrade() {
+                let category = w.get_composer_emoji_category();
+                if category == 1 {
+                    // People & Body — apply skin tone
+                    let emojis = get_emoji_list_with_tone(category, tone);
+                    w.set_composer_emoji_list(ModelRc::new(VecModel::from(emojis)));
+                }
+            }
+        }
+    });
+}
+
+/// Get the `RecentEmojiStore` as a standalone helper for other modules.
+fn recent_to_emoji_data(store: &RecentEmojiStore) -> Vec<EmojiData> {
+    store
+        .get_recent()
+        .into_iter()
+        .map(|emoji| EmojiData {
+            emoji: emoji.into(),
+            name: "recent".into(),
+            category: RECENT_CATEGORY,
+        })
+        .collect()
+}
+
+/// Get emoji list with skin tone applied (only affects People & Body, category 1).
+fn get_emoji_list_with_tone(category: i32, tone: i32) -> Vec<EmojiData> {
+    let base = get_emoji_list(category);
+    if category != 1 || tone == 0 {
+        return base;
+    }
+    base.into_iter()
+        .map(|mut e| {
+            e.emoji = apply_skin_tone(&e.emoji, tone).into();
+            e
+        })
+        .collect()
 }
 
 /// Categories: 0=Smileys, 1=People, 2=Animals, 3=Food, 4=Travel, 5=Activities, 6=Objects, 7=Symbols, 8=Flags

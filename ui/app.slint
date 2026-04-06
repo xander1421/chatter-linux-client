@@ -258,9 +258,11 @@ export component App inherits Rectangle {
     in property <[EmojiData]> composer-emoji-list: [];
     in-out property <int> composer-emoji-category: 0;
     in-out property <string> composer-emoji-search: "";
+    in-out property <int> composer-emoji-skin-tone: 0;  // 0=default, 1-5=Fitzpatrick
     callback composer-emoji-selected(string);      // emoji to insert
     callback composer-emoji-category-changed(int); // category index
     callback composer-emoji-search-changed(string); // search query
+    callback composer-emoji-skin-tone-changed(int); // skin tone index
 
     // ========== Composer GIF picker state ==========
     in-out property <bool> composer-gif-picker-visible: false;
@@ -2306,6 +2308,7 @@ export component App inherits Rectangle {
         emoji-list: root.composer-emoji-list;
         selected-category <=> root.composer-emoji-category;
         search-query <=> root.composer-emoji-search;
+        selected-skin-tone <=> root.composer-emoji-skin-tone;
         max-picker-width: min(280px, root.width - 32px);
         max-picker-height: min(320px, root.height - 128px);
 
@@ -2322,6 +2325,9 @@ export component App inherits Rectangle {
         }
         search-changed(q) => {
             root.composer-emoji-search-changed(q);
+        }
+        skin-tone-changed(tone) => {
+            root.composer-emoji-skin-tone-changed(tone);
         }
         close => {
             root.composer-emoji-picker-visible = false;

@@ -8,6 +8,7 @@ pub mod chat_data;
 pub mod commands;
 pub mod emoji_data;
 pub mod file_data;
+pub mod recent_emoji;
 pub mod handlers;
 pub mod picker_data;
 pub mod sidebar_data;
