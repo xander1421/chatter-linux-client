@@ -198,11 +198,9 @@ impl AnonDmService {
 
         // Build the initial contact message per NDSS'21: "init" || pk_e
         // Extended to include our identity for subsequent session establishment
-        use crate::storage::repositories::settings_keys;
-        let sender_avatar = self.settings_repo
-            .get_bytes(settings_keys::AVATAR)
-            .ok()
-            .flatten();
+        // NOTE: No avatar in Phase 1 — ECIES has no PFS, so only ephemeral data goes here.
+        // Avatars are exchanged after Double Ratchet session is established (Phase 2).
+        // Also, server caps ECIES_INIT payloads at 2048 bytes (GRA-572).
         let init_message = AnonDmInitMessage::new(
             *conversation_id,
             our_user_id,
@@ -211,7 +209,7 @@ impl AnonDmService {
             our_delivery_token,
             sender_display_name.unwrap_or(""),
             intro_message.unwrap_or_default(),
-            sender_avatar,
+            None, // No avatar in Phase 1 (no PFS, payload size cap)
         );
 
         // Serialize the init message
@@ -238,15 +236,11 @@ impl AnonDmService {
             .expect("Time should be after Unix epoch")
             .as_nanos() as u64;
 
-        let server_key_id = self.settings_repo
-            .get::<u32>(crate::storage::repositories::settings_repo::keys::SENDER_CERTIFICATE_SERVER_KEY_ID)
-            .ok()
-            .flatten()
-            .unwrap_or(1);
+        // ECIES_INIT requires server_key_id == 0 (server rejects non-zero, see sealed_sender.go:66-68)
         let sealed_message = SealedSenderMessage {
             sealed_body: ecies_message.to_bytes(),
             timestamp: timestamp_nanos,
-            server_key_id,
+            server_key_id: 0,
         };
 
         // Use envelope_type=4 (ECIES_INIT) so receiver knows to use HPKE decryption
