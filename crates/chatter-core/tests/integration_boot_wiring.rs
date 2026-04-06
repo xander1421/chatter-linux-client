@@ -10,6 +10,14 @@
 
 use std::time::{Duration, Instant};
 
+/// Create a unique temp directory for a test to avoid SQLite lock contention
+/// when multiple tests run in parallel.
+fn test_data_dir(test_name: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("chatter-test-{}-{}", test_name, std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create test data dir");
+    dir.to_string_lossy().into_owned()
+}
+
 /// Test that AppContext initializes the full 3-tier stack.
 ///
 /// Architecture reference:
@@ -17,11 +25,12 @@ use std::time::{Duration, Instant};
 ///     ├─ Tier 1: InfrastructureContainer (DB, crypto stores, gRPC pool)
 ///     ├─ Tier 2: ServiceContainer (16 services using infra)
 ///     └─ Tier 3: CoreServices (services + 11 state stores + EventBus)
-#[test]
-fn test_appcontext_three_tier_initialization() {
+#[tokio::test]
+async fn test_appcontext_three_tier_initialization() {
     let start = Instant::now();
+    let data_dir = test_data_dir("appcontext_init");
 
-    let ctx = chatter_core::app::AppContext::with_config(Some("http://localhost:50051".to_string()), None);
+    let ctx = chatter_core::app::AppContext::with_config(Some("http://localhost:50051".to_string()), Some(data_dir));
 
     let elapsed = start.elapsed();
     assert!(elapsed < Duration::from_secs(30), "AppContext init took too long: {:?}", elapsed);
@@ -36,6 +45,7 @@ fn test_appcontext_three_tier_initialization() {
             // Build a client to verify all tiers wired correctly
             let client = chatter_core::client::ChatterClient::builder()
                 .server_url("http://localhost:50051")
+                .data_dir(test_data_dir("appcontext_init_client"))
                 .build();
 
             let Ok(client) = client else {
@@ -88,10 +98,11 @@ fn test_appcontext_three_tier_initialization() {
 /// Architecture reference:
 ///   ChatterClient wraps CoreServices and adds task management + convenience methods.
 ///   The UI only talks to ChatterClient.
-#[test]
-fn test_chatter_client_builder() {
+#[tokio::test]
+async fn test_chatter_client_builder() {
     let result = chatter_core::client::ChatterClient::builder()
         .server_url("http://localhost:50051")
+        .data_dir(test_data_dir("client_builder"))
         .build();
 
     match result {
@@ -139,10 +150,11 @@ fn test_chatter_client_builder() {
 /// Architecture reference:
 ///   CoreServices has post-boot OnceLocks: CallService, DeviceInboxProvider, GroupFanout
 ///   These are only initialized after successful login.
-#[test]
-fn test_oncelock_services_uninitialized_before_login() {
+#[tokio::test]
+async fn test_oncelock_services_uninitialized_before_login() {
     let result = chatter_core::client::ChatterClient::builder()
         .server_url("http://localhost:50051")
+        .data_dir(test_data_dir("oncelock_uninit"))
         .build();
 
     match result {
@@ -179,10 +191,11 @@ fn test_oncelock_services_uninitialized_before_login() {
 ///   EventBus is part of Tier 3 (CoreServices).
 ///   It has domain_tx (broadcast/64) for DomainEvents
 ///   and ui_tx for UiEvents.
-#[test]
-fn test_event_bus_created_on_init() {
+#[tokio::test]
+async fn test_event_bus_created_on_init() {
     let result = chatter_core::client::ChatterClient::builder()
         .server_url("http://localhost:50051")
+        .data_dir(test_data_dir("event_bus"))
         .build();
 
     match result {
@@ -207,10 +220,11 @@ fn test_event_bus_created_on_init() {
 /// Architecture reference:
 ///   auth().restore_session() — load saved credentials (step 4 of boot)
 ///   On fresh init with no saved session, should be not logged in.
-#[test]
-fn test_fresh_init_not_logged_in() {
+#[tokio::test]
+async fn test_fresh_init_not_logged_in() {
     let result = chatter_core::client::ChatterClient::builder()
         .server_url("http://localhost:50051")
+        .data_dir(test_data_dir("fresh_init"))
         .build();
 
     match result {

@@ -20,6 +20,9 @@ use std::sync::Arc;
 
 use slint::Weak;
 
+use chatter_core::domain::ids::MessageId;
+use chatter_core::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
+use chrono::Utc;
 use chatter_core::inbox::handlers::DomainEvent;
 use chatter_core::client::ChatterClient;
 use crate::MainWindow;
@@ -127,34 +130,16 @@ pub async fn handle_domain_event(
         // Message Events (handled by EventHandlers state store)
         // =========================================================================
         DomainEvent::MessageReceived { ref message } => {
-            use chatter_core::domain::message::ConversationType;
-            match message.conversation_type {
-                ConversationType::AnonDm | ConversationType::AnonGroup => {
-                    anon::handle_message_received_unified(window, ui_ctx, message.clone());
-                }
-                _ => {
-                    messaging::handle_message_received(window, ui_ctx, message.clone());
-                }
-            }
+            messaging::handle_message_received(window, ui_ctx, message.clone());
         }
 
         // Receipt events: update checkmarks (✓✓) in the Slint message model.
-        // Route to anon handler when the active conversation is anonymous,
-        // mirroring the MessageReceived dispatch pattern.
         DomainEvent::MessagesDelivered { message_timestamps, .. } => {
-            if ui_ctx.chat_state().active_conversation().is_anon() {
-                anon::handle_anon_delivery_status_update(window, message_timestamps, "delivered");
-            } else {
-                messaging::handle_delivery_status_update(window, message_timestamps, "delivered");
-            }
+            messaging::handle_delivery_status_update(window, message_timestamps, "delivered");
         }
 
         DomainEvent::MessagesRead { message_timestamps, .. } => {
-            if ui_ctx.chat_state().active_conversation().is_anon() {
-                anon::handle_anon_delivery_status_update(window, message_timestamps, "read");
-            } else {
-                messaging::handle_delivery_status_update(window, message_timestamps, "read");
-            }
+            messaging::handle_delivery_status_update(window, message_timestamps, "read");
         }
 
         // Reaction UI updates: update emoji summary on the message bubble + sidebar
@@ -246,15 +231,102 @@ pub async fn handle_domain_event(
         }
 
         DomainEvent::AnonGroupMemberJoined { group_id, user_id, .. } => {
-            anon::handle_group_member_joined(window, ui_ctx, group_id, user_id);
+            let now = Utc::now();
+            let message = Message {
+                id: MessageId::new(),
+                conversation_id: group_id.into(),
+                conversation_type: ConversationType::AnonGroup,
+                sender_id: Some(user_id),
+                device_id: None,
+                content: MessageContent::System(SystemMessage::UserJoined(user_id)),
+                encrypted_content: None,
+                thread_id: None,
+                reply_to: None,
+                reply_to_author_id: None,
+                reply_to_text: None,
+                attachments: Vec::new(),
+                is_pinned: false,
+                is_edited: false,
+                is_deleted: false,
+                is_read: true,
+                sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
+                created_at: now,
+                updated_at: now,
+                edited_at: None,
+                reaction_counts: Vec::new(),
+                current_user_reactions: Vec::new(),
+                mentioned_integrations: Vec::new(),
+                targets_ai_bot: false,
+                delivery_status: String::new(),
+            };
+            messaging::handle_message_received(window, ui_ctx, message);
+            messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
         }
 
         DomainEvent::AnonGroupMemberLeft { group_id, user_id } => {
-            anon::handle_group_member_left(window, ui_ctx, group_id, user_id);
+            let now = Utc::now();
+            let message = Message {
+                id: MessageId::new(),
+                conversation_id: group_id.into(),
+                conversation_type: ConversationType::AnonGroup,
+                sender_id: Some(user_id),
+                device_id: None,
+                content: MessageContent::System(SystemMessage::UserLeft(user_id)),
+                encrypted_content: None,
+                thread_id: None,
+                reply_to: None,
+                reply_to_author_id: None,
+                reply_to_text: None,
+                attachments: Vec::new(),
+                is_pinned: false,
+                is_edited: false,
+                is_deleted: false,
+                is_read: true,
+                sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
+                created_at: now,
+                updated_at: now,
+                edited_at: None,
+                reaction_counts: Vec::new(),
+                current_user_reactions: Vec::new(),
+                mentioned_integrations: Vec::new(),
+                targets_ai_bot: false,
+                delivery_status: String::new(),
+            };
+            messaging::handle_message_received(window, ui_ctx, message);
+            messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
         }
 
         DomainEvent::AnonGroupMemberKicked { group_id, user_id, kicked_by } => {
-            anon::handle_group_member_kicked(window, ui_ctx, group_id, user_id, kicked_by);
+            let now = Utc::now();
+            let message = Message {
+                id: MessageId::new(),
+                conversation_id: group_id.into(),
+                conversation_type: ConversationType::AnonGroup,
+                sender_id: Some(kicked_by), // Admin who did it
+                device_id: None,
+                content: MessageContent::System(SystemMessage::UserRemoved { by: kicked_by, removed: user_id }),
+                encrypted_content: None,
+                thread_id: None,
+                reply_to: None,
+                reply_to_author_id: None,
+                reply_to_text: None,
+                attachments: Vec::new(),
+                is_pinned: false,
+                is_edited: false,
+                is_deleted: false,
+                is_read: true,
+                sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
+                created_at: now,
+                updated_at: now,
+                edited_at: None,
+                reaction_counts: Vec::new(),
+                current_user_reactions: Vec::new(),
+                mentioned_integrations: Vec::new(),
+                targets_ai_bot: false,
+                delivery_status: String::new(),
+            };
+            messaging::handle_message_received(window, ui_ctx, message);
+            messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
         }
 
         DomainEvent::AnonGroupBootstrapComplete { group_id } => {
