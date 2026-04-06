@@ -58,6 +58,7 @@ pub mod anon_group;
 pub mod anon_dm;
 pub mod svr_backup_service;
 pub mod jarvis;
+pub mod validation;
 #[cfg(not(target_os = "android"))]
 pub mod oidc_service;
 

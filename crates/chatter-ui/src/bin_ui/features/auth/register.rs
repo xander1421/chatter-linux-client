@@ -125,6 +125,26 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
+    window.on_register_password_changed({
+        let weak = weak_window.clone();
+        move |password: slint::SharedString| {
+            let strength = chatter_core::services::validation::password_strength(password.as_str());
+            if let Some(w) = weak.upgrade() {
+                w.set_register_password_strength(strength);
+            }
+        }
+    });
+
+    window.on_register_pin_changed({
+        let weak = weak_window.clone();
+        move |pin: slint::SharedString| {
+            let strength = chatter_core::services::validation::pin_strength(pin.as_str());
+            if let Some(w) = weak.upgrade() {
+                w.set_register_pin_strength(strength);
+            }
+        }
+    });
+
     window.on_register(
         move |username: slint::SharedString, password: slint::SharedString, display_name: slint::SharedString, pin: slint::SharedString, server_url: slint::SharedString| {
             tracing::info!("REGISTER BUTTON TAPPED: user={}, server={}", username, server_url);
