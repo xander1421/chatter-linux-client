@@ -2,7 +2,7 @@
 //!
 //! Provides a unified API for AI memory operations, handling both:
 //! 1. Server-side processing for non-E2E channels (direct gRPC calls)
-//! 2. Client-side extraction for E2E channels (local Ollama → Remember RPC)
+//! 2. Client-side extraction for E2E channels (local AI → Remember RPC)
 //!
 //! SECURITY: E2E encrypted content is NEVER sent to the server for processing.
 //! Client decrypts locally, runs extraction via local AI, then sends only the
@@ -18,6 +18,13 @@ use crate::proto::chat_v1::{
     RememberResponse, SearchResponse, SummarizeConversationResponse,
 };
 use crate::services::ai::{LocalAIActorHandle, SampleParams};
+
+#[cfg(feature = "local-ai")]
+use crate::local_ai::backend::{ChatMessage, ChatRole, GenerateParams, LocalAIBackend};
+#[cfg(feature = "local-ai")]
+use crate::local_ai::ollama::OllamaBackend;
+#[cfg(feature = "local-ai")]
+use crate::local_ai::settings::LocalAISettings;
 
 /// Memory service error types.
 #[derive(Debug, thiserror::Error)]
@@ -35,20 +42,48 @@ pub enum MemoryError {
     E2EViolation,
 }
 
+/// Extraction prompt for local AI memory extraction.
+const EXTRACTION_SYSTEM_PROMPT: &str = "\
+You are a memory extraction assistant. Extract key facts, preferences, and important \
+information from conversations. Output one memory per line in the format:\n\
+TYPE|IMPORTANCE|CATEGORY|CONTENT\n\
+Where TYPE is one of: fact, preference, episode, personal, goal\n\
+Where IMPORTANCE is one of: low, medium, high, critical\n\
+Where CATEGORY is a short label (e.g., work, hobby, family)\n\
+Output only the extracted lines, nothing else.";
+
 /// Memory service bridging server memory RPCs with local AI extraction.
 ///
 /// For non-E2E channels, calls the server memory service directly.
 /// For E2E channels, uses local AI to extract memories client-side,
 /// then stores them via the Remember RPC with PROCESSING_SOURCE_CLIENT.
+///
+/// Extraction uses two backends with automatic fallback:
+/// 1. **mistralrs GPU actor** — fast local GPU inference (if model loaded)
+/// 2. **Ollama HTTP** — fallback to Ollama server (requires `local-ai` feature)
 pub struct MemoryService {
     grpc_pool: Arc<GrpcClientPool>,
     local_ai: LocalAIActorHandle,
+    #[cfg(feature = "local-ai")]
+    ollama: OllamaBackend,
+    #[cfg(feature = "local-ai")]
+    ollama_model: String,
 }
 
 impl MemoryService {
     /// Create a new MemoryService.
     pub fn new(grpc_pool: Arc<GrpcClientPool>, local_ai: LocalAIActorHandle) -> Self {
-        Self { grpc_pool, local_ai }
+        #[cfg(feature = "local-ai")]
+        let settings = LocalAISettings::default();
+
+        Self {
+            grpc_pool,
+            local_ai,
+            #[cfg(feature = "local-ai")]
+            ollama: OllamaBackend::new(&settings.ollama_url, settings.request_timeout),
+            #[cfg(feature = "local-ai")]
+            ollama_model: settings.chat_model,
+        }
     }
 
     // ==================== Direct Server RPCs ====================
@@ -152,7 +187,7 @@ impl MemoryService {
     ///
     /// This is the E2E-safe extraction pipeline:
     /// 1. Client has already decrypted the messages locally
-    /// 2. Local AI extracts memories from plaintext
+    /// 2. Local AI extracts memories from plaintext (GPU actor → Ollama fallback)
     /// 3. Only extracted memories (not plaintext) are sent to the server
     ///
     /// The `source` is always set to PROCESSING_SOURCE_CLIENT.
@@ -165,32 +200,80 @@ impl MemoryService {
             return Ok(vec![]);
         }
 
-        // Build extraction prompt for local AI
         let conversation = decrypted_messages.join("\n");
-        let prompt = format!(
-            "Extract key facts, preferences, and important information from this conversation. \
-             For each extracted memory, output one line in the format:\n\
-             TYPE|IMPORTANCE|CATEGORY|CONTENT\n\
-             Where TYPE is one of: fact, preference, episode, personal, goal\n\
-             Where IMPORTANCE is one of: low, medium, high, critical\n\
-             Where CATEGORY is a short label (e.g., work, hobby, family)\n\n\
-             Conversation:\n{}\n\n\
-             Extracted memories:",
-            conversation
-        );
+        let extraction = self.extract_memories(&conversation).await?;
+        self.store_extracted_memories(channel_id, &extraction).await
+    }
 
+    /// Run memory extraction using local AI with automatic fallback.
+    ///
+    /// 1. Try mistralrs GPU actor (fast, no network)
+    /// 2. Fall back to Ollama HTTP API (requires `local-ai` feature)
+    async fn extract_memories(&self, conversation: &str) -> Result<String, MemoryError> {
+        let user_prompt = format!("Conversation:\n{}\n\nExtracted memories:", conversation);
+
+        // Path 1: Try the GPU actor (mistralrs) — always available (stubs without feature)
+        let gpu_prompt = format!("{}\n\n{}", EXTRACTION_SYSTEM_PROMPT, user_prompt);
         let params = SampleParams {
             max_tokens: 500,
             ..Default::default()
         };
 
-        let extraction = self
-            .local_ai
-            .complete(prompt, params)
-            .await
-            .map_err(|e| MemoryError::ExtractionFailed(e.to_string()))?;
+        match self.local_ai.complete(gpu_prompt, params).await {
+            Ok(result) if !result.trim().is_empty() => {
+                tracing::debug!("Memory extraction via GPU actor succeeded");
+                return Ok(result);
+            }
+            Ok(_) => {
+                tracing::debug!("GPU actor returned empty result, trying Ollama fallback");
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "GPU actor unavailable, trying Ollama fallback");
+            }
+        }
 
-        // Parse extraction output and store each memory
+        // Path 2: Fall back to Ollama HTTP (only with local-ai feature)
+        #[cfg(feature = "local-ai")]
+        {
+            let messages = vec![
+                ChatMessage {
+                    role: ChatRole::System,
+                    content: EXTRACTION_SYSTEM_PROMPT.to_string(),
+                },
+                ChatMessage {
+                    role: ChatRole::User,
+                    content: user_prompt,
+                },
+            ];
+
+            let gen_params = GenerateParams {
+                max_tokens: 500,
+                ..Default::default()
+            };
+
+            match self.ollama.chat(&self.ollama_model, &messages, &gen_params).await {
+                Ok(resp) if !resp.content.trim().is_empty() => {
+                    tracing::debug!("Memory extraction via Ollama succeeded");
+                    return Ok(resp.content);
+                }
+                Ok(_) => {
+                    tracing::warn!("Ollama returned empty extraction result");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Ollama extraction failed");
+                }
+            }
+        }
+
+        Err(MemoryError::LocalAIUnavailable)
+    }
+
+    /// Parse extraction output and store each memory via the server.
+    async fn store_extracted_memories(
+        &self,
+        channel_id: &str,
+        extraction: &str,
+    ) -> Result<Vec<RememberResponse>, MemoryError> {
         let mut results = Vec::new();
         let mut client = self.grpc_pool.memory_client();
 
