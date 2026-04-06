@@ -300,15 +300,11 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 });
             }
 
-            // Load anon DM peers (active conversations only)
-            if let Ok(conversations) = anon_dm_service.list_conversations() {
+            // Load anon DM peers (ready conversations only)
+            if let Ok(conversations) = anon_dm_service.list_ready_conversations() {
                 for dm in conversations {
                     // Skip if already in friends list
                     if seen_user_ids.contains(&dm.peer_id) {
-                        continue;
-                    }
-                    // Only include ready conversations (can send via tunnel)
-                    if !dm.is_ready() {
                         continue;
                     }
                     let display_name = dm.peer_display_name

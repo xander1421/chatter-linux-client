@@ -169,6 +169,23 @@ impl ChannelService {
         Ok(channels.into_iter().filter(|ch| !sectioned.contains(&ch.id.to_string())).collect())
     }
 
+    /// Get channels sorted by most recently used (last_message_at DESC).
+    ///
+    /// Channels with messages appear first (sorted by recency).
+    /// Channels without messages appear at the end (sorted by creation time).
+    pub fn get_channels_mru(&self) -> Result<Vec<Channel>, ChannelError> {
+        let mut channels = self.get_unsectioned_channels_for_user()?;
+        channels.sort_by(|a, b| {
+            match (&b.last_message_at, &a.last_message_at) {
+                (Some(b_time), Some(a_time)) => b_time.cmp(a_time),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => b.created_at.cmp(&a.created_at),
+            }
+        });
+        Ok(channels)
+    }
+
     /// Get a channel from local storage (no network request).
     pub fn get_channel_local(
         &self,
@@ -185,6 +202,40 @@ impl ChannelService {
     ) -> Result<Vec<crate::domain::channel::Membership>, ChannelError> {
         let members = self.channel_repo.list_members(channel_id)?;
         Ok(members)
+    }
+
+    /// List channel members with profile information (display name, avatar).
+    ///
+    /// Joins membership data with user profiles from local storage.
+    /// Members without a stored profile get a fallback display name from their user ID.
+    pub fn list_members_with_profiles(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<Vec<crate::domain::channel::MemberWithProfile>, ChannelError> {
+        let members = self.channel_repo.list_members(channel_id)?;
+        let mut result = Vec::with_capacity(members.len());
+        for membership in members {
+            let profile = self.user_repo.get_profile(&membership.user_id).ok().flatten();
+            let display_name = profile.as_ref()
+                .map(|p| p.display_name.clone())
+                .unwrap_or_else(|| format!("User {}", &membership.user_id.to_string()[..8]));
+            let avatar_url = profile.and_then(|p| p.avatar_url);
+            result.push(crate::domain::channel::MemberWithProfile {
+                membership,
+                display_name,
+                avatar_url,
+            });
+        }
+        Ok(result)
+    }
+
+    /// Get the set of member user IDs for a channel (local query).
+    ///
+    /// Used for filtering invite candidates — callers can check which users
+    /// are already members without loading full membership objects.
+    pub fn get_member_ids(&self, channel_id: &ChannelId) -> Result<std::collections::HashSet<crate::domain::ids::UserId>, ChannelError> {
+        let members = self.channel_repo.list_members(channel_id)?;
+        Ok(members.into_iter().map(|m| m.user_id).collect())
     }
 
     /// Get the peer's user ID from a DM channel (local query).

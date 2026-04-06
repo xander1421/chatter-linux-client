@@ -147,6 +147,16 @@ pub struct Membership {
     pub notification_preference: NotificationPreference,
 }
 
+/// Channel member with profile information.
+///
+/// Combines membership data with user profile for display.
+#[derive(Clone, Debug)]
+pub struct MemberWithProfile {
+    pub membership: Membership,
+    pub display_name: String,
+    pub avatar_url: Option<String>,
+}
+
 /// Notification preference for a channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum NotificationPreference {

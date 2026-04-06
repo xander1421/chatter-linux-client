@@ -24,6 +24,16 @@ impl AnonDmService {
         Ok(self.anon_dm_repo.list_active_conversations()?)
     }
 
+    /// List conversations that are ready for messaging.
+    ///
+    /// Only returns conversations where `is_ready()` is true (Active status
+    /// with a peer mailbox public key). Used for building invite candidate lists
+    /// without filtering in the UI layer.
+    pub fn list_ready_conversations(&self) -> Result<Vec<AnonDm>, AnonDmError> {
+        let all = self.anon_dm_repo.list_active_conversations()?;
+        Ok(all.into_iter().filter(|dm| dm.is_ready()).collect())
+    }
+
     /// List pending message requests (incoming only).
     pub fn list_message_requests(&self) -> Result<Vec<AnonDm>, AnonDmError> {
         Ok(self.anon_dm_repo.list_message_requests()?)

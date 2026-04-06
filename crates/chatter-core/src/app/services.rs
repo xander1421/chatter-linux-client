@@ -178,6 +178,7 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
             infra.channel_repo.clone(),
             infra.section_repo.clone(),
+            infra.user_repo.clone(),
             signal_service.clone(),
             infra.group_coordinator.clone(),
         ));

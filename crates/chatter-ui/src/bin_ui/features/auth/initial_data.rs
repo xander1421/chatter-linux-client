@@ -45,7 +45,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     }
 
     // Now get channels from local storage (which has been synced)
-    let channels = match ui_ctx.channels().get_unsectioned_channels_for_user() {
+    let channels = match ui_ctx.channels().get_channels_mru() {
         Ok(ch) => ch,
         Err(e) => {
             tracing::error!(
@@ -730,7 +730,7 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let current_user_id = ui_ctx.auth_state().get().current_user_id;
         
         // Get channels from local storage
-        let channels = match ui_ctx.channels().get_unsectioned_channels_for_user() {
+        let channels = match ui_ctx.channels().get_channels_mru() {
             Ok(ch) => ch,
             Err(e) => {
                 tracing::error!("Failed to refresh DM list: {}", e);
