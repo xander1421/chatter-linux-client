@@ -565,7 +565,7 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let before = cursor.and_then(|c| c.oldest_message_id);
 
-            let older_messages = match message_service.get_messages_local(&channel_id, &conversation_type, before.as_ref(), 50) {
+            let older_messages = match message_service.get_messages_local_asc(&channel_id, &conversation_type, before.as_ref(), 50) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to load more messages: {}", e);
@@ -613,9 +613,6 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 display_messages.push(display_data);
             }
-
-            // Reverse to get chronological order (oldest first)
-            display_messages.reverse();
 
             // Pre-decode attachment thumbnails before UI thread
             for msg in &mut display_messages {

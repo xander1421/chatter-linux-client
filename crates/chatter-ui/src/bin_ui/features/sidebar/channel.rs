@@ -191,7 +191,7 @@ pub async fn load_channel_into_ui(
     let conversation_type = channel.conversation_type();
 
     // Fetch recent messages (limit 50)
-    let messages = match message_service.get_messages_local(channel_id, &conversation_type, None, 50) {
+    let messages = match message_service.get_messages_local_asc(channel_id, &conversation_type, None, 50) {
         Ok(msgs) => {
             tracing::info!(
                 channel_id = %channel_id,
@@ -271,9 +271,6 @@ pub async fn load_channel_into_ui(
 
         display_messages.push(display_data);
     }
-
-    // Reverse to show oldest first (newest at bottom, like chat apps)
-    display_messages.reverse();
 
     // Pre-decode attachment thumbnails before UI thread
     for msg in &mut display_messages {

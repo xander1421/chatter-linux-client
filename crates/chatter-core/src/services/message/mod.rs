@@ -256,6 +256,36 @@ impl MessageService {
         Ok(messages)
     }
 
+    /// Get messages for a channel in chronological order (oldest first).
+    ///
+    /// Returns messages ready for chat display — no reversal needed by caller.
+    pub fn get_messages_local_asc(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+        before: Option<&crate::domain::ids::MessageId>,
+        limit: u32,
+    ) -> Result<Vec<Message>, MessageError> {
+        let messages = self.message_repo.list_for_channel_asc(channel_id, conversation_type, before, limit)?;
+        Ok(messages)
+    }
+
+    /// Get sent_at timestamps of messages from a specific peer in a conversation.
+    ///
+    /// Used for sending read receipts — returns the peer's message timestamps
+    /// so the caller can acknowledge them without filtering in the UI layer.
+    pub fn get_peer_message_timestamps(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+        peer_id: &UserId,
+        limit: u32,
+    ) -> Result<Vec<u64>, MessageError> {
+        self.message_repo
+            .get_timestamps_from_sender(channel_id, conversation_type, peer_id, limit)
+            .map_err(MessageError::from)
+    }
+
     /// Get a message by sender ID and sent timestamp (Signal-style lookup).
     pub fn get_by_sender_timestamp(
         &self,

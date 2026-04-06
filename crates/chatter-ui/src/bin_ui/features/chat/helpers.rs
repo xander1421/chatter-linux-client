@@ -136,11 +136,6 @@ pub fn append_message_to_ui(window: &crate::MainWindow, msg_item: crate::Message
         .filter_map(|i| model.row_data(i))
         .collect();
     messages.push(msg_item);
-    messages.sort_by(|a, b| {
-        let ts_a = a.timestamp_ns.parse::<u64>().unwrap_or(0);
-        let ts_b = b.timestamp_ns.parse::<u64>().unwrap_or(0);
-        ts_a.cmp(&ts_b).then_with(|| a.sender_id.as_str().cmp(b.sender_id.as_str()))
-    });
     window.set_messages(ModelRc::new(VecModel::from(messages)));
     window.set_composer_text("".into());
     window.set_message_scroll_position(-99999.0);

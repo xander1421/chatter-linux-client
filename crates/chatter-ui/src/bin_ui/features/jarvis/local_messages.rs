@@ -129,11 +129,6 @@ pub fn replace_thinking_with_response(
     };
 
     messages.push(msg_item);
-    messages.sort_by(|a, b| {
-        let ts_a = a.timestamp_ns.parse::<u64>().unwrap_or(0);
-        let ts_b = b.timestamp_ns.parse::<u64>().unwrap_or(0);
-        ts_a.cmp(&ts_b)
-    });
     window.set_messages(ModelRc::new(VecModel::from(messages)));
     window.set_message_scroll_position(-99999.0);
     window.set_is_at_bottom(true);

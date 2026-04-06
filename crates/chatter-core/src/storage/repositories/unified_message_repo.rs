@@ -865,6 +865,83 @@ impl UnifiedMessageRepository {
         self.list(channel_id, conversation_type, before_sent_at, limit)
     }
 
+    /// List messages in chronological order (oldest first).
+    ///
+    /// Fetches the N most recent messages before `before_sent_at`, returned
+    /// in ascending timestamp order — ready for chat display without reversal.
+    pub fn list_asc(
+        &self,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
+        before_sent_at: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Message>, StorageError> {
+        let mut messages = self.list(conversation_id, conversation_type, before_sent_at, limit)?;
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// List messages for a channel in chronological order (oldest first).
+    ///
+    /// Same as `list_for_channel` but returns ASC order for direct UI display.
+    pub fn list_for_channel_asc(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+        before: Option<&MessageId>,
+        limit: u32,
+    ) -> Result<Vec<Message>, StorageError> {
+        let mut messages = self.list_for_channel(channel_id, conversation_type, before, limit)?;
+        messages.reverse();
+        Ok(messages)
+    }
+
+    /// List messages for a conversation in chronological order (oldest first).
+    /// Alias for `list_asc()` matching old MessageRepository API.
+    pub fn list_for_conversation_asc(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+        before_sent_at: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Message>, StorageError> {
+        self.list_asc(channel_id, conversation_type, before_sent_at, limit)
+    }
+
+    /// Get sent_at timestamps of messages from a specific sender in a conversation.
+    ///
+    /// Used for read receipts — returns timestamps of peer messages for acknowledgement.
+    pub fn get_timestamps_from_sender(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+        sender_id: &UserId,
+        limit: u32,
+    ) -> Result<Vec<u64>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT sent_at FROM messages \
+             WHERE conversation_id = ?1 AND conversation_type = ?2 \
+               AND sender_id = ?3 AND is_deleted = 0 \
+             ORDER BY sent_at DESC \
+             LIMIT ?4",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                channel_id.to_string(),
+                conversation_type.as_str(),
+                sender_id.to_string(),
+                limit,
+            ],
+            |row| row.get::<_, i64>(0).map(|v| v as u64),
+        )?;
+        let mut timestamps = Vec::new();
+        for row in rows {
+            timestamps.push(row?);
+        }
+        Ok(timestamps)
+    }
+
     /// Get the latest message in a conversation (for preview).
     /// Alias for `get_latest()` matching old MessageRepository API.
     pub fn get_latest_for_conversation(

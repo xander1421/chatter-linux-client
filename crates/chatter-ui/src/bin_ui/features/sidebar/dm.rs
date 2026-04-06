@@ -220,15 +220,12 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
             // Send read receipts for unread messages from the peer
             if auth_state.is_logged_in() {
-                // Get the peer's user ID from the DM channel
                 if let Ok(Some(channel)) = channel_service.get_channel_local(&channel_id) {
                     if channel.channel_type == ChannelType::DirectMessage {
-                        // Get our user ID
                         let my_user_id = auth_state.get().current_user_id.clone();
 
-                        // Get recent messages to find the peer and their message timestamps
+                        // Find peer ID from the latest message sender that isn't us
                         if let Ok(messages) = message_service.get_messages_local(&channel_id, &ConversationType::ServerDm, None, 50) {
-                            // Find peer ID (sender that isn't us)
                             let peer_id = messages
                                 .iter()
                                 .filter_map(|m| m.sender_id.as_ref())
@@ -236,12 +233,10 @@ pub(crate) fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                                 .cloned();
 
                             if let Some(peer_id) = peer_id {
-                                // Get sent_at timestamps (nanoseconds) of messages from the peer
-                                let unread_timestamps: Vec<u64> = messages
-                                    .iter()
-                                    .filter(|m| m.sender_id.as_ref() == Some(&peer_id))
-                                    .map(|m| m.sent_at)
-                                    .collect();
+                                // Get peer's message timestamps via service (no UI-side filtering)
+                                let unread_timestamps = message_service
+                                    .get_peer_message_timestamps(&channel_id, &ConversationType::ServerDm, &peer_id, 50)
+                                    .unwrap_or_default();
 
                                 if !unread_timestamps.is_empty() {
                                     let handle = ConversationHandle::new(
@@ -310,7 +305,7 @@ async fn load_anon_dm_into_ui(
     let my_avatar = anon_dm_service.get_my_avatar();
 
     // Load messages
-    let mut messages = match anon_dm_service.get_messages(&dm_id, None, 50) {
+    let mut messages = match anon_dm_service.get_messages_asc(&dm_id, None, 50) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to load anon DM messages: {}", e);
@@ -404,9 +399,6 @@ async fn load_anon_dm_into_ui(
 
         display_messages.push(display_data);
     }
-
-    // Reverse to show oldest first
-    display_messages.reverse();
 
     // Pre-decode attachment thumbnails and sender avatars before UI thread
     for msg in &mut display_messages {

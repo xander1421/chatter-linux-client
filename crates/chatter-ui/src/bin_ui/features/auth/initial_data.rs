@@ -626,7 +626,7 @@ async fn load_channel_into_ui_from_services(
     let conversation_type = channel.conversation_type();
 
     // Fetch recent messages (limit 50)
-    let messages = match ui_ctx.messages().get_messages_local(channel_id, &conversation_type, None, 50) {
+    let messages = match ui_ctx.messages().get_messages_local_asc(channel_id, &conversation_type, None, 50) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to get messages for channel {}: {}", channel_id, e);
@@ -687,9 +687,6 @@ async fn load_channel_into_ui_from_services(
 
     // Get current user ID for is_own calculation in to_slint_with_user
     let current_user_id_for_slint = current_user_id.clone().unwrap_or_default();
-
-    // Reverse to show oldest first in chat
-    display_messages.reverse();
 
     // Pre-decode attachment thumbnails before UI thread
     for msg in &mut display_messages {

@@ -55,6 +55,24 @@ impl AnonDmService {
         )?)
     }
 
+    /// Get messages for a conversation in chronological order (oldest first).
+    ///
+    /// Returns messages ready for chat display — no reversal needed by caller.
+    pub fn get_messages_asc(
+        &self,
+        conversation_id: &AnonDmId,
+        before_sent_at: Option<u64>,
+        limit: i32,
+    ) -> Result<Vec<Message>, AnonDmError> {
+        let channel_id: ChannelId = (*conversation_id).into();
+        Ok(self.message_repo.list_for_conversation_asc(
+            &channel_id,
+            &ConversationType::AnonDm,
+            before_sent_at,
+            limit as u32,
+        )?)
+    }
+
     /// Get a single message by ID.
     pub fn get_message(
         &self,

@@ -214,6 +214,27 @@ impl AnonGroupService {
         )?)
     }
 
+    /// Get messages for a group in chronological order (oldest first).
+    ///
+    /// Returns messages ready for chat display — no reversal needed by caller.
+    pub fn get_messages_asc(
+        &self,
+        group_id: &AnonGroupId,
+        before: Option<&chrono::DateTime<Utc>>,
+        limit: i32,
+    ) -> Result<Vec<Message>, AnonGroupError> {
+        let channel_id: ChannelId = (*group_id).into();
+        let before_sent_at = before.and_then(|dt| {
+            dt.timestamp_nanos_opt().map(|ns| ns as u64)
+        });
+        Ok(self.message_service.message_repo.list_for_conversation_asc(
+            &channel_id,
+            &ConversationType::AnonGroup,
+            before_sent_at,
+            limit as u32,
+        )?)
+    }
+
     /// Get a single message by ID.
     pub fn get_message(
         &self,

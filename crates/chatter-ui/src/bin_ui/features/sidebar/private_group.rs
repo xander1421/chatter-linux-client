@@ -55,7 +55,7 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         let current_user_id_str = current_user_id.map(|id| id.to_string()).unwrap_or_default();
         
         // Load messages for this group
-        let mut messages = match anon_group_service.get_messages(&group_id, None, 50) {
+        let mut messages = match anon_group_service.get_messages_asc(&group_id, None, 50) {
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::error!("Failed to load messages for private group {}: {}", group_id, e);
@@ -160,9 +160,6 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             display_messages.push(display_data);
         }
 
-        // Reverse to show oldest first (messages come from DB in DESC order)
-        display_messages.reverse();
-        
         // Pre-decode attachment thumbnails before UI thread
         for msg in &mut display_messages {
             msg.decode_attachment_thumbnails();
@@ -305,7 +302,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             let current_user_id_str = current_user_id.map(|id| id.to_string()).unwrap_or_default();
 
             // Load messages for this group
-            let mut messages = match anon_group_service.get_messages(&group_id, None, 50) {
+            let mut messages = match anon_group_service.get_messages_asc(&group_id, None, 50) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to load messages for private group {}: {}", group_id, e);
@@ -409,9 +406,6 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
 
                 display_messages.push(display_data);
             }
-
-            // Reverse to show oldest first (messages come from DB in DESC order)
-            display_messages.reverse();
 
             // Pre-decode attachment thumbnails before UI thread
             for msg in &mut display_messages {
