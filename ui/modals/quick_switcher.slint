@@ -26,8 +26,10 @@ component SwitcherResultItem inherits Rectangle {
 
     height: 40px;
     border-radius: Spacing.radius-sm;
-    background: root.selected ? Colors.primary.with-alpha(0.15) :
+    background: root.selected ? Colors.neo-inset-bg :
                 touch.has-hover ? Colors.surface-hover : transparent;
+    border-width: root.selected || touch.has-hover ? 1px : 0px;
+    border-color: root.selected ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-highlight;
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -110,7 +112,7 @@ export component QuickSwitcher inherits Rectangle {
         }
     }
 
-    // Modal panel (centered, narrow)
+    // Modal panel (centered, narrow) — Neo strong surface
     Rectangle {
         x: (parent.width - self.width) / 2;
         y: min(120px, parent.height * 0.15);
@@ -118,10 +120,12 @@ export component QuickSwitcher inherits Rectangle {
         height: min(content.preferred-height + Spacing.lg * 2, parent.height - 160px);
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
-        border-color: Colors.border;
+        border-color: Colors.neo-highlight-strong;
         border-width: 1px;
-        drop-shadow-blur: 16px;
-        drop-shadow-color: Colors.background.with-alpha(0.4);
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-offset-x: Spacing.neo-offset-lg;
+        drop-shadow-offset-y: Spacing.neo-offset-lg;
+        drop-shadow-color: Colors.neo-shadow-strong;
 
         // Block clicks from closing overlay
         TouchArea {}
@@ -130,12 +134,12 @@ export component QuickSwitcher inherits Rectangle {
             padding: Spacing.lg;
             spacing: Spacing.sm;
 
-            // Search input
+            // Search input — Neo inset
             Rectangle {
                 height: 44px;
                 border-radius: Spacing.radius-md;
-                background: Colors.background;
-                border-color: search-input.has-focus ? Colors.primary : Colors.border;
+                background: Colors.neo-inset-bg;
+                border-color: search-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
                 border-width: 1px;
 
                 HorizontalLayout {

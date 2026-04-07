@@ -1,4 +1,4 @@
-// Modal component with header, close button, and content slots
+// Modal component with header, close button, and content slots — Neo 2.0 styled
 // Uses ModalContainer to ensure proper sizing and centering (not full-screen)
 
 import { Colors } from "../theme/colors.slint";
@@ -40,12 +40,14 @@ export component Modal inherits Rectangle {
                     overflow: elide;
                 }
 
-                // Close button — 40px touch target for mobile
+                // Close button — 40px touch target for mobile, Neo hover
                 Rectangle {
                     width: 40px;
                     height: 40px;
                     border-radius: Spacing.radius-sm;
-                    background: close-area.has-hover ? Colors.surface-hover : transparent;
+                    background: close-area.has-hover ? Colors.neo-inset-bg : transparent;
+                    border-width: close-area.has-hover ? 1px : 0px;
+                    border-color: Colors.neo-inset-shadow;
                     accessible-role: button;
                     accessible-label: "Close dialog";
 

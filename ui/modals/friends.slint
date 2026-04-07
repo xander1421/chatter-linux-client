@@ -132,7 +132,7 @@ export component FriendsModal inherits Rectangle {
             spacing: Spacing.md;
             vertical-stretch: 1;
 
-            // Main tab bar
+            // Main tab bar — Neo
             HorizontalLayout {
                 height: 44px;
 
@@ -143,7 +143,7 @@ export component FriendsModal inherits Rectangle {
                     { id: "blocked", label: "Blocked" }
                 ]: Rectangle {
                     horizontal-stretch: 1;
-                    background: tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
+                    background: root.active-tab == tab.id ? Colors.neo-inset-bg : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
 
                     VerticalLayout {
                         HorizontalLayout {
@@ -163,7 +163,7 @@ export component FriendsModal inherits Rectangle {
 
                         Rectangle {
                             height: 2px;
-                            background: root.active-tab == tab.id ? Colors.primary : transparent;
+                            background: root.active-tab == tab.id ? Colors.glow-cyan : transparent;
                         }
                     }
 
@@ -242,6 +242,8 @@ export component FriendsModal inherits Rectangle {
                                 height: 56px;
                                 background: friend-touch.has-hover ? Colors.surface-hover : transparent;
                                 border-radius: Spacing.radius-md;
+                                border-width: friend-touch.has-hover ? 1px : 0px;
+                                border-color: Colors.neo-highlight;
 
                                 HorizontalLayout {
                                     padding: Spacing.sm;
@@ -348,10 +350,16 @@ export component FriendsModal inherits Rectangle {
                     vertical-stretch: 1;
                     spacing: Spacing.md;
 
-                    // ===== Friend Code Section =====
+                    // ===== Friend Code Section ===== — Neo raised card
                     Rectangle {
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
+                        border-width: 1px;
+                        border-color: Colors.neo-highlight;
+                        drop-shadow-blur: Spacing.neo-blur-sm;
+                        drop-shadow-offset-x: Spacing.neo-offset-sm;
+                        drop-shadow-offset-y: Spacing.neo-offset-sm;
+                        drop-shadow-color: Colors.neo-shadow;
 
                         VerticalLayout {
                             padding: Spacing.md;
@@ -376,8 +384,10 @@ export component FriendsModal inherits Rectangle {
 
                                 Rectangle {
                                     height: 36px;
-                                    background: Colors.background;
+                                    background: Colors.neo-inset-bg;
                                     border-radius: Spacing.radius-sm;
+                                    border-width: 1px;
+                                    border-color: Colors.neo-inset-shadow;
 
                                     HorizontalLayout {
                                         padding-left: Spacing.sm;
@@ -784,6 +794,8 @@ export component FriendsModal inherits Rectangle {
                                     height: 64px;
                                     background: recv-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
+                                    border-width: recv-touch.has-hover ? 1px : 0px;
+                                    border-color: Colors.neo-highlight;
 
                                     // TouchArea first (behind) for hover detection
                                     recv-touch := TouchArea {}
@@ -870,6 +882,8 @@ export component FriendsModal inherits Rectangle {
                                     height: 56px;
                                     background: sent-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
+                                    border-width: sent-touch.has-hover ? 1px : 0px;
+                                    border-color: Colors.neo-highlight;
 
                                     // TouchArea first (behind) for hover detection
                                     sent-touch := TouchArea {}
@@ -955,6 +969,8 @@ export component FriendsModal inherits Rectangle {
                                     height: 72px;
                                     background: priv-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
+                                    border-width: priv-touch.has-hover ? 1px : 0px;
+                                    border-color: Colors.neo-highlight;
 
                                     // TouchArea first (behind) for hover detection
                                     priv-touch := TouchArea {}
@@ -1096,6 +1112,8 @@ export component FriendsModal inherits Rectangle {
                                     height: 72px;
                                     background: gi-touch.has-hover ? Colors.surface-hover : transparent;
                                     border-radius: Spacing.radius-md;
+                                    border-width: gi-touch.has-hover ? 1px : 0px;
+                                    border-color: Colors.neo-highlight;
 
                                     gi-touch := TouchArea {}
 
@@ -1239,6 +1257,8 @@ export component FriendsModal inherits Rectangle {
                                 height: 56px;
                                 background: blocked-touch.has-hover ? Colors.surface-hover : transparent;
                                 border-radius: Spacing.radius-md;
+                                border-width: blocked-touch.has-hover ? 1px : 0px;
+                                border-color: Colors.neo-highlight;
 
                                 // TouchArea first (behind) for hover detection
                                 blocked-touch := TouchArea {}

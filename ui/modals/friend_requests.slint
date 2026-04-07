@@ -69,10 +69,10 @@ export component FriendRequestsModal inherits Rectangle {
                             }
                         }
 
-                        // Active indicator
+                        // Active indicator — Neo glow
                         Rectangle {
                             height: 2px;
-                            background: root.active-tab == "received" ? Colors.primary : transparent;
+                            background: root.active-tab == "received" ? Colors.glow-cyan : transparent;
                         }
                     }
 
@@ -106,10 +106,10 @@ export component FriendRequestsModal inherits Rectangle {
                             }
                         }
 
-                        // Active indicator
+                        // Active indicator — Neo glow
                         Rectangle {
                             height: 2px;
-                            background: root.active-tab == "sent" ? Colors.primary : transparent;
+                            background: root.active-tab == "sent" ? Colors.glow-cyan : transparent;
                         }
                     }
 
@@ -122,10 +122,10 @@ export component FriendRequestsModal inherits Rectangle {
                 }
             }
 
-            // Divider below tabs
+            // Divider below tabs — Neo
             Rectangle {
                 height: 1px;
-                background: Colors.text-muted.with-alpha(0.2);
+                background: Colors.neo-inset-shadow;
             }
 
             // Request list container
@@ -167,6 +167,8 @@ export component FriendRequestsModal inherits Rectangle {
                                 height: 64px;
                                 background: request-received-touch.has-hover ? Colors.surface-hover : transparent;
                                 border-radius: Spacing.radius-md;
+                                border-width: request-received-touch.has-hover ? 1px : 0px;
+                                border-color: Colors.neo-highlight;
 
                                 // TouchArea first (behind) for hover detection
                                 request-received-touch := TouchArea {}
@@ -277,6 +279,8 @@ export component FriendRequestsModal inherits Rectangle {
                                 height: 64px;
                                 background: request-sent-touch.has-hover ? Colors.surface-hover : transparent;
                                 border-radius: Spacing.radius-md;
+                                border-width: request-sent-touch.has-hover ? 1px : 0px;
+                                border-color: Colors.neo-highlight;
 
                                 // TouchArea first (behind) for hover detection
                                 request-sent-touch := TouchArea {}

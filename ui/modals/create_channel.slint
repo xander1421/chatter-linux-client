@@ -133,12 +133,14 @@ export component CreateChannelModal inherits Rectangle {
                 spacing: Spacing.sm;
                 height: 24px;
 
-                // Step 1 indicator
+                // Step 1 indicator — Neo pill
                 Rectangle {
                     width: 24px;
                     height: 24px;
                     border-radius: Spacing.radius-full;
-                    background: current-step >= 1 ? Colors.primary : Colors.surface-hover;
+                    background: current-step >= 1 ? Colors.primary : Colors.neo-inset-bg;
+                    border-width: 1px;
+                    border-color: current-step >= 1 ? Colors.glow-primary : Colors.neo-inset-shadow;
 
                     Text {
                         text: "1";
@@ -164,16 +166,18 @@ export component CreateChannelModal inherits Rectangle {
                 Rectangle {
                     width: 24px;
                     height: 2px;
-                    background: current-step >= 2 ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                    background: current-step >= 2 ? Colors.primary : Colors.neo-inset-shadow;
                     y: (parent.height - self.height) / 2;
                 }
 
-                // Step 2 indicator
+                // Step 2 indicator — Neo pill
                 Rectangle {
                     width: 24px;
                     height: 24px;
                     border-radius: Spacing.radius-full;
-                    background: current-step >= 2 ? Colors.primary : Colors.surface-hover;
+                    background: current-step >= 2 ? Colors.primary : Colors.neo-inset-bg;
+                    border-width: 1px;
+                    border-color: current-step >= 2 ? Colors.glow-primary : Colors.neo-inset-shadow;
 
                     Text {
                         text: "2";
@@ -199,7 +203,7 @@ export component CreateChannelModal inherits Rectangle {
                 if root.is-ai-template: Rectangle {
                     width: 24px;
                     height: 2px;
-                    background: current-step >= 3 ? Colors.primary : Colors.text-muted.with-alpha(0.3);
+                    background: current-step >= 3 ? Colors.primary : Colors.neo-inset-shadow;
                     y: (parent.height - self.height) / 2;
                 }
 
@@ -207,7 +211,9 @@ export component CreateChannelModal inherits Rectangle {
                     width: 24px;
                     height: 24px;
                     border-radius: Spacing.radius-full;
-                    background: current-step >= 3 ? Colors.primary : Colors.surface-hover;
+                    background: current-step >= 3 ? Colors.primary : Colors.neo-inset-bg;
+                    border-width: 1px;
+                    border-color: current-step >= 3 ? Colors.glow-primary : Colors.neo-inset-shadow;
 
                     Text {
                         text: "3";
@@ -326,14 +332,14 @@ export component CreateChannelModal inherits Rectangle {
                         }
                     }
 
-                    // Friend list (scrollable)
+                    // Friend list (scrollable) — Neo inset container
                     Rectangle {
                         vertical-stretch: 1;
                         min-height: 150px;
-                        background: Colors.surface;
+                        background: Colors.neo-inset-bg;
                         border-radius: Spacing.radius-md;
                         border-width: 1px;
-                        border-color: Colors.text-muted.with-alpha(0.2);
+                        border-color: Colors.neo-inset-shadow;
                         clip: true;
 
                         if root.available-friends.length == 0: VerticalLayout {
@@ -362,10 +368,10 @@ export component CreateChannelModal inherits Rectangle {
                                 for friend[idx] in root.available-friends: Rectangle {
                                     height: 48px;
                                     border-radius: Spacing.radius-sm;
-                                    background: friend-touch.has-hover ? Colors.surface-hover :
-                                                (friend.selected ? Colors.primary.with-alpha(0.1) : transparent);
-                                    border-width: friend.selected ? 1px : 0px;
-                                    border-color: Colors.primary.with-alpha(0.3);
+                                    background: friend.selected ? Colors.neo-inset-bg :
+                                                (friend-touch.has-hover ? Colors.surface-hover : transparent);
+                                    border-width: friend.selected || friend-touch.has-hover ? 1px : 0px;
+                                    border-color: friend.selected ? Colors.glow-primary : Colors.neo-highlight;
 
                                     // Friend selection touch area (behind content)
                                     friend-touch := TouchArea {
@@ -573,14 +579,14 @@ export component CreateChannelModal inherits Rectangle {
                         HorizontalLayout {
                             spacing: Spacing.sm;
 
-                            // Public option
+                            // Public option — Neo toggle card
                             Rectangle {
                                 height: 40px;
                                 horizontal-stretch: 1;
                                 border-radius: Spacing.radius-md;
-                                border-width: !root.is-private ? 2px : 1px;
-                                border-color: !root.is-private ? Colors.primary : Colors.text-muted.with-alpha(0.3);
-                                background: public-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                                border-width: 1px;
+                                border-color: !root.is-private ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                                background: !root.is-private ? Colors.neo-inset-bg : (public-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                                 HorizontalLayout {
                                     padding-left: Spacing.md;
@@ -621,14 +627,14 @@ export component CreateChannelModal inherits Rectangle {
                                 }
                             }
 
-                            // Private option
+                            // Private option — Neo toggle card
                             Rectangle {
                                 height: 40px;
                                 horizontal-stretch: 1;
                                 border-radius: Spacing.radius-md;
-                                border-width: root.is-private ? 2px : 1px;
-                                border-color: root.is-private ? Colors.primary : Colors.text-muted.with-alpha(0.3);
-                                background: private-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                                border-width: 1px;
+                                border-color: root.is-private ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                                background: root.is-private ? Colors.neo-inset-bg : (private-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                                 HorizontalLayout {
                                     padding-left: Spacing.md;
@@ -692,14 +698,14 @@ export component CreateChannelModal inherits Rectangle {
                     HorizontalLayout {
                         spacing: Spacing.md;
 
-                        // Encrypted toggle
+                        // Encrypted toggle — Neo
                         Rectangle {
                             height: 36px;
                             horizontal-stretch: 1;
                             border-radius: Spacing.radius-md;
-                            border-width: root.is-encrypted ? 2px : 1px;
-                            border-color: root.is-encrypted ? Colors.success : Colors.text-muted.with-alpha(0.3);
-                            background: encrypted-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                            border-width: 1px;
+                            border-color: root.is-encrypted ? Colors.success.with-alpha(0.4) : Colors.neo-inset-shadow;
+                            background: root.is-encrypted ? Colors.neo-inset-bg : (encrypted-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                             HorizontalLayout {
                                 padding-left: Spacing.md;
@@ -731,14 +737,14 @@ export component CreateChannelModal inherits Rectangle {
                             }
                         }
 
-                        // Friends only toggle
+                        // Friends only toggle — Neo
                         Rectangle {
                             height: 36px;
                             horizontal-stretch: 1;
                             border-radius: Spacing.radius-md;
-                            border-width: root.friends-only ? 2px : 1px;
-                            border-color: root.friends-only ? Colors.info : Colors.text-muted.with-alpha(0.3);
-                            background: friends-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                            border-width: 1px;
+                            border-color: root.friends-only ? Colors.info.with-alpha(0.4) : Colors.neo-inset-shadow;
+                            background: root.friends-only ? Colors.neo-inset-bg : (friends-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                             HorizontalLayout {
                                 padding-left: Spacing.md;
@@ -802,9 +808,9 @@ export component CreateChannelModal inherits Rectangle {
                                 height: 36px;
                                 horizontal-stretch: 1;
                                 border-radius: Spacing.radius-md;
-                                border-width: root.ai-provider == provider.id ? 2px : 1px;
-                                border-color: root.ai-provider == provider.id ? Colors.primary : Colors.text-muted.with-alpha(0.3);
-                                background: provider-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                                border-width: 1px;
+                                border-color: root.ai-provider == provider.id ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                                background: root.ai-provider == provider.id ? Colors.neo-inset-bg : (provider-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                                 Text {
                                     text: provider.name;
@@ -876,9 +882,9 @@ export component CreateChannelModal inherits Rectangle {
                                 for model in root.ai-models: Rectangle {
                                     height: 40px;
                                     border-radius: Spacing.radius-md;
-                                    border-width: root.ai-model == model.id ? 2px : 1px;
-                                    border-color: root.ai-model == model.id ? Colors.primary : Colors.text-muted.with-alpha(0.3);
-                                    background: model-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                                    border-width: 1px;
+                                    border-color: root.ai-model == model.id ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                                    background: root.ai-model == model.id ? Colors.neo-inset-bg : (model-touch.has-hover ? Colors.surface-hover : Colors.surface);
 
                                     HorizontalLayout {
                                         padding-left: Spacing.md;

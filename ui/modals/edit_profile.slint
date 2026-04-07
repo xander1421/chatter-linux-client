@@ -76,13 +76,13 @@ export component EditProfileModal inherits Rectangle {
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                 }
-                // Using a manual multi-line text input since Input component is single-line
+                // Using a manual multi-line text input — Neo inset
                 Rectangle {
                     height: 80px;
                     border-radius: Spacing.radius-md;
-                    background: Colors.surface;
+                    background: Colors.neo-inset-bg;
                     border-width: 1px;
-                    border-color: Colors.text-muted;
+                    border-color: Colors.neo-inset-shadow;
 
                     TextInput {
                         x: Spacing.md;

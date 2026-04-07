@@ -74,11 +74,13 @@ export component UserProfileModal inherits Rectangle {
         VerticalLayout {
             spacing: 0px;
 
-            // Banner area with colored background
+            // Banner area — Neo surface with subtle glow
             Rectangle {
                 height: 80px;
                 background: Colors.primary.with-alpha(0.15);
                 border-radius: Spacing.radius-md;
+                border-width: 1px;
+                border-color: Colors.neo-highlight;
 
                 // Presence dot in top-right corner
                 Rectangle {
@@ -182,8 +184,10 @@ export component UserProfileModal inherits Rectangle {
                     Rectangle {
                         width: status-pill-text.width + Spacing.md * 2;
                         height: 28px;
-                        background: Colors.surface-hover;
+                        background: Colors.neo-inset-bg;
                         border-radius: Spacing.radius-full;
+                        border-width: 1px;
+                        border-color: Colors.neo-inset-shadow;
 
                         status-pill-text := Text {
                             x: Spacing.md;
@@ -207,7 +211,7 @@ export component UserProfileModal inherits Rectangle {
 
                 Rectangle {
                     height: 1px;
-                    background: Colors.text-muted.with-alpha(0.15);
+                    background: Colors.neo-inset-shadow;
                 }
 
                 Text {
@@ -237,7 +241,7 @@ export component UserProfileModal inherits Rectangle {
 
                 Rectangle {
                     height: 1px;
-                    background: Colors.text-muted.with-alpha(0.15);
+                    background: Colors.neo-inset-shadow;
                 }
 
                 // "View Safety Number" toggle button
@@ -288,10 +292,12 @@ export component UserProfileModal inherits Rectangle {
                         wrap: word-wrap;
                     }
 
-                    // Safety number display (formatted in groups of 5)
+                    // Safety number display — Neo inset
                     Rectangle {
-                        background: Colors.surface-hover;
+                        background: Colors.neo-inset-bg;
                         border-radius: Spacing.radius-md;
+                        border-width: 1px;
+                        border-color: Colors.neo-inset-shadow;
                         height: safety-number-text.preferred-height + Spacing.md * 2;
 
                         safety-number-text := Text {

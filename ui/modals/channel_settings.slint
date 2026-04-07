@@ -107,22 +107,26 @@ export component ChannelSettingsModal inherits Rectangle {
         HorizontalLayout {
             spacing: 0;
 
-            // Left sidebar - section navigation
+            // Left sidebar - section navigation — Neo inset panel
             Rectangle {
                 width: 160px;
-                background: Colors.surface;
+                background: Colors.neo-inset-bg;
                 border-radius: Spacing.radius-md;
+                border-width: 1px;
+                border-color: Colors.neo-inset-shadow;
 
                 VerticalLayout {
                     padding: Spacing.sm;
                     spacing: Spacing.xs;
                     alignment: start;
 
-                    // General section
+                    // General section — Neo nav item
                     Rectangle {
                         height: 36px;
                         background: root.active-section == "general" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
+                        border-width: root.active-section == "general" ? 1px : 0px;
+                        border-color: Colors.neo-highlight;
 
                         TouchArea {
                             clicked => { root.active-section = "general"; }
@@ -142,11 +146,13 @@ export component ChannelSettingsModal inherits Rectangle {
                         }
                     }
 
-                    // Notifications section
+                    // Notifications section — Neo nav item
                     Rectangle {
                         height: 36px;
                         background: root.active-section == "notifications" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
+                        border-width: root.active-section == "notifications" ? 1px : 0px;
+                        border-color: Colors.neo-highlight;
 
                         TouchArea {
                             clicked => { root.active-section = "notifications"; }
@@ -166,11 +172,13 @@ export component ChannelSettingsModal inherits Rectangle {
                         }
                     }
 
-                    // Members section
+                    // Members section — Neo nav item
                     if root.can-manage-members: Rectangle {
                         height: 36px;
                         background: root.active-section == "members" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
+                        border-width: root.active-section == "members" ? 1px : 0px;
+                        border-color: Colors.neo-highlight;
 
                         TouchArea {
                             clicked => { root.active-section = "members"; }
@@ -260,10 +268,10 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                             }
 
-                            // Divider
+                            // Divider — Neo
                             Rectangle {
                                 height: 1px;
-                                background: Colors.surface-hover;
+                                background: Colors.neo-inset-shadow;
                             }
 
                             // Channel name (editable if permitted)
@@ -469,13 +477,13 @@ export component ChannelSettingsModal inherits Rectangle {
                                 font-size: Typography.sm;
                             }
 
-                            // All messages
+                            // All messages — Neo selection card
                             Rectangle {
                                 height: 44px;
-                                background: root.notification-preference == "all" ? Colors.primary.with-alpha(0.1) : transparent;
+                                background: root.notification-preference == "all" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
                                 border-width: root.notification-preference == "all" ? 1px : 0;
-                                border-color: Colors.primary;
+                                border-color: Colors.glow-cyan.with-alpha(0.4);
 
                                 TouchArea {
                                     clicked => { root.change-notification("all"); }
@@ -489,8 +497,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                             height: 20px;
                                             border-radius: 10px;
                                             border-width: 2px;
-                                            border-color: root.notification-preference == "all" ? Colors.primary : Colors.surface-hover;
-                                            background: root.notification-preference == "all" ? Colors.primary : transparent;
+                                            border-color: root.notification-preference == "all" ? Colors.glow-cyan : Colors.neo-inset-shadow;
+                                            background: root.notification-preference == "all" ? Colors.glow-cyan : transparent;
                                         }
 
                                         VerticalLayout {
@@ -509,13 +517,13 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                             }
 
-                            // Mentions only
+                            // Mentions only — Neo selection card
                             Rectangle {
                                 height: 44px;
-                                background: root.notification-preference == "mentions" ? Colors.primary.with-alpha(0.1) : transparent;
+                                background: root.notification-preference == "mentions" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
                                 border-width: root.notification-preference == "mentions" ? 1px : 0;
-                                border-color: Colors.primary;
+                                border-color: Colors.glow-cyan.with-alpha(0.4);
 
                                 TouchArea {
                                     clicked => { root.change-notification("mentions"); }
@@ -529,8 +537,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                             height: 20px;
                                             border-radius: 10px;
                                             border-width: 2px;
-                                            border-color: root.notification-preference == "mentions" ? Colors.primary : Colors.surface-hover;
-                                            background: root.notification-preference == "mentions" ? Colors.primary : transparent;
+                                            border-color: root.notification-preference == "mentions" ? Colors.glow-cyan : Colors.neo-inset-shadow;
+                                            background: root.notification-preference == "mentions" ? Colors.glow-cyan : transparent;
                                         }
 
                                         VerticalLayout {
@@ -549,13 +557,13 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
                             }
 
-                            // None
+                            // None — Neo selection card
                             Rectangle {
                                 height: 44px;
-                                background: root.notification-preference == "none" ? Colors.primary.with-alpha(0.1) : transparent;
+                                background: root.notification-preference == "none" ? Colors.neo-inset-bg : transparent;
                                 border-radius: Spacing.radius-sm;
                                 border-width: root.notification-preference == "none" ? 1px : 0;
-                                border-color: Colors.primary;
+                                border-color: Colors.glow-cyan.with-alpha(0.4);
 
                                 TouchArea {
                                     clicked => { root.change-notification("none"); }
@@ -569,8 +577,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                             height: 20px;
                                             border-radius: 10px;
                                             border-width: 2px;
-                                            border-color: root.notification-preference == "none" ? Colors.primary : Colors.surface-hover;
-                                            background: root.notification-preference == "none" ? Colors.primary : transparent;
+                                            border-color: root.notification-preference == "none" ? Colors.glow-cyan : Colors.neo-inset-shadow;
+                                            background: root.notification-preference == "none" ? Colors.glow-cyan : transparent;
                                         }
 
                                         VerticalLayout {

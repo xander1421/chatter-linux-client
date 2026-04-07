@@ -29,9 +29,9 @@ component SearchResultItem inherits Rectangle {
 
     height: 64px;
     border-radius: Spacing.radius-md;
-    background: selected ? Colors.primary.with-alpha(0.2) : (hovered ? Colors.surface-hover : Colors.surface);
-    border-width: selected ? 2px : 1px;
-    border-color: selected ? Colors.primary : Colors.text-muted.with-alpha(0.2);
+    background: selected ? Colors.neo-inset-bg : (hovered ? Colors.surface-hover : Colors.surface);
+    border-width: 1px;
+    border-color: selected ? Colors.glow-cyan.with-alpha(0.4) : (hovered ? Colors.neo-highlight : Colors.neo-inset-shadow);
 
     touch := TouchArea {
         mouse-cursor: pointer;

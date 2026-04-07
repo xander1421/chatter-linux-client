@@ -34,6 +34,8 @@ component SearchResultItem inherits Rectangle {
     height: 72px;
     border-radius: Spacing.radius-md;
     background: hovered ? Colors.surface-hover : Colors.surface;
+    border-width: hovered ? 1px : 0px;
+    border-color: Colors.neo-highlight;
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -142,9 +144,9 @@ export component SearchModal inherits Rectangle {
                         width: scope-text.preferred-width + Spacing.md * 2;
                         height: 28px;
                         border-radius: Spacing.radius-sm;
-                        background: scope-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                        background: root.search-all-channels ? Colors.neo-inset-bg : (scope-touch.has-hover ? Colors.surface-hover : Colors.surface);
                         border-width: 1px;
-                        border-color: Colors.text-muted.with-alpha(0.2);
+                        border-color: root.search-all-channels ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
 
                         scope-touch := TouchArea {
                             mouse-cursor: pointer;
@@ -159,14 +161,14 @@ export component SearchModal inherits Rectangle {
                             spacing: Spacing.xs;
                             alignment: center;
 
-                            // Checkbox indicator
+                            // Checkbox indicator — Neo
                             Rectangle {
                                 width: 14px;
                                 height: 14px;
                                 border-radius: 3px;
                                 border-width: 1px;
-                                border-color: root.search-all-channels ? Colors.primary : Colors.text-muted;
-                                background: root.search-all-channels ? Colors.primary : transparent;
+                                border-color: root.search-all-channels ? Colors.glow-cyan : Colors.neo-inset-shadow;
+                                background: root.search-all-channels ? Colors.glow-cyan : transparent;
 
                                 if root.search-all-channels: Text {
                                     text: "\u{2713}";
