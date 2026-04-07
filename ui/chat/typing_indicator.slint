@@ -11,6 +11,10 @@ export component TypingIndicator inherits Rectangle {
     in property <string> typing-text: "";
     in property <bool> visible: typing-text != "";
 
+    // Accessibility: announce typing status to screen readers
+    accessible-role: text;
+    accessible-label: typing-text;
+
     // Animation timer (0.0 to 1.0 cycling)
     property <float> animation-progress: 0.0;
 

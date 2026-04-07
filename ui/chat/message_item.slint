@@ -608,6 +608,9 @@ export component MessageItem inherits Rectangle {
                                         width: 100%;
                                         height: 100%;
                                         background: Colors.overlay;
+                                        accessible-role: progress-indicator;
+                                        accessible-label: attachment.is-uploading ? "Uploading " + attachment.filename : "Downloading " + attachment.filename;
+                                        accessible-value: Math.round(attachment.progress * 100) + " percent";
 
                                         VerticalLayout {
                                             alignment: center;
@@ -884,6 +887,9 @@ export component MessageItem inherits Rectangle {
                                         height: 3px;
                                         background: Colors.surface-hover;
                                         border-radius: 1.5px;
+                                        accessible-role: progress-indicator;
+                                        accessible-label: attachment.is-uploading ? "Upload progress" : "Download progress";
+                                        accessible-value: Math.round(attachment.progress * 100) + " percent";
 
                                         Rectangle {
                                             width: parent.width * attachment.progress;
@@ -943,6 +949,10 @@ export component MessageItem inherits Rectangle {
                                     text: root.delivery-status == "sent" ? "✓" : "✓✓";
                                     color: root.delivery-status == "read" ? Colors.primary : Colors.text-muted;
                                     font-size: Typography.xs;
+                                    accessible-role: text;
+                                    accessible-label: root.delivery-status == "sent" ? "Sent"
+                                        : root.delivery-status == "delivered" ? "Delivered"
+                                        : root.delivery-status == "read" ? "Read" : "";
                                 }
                             }
 

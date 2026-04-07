@@ -289,6 +289,10 @@ export component RegisterPage inherits Rectangle {
 
                             // Password strength meter (4 segments)
                             if root.password-strength > 0: VerticalLayout {
+                                accessible-role: text;
+                                accessible-label: "Password strength: " + (root.password-strength == 1 ? "Weak" :
+                                    root.password-strength == 2 ? "Fair" :
+                                    root.password-strength == 3 ? "Good" : "Strong");
                                 spacing: 4px;
                                 HorizontalLayout {
                                     spacing: Spacing.xs;
@@ -364,6 +368,9 @@ export component RegisterPage inherits Rectangle {
 
                             // PIN strength (3 segments: weak/fair/strong)
                             if root.pin-strength > 0: HorizontalLayout {
+                                accessible-role: text;
+                                accessible-label: "PIN strength: " + (root.pin-strength == 1 ? "Weak" :
+                                    root.pin-strength == 2 ? "Fair" : "Strong");
                                 spacing: Spacing.xs;
                                 height: 8px;
                                 Rectangle {
