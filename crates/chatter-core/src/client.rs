@@ -2387,6 +2387,33 @@ impl ChatterClient {
         self.last_activity_ms.store(now, Ordering::Relaxed);
     }
 
+    // ── Organization management ────────────────────────────────────
+
+    /// List all organizations the current user belongs to.
+    pub async fn list_user_organizations(&self) -> Result<Vec<crate::proto::organization_v1::Organization>, ClientError> {
+        let mut client = self.try_org_client()
+            .ok_or_else(|| ClientError::NotConnected)?;
+        client.list_user_organizations().await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Get organization details by ID.
+    pub async fn get_organization(&self, org_id: &str) -> Result<crate::proto::organization_v1::Organization, ClientError> {
+        let mut client = self.try_org_client()
+            .ok_or_else(|| ClientError::NotConnected)?;
+        client.get_organization(org_id).await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// List members of an organization.
+    pub async fn list_org_members(&self, org_id: &str) -> Result<Vec<crate::proto::organization_v1::OrgMember>, ClientError> {
+        let mut client = self.try_org_client()
+            .ok_or_else(|| ClientError::NotConnected)?;
+        let response = client.list_members(org_id).await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+        Ok(response.members)
+    }
+
     // ── Device management ─────────────────────────────────────────
 
     /// List all linked devices for the current user.
