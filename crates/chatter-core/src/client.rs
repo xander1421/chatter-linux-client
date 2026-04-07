@@ -1852,6 +1852,16 @@ impl ChatterClient {
         self.users().get_display_name(user_id)
     }
 
+    /// Search for users by query.
+    pub async fn search_users(
+        &self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::domain::Profile>, crate::services::user::UserError> {
+        self.users().search_users(query, limit, offset).await
+    }
+
     /// Get a user's profile.
     pub async fn get_user_profile(
         &self,
