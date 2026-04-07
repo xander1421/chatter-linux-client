@@ -146,13 +146,13 @@ export component Sidebar inherits Rectangle {
                     padding-left: Spacing.sm;
                     spacing: Spacing.sm;
                     alignment: start;
-                    Rectangle {
-                        width: 14px;
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 0;
                         Image {
                             source: Icons.search;
                             width: 14px;
                             height: 14px;
-                            y: (parent.height - self.height) / 2;
                             colorize: Colors.text-muted;
                         }
                     }
@@ -219,8 +219,8 @@ export component Sidebar inherits Rectangle {
                     accessible-label: "Saved Messages";
                     if !root.collapsed: HorizontalLayout {
                         padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        Rectangle { width: 14px;
-                            Image { source: Icons.bookmark; width: 14px; height: 14px; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Image { source: Icons.bookmark; width: 14px; height: 14px; colorize: Colors.text-secondary; }
                         }
                         Text { text: "Saved Messages"; color: Colors.text-secondary; font-size: 13px; vertical-alignment: center; }
                     }
@@ -239,8 +239,8 @@ export component Sidebar inherits Rectangle {
                     accessible-label: "Friends";
                     if !root.collapsed: HorizontalLayout {
                         padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        Rectangle { width: 14px;
-                            Image { source: Icons.users; width: 14px; height: 14px; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Image { source: Icons.users; width: 14px; height: 14px; colorize: Colors.text-secondary; }
                         }
                         Text { text: "Friends"; color: Colors.text-secondary; font-size: 13px; vertical-alignment: center; }
                     }
@@ -265,13 +265,13 @@ export component Sidebar inherits Rectangle {
                         padding-right: Spacing.sm;
                         spacing: Spacing.sm;
                         alignment: start;
-                        Rectangle {
-                            width: 16px;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
                             Image {
                                 source: Icons.message-circle;
                                 width: 16px;
                                 height: 16px;
-                                y: (parent.height - self.height) / 2;
                                 colorize: Colors.primary;
                             }
                         }
@@ -343,13 +343,13 @@ export component Sidebar inherits Rectangle {
                         padding-right: Spacing.sm;
                         spacing: Spacing.sm;
                         alignment: start;
-                        Rectangle {
-                            width: 16px;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 0;
                             Image {
                                 source: Icons.shield;
                                 width: 16px;
                                 height: 16px;
-                                y: (parent.height - self.height) / 2;
                                 colorize: Colors.group-accent;
                             }
                         }
@@ -423,13 +423,13 @@ export component Sidebar inherits Rectangle {
                                 padding-left: 2px;
                                 spacing: 4px;
                                 alignment: start;
-                                Rectangle {
-                                    width: 10px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
                                     Image {
                                         source: Icons.chevron-right;
                                         width: 10px;
                                         height: 10px;
-                                        y: (parent.height - self.height) / 2;
                                         colorize: Colors.text-muted;
                                         transform-rotation: root.channels-expanded ? 90deg : 0deg;
                                         animate transform-rotation { duration: 150ms; easing: ease-out; }
@@ -559,13 +559,13 @@ export component Sidebar inherits Rectangle {
                                 padding-left: 2px;
                                 spacing: 4px;
                                 alignment: start;
-                                Rectangle {
-                                    width: 10px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
                                     Image {
                                         source: Icons.chevron-right;
                                         width: 10px;
                                         height: 10px;
-                                        y: (parent.height - self.height) / 2;
                                         colorize: Colors.text-muted;
                                         transform-rotation: root.messages-expanded ? 90deg : 0deg;
                                         animate transform-rotation { duration: 150ms; easing: ease-out; }

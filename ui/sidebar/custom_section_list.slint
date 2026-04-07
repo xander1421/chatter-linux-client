@@ -201,13 +201,13 @@ component CustomSectionHeader inherits Rectangle {
                 alignment: start;
 
                 // Collapse chevron
-                Rectangle {
-                    width: 10px;
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
                     Image {
                         source: Icons.chevron-right;
                         width: 10px;
                         height: 10px;
-                        y: (parent.height - self.height) / 2;
                         colorize: Colors.text-muted;
                         transform-rotation: root.is-expanded ? 90deg : 0deg;
                         animate transform-rotation { duration: 150ms; easing: ease-out; }
@@ -361,13 +361,13 @@ export component CustomSectionList inherits Rectangle {
                 spacing: 6px;
                 alignment: start;
 
-                Rectangle {
-                    width: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
                     Image {
                         source: Icons.plus;
                         width: 12px;
                         height: 12px;
-                        y: (parent.height - self.height) / 2;
                         colorize: Colors.text-muted;
                     }
                 }
