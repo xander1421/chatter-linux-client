@@ -48,13 +48,16 @@ pub struct SystemTray {
 }
 
 impl SystemTray {
-    /// Spawn the system tray service and return a controller and handle.
+    /// Spawn the system tray service and return a controller, handle, and event receiver.
+    ///
+    /// The returned `mpsc::Receiver<TrayMessage>` delivers user-initiated tray events
+    /// (`OpenWindow`, `Quit`) so the caller can wire them to the windowing system.
     ///
     /// # Errors
     ///
     /// Returns `SystemError::TrayInit` if the tray service fails to start.
-    pub fn spawn() -> Result<(Self, TrayHandle), SystemError> {
-        let (tx, rx) = mpsc::channel::<TrayMessage>(16);
+    pub fn spawn() -> Result<(Self, TrayHandle, mpsc::Receiver<TrayMessage>), SystemError> {
+        let (tx, _rx) = mpsc::channel::<TrayMessage>(16);
         let (event_tx, event_rx) = mpsc::channel::<TrayMessage>(16);
 
         let tray_service = TrayServiceImpl::new(event_tx);
@@ -70,40 +73,13 @@ impl SystemTray {
             drop(service_handle);
         });
 
-        // Spawn message handler task
         let controller = Self { sender: tx.clone() };
         let tray_handle = TrayHandle {
             thread_handle: Some(handle),
             sender: tx,
         };
 
-        // Spawn a task to forward messages (if needed for future state updates)
-        tokio::spawn(async move {
-            let mut rx = rx;
-            let mut event_rx = event_rx;
-
-            loop {
-                tokio::select! {
-                    Some(msg) = rx.recv() => {
-                        if let TrayMessage::Quit = msg { break }
-                    }
-                    Some(event) = event_rx.recv() => {
-                        // Forward events from tray callbacks
-                        // In a real app, this would notify the app of menu clicks
-                        match event {
-                            TrayMessage::Quit => break,
-                            TrayMessage::OpenWindow => {
-                                // Would trigger window show
-                            }
-                            _ => {}
-                        }
-                    }
-                    else => break,
-                }
-            }
-        });
-
-        Ok((controller, tray_handle))
+        Ok((controller, tray_handle, event_rx))
     }
 
     /// Update the unread message count badge.

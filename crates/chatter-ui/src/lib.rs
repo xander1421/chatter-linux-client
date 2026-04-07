@@ -120,6 +120,8 @@ pub struct AppState {
     window: MainWindow,
     ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
     shutdown_token: CancellationToken,
+    #[cfg(target_os = "linux")]
+    _tray_handle: Option<chatter_core::system::TrayHandle>,
 }
 
 /// Phase 1: Async initialization (runs inside block_on — reactor is active).
@@ -278,6 +280,76 @@ pub async fn app_init() -> AppState {
 
     bin_ui::features::wire_all(&window, &ui_ctx);
 
+    // System tray (Linux only — StatusNotifierItem via ksni)
+    #[cfg(target_os = "linux")]
+    let tray_handle = {
+        match chatter_core::system::SystemTray::spawn() {
+            Ok((tray_controller, handle, mut event_rx)) => {
+                tracing::info!("System tray initialized");
+
+                // Forward tray menu events → Slint window
+                let weak_for_tray = window.as_weak();
+                let shutdown_for_tray = shutdown_token.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = shutdown_for_tray.cancelled() => break,
+                            event = event_rx.recv() => {
+                                match event {
+                                    Some(chatter_core::system::TrayMessage::OpenWindow) => {
+                                        let weak = weak_for_tray.clone();
+                                        let _ = slint::invoke_from_event_loop(move || {
+                                            if let Some(w) = weak.upgrade() {
+                                                w.window().show().ok();
+                                            }
+                                        });
+                                    }
+                                    Some(chatter_core::system::TrayMessage::Quit) | None => {
+                                        slint::quit_event_loop().ok();
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Forward unread count changes to tray badge
+                let tray_for_unread = tray_controller.clone();
+                let weak_for_unread = window.as_weak();
+                // Poll total-unread-count periodically (Slint properties can't be
+                // observed directly from Rust; a 1-second poll is cheap and sufficient).
+                let last_count = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+                tokio::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+                    loop {
+                        interval.tick().await;
+                        let weak = weak_for_unread.clone();
+                        let tray = tray_for_unread.clone();
+                        let last = last_count.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                let count = w.get_total_unread_count();
+                                let prev = last.load(std::sync::atomic::Ordering::Relaxed);
+                                if count != prev {
+                                    last.store(count, std::sync::atomic::Ordering::Relaxed);
+                                    tray.set_unread_count(count.max(0) as u32);
+                                }
+                            }
+                        });
+                    }
+                });
+
+                Some(handle)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize system tray: {}", e);
+                None
+            }
+        }
+    };
+
     // Dev mode auto-register (desktop: CHATTER_DEV=1, Android: always in dev builds)
     let dev_mode = std::env::var("CHATTER_DEV").is_ok() || cfg!(target_os = "android");
     if dev_mode && !ui_ctx.auth().is_logged_in() && !ui_ctx.auth().has_registered_before() {
@@ -330,7 +402,13 @@ pub async fn app_init() -> AppState {
         });
     }
 
-    AppState { window, ui_ctx: client, shutdown_token }
+    AppState {
+        window,
+        ui_ctx: client,
+        shutdown_token,
+        #[cfg(target_os = "linux")]
+        _tray_handle: tray_handle,
+    }
 }
 
 /// Phase 2: Sync event loop (runs OUTSIDE block_on — rt.enter() keeps reactor accessible).
