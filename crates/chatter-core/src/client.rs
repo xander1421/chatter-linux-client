@@ -2126,11 +2126,34 @@ impl ChatterClient {
     }
 
     /// Leave a channel.
+    ///
+    /// Before leaving, rotates the sender key and distributes the new SKDM
+    /// to remaining members. This ensures forward secrecy — the departed
+    /// member can no longer decrypt future messages.
     pub async fn leave_channel(
         &self,
         channel_id: &crate::domain::ids::ChannelId,
     ) -> Result<(), crate::services::channel::ChannelError> {
-        self.channels().leave_channel(channel_id).await
+        // leave_channel now blocks sending, rotates key, and returns SKDM
+        let skdm = self.channels().leave_channel(channel_id).await?;
+
+        // Distribute SKDM to remaining members BEFORE we're fully gone.
+        // This is best-effort — if it fails, remaining members will still
+        // rotate via mark_channel_for_rotation on their next send.
+        if let Err(e) = self.messages().distribute_skdm(channel_id, &skdm).await {
+            tracing::warn!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to distribute SKDM on leave — remaining members will rotate on next send"
+            );
+        }
+
+        // Unblock sending (for remaining members' benefit via the rotation flag)
+        if let Err(e) = self.signal().unblock_channel_send(channel_id) {
+            tracing::warn!(channel_id = %channel_id, error = %e, "Failed to unblock channel send after leave");
+        }
+
+        Ok(())
     }
 
     /// Search public channels.

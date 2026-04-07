@@ -194,7 +194,8 @@ impl AppContext {
         .with_group_coordinator(self.infrastructure.group_coordinator.clone())
         .with_message_service(self.core_services.message_service.clone())
         .with_anon_group_service(self.services.anon_group_service.clone())
-        .with_anon_dm_service(self.services.anon_dm_service.clone());
+        .with_anon_dm_service(self.services.anon_dm_service.clone())
+        .with_signal_service(self.core_services.signal_service.clone());
 
         handlers.spawn(self.core_services.event_bus.clone())
     }

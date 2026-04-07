@@ -211,9 +211,54 @@ impl ChannelService {
     }
 
     /// Leave a channel.
-    pub async fn leave_channel(&self, channel_id: &ChannelId) -> Result<(), ChannelError> {
+    ///
+    /// Before leaving, rotates sender key and returns the SKDM so the caller
+    /// can distribute it to remaining members. This matches Signal's behavior:
+    /// sender keys MUST be rotated on ANY member departure (voluntary or forced)
+    /// to maintain forward secrecy.
+    ///
+    /// The caller MUST:
+    /// 1. Distribute the returned SKDM to remaining members
+    /// 2. Then call `signal_service.unblock_channel_send()` — though since we're
+    ///    leaving, remaining members handle unblocking on their side.
+    pub async fn leave_channel(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<crate::proto::content_v1::SenderKeyDistribution, ChannelError> {
         let current_user = self.settings_repo.current_user_id()?;
 
+        // Block message sending BEFORE leave to prevent encryption with old key.
+        // The leaving user still has the old key — any message encrypted with it
+        // after departure would violate forward secrecy for remaining members.
+        if let Err(e) = self.signal_service.block_channel_send(channel_id) {
+            tracing::error!(
+                channel_id = %channel_id,
+                error = %e,
+                "Failed to block channel send before leave"
+            );
+        }
+
+        // Rotate sender key BEFORE leaving (we're still a member at this point).
+        // This gives remaining members a fresh key via SKDM distribution.
+        let skdm = self.signal_service.rotate_sender_key(channel_id).await
+            .map_err(|e| {
+                tracing::error!(
+                    channel_id = %channel_id,
+                    error = %e,
+                    "CRITICAL: Sender key rotation failed before leave — sending remains blocked"
+                );
+                let _ = self.signal_service.mark_channel_for_rotation(channel_id);
+                ChannelError::SenderKeyRotationFailed(format!(
+                    "rotation failed before leaving: {} — message sending blocked until resolved", e
+                ))
+            })?;
+
+        tracing::info!(
+            channel_id = %channel_id,
+            "Rotated sender key before leave — caller MUST distribute SKDM"
+        );
+
+        // Now perform the actual leave
         let channel_id_str = channel_id.to_string();
         let mut channel_client = self.channel_client();
         let mut stream = channel_client.leave_channel(&channel_id_str).await?;
@@ -229,6 +274,8 @@ impl ChannelService {
                     }
                 }
                 Some(channel_event::Event::OperationFailed(failure)) => {
+                    // Leave failed — unblock sending since we're still a member
+                    let _ = self.signal_service.unblock_channel_send(channel_id);
                     let err_msg = failure
                         .error
                         .map(|e| format!("leave failed: {:?} - {}", e.code, e.message))
@@ -240,6 +287,7 @@ impl ChannelService {
         }
 
         if !left {
+            let _ = self.signal_service.unblock_channel_send(channel_id);
             return Err(ChannelError::InvalidInput(
                 "no member_removed_id event received".to_string(),
             ));
@@ -249,6 +297,7 @@ impl ChannelService {
             .channel_repo
             .delete_membership(channel_id, &current_user);
 
+        // Clear our local sender keys (we no longer need them)
         if let Err(e) = self.signal_service.clear_channel_sender_keys(channel_id).await {
             tracing::warn!(
                 channel_id = %channel_id,
@@ -266,7 +315,7 @@ impl ChannelService {
             );
         }
 
-        Ok(())
+        Ok(skdm)
     }
 
     /// Invite a user to a channel.

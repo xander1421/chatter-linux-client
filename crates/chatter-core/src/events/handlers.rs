@@ -98,6 +98,8 @@ pub struct EventHandlers {
     anon_group_service: Option<Arc<crate::services::anon_group::AnonGroupService>>,
     /// Anon DM service for conversation creation from ECIES init messages.
     anon_dm_service: Option<Arc<crate::services::anon_dm::AnonDmService>>,
+    /// Signal service for sender key rotation on member departure.
+    signal_service: Option<Arc<crate::services::signal_service::SignalService>>,
 }
 
 impl EventHandlers {
@@ -134,6 +136,7 @@ impl EventHandlers {
             message_service: None,
             anon_group_service: None,
             anon_dm_service: None,
+            signal_service: None,
         }
     }
 
@@ -160,6 +163,12 @@ impl EventHandlers {
     /// Set the anon DM service for conversation creation from ECIES init messages.
     pub fn with_anon_dm_service(mut self, service: Arc<crate::services::anon_dm::AnonDmService>) -> Self {
         self.anon_dm_service = Some(service);
+        self
+    }
+
+    /// Set the signal service for sender key rotation on member departure.
+    pub fn with_signal_service(mut self, service: Arc<crate::services::signal_service::SignalService>) -> Self {
+        self.signal_service = Some(service);
         self
     }
 
@@ -811,6 +820,27 @@ impl EventHandlers {
                 // Add system message to chat
                 trace!(?channel_id, ?user_id, %display_name, "Member left channel");
                 self.message_state.append_message(channel_id, message);
+
+                // Mark channel for sender key rotation — the departed member had
+                // copies of our sender key, so we MUST rotate before sending any
+                // more messages. This matches Signal's behavior: rotate on ANY
+                // member departure (voluntary or forced) for forward secrecy.
+                if let Some(ref signal_svc) = self.signal_service {
+                    if let Err(e) = signal_svc.mark_channel_for_rotation(&channel_id) {
+                        tracing::error!(
+                            channel_id = %channel_id,
+                            departed_user = %user_id,
+                            error = %e,
+                            "Failed to mark channel for sender key rotation after member departure"
+                        );
+                    } else {
+                        tracing::info!(
+                            channel_id = %channel_id,
+                            departed_user = %user_id,
+                            "Marked channel for sender key rotation after member departure"
+                        );
+                    }
+                }
             }
 
             // ================================================================
