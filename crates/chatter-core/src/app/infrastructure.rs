@@ -18,7 +18,7 @@ use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::network::streaming::{ReactionAggregator, TypingAggregator};
 use crate::storage::repositories::{
     AnonDmRepository, AnonGroupRepository, JarvisGraphRepository, JarvisMemoryRepository,
-    SectionRepository, UnifiedConversationRepository,
+    SectionRepository, UnifiedConversationRepository, VectorRepository,
 };
 use crate::storage::{
     AttachmentRepository, ChannelRepository, Database, DraftRepository, KeyStore,
@@ -85,6 +85,10 @@ pub struct InfrastructureContainer {
     pub(crate) jarvis_graph_repo: Arc<JarvisGraphRepository>,
     /// Custom sidebar section repository.
     pub(crate) section_repo: Arc<SectionRepository>,
+    /// Vector embedding repository for semantic search.
+    /// Used by `HttpLocalAIService` and `SemanticSearchService` when `local-ai` is enabled.
+    #[cfg_attr(not(feature = "local-ai"), allow(dead_code))]
+    pub(crate) vector_repo: Arc<VectorRepository>,
 
     // Crypto managers - pub(crate)
     /// Identity key management.
@@ -193,6 +197,7 @@ impl InfrastructureContainer {
         let jarvis_memory_repo = Arc::new(JarvisMemoryRepository::new(database.clone()));
         let jarvis_graph_repo = Arc::new(JarvisGraphRepository::new(database.clone()));
         let section_repo = Arc::new(SectionRepository::new(database.clone()));
+        let vector_repo = Arc::new(VectorRepository::new(database.clone()));
 
         // 8. Create crypto managers
         let identity_manager = Arc::new(IdentityKeyManager::new(key_store.clone()));
@@ -256,6 +261,7 @@ impl InfrastructureContainer {
             jarvis_memory_repo,
             jarvis_graph_repo,
             section_repo,
+            vector_repo,
             event_bus: crate::events::EventBus::new(),
             group_fanout: Arc::new(std::sync::OnceLock::new()),
         })

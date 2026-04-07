@@ -25,11 +25,13 @@ pub mod call_worker;
 pub mod call_verification;
 pub mod notification_service;
 pub mod search_service;
+#[cfg(feature = "local-ai")]
 pub mod semantic_search;
 pub mod sync_service;
 pub mod offline_queue;
 pub mod moderation_service;
 pub mod ai_service;
+#[cfg(feature = "local-ai")]
 pub mod local_ai_service;
 pub mod memory_service;
 pub mod ai_summarize;

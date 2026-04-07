@@ -41,6 +41,7 @@ pub mod jarvis_graph_repo;
 pub mod section_repo;
 pub mod unified_conversation_repo;
 pub mod unified_message_repo;
+pub mod vector_repo;
 
 pub use attachment_repo::AttachmentRepository;
 pub use channel_repo::ChannelRepository;
@@ -60,3 +61,4 @@ pub use anon_dm_repo::AnonDmRepository;
 pub use jarvis_memory_repo::JarvisMemoryRepository;
 pub use jarvis_graph_repo::JarvisGraphRepository;
 pub use section_repo::SectionRepository;
+pub use vector_repo::{VectorRepository, StoredEmbedding, EmbeddingSourceType};
