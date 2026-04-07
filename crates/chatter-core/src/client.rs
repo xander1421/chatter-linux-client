@@ -203,6 +203,7 @@ impl ChatterClient {
     pub fn channel_events(&self) -> &Arc<ChannelEventService> { &self.ui.channel_event_service }
     pub fn notifications(&self) -> &Arc<crate::services::notification_service::NotificationService> { &self.ui.notification_service }
     pub fn sections(&self) -> &Arc<SectionService> { &self.ui.section_service }
+    pub fn devices(&self) -> &Arc<crate::services::device_service::DeviceService> { &self.ui.device_service }
 
     /// Get the SVR backup service (lazy-initialized, persistent instance).
     pub fn svr_backup(&self) -> &crate::services::svr_backup_service::SvrBackupService {
@@ -2385,6 +2386,25 @@ impl ChatterClient {
             .unwrap_or_default()
             .as_millis() as u64;
         self.last_activity_ms.store(now, Ordering::Relaxed);
+    }
+
+    // ── Thread support ─────────────────────────────────────────────
+
+    /// Get messages in a thread.
+    pub async fn get_thread_messages(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        thread_root_id: &crate::domain::ids::MessageId,
+        limit: u32,
+        before: Option<&crate::domain::ids::MessageId>,
+    ) -> Result<Vec<Message>, ClientError> {
+        let mut msg_client = self.ui.grpc_pool.message_client();
+        let mut auth_client = self.ui.grpc_pool.auth_client();
+        let mut ch_client = self.ui.grpc_pool.channel_client();
+        self.messages()
+            .get_thread_messages(&mut msg_client, channel_id, thread_root_id, limit, before)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
     // ── Organization management ────────────────────────────────────

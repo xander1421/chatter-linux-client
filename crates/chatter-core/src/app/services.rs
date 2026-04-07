@@ -28,6 +28,7 @@ use crate::services::session_service::SessionService;
 use crate::services::signal_service::SignalService;
 use crate::services::typing_service::TypingService;
 use crate::services::section_service::SectionService;
+use crate::services::device_service::DeviceService;
 use crate::services::user::UserService;
 
 use crate::state::OrgState;
@@ -97,6 +98,8 @@ pub struct ServiceContainer {
     pub section_service: Arc<SectionService>,
     /// Memory service for AI memory operations (server + client-side extraction).
     pub memory_service: Arc<MemoryService>,
+    /// Device service for multi-device management.
+    pub device_service: Arc<DeviceService>,
     /// Unified conversation repository (available to services).
     pub(crate) conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
     /// Organization state (shared with AuthService for org context).
@@ -301,7 +304,12 @@ impl ServiceContainer {
             infra.unified_conversation_repo.clone(),
         ));
 
-        // 24. Unified conversation repository
+        // 24. Device service for multi-device management
+        let device_service = Arc::new(DeviceService::new(
+            infra.settings_repo.clone(),
+        ));
+
+        // 25. Unified conversation repository
         let conversation_repo = infra.unified_conversation_repo.clone();
 
         tracing::info!("Services initialized");
@@ -332,6 +340,7 @@ impl ServiceContainer {
             channel_bootstrap_service,
             section_service,
             memory_service,
+            device_service,
             conversation_repo,
             org_state,
         })
