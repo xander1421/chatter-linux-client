@@ -483,6 +483,29 @@ pub struct AnonCallSetupResult {
     pub peer_display_name: String,
 }
 
+/// Call setup data for mobile clients (Android/iOS).
+///
+/// Contains LiveKit connection info and encryption key so the mobile client
+/// can connect via the platform-native LiveKit SDK instead of the desktop
+/// GStreamer-based media stack.
+#[derive(Debug, Clone)]
+pub struct MobileCallSetup {
+    /// The call ID.
+    pub call_id: CallId,
+    /// The channel ID.
+    pub channel_id: ChannelId,
+    /// Verification emojis for secure call verification (4 emojis).
+    pub verification_emojis: [String; 4],
+    /// Whether this is a video call.
+    pub is_video: bool,
+    /// LiveKit server URL.
+    pub livekit_url: String,
+    /// LiveKit room access token.
+    pub livekit_token: String,
+    /// E2EE encryption key (32 bytes) for LiveKit frame encryption.
+    pub encryption_key: Vec<u8>,
+}
+
 /// Pending DM call state during offer→answer exchange.
 ///
 /// Stored in core while waiting for the peer's ephemeral key answer.

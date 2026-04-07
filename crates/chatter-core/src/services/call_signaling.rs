@@ -111,6 +111,18 @@ impl CallSignalingService {
         *self.pending_dm_call.lock() = None;
     }
 
+    /// Get the anon DM service (for mobile call flows that need direct access).
+    pub fn anon_dm_service(&self) -> &Arc<AnonDmService> {
+        &self.anon_dm_service
+    }
+
+    /// Acquire a call room token (public wrapper for mobile flows).
+    pub async fn acquire_call_room_token_public(
+        &self,
+    ) -> Result<crate::mailbox::CallRoomToken, CallSignalingError> {
+        self.acquire_call_room_token().await
+    }
+
     /// Send a call offer with our ephemeral public key.
     ///
     /// The peer will respond with `send_call_answer` containing their
