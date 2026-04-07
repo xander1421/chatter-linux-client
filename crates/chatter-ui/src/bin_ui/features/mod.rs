@@ -22,6 +22,7 @@ pub mod jarvis;
 pub mod modals;
 pub mod navigation;
 pub mod notifications;
+pub mod quick_switcher;
 pub mod sidebar;
 pub mod status;
 pub mod thread;
@@ -48,6 +49,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     jarvis::wire_jarvis_panel(window, ui_ctx);
     status::wire(window, ui_ctx);
     connection::wire(window, ui_ctx);
+    quick_switcher::wire(window, ui_ctx);
     notifications::wire(window, ui_ctx);
 
     // Initialize inline GIF animation system

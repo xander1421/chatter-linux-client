@@ -37,6 +37,7 @@ import { ChannelSettingsModal, ChannelMemberData } from "modals/channel_settings
 import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
 import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
 import { CreateSectionModal } from "modals/create_section.slint";
+import { QuickSwitcher, QuickSwitcherItem } from "modals/quick_switcher.slint";
 
 // Import settings
 import { SettingsScreen } from "settings/settings_screen.slint";
@@ -60,7 +61,7 @@ import { IncomingCallModal, ActiveCallView, DevicePicker, IncomingCallData, Acti
 import { JarvisPanel, JarvisMessageData } from "jarvis/mod.slint";
 
 // Re-export types for Rust binding
-export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData }
+export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListItemData, CustomSectionData, SectionConversationData, MessageItemData, MessageAttachmentData, FriendRequest, ForwardTarget, SessionInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, UserSearchResult, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, ChannelMemberData, PrivateGroupFriend, JarvisMessageData, InviteUser, ReactionEntry, OrgMemberData, OrgDashboardData, QuickSwitcherItem }
 
 export component App inherits Rectangle {
     // ========== Safe area insets (set by Rust on Android) ==========
@@ -83,6 +84,14 @@ export component App inherits Rectangle {
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
     in-out property <string> current-view: "loading";
+
+    // ========== Quick switcher (Ctrl+K) ==========
+    in property <[QuickSwitcherItem]> quick-switcher-items: [];
+    in-out property <string> quick-switcher-query: "";
+    in-out property <int> quick-switcher-selected-index: 0;
+    callback quick-switcher-search(string);
+    callback quick-switcher-select(string, string);
+    callback quick-switcher-opened();
 
     // ========== Connection status ==========
     // "connected", "connecting", "reconnecting", "disconnected", "failed"
@@ -813,6 +822,14 @@ export component App inherits Rectangle {
             // Ctrl+J: Toggle Jarvis panel
             if (event.modifiers.control && event.text == "j") {
                 root.jarvis-panel-visible = !root.jarvis-panel-visible;
+                return accept;
+            }
+            // Ctrl+K: Open quick switcher
+            if (event.modifiers.control && event.text == "k") {
+                root.quick-switcher-query = "";
+                root.quick-switcher-selected-index = 0;
+                root.active-modal = "quick-switcher";
+                root.quick-switcher-opened();
                 return accept;
             }
             // Ctrl+F: Open search
@@ -1678,6 +1695,25 @@ export component App inherits Rectangle {
         }
         toggle-scope => {
             root.search-toggle-scope();
+        }
+    }
+
+    // Quick Switcher (Ctrl+K)
+    QuickSwitcher {
+        show-modal: root.active-modal == "quick-switcher";
+        items: root.quick-switcher-items;
+        search-query <=> root.quick-switcher-query;
+        selected-index <=> root.quick-switcher-selected-index;
+
+        close => {
+            root.active-modal = "none";
+        }
+        item-selected(id, conv-type) => {
+            root.active-modal = "none";
+            root.quick-switcher-select(id, conv-type);
+        }
+        search-changed(query) => {
+            root.quick-switcher-search(query);
         }
     }
 

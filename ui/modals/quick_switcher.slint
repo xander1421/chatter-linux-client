@@ -1,0 +1,248 @@
+// Quick Switcher — Ctrl+K command palette for fast conversation navigation
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+import { Modal } from "../components/modal.slint";
+
+export struct QuickSwitcherItem {
+    id: string,
+    name: string,
+    // "channel", "dm", "private_group", "anon_dm"
+    conv-type: string,
+    presence-status: string,
+    unread-count: int,
+}
+
+component SwitcherResultItem inherits Rectangle {
+    in property <string> item-id;
+    in property <string> name;
+    in property <string> conv-type;
+    in property <string> presence-status;
+    in property <int> unread-count;
+    in property <bool> selected: false;
+
+    callback clicked(string, string);
+
+    height: 40px;
+    border-radius: Spacing.radius-sm;
+    background: root.selected ? Colors.primary.with-alpha(0.15) :
+                touch.has-hover ? Colors.surface-hover : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked(root.item-id, root.conv-type);
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.sm;
+        alignment: stretch;
+
+        // Type icon
+        Text {
+            text: conv-type == "channel" ? "#" :
+                  conv-type == "private_group" ? "🔒" :
+                  conv-type == "anon_dm" ? "👤" : "@";
+            color: root.selected ? Colors.primary : Colors.text-muted;
+            font-size: Typography.sm;
+            font-weight: Typography.semibold;
+            width: 20px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        // Name
+        Text {
+            text: root.name;
+            color: root.selected ? Colors.text-primary : Colors.text-secondary;
+            font-size: Typography.sm;
+            font-weight: root.selected ? Typography.semibold : Typography.normal;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+
+        // Unread badge
+        if root.unread-count > 0: Rectangle {
+            width: 20px;
+            height: 20px;
+            border-radius: 10px;
+            background: Colors.primary;
+            y: (parent.height - self.height) / 2;
+
+            Text {
+                text: root.unread-count > 99 ? "99+" : root.unread-count;
+                color: Colors.text-primary;
+                font-size: Typography.xs;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                width: 100%;
+                height: 100%;
+            }
+        }
+    }
+}
+
+export component QuickSwitcher inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <[QuickSwitcherItem]> items: [];
+    in-out property <string> search-query: "";
+    in-out property <int> selected-index: 0;
+
+    callback close();
+    callback item-selected(string, string);
+    callback search-changed(string);
+
+    visible: root.show-modal;
+
+    // Full-screen overlay
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Colors.overlay;
+
+        TouchArea {
+            clicked => { root.close(); }
+        }
+    }
+
+    // Modal panel (centered, narrow)
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: min(120px, parent.height * 0.15);
+        width: min(480px, parent.width - 32px);
+        height: min(content.preferred-height + Spacing.lg * 2, parent.height - 160px);
+        background: Colors.surface;
+        border-radius: Spacing.radius-lg;
+        border-color: Colors.border;
+        border-width: 1px;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: Colors.background.with-alpha(0.4);
+
+        // Block clicks from closing overlay
+        TouchArea {}
+
+        content := VerticalLayout {
+            padding: Spacing.lg;
+            spacing: Spacing.sm;
+
+            // Search input
+            Rectangle {
+                height: 44px;
+                border-radius: Spacing.radius-md;
+                background: Colors.background;
+                border-color: search-input.has-focus ? Colors.primary : Colors.border;
+                border-width: 1px;
+
+                HorizontalLayout {
+                    padding-left: Spacing.md;
+                    padding-right: Spacing.md;
+                    spacing: Spacing.sm;
+
+                    // Search icon
+                    Text {
+                        text: "⌘K";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        vertical-alignment: center;
+                        width: 28px;
+                    }
+
+                    search-input := TextInput {
+                        text <=> root.search-query;
+                        font-size: Typography.sm;
+                        color: Colors.text-primary;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        // "placeholder-color" is not a Slint property; leave blank
+                        // Actual placeholder text is shown in the hint below
+
+                        edited => {
+                            root.selected-index = 0;
+                            root.search-changed(root.search-query);
+                        }
+
+                        accepted => {
+                            if root.items.length > 0 && root.selected-index < root.items.length {
+                                root.item-selected(
+                                    root.items[root.selected-index].id,
+                                    root.items[root.selected-index].conv-type,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Placeholder hint when empty
+            if root.search-query == "": Text {
+                text: "Type to search conversations…";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                horizontal-alignment: left;
+            }
+
+            // Results list
+            if root.items.length > 0: Flickable {
+                vertical-stretch: 1;
+                min-height: 40px;
+                max-height: 320px;
+
+                VerticalLayout {
+                    spacing: Spacing.xxs;
+
+                    for item[idx] in root.items: SwitcherResultItem {
+                        item-id: item.id;
+                        name: item.name;
+                        conv-type: item.conv-type;
+                        presence-status: item.presence-status;
+                        unread-count: item.unread-count;
+                        selected: idx == root.selected-index;
+
+                        clicked(id, ctype) => {
+                            root.item-selected(id, ctype);
+                        }
+                    }
+                }
+            }
+
+            // Empty state
+            if root.items.length == 0 && root.search-query != "": Text {
+                text: "No conversations found";
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+                horizontal-alignment: center;
+            }
+        }
+
+        // Keyboard navigation
+        FocusScope {
+            width: 0;
+            height: 0;
+
+            key-pressed(event) => {
+                if event.text == Key.UpArrow {
+                    if root.selected-index > 0 {
+                        root.selected-index -= 1;
+                    }
+                    return accept;
+                }
+                if event.text == Key.DownArrow {
+                    if root.selected-index < root.items.length - 1 {
+                        root.selected-index += 1;
+                    }
+                    return accept;
+                }
+                if event.text == Key.Escape {
+                    root.close();
+                    return accept;
+                }
+                reject
+            }
+        }
+    }
+}
