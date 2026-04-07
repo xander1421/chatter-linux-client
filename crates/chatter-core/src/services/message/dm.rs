@@ -128,10 +128,9 @@ impl MessageService {
             let mailbox_encrypted = encrypt_dm_bytes(&signal_ciphertext, shared_secret)
                 .map_err(|e| MessageError::EncryptionFailed(format!("Mailbox encrypt: {}", e)))?;
 
-            mailbox_manager
-                .send_to_mailbox(&peer_mailbox.public_key, mailbox_encrypted, EnvelopeType::SealedSender)
-                .await
-                .map_err(|e| MessageError::DmError(format!("Failed to send to mailbox: {}", e)))?;
+            self.send_to_mailbox_retried(
+                mailbox_manager, &peer_mailbox.public_key, mailbox_encrypted, peer_id, device_id,
+            ).await?;
 
             tracing::debug!(
                 peer_id = %peer_id,
@@ -776,6 +775,62 @@ impl MessageService {
         );
 
         Ok(device_ids)
+    }
+
+    /// Send to a mailbox with retry for transient network failures.
+    ///
+    /// Retries up to 3 times with exponential backoff (500ms, 1s, 2s)
+    /// for retryable errors (timeout, unavailable, rate limit, server error).
+    /// Non-retryable errors (auth, not found, invalid request) fail immediately.
+    async fn send_to_mailbox_retried(
+        &self,
+        mailbox_manager: &MailboxManager,
+        public_key: &[u8],
+        encrypted_envelope: Vec<u8>,
+        peer_id: &UserId,
+        device_id: u32,
+    ) -> Result<(), MessageError> {
+        use crate::services::mailbox_manager::MailboxError;
+
+        const MAX_ATTEMPTS: u32 = 4; // 1 initial + 3 retries
+
+        for attempt in 0..MAX_ATTEMPTS {
+            if attempt > 0 {
+                let delay = std::time::Duration::from_millis(500 * 2u64.pow(attempt - 1));
+                tokio::time::sleep(delay).await;
+            }
+
+            match mailbox_manager
+                .send_to_mailbox(
+                    public_key,
+                    encrypted_envelope.clone(),
+                    EnvelopeType::SealedSender,
+                )
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(MailboxError::Network(net_err))
+                    if net_err.is_retryable() && attempt + 1 < MAX_ATTEMPTS =>
+                {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        device_id,
+                        attempt = attempt + 1,
+                        max_attempts = MAX_ATTEMPTS,
+                        error = %net_err,
+                        "Mailbox send failed, retrying"
+                    );
+                }
+                Err(e) => {
+                    return Err(MessageError::DmError(format!(
+                        "Failed to send to mailbox: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        unreachable!("retry loop always returns")
     }
 
     /// Inject our profile key into the Content if profile sharing is enabled.
