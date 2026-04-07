@@ -2399,8 +2399,6 @@ impl ChatterClient {
         before: Option<&crate::domain::ids::MessageId>,
     ) -> Result<Vec<Message>, ClientError> {
         let mut msg_client = self.ui.grpc_pool.message_client();
-        let mut auth_client = self.ui.grpc_pool.auth_client();
-        let mut ch_client = self.ui.grpc_pool.channel_client();
         self.messages()
             .get_thread_messages(&mut msg_client, channel_id, thread_root_id, limit, before)
             .await
