@@ -2387,6 +2387,61 @@ impl ChatterClient {
         self.last_activity_ms.store(now, Ordering::Relaxed);
     }
 
+    // ── Device management ─────────────────────────────────────────
+
+    /// List all linked devices for the current user.
+    pub async fn list_devices(&self) -> Result<Vec<crate::services::device_service::Device>, ClientError> {
+        let mut auth_client = self.ui.grpc_pool.auth_client();
+        let response = auth_client.list_devices().await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
+
+        let mut devices: Vec<crate::services::device_service::Device> = response
+            .devices
+            .into_iter()
+            .map(|d| crate::services::device_service::Device {
+                device_id: d.device_id,
+                name: d.device_name,
+                info: d.device_info,
+                created_at: chrono::DateTime::from_timestamp_millis(d.created_at as i64)
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH),
+                last_active: chrono::DateTime::from_timestamp_millis(d.last_active as i64)
+                    .unwrap_or(chrono::DateTime::UNIX_EPOCH),
+                is_primary: d.is_primary,
+                is_current: d.is_current,
+            })
+            .collect();
+
+        devices.sort_by_key(|d| d.device_id);
+        Ok(devices)
+    }
+
+    /// Unlink (revoke) a specific device.
+    pub async fn unlink_device(&self, device_id: u32) -> Result<(), ClientError> {
+        let mut auth_client = self.ui.grpc_pool.auth_client();
+        auth_client.revoke_device(device_id).await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
+    /// Unlink all devices except the current one.
+    pub async fn unlink_all_other_devices(&self) -> Result<(), ClientError> {
+        let devices = self.list_devices().await?;
+        let current_device_id = self.sessions().current_device_id();
+
+        for device in devices {
+            if device.is_current || Some(device.device_id) == current_device_id {
+                continue;
+            }
+            if device.is_primary {
+                continue; // Cannot revoke primary device
+            }
+            if let Err(e) = self.unlink_device(device.device_id).await {
+                tracing::warn!(device_id = device.device_id, error = %e, "Failed to unlink device");
+            }
+        }
+
+        Ok(())
+    }
+
     // ── Private channel helpers ────────────────────────────────────
 
     /// Announce mailbox and distribute SKDM after channel create/join.
