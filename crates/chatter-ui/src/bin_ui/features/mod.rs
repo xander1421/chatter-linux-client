@@ -14,6 +14,7 @@
 pub mod auth;
 pub mod calls;
 pub mod chat;
+pub mod connection;
 pub mod chat_actions;
 pub mod composer;
 pub mod header;
@@ -46,6 +47,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     calls::wire(window, ui_ctx);
     jarvis::wire_jarvis_panel(window, ui_ctx);
     status::wire(window, ui_ctx);
+    connection::wire(window, ui_ctx);
     notifications::wire(window, ui_ctx);
 
     // Initialize inline GIF animation system

@@ -47,6 +47,7 @@ import { OrgManagementScreen, OrgMemberData, OrgDashboardData } from "org/org_ma
 // Import components
 import { ImageViewer, EmojiData } from "components/mod.slint";
 import { Toast } from "components/mod.slint";
+import { ConnectionBanner } from "components/mod.slint";
 import { CodePreviewPanel } from "components/mod.slint";
 import { PdfPreviewPanel } from "components/mod.slint";
 import { VideoPlayer } from "components/mod.slint";
@@ -82,6 +83,12 @@ export component App inherits Rectangle {
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
     in-out property <string> current-view: "loading";
+
+    // ========== Connection status ==========
+    // "connected", "connecting", "reconnecting", "disconnected", "failed"
+    in property <string> connection-status: "connected";
+    in property <int> connection-reconnect-attempt: 0;
+    in property <int> connection-queue-count: 0;
 
     // ========== Loading page properties ==========
     in property <string> loading-message: "Loading...";
@@ -937,11 +944,21 @@ export component App inherits Rectangle {
 
         // Main chat layout
         // On mobile, leave room for the bottom nav + safe area; on desktop, subtract safe-area-bottom
-        if current-view == "main": HorizontalLayout {
+        if current-view == "main": VerticalLayout {
             width: 100%;
             height: root.is-mobile-screen && !root.keyboard-open
                 ? parent.height - Spacing.bottom-nav-height - root.safe-area-bottom
                 : parent.height - root.safe-area-bottom;
+
+            // Connection status banner (auto-hides when connected)
+            ConnectionBanner {
+                connection-state: root.connection-status;
+                reconnect-attempt: root.connection-reconnect-attempt;
+                queue-count: root.connection-queue-count;
+            }
+
+            HorizontalLayout {
+                vertical-stretch: 1;
 
             // Sidebar (width controlled by collapsed state; mobile-mode for full-width)
             Sidebar {
@@ -1237,7 +1254,8 @@ export component App inherits Rectangle {
 
             }
         }
-        } // end HorizontalLayout (chat area)
+        } // end inner HorizontalLayout (sidebar + chat)
+        } // end VerticalLayout (banner + chat area)
 
     // Mobile bottom navigation bar (absolute positioned, pinned to bottom, extends into gesture area)
     if root.current-view == "main" && root.is-mobile-screen && !root.keyboard-open: MobileBottomNav {

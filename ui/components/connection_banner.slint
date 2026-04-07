@@ -1,0 +1,84 @@
+// Connection status banner — slides in below header when offline/reconnecting
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component ConnectionBanner inherits Rectangle {
+    // "connected", "connecting", "reconnecting", "disconnected", "failed"
+    in property <string> connection-state: "connected";
+    in property <int> reconnect-attempt: 0;
+    in property <int> queue-count: 0;
+
+    // Internal: tracks "just reconnected" for the green flash
+    property <bool> just-reconnected: false;
+    property <bool> was-disconnected: false;
+
+    // Show banner when not connected (or briefly after reconnect)
+    property <bool> should-show:
+        connection-state == "connecting"
+        || connection-state == "reconnecting"
+        || connection-state == "disconnected"
+        || connection-state == "failed"
+        || root.just-reconnected;
+
+    visible: root.should-show;
+    height: root.should-show ? 36px : 0px;
+    animate height { duration: 200ms; easing: ease-out; }
+
+    // Banner color based on state
+    property <color> banner-color:
+        root.just-reconnected ? Colors.success :
+        connection-state == "connecting" || connection-state == "reconnecting" ? Colors.warning :
+        connection-state == "failed" ? Colors.error :
+        Colors.error;  // disconnected
+
+    background: root.banner-color.with-alpha(0.15);
+    border-width: 0px;
+
+    // Bottom border accent
+    Rectangle {
+        y: parent.height - 1px;
+        width: 100%;
+        height: 1px;
+        background: root.banner-color.with-alpha(0.3);
+    }
+
+    HorizontalLayout {
+        padding-left: Spacing.lg;
+        padding-right: Spacing.lg;
+        spacing: Spacing.sm;
+        alignment: center;
+
+        // Status dot (pulsing for connecting states)
+        Rectangle {
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: root.banner-color;
+            y: (parent.height - self.height) / 2;
+
+            // Pulse animation for connecting/reconnecting
+            states [
+                pulsing when connection-state == "connecting" || connection-state == "reconnecting": {
+                    opacity: 0.4;
+                }
+            ]
+            animate opacity { duration: 800ms; easing: ease-in-out; }
+        }
+
+        // Status text
+        Text {
+            text: root.just-reconnected ? "Connected" :
+                  connection-state == "connecting" ? "Connecting…" :
+                  connection-state == "reconnecting" ? "Reconnecting" + (reconnect-attempt > 0 ? " (attempt " + reconnect-attempt + ")…" : "…") :
+                  connection-state == "failed" ? "Connection failed — check your network" :
+                  queue-count > 0 ? "No connection — " + queue-count + " messages queued" :
+                  "No connection — messages will be sent when you reconnect";
+            color: root.banner-color;
+            font-size: Typography.xs;
+            font-weight: Typography.medium;
+            vertical-alignment: center;
+        }
+    }
+}

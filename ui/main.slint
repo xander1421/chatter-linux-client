@@ -30,6 +30,11 @@ export component MainWindow inherits Window {
     // ========== View routing ==========
     in-out property <string> current-view <=> app.current-view;
 
+    // ========== Connection status ==========
+    in property <string> connection-status <=> app.connection-status;
+    in property <int> connection-reconnect-attempt <=> app.connection-reconnect-attempt;
+    in property <int> connection-queue-count <=> app.connection-queue-count;
+
     // ========== Loading page properties ==========
     in property <string> loading-message <=> app.loading-message;
     in property <string> loading-secondary-message <=> app.loading-secondary-message;
