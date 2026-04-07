@@ -1,16 +1,14 @@
-// Slack-style sidebar
+// Sidebar — Neo 2.0
 //
 // Layout (top to bottom):
-//   1. Org switcher — horizontal button row
-//   2. Search bar
-//   3. Scrollable content:
-//      a. Quick links (Friends, Saved Messages)
-//      b. Invite banners
-//      c. Messages section (merged: DMs + anonymous DMs)
-//      d. Channels section (merged: public + private + anonymous)
-//   4. Bottom bar (Profile + Jarvis + Settings + Collapse)
+//   1. Org switcher — neo button row
+//   2. Search bar — inset surface
+//   3. Scrollable content with flat/inset list items
+//   4. Bottom bar — glass surface
 //
-// Supports collapsed mode (60px icon-only) and mobile full-width.
+// Neo depth separation: sidebar surface is raised from background,
+// with right-edge highlight border. Internal elements use
+// inset (search, selected items) and glass (bottom bar) surfaces.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -104,7 +102,13 @@ export component Sidebar inherits Rectangle {
          : root.collapsed ? Spacing.sidebar-width-collapsed
          : Spacing.sidebar-width;
     visible: root.mobile-mode ? true : !root.hidden;
+    // Neo 2.0: sidebar is a raised surface with right-edge highlight
     background: Colors.surface;
+    border-width: 1px;
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: Spacing.neo-blur-md;
+    drop-shadow-offset-x: Spacing.neo-offset-md;
+    drop-shadow-color: Colors.neo-shadow;
 
     animate width { duration: 200ms; easing: ease-out; }
 
@@ -123,7 +127,7 @@ export component Sidebar inherits Rectangle {
         }
 
         // ════════════════════════════════════════
-        // 2. SEARCH BAR
+        // 2. SEARCH BAR — Neo 2.0 inset surface
         // ════════════════════════════════════════
         if !root.collapsed: Rectangle {
             height: 40px;
@@ -133,7 +137,10 @@ export component Sidebar inherits Rectangle {
                 width: parent.width - 2 * Spacing.sm;
                 height: 32px;
                 border-radius: Spacing.radius-sm;
-                background: search-touch.has-hover ? Colors.surface-hover : Colors.background;
+                // Neo inset: pressed-in search field
+                background: search-touch.has-hover ? Colors.surface-hover : Colors.neo-inset-bg;
+                border-width: 1px;
+                border-color: search-touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-inset-shadow;
 
                 HorizontalLayout {
                     padding-left: Spacing.sm;
@@ -616,10 +623,15 @@ export component Sidebar inherits Rectangle {
             }
         }
 
-        // 7. BOTTOM UTILITY BAR
+        // 7. BOTTOM UTILITY BAR — Neo 2.0 glass surface
         Rectangle {
             height: root.collapsed ? 140px : 44px;
-            background: Colors.background;
+            background: Colors.surface.with-alpha(0.85);
+            border-width: 1px;
+            border-color: Colors.neo-highlight;
+            drop-shadow-blur: Spacing.neo-blur-sm;
+            drop-shadow-offset-y: -2px;
+            drop-shadow-color: Colors.neo-shadow;
 
             // Expanded view: Profile + Jarvis + Settings on same row
             if !root.collapsed: HorizontalLayout {

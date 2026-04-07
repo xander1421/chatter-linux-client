@@ -1,6 +1,6 @@
-// User profile bar component
+// User profile bar component — Neo 2.0
 //
-// Displays current user's profile with avatar, name, status, and friends button.
+// Extruded profile card with neo surface depth.
 // Supports collapsed mode showing only centered avatar with self-contained tooltip.
 
 import { Colors } from "../theme/colors.slint";
@@ -26,9 +26,16 @@ export component UserProfileBar inherits Rectangle {
     // Friend request badge count
     in property <int> pending-friend-requests: 0;
 
-    // Layout
+    // Layout — Neo 2.0 extruded profile card
     height: 72px;
-    background: Colors.background;
+    background: Colors.surface;
+    border-radius: Spacing.radius-md;
+    border-width: 1px;
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: Spacing.neo-blur-md;
+    drop-shadow-offset-x: Spacing.neo-offset-md;
+    drop-shadow-offset-y: Spacing.neo-offset-md;
+    drop-shadow-color: Colors.neo-shadow;
 
     // Expanded layout
     if !root.collapsed: HorizontalLayout {

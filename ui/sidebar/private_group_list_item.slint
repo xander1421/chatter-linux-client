@@ -1,8 +1,7 @@
-// Private group list item component
+// Private group list item component — Neo 2.0
 //
 // Displays a single private group in the sidebar list.
-// Shows shield icon, group name, member count, and unread badge.
-// Self-contained tooltip via TooltipArea in collapsed mode.
+// Neo states: flat default, highlight hover, inset active with purple glow.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -53,11 +52,16 @@ export component PrivateGroupListItem inherits Rectangle {
 
     height: 44px;
     border-radius: Spacing.radius-sm;
-    background: root.selected ? accent-color.with-alpha(0.15) :
-                (touch.has-hover ? Colors.surface-hover : Colors.surface);
 
     // Use purple accent for private groups
     property <color> accent-color: Colors.group-accent;
+
+    // Neo 2.0 states: flat → highlight hover → inset selected with purple glow
+    background: root.selected ? Colors.neo-inset-bg
+              : touch.has-hover ? Colors.surface-hover
+              : transparent;
+    border-width: root.selected || touch.has-hover ? 1px : 0px;
+    border-color: root.selected ? accent-color.with-alpha(0.2) : Colors.neo-highlight;
 
     // Expanded layout
     if !root.collapsed: HorizontalLayout {

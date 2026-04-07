@@ -1,6 +1,6 @@
-// Section context menu for sidebar conversations
+// Section context menu for sidebar conversations — Neo 2.0
 //
-// Right-click a channel, DM, or private group to move it into a custom section.
+// Right-click popup with strong neo surface depth.
 // Uses full-screen backdrop pattern (same as MessageContextMenu).
 
 import { Colors } from "../theme/colors.slint";
@@ -9,7 +9,7 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { CustomSectionData } from "custom_section_list.slint";
 
-// Reusable menu item (icon + label, hover highlight)
+// Reusable menu item — Neo 2.0 (icon + label, neo hover highlight)
 component MenuItem inherits Rectangle {
     in property <image> icon;
     in property <string> label;
@@ -20,6 +20,8 @@ component MenuItem inherits Rectangle {
     height: 36px;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
+    border-width: touch.has-hover ? 1px : 0px;
+    border-color: Colors.neo-highlight;
 
     HorizontalLayout {
         padding-left: Spacing.md;
@@ -92,7 +94,7 @@ export component SectionContextMenu inherits Rectangle {
         clicked => { root.close(); }
     }
 
-    // Menu card
+    // Menu card — Neo 2.0 strong popup surface
     menu-container := Rectangle {
         x: min(root.position-x, parent.width - self.width - Spacing.md);
         y: min(root.position-y, parent.height - self.height - Spacing.md);
@@ -101,10 +103,11 @@ export component SectionContextMenu inherits Rectangle {
         background: Colors.surface;
         border-radius: Spacing.radius-md;
         border-width: 1px;
-        border-color: Colors.text-muted.with-alpha(0.2);
-        drop-shadow-blur: 12px;
-        drop-shadow-color: Colors.background.with-alpha(0.6);
-        drop-shadow-offset-y: 4px;
+        border-color: Colors.neo-highlight-strong;
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-offset-x: Spacing.neo-offset-lg;
+        drop-shadow-offset-y: Spacing.neo-offset-lg;
+        drop-shadow-color: Colors.neo-shadow-strong;
 
         // Block backdrop clicks on menu area
         TouchArea { }

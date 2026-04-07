@@ -1,7 +1,7 @@
-// DM list item component
+// DM list item component — Neo 2.0
 //
 // Displays a direct message conversation with avatar, presence, name, preview, and unread badge.
-// Supports collapsed mode showing avatar + presence + badge only with self-contained tooltip.
+// Neo states: flat default, highlight hover, inset active (selected).
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -58,10 +58,12 @@ export component DMListItem inherits Rectangle {
     height: root.collapsed ? 44px : 52px;
     border-radius: Spacing.radius-sm;
 
-    // Background states: default, hover, selected
-    background: root.selected ? Colors.primary.with-alpha(0.2)
+    // Neo 2.0 states: flat → highlight hover → inset selected
+    background: root.selected ? Colors.neo-inset-bg
               : touch.has-hover ? Colors.surface-hover
-              : Colors.surface;
+              : transparent;
+    border-width: root.selected || touch.has-hover ? 1px : 0px;
+    border-color: root.selected ? Colors.glow-primary : Colors.neo-highlight;
 
     // Expanded content layout
     if !root.collapsed: HorizontalLayout {

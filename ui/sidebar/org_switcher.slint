@@ -1,8 +1,7 @@
-// Organization switcher — button row style.
+// Organization switcher — Neo 2.0 button row.
 //
-// Shows org initial badges in a horizontal row. Active org is highlighted.
-// Plus button at end for managing/adding orgs. Space-efficient alternative
-// to a dropdown.
+// Shows org initial badges in a horizontal row. Active org uses raised neo surface
+// with primary glow. Inactive orgs are flat with neo hover. Plus button has neo border.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -45,10 +44,19 @@ export component OrgSwitcher inherits Rectangle {
         for org in root.organizations: Rectangle {
             width: 32px;
             height: 32px;
-            border-radius: 8px;
+            border-radius: Spacing.radius-sm;
+            // Neo 2.0: active org is raised with primary glow, inactive is flat
             background: org.is-current ? Colors.primary
                       : org-btn-touch.has-hover ? Colors.surface-hover
                       : Colors.background;
+            border-width: 1px;
+            border-color: org.is-current ? Colors.glow-primary
+                        : org-btn-touch.has-hover ? Colors.neo-highlight
+                        : transparent;
+            drop-shadow-blur: org.is-current ? Spacing.neo-blur-sm : 0px;
+            drop-shadow-offset-x: org.is-current ? Spacing.neo-offset-sm : 0px;
+            drop-shadow-offset-y: org.is-current ? Spacing.neo-offset-sm : 0px;
+            drop-shadow-color: org.is-current ? Colors.neo-shadow : transparent;
 
             Text {
                 text: org.initial != "" ? org.initial : org.name;
@@ -72,14 +80,14 @@ export component OrgSwitcher inherits Rectangle {
             }
         }
 
-        // + button to manage/add orgs
+        // + button to manage/add orgs — Neo 2.0 subtle border
         Rectangle {
             width: 32px;
             height: 32px;
-            border-radius: 8px;
+            border-radius: Spacing.radius-sm;
             background: manage-touch.has-hover ? Colors.surface-hover : transparent;
             border-width: 1px;
-            border-color: manage-touch.has-hover ? Colors.border : transparent;
+            border-color: manage-touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-highlight;
 
             Image {
                 source: Icons.plus;
@@ -117,8 +125,14 @@ export component OrgSwitcher inherits Rectangle {
                 Rectangle {
                     width: 32px;
                     height: 32px;
-                    border-radius: 8px;
+                    border-radius: Spacing.radius-sm;
                     background: Colors.primary;
+                    border-width: 1px;
+                    border-color: Colors.glow-primary;
+                    drop-shadow-blur: Spacing.neo-blur-sm;
+                    drop-shadow-offset-x: Spacing.neo-offset-sm;
+                    drop-shadow-offset-y: Spacing.neo-offset-sm;
+                    drop-shadow-color: Colors.neo-shadow;
 
                     Text {
                         text: root.current-org-initial != "" ? root.current-org-initial : root.current-org-name;
