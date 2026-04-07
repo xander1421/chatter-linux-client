@@ -29,7 +29,13 @@ component IconButton inherits Rectangle {
     width: Spacing.touch-target-min;
     height: Spacing.touch-target-min;
     background: touch.has-hover ? Colors.surface-hover : transparent;
-    border-radius: Spacing.radius-sm;
+    border-radius: Spacing.radius-md;
+    border-width: touch.has-hover ? 1px : 0px;
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: touch.has-hover ? Spacing.neo-blur-sm : 0px;
+    drop-shadow-offset-x: touch.has-hover ? 1px : 0px;
+    drop-shadow-offset-y: touch.has-hover ? 1px : 0px;
+    drop-shadow-color: touch.has-hover ? Colors.neo-shadow : transparent;
 
     Image {
         source: icon;
@@ -95,9 +101,14 @@ export component ChatHeader inherits Rectangle {
     // Show call buttons for everything except saved messages
     property <bool> show-calls: !is-saved;
 
-    // Layout (56px header, no encryption banner)
+    // Layout (56px header) — Neo glassmorphism: translucent surface with edge definition
     height: 56px;
-    background: Colors.surface;
+    background: Colors.surface.with-alpha(0.85);
+    border-width: 1px;
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: Spacing.neo-blur-sm;
+    drop-shadow-offset-y: Spacing.neo-offset-sm;
+    drop-shadow-color: Colors.neo-shadow;
 
     HorizontalLayout {
         padding-left: Spacing.sm;
@@ -347,11 +358,11 @@ export component ChatHeader inherits Rectangle {
         }
     }
 
-    // Bottom border
+    // Bottom edge — neo highlight creates glass edge
     Rectangle {
         y: parent.height - 1px;
         width: 100%;
         height: 1px;
-        background: Colors.surface-hover;
+        background: Colors.neo-highlight;
     }
 }

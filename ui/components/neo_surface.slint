@@ -1,0 +1,63 @@
+// Neomorphism 2.0 base surface components
+//
+// Provides raised (convex) and inset (concave) surface primitives
+// using the "Ink & Neon" design system tokens.
+// Light angle: 145° — top-left highlight, bottom-right shadow.
+
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+
+// Raised convex surface — appears to bulge out of the background.
+// Use for: buttons, outgoing message bubbles, floating bars, popups.
+export component NeoSurface inherits Rectangle {
+    in property <color> surface-color: Colors.surface;
+    in property <length> surface-radius: Spacing.radius-lg;
+    in property <bool> strong: false;  // Deeper shadow for modals/popups
+
+    background: surface-color;
+    border-radius: surface-radius;
+    border-width: 1px;
+    border-color: strong ? Colors.neo-highlight-strong : Colors.neo-highlight;
+    drop-shadow-blur: strong ? Spacing.neo-blur-lg : Spacing.neo-blur-md;
+    drop-shadow-offset-x: strong ? Spacing.neo-offset-lg : Spacing.neo-offset-md;
+    drop-shadow-offset-y: strong ? Spacing.neo-offset-lg : Spacing.neo-offset-md;
+    drop-shadow-color: strong ? Colors.neo-shadow-strong : Colors.neo-shadow;
+}
+
+// Pressed concave surface — appears pushed into the background.
+// Use for: input fields, incoming message bubbles, inset containers.
+export component NeoInsetSurface inherits Rectangle {
+    in property <color> surface-color: Colors.neo-inset-bg;
+    in property <length> surface-radius: Spacing.radius-lg;
+
+    background: surface-color;
+    border-radius: surface-radius;
+    border-width: 1px;
+    border-color: Colors.neo-inset-shadow;
+
+    // Subtle inner highlight at bottom-right edge (simulated via overlay)
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+        border-radius: parent.border-radius;
+        background: transparent;
+        border-width: 1px;
+        border-color: Colors.neo-inset-highlight;
+    }
+}
+
+// Glassmorphism surface — semi-transparent with strong edge definition.
+// Use for: headers, toolbars, overlays that need backdrop distinction.
+export component NeoGlassSurface inherits Rectangle {
+    in property <length> surface-radius: 0px;
+
+    background: Colors.surface.with-alpha(0.85);
+    border-radius: surface-radius;
+    border-width: 1px;
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: Spacing.neo-blur-sm;
+    drop-shadow-offset-y: Spacing.neo-offset-sm;
+    drop-shadow-color: Colors.neo-shadow;
+}

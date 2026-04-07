@@ -6,6 +6,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 
+// Neo 2.0: dots rendered as small convex bumps with subtle shadows
 export component TypingIndicator inherits Rectangle {
     // Properties - typing-text is pre-formatted by Rust
     in property <string> typing-text: "";
@@ -64,30 +65,48 @@ export component TypingIndicator inherits Rectangle {
             spacing: 3px;
             alignment: center;
 
-            // Dot 1
+            // Dot 1 — Neo convex bump
             Rectangle {
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
+                width: 7px;
+                height: 7px;
+                border-radius: 3.5px;
                 background: Colors.primary;
+                border-width: 1px;
+                border-color: Colors.neo-highlight;
+                drop-shadow-blur: Spacing.neo-blur-sm;
+                drop-shadow-offset-x: 1px;
+                drop-shadow-offset-y: 1px;
+                drop-shadow-color: Colors.neo-shadow;
                 opacity: dot-opacity(0);
             }
 
-            // Dot 2
+            // Dot 2 — Neo convex bump
             Rectangle {
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
+                width: 7px;
+                height: 7px;
+                border-radius: 3.5px;
                 background: Colors.primary;
+                border-width: 1px;
+                border-color: Colors.neo-highlight;
+                drop-shadow-blur: Spacing.neo-blur-sm;
+                drop-shadow-offset-x: 1px;
+                drop-shadow-offset-y: 1px;
+                drop-shadow-color: Colors.neo-shadow;
                 opacity: dot-opacity(1);
             }
 
-            // Dot 3
+            // Dot 3 — Neo convex bump
             Rectangle {
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
+                width: 7px;
+                height: 7px;
+                border-radius: 3.5px;
                 background: Colors.primary;
+                border-width: 1px;
+                border-color: Colors.neo-highlight;
+                drop-shadow-blur: Spacing.neo-blur-sm;
+                drop-shadow-offset-x: 1px;
+                drop-shadow-offset-y: 1px;
+                drop-shadow-color: Colors.neo-shadow;
                 opacity: dot-opacity(2);
             }
         }

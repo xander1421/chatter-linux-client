@@ -89,15 +89,17 @@ export component MessageComposer inherits Rectangle {
     forward-focus: text-input;
 
     // Layout - dynamic height based on content
-    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + Spacing.sm * 2 + 1px;  // +1px for top border
+    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + Spacing.sm * 2 + 1px;
     background: Colors.surface;
+    border-width: 1px;
+    border-color: Colors.neo-highlight;
 
-    // Top border
+    // Neo top edge — highlight border replaces flat divider
     Rectangle {
         y: 0;
         width: 100%;
         height: 1px;
-        background: Colors.surface-hover;
+        background: Colors.neo-highlight-strong;
     }
 
     VerticalLayout {
@@ -419,12 +421,18 @@ export component MessageComposer inherits Rectangle {
                     spacing: Spacing.sm;
                     alignment: start;
 
-                    // Pending attachment items
+                    // Pending attachment items — Neo convex cards
                     for attachment in root.pending-attachments: Rectangle {
                         width: 180px;
                         height: 56px;
                         background: Colors.surface;
-                        border-radius: Spacing.radius-sm;
+                        border-radius: Spacing.radius-md;
+                        border-width: 1px;
+                        border-color: Colors.neo-highlight;
+                        drop-shadow-blur: Spacing.neo-blur-sm;
+                        drop-shadow-offset-x: Spacing.neo-offset-sm;
+                        drop-shadow-offset-y: Spacing.neo-offset-sm;
+                        drop-shadow-color: Colors.neo-shadow;
                         opacity: attachment.is-ready ? 1.0 : 0.7;
 
                         property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
@@ -536,14 +544,14 @@ export component MessageComposer inherits Rectangle {
                         }
                     }
 
-                    // Add more button
+                    // Add more button — Neo dashed outline
                     Rectangle {
                         width: 56px;
                         height: 56px;
-                        background: add-more-touch.has-hover ? Colors.surface-hover : transparent;
-                        border-width: 2px;
-                        border-color: Colors.text-muted;
-                        border-radius: Spacing.radius-sm;
+                        background: add-more-touch.has-hover ? Colors.surface-hover : Colors.neo-inset-bg;
+                        border-width: 1px;
+                        border-color: add-more-touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-inset-shadow;
+                        border-radius: Spacing.radius-md;
                         accessible-role: button;
                         accessible-label: "Add attachment";
 
@@ -580,16 +588,16 @@ export component MessageComposer inherits Rectangle {
             spacing: Spacing.sm;
             alignment: stretch;
 
-            // Text input area
+            // Text input area — Neo inset (concave, pressed into surface)
             Rectangle {
                 horizontal-stretch: 1;
                 height: root.content-height;
-                background: Colors.background;
-                border-radius: Spacing.radius-md;
+                background: Colors.neo-inset-bg;
+                border-radius: Spacing.radius-lg;
                 border-width: 1px;
-                border-color: text-input.has-focus ? Colors.primary : Colors.surface-hover;
+                border-color: text-input.has-focus ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
                 opacity: root.disabled ? 0.5 : 1.0;
-                clip: true;  // Prevent text from overflowing outside input bounds
+                clip: true;
                 accessible-role: AccessibleRole.text-input;
                 accessible-label: "Message input";
 
@@ -703,12 +711,18 @@ export component MessageComposer inherits Rectangle {
                 }
             }
 
-            // Send button (visible when can send)
+            // Send button — Neo convex with glow on hover
             if root.can-send: Rectangle {
                 width: 36px;
                 height: 36px;
                 background: send-touch.has-hover ? Colors.primary-hover : Colors.primary;
-                border-radius: Spacing.radius-sm;
+                border-radius: Spacing.radius-md;
+                border-width: 1px;
+                border-color: Colors.neo-highlight-strong;
+                drop-shadow-blur: send-touch.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
+                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                drop-shadow-color: send-touch.has-hover ? Colors.glow-primary : Colors.neo-shadow;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
                 accessible-label: "Send message";

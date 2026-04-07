@@ -144,9 +144,13 @@ export component MessageItem inherits Rectangle {
                 width: call-content.preferred-width + Spacing.lg * 2;
                 height: call-content.preferred-height + Spacing.md * 2;
                 background: is-missed ? Colors.error.transparentize(0.9) : Colors.surface;
-                border-radius: Spacing.radius-md;
+                border-radius: Spacing.radius-lg;
                 border-width: 1px;
-                border-color: is-missed ? Colors.error.transparentize(0.7) : Colors.surface-hover;
+                border-color: is-missed ? Colors.error.transparentize(0.7) : Colors.neo-highlight;
+                drop-shadow-blur: Spacing.neo-blur-sm;
+                drop-shadow-offset-x: Spacing.neo-offset-sm;
+                drop-shadow-offset-y: Spacing.neo-offset-sm;
+                drop-shadow-color: Colors.neo-shadow;
 
                 call-content := HorizontalLayout {
                     padding: Spacing.md;
@@ -263,15 +267,23 @@ export component MessageItem inherits Rectangle {
                     accessible-role: text;
                     accessible-label: root.is-own ? "Your message: " + root.content : root.sender-name + " says: " + root.content;
 
-                    // AI messages get distinct styling with primary color tint
+                    // Neo 2.0: Own = convex (raised), Others = concave (inset)
+                    // AI messages get distinct primary-tinted neo surface
                     background: root.is-ai
                         ? (bubble-hovered ? Colors.primary.with-alpha(0.12) : Colors.primary.with-alpha(0.08))
                         : (bubble-hovered
                             ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
                             : (root.is-own ? Colors.bubble-own : Colors.bubble-other));
-                    // Asymmetric border radius for chat bubble style
-                    // Own: rounded except bottom-right, Others: rounded except bottom-left
-                    border-radius: Spacing.radius-md;
+                    border-radius: Spacing.radius-xl;
+
+                    // Neo convex: outgoing bubbles get highlight border + drop shadow
+                    // Neo concave: incoming bubbles get inset border
+                    border-width: 1px;
+                    border-color: root.is-own ? Colors.neo-highlight : Colors.neo-inset-shadow;
+                    drop-shadow-blur: root.is-own ? Spacing.neo-blur-md : 0px;
+                    drop-shadow-offset-x: root.is-own ? Spacing.neo-offset-md : 0px;
+                    drop-shadow-offset-y: root.is-own ? Spacing.neo-offset-md : 0px;
+                    drop-shadow-color: root.is-own ? Colors.neo-shadow : transparent;
 
                     // Calculate height based on content
                     height: bubble-content.preferred-height;
@@ -821,9 +833,13 @@ export component MessageItem inherits Rectangle {
                                     width: min(240px, root.width * 0.7 - Spacing.md);
                                     height: 52px;
                                     background: Colors.surface;
-                                    border-radius: Spacing.radius-sm;
+                                    border-radius: Spacing.radius-md;
                                     border-width: 1px;
-                                    border-color: Colors.surface-hover;
+                                    border-color: Colors.neo-highlight;
+                                    drop-shadow-blur: Spacing.neo-blur-sm;
+                                    drop-shadow-offset-x: Spacing.neo-offset-sm;
+                                    drop-shadow-offset-y: Spacing.neo-offset-sm;
+                                    drop-shadow-color: Colors.neo-shadow;
 
                                     HorizontalLayout {
                                         padding: Spacing.sm;
@@ -990,10 +1006,14 @@ export component MessageItem inherits Rectangle {
                 if root.has-reactions: Rectangle {
                     height: 22px;
                     width: reactions-row.preferred-width + 8px;
-                    background: Colors.surface-hover;
+                    background: Colors.surface;
                     border-radius: 11px;
                     border-width: 1px;
-                    border-color: Colors.text-muted.with-alpha(0.15);
+                    border-color: Colors.neo-highlight;
+                    drop-shadow-blur: Spacing.neo-blur-sm;
+                    drop-shadow-offset-x: Spacing.neo-offset-sm;
+                    drop-shadow-offset-y: Spacing.neo-offset-sm;
+                    drop-shadow-color: Colors.neo-shadow;
                     x: root.is-own ? -self.width + 8px : bubble.width - 8px;
                     y: bubble.height - 4px;
                     accessible-role: button;
@@ -1041,12 +1061,13 @@ export component MessageItem inherits Rectangle {
                         height: 28px;
                         width: 80px;
                         background: Colors.surface;
-                        border-radius: Spacing.radius-sm;
+                        border-radius: Spacing.radius-md;
                         border-width: 1px;
-                        border-color: Colors.surface-hover;
-                        drop-shadow-blur: 4px;
-                        drop-shadow-color: Colors.background.with-alpha(0.3);
-                        drop-shadow-offset-y: 1px;
+                        border-color: Colors.neo-highlight-strong;
+                        drop-shadow-blur: Spacing.neo-blur-sm;
+                        drop-shadow-offset-x: Spacing.neo-offset-sm;
+                        drop-shadow-offset-y: Spacing.neo-offset-sm;
+                        drop-shadow-color: Colors.neo-shadow;
 
                         HorizontalLayout {
                             padding: 2px;

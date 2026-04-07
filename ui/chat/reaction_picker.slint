@@ -55,16 +55,20 @@ export component ReactionPicker inherits Rectangle {
         }
     }
 
-    // Picker container (positioned absolutely)
+    // Picker container — Neo convex popup with strong shadow
     Rectangle {
         x: root.position-x;
         y: root.position-y;
         width: min(280px, parent.width - 32px);
-        height: min(352px, parent.height - 48px); // 320px EmojiPicker + 32px quick bar
+        height: min(352px, parent.height - 48px);
         background: Colors.surface;
-        border-radius: Spacing.radius-lg;
+        border-radius: Spacing.radius-xl;
         border-width: 1px;
-        border-color: Colors.text-muted.with-alpha(0.2);
+        border-color: Colors.neo-highlight-strong;
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-offset-x: Spacing.neo-offset-lg;
+        drop-shadow-offset-y: Spacing.neo-offset-lg;
+        drop-shadow-color: Colors.neo-shadow-strong;
 
         // Block backdrop clicks when clicking picker
         TouchArea {
@@ -73,11 +77,13 @@ export component ReactionPicker inherits Rectangle {
         }
 
         VerticalLayout {
-            // Quick reactions bar
+            // Quick reactions bar — Neo inset tray
             Rectangle {
                 height: 32px;
-                background: Colors.surface-hover;
-                border-radius: Spacing.radius-lg;
+                background: Colors.neo-inset-bg;
+                border-radius: Spacing.radius-xl;
+                border-width: 1px;
+                border-color: Colors.neo-inset-shadow;
 
                 HorizontalLayout {
                     padding-left: Spacing.sm;
@@ -116,10 +122,10 @@ export component ReactionPicker inherits Rectangle {
                 }
             }
 
-            // Divider
+            // Divider — neo edge
             Rectangle {
                 height: 1px;
-                background: Colors.text-muted.with-alpha(0.15);
+                background: Colors.neo-highlight;
             }
 
             // EmojiPicker

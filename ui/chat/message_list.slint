@@ -45,8 +45,8 @@ export component MessageList inherits Rectangle {
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button clicked
 
-    // Layout - explicit width ensures text wrapping in message items
-    // Width flows: root → Flickable → messages-layout → MessageItem → Text
+    // Layout — flat background to avoid neomorphic fatigue in scrolling content.
+    // The messages themselves carry the depth; the list stays neutral.
     background: Colors.background;
 
     // Loading state: skeleton placeholders
@@ -311,6 +311,7 @@ export component MessageList inherits Rectangle {
 
         // Scroll-to-bottom floating button
         // Appears when user has scrolled up from the bottom
+        // Scroll-to-bottom — Neo convex floating button
         if !root.is-at-bottom: Rectangle {
             x: root.width - 60px;
             y: root.height - 60px;
@@ -318,11 +319,14 @@ export component MessageList inherits Rectangle {
             height: 44px;
             border-radius: 22px;
             background: Colors.primary;
+            border-width: 1px;
+            border-color: Colors.neo-highlight-strong;
             accessible-role: button;
             accessible-label: "Scroll to bottom";
-            drop-shadow-blur: 8px;
-            drop-shadow-offset-y: 2px;
-            drop-shadow-color: Colors.shadow;
+            drop-shadow-blur: Spacing.neo-blur-lg;
+            drop-shadow-offset-x: Spacing.neo-offset-md;
+            drop-shadow-offset-y: Spacing.neo-offset-md;
+            drop-shadow-color: Colors.neo-shadow-strong;
 
             // Fade in animation
             opacity: 1.0;
