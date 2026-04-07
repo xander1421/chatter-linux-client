@@ -49,6 +49,10 @@ pub enum SvrBackupError {
     /// Backup not found on server.
     #[error("backup not found")]
     BackupNotFound,
+
+    /// Backup permanently destroyed by server (too many failed PIN attempts).
+    #[error("backup destroyed: re-register PIN to create a new backup")]
+    BackupDestroyed,
 }
 
 /// Result of a successful backup restore.
@@ -187,6 +191,10 @@ impl SvrBackupService {
             match &e {
                 NetworkError::NotFound(_) => SvrBackupError::BackupNotFound,
                 NetworkError::RateLimited => SvrBackupError::RateLimited,
+                NetworkError::DataLoss(_) => {
+                    tracing::error!("SVR backup destroyed by server (too many failed PIN attempts)");
+                    SvrBackupError::BackupDestroyed
+                }
                 _ => SvrBackupError::Network(e),
             }
         })?;

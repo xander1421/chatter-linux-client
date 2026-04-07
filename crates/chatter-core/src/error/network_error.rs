@@ -45,6 +45,10 @@ pub enum NetworkError {
     #[error("server error: {0}")]
     ServerError(String),
 
+    /// Permanent data loss reported by server.
+    #[error("data loss: {0}")]
+    DataLoss(String),
+
     /// Unknown or unclassified error.
     #[error("unknown error: {0}")]
     Unknown(String),
@@ -105,7 +109,7 @@ impl NetworkError {
             Code::Unimplemented => NetworkError::ServerError(format!("unimplemented: {}", message)),
             Code::Internal => NetworkError::ServerError(message),
             Code::Unavailable => NetworkError::Unavailable,
-            Code::DataLoss => NetworkError::ServerError(format!("data loss: {}", message)),
+            Code::DataLoss => NetworkError::DataLoss(message),
             Code::Unauthenticated => NetworkError::Unauthenticated,
         }
     }
@@ -235,6 +239,15 @@ mod tests {
         let err = NetworkError::from_status(&status);
         assert!(matches!(err, NetworkError::Unknown(_)));
         assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn test_from_status_data_loss() {
+        let status = Status::new(Code::DataLoss, "backup destroyed");
+        let err = NetworkError::from_status(&status);
+        assert!(matches!(err, NetworkError::DataLoss(_)));
+        assert!(!err.is_retryable());
+        assert!(!err.is_transport_error());
     }
 
     #[test]
