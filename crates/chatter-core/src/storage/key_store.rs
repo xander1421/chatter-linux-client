@@ -287,9 +287,87 @@ impl KeyStore {
         Ok(())
     }
 
+    /// Get the creation timestamp of the most recent signed prekey.
+    ///
+    /// Returns `None` if no signed prekeys exist (e.g., before registration).
+    /// Used by the background task to check if signed prekey rotation is needed.
+    pub fn get_latest_signed_prekey_created_at(
+        &self,
+    ) -> Result<Option<chrono::DateTime<Utc>>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt =
+            conn.prepare("SELECT created_at FROM signed_prekeys ORDER BY id DESC LIMIT 1")?;
+
+        let result: Result<String, _> = stmt.query_row([], |row| row.get(0));
+
+        match result {
+            Ok(ts_str) => {
+                let dt = chrono::DateTime::parse_from_rfc3339(&ts_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .map_err(|e| {
+                        StorageError::Database(rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        ))
+                    })?;
+                Ok(Some(dt))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
+    /// Get the maximum signed prekey ID.
+    ///
+    /// Returns 0 if no signed prekeys exist. Used to determine the next ID
+    /// for generating a rotated signed prekey.
+    pub fn max_signed_prekey_id(&self) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let max_id: Option<i64> =
+            conn.query_row("SELECT MAX(id) FROM signed_prekeys", [], |row| row.get(0))?;
+        Ok(max_id.unwrap_or(0) as u32)
+    }
+
+    /// Delete signed prekeys older than `max_age_days` days.
+    ///
+    /// Retains old signed prekeys for a grace period (typically 30 days)
+    /// so in-flight X3DH sessions referencing them can still complete.
+    /// After the grace period, they are safe to prune.
+    pub fn cleanup_expired_signed_prekeys(&self, max_age_days: u64) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let cutoff = (Utc::now() - chrono::Duration::days(max_age_days as i64)).to_rfc3339();
+
+        // Keep at least the most recent signed prekey (never delete it)
+        let max_id: Option<i64> =
+            conn.query_row("SELECT MAX(id) FROM signed_prekeys", [], |row| row.get(0))?;
+
+        let deleted = if let Some(current_id) = max_id {
+            conn.execute(
+                "DELETE FROM signed_prekeys WHERE created_at < ?1 AND id != ?2",
+                params![cutoff, current_id],
+            )?
+        } else {
+            0
+        };
+
+        Ok(deleted as u32)
+    }
+
     // ========================================================================
     // Kyber Pre-keys (Post-Quantum)
     // ========================================================================
+
+    /// Get the maximum Kyber prekey ID.
+    ///
+    /// Returns 0 if no Kyber prekeys exist. Used to determine the next ID
+    /// for generating a rotated Kyber prekey.
+    pub fn max_kyber_prekey_id(&self) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let max_id: Option<i64> =
+            conn.query_row("SELECT MAX(id) FROM kyber_prekeys", [], |row| row.get(0))?;
+        Ok(max_id.unwrap_or(0) as u32)
+    }
 
     /// Get a Kyber pre-key record by ID.
     pub fn get_kyber_prekey(&self, id: u32) -> Result<Option<Vec<u8>>, StorageError> {

@@ -55,6 +55,35 @@ impl SignalService {
         Ok(uploaded_count)
     }
 
+    /// Rotate signed prekey + Kyber prekey and upload to server.
+    ///
+    /// Generates a new signed prekey and Kyber prekey (PQXDH pairing),
+    /// uploads them via the RefreshPreKeysRequest, and prunes expired
+    /// signed prekeys older than 30 days.
+    pub async fn rotate_signed_prekey(
+        &self,
+        auth_client: &mut AuthClient,
+    ) -> Result<(), ServiceError> {
+        let (spk_proto, kpk_proto) = self.actor.rotate_signed_prekey().await?;
+
+        auth_client
+            .refresh_pre_keys_with_rotation(Vec::new(), Some(spk_proto), Some(kpk_proto))
+            .await
+            .map_err(ServiceError::Network)?;
+
+        // Prune signed prekeys older than 30 days (retain for in-flight sessions)
+        use crate::crypto::signal::PreKeyManager;
+        let prekey_manager = PreKeyManager::new(self.key_store.clone());
+        let pruned = prekey_manager.cleanup_expired_signed_prekeys(30)
+            .map_err(ServiceError::Crypto)?;
+        if pruned > 0 {
+            tracing::info!(count = pruned, "Pruned expired signed prekeys");
+        }
+
+        tracing::info!("Rotated signed prekey + Kyber prekey (PQXDH pair)");
+        Ok(())
+    }
+
     /// Derive a shared secret for call encryption with a peer.
     pub async fn derive_call_encryption_key(
         &self,

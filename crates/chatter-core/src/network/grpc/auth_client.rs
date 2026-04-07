@@ -624,9 +624,25 @@ impl AuthClient {
         &mut self,
         new_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
     ) -> Result<(), NetworkError> {
+        self.refresh_pre_keys_with_rotation(new_prekeys, None, None).await
+    }
+
+    /// Refresh prekeys with optional signed + Kyber prekey rotation.
+    ///
+    /// Extends `refresh_pre_keys` to support signed prekey rotation (every 48h)
+    /// alongside one-time prekey replenishment. The signed and Kyber prekeys
+    /// must be rotated together per PQXDH.
+    pub async fn refresh_pre_keys_with_rotation(
+        &mut self,
+        new_prekeys: Vec<signal_pre_key_bundle::PreKeyRecord>,
+        new_signed_prekey: Option<signal_pre_key_bundle::SignedPreKeyRecord>,
+        new_kyber_prekey: Option<signal_pre_key_bundle::KyberPreKeyRecord>,
+    ) -> Result<(), NetworkError> {
         let request = RefreshPreKeysRequest {
             new_one_time_prekeys: new_prekeys,
             request_id: uuid::Uuid::new_v4().to_string(),
+            new_signed_prekey,
+            new_kyber_prekey,
         };
 
         self.inner

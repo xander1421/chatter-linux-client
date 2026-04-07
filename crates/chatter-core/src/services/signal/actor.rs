@@ -99,6 +99,14 @@ pub enum SignalCommand {
         peer_user_id: String,
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
+    /// Rotate signed prekey + Kyber prekey (PQXDH pairing).
+    /// Returns (signed_prekey_proto, kyber_prekey_proto) for upload.
+    RotateSignedPreKey {
+        response: oneshot::Sender<Result<(
+            crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
+            crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
+        ), ServiceError>>,
+    },
 }
 
 /// Handle to the Signal Actor.
@@ -432,6 +440,45 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
+                        SignalCommand::RotateSignedPreKey { response } => {
+                            use libsignal_protocol::{IdentityKeyStore, GenericSignedPreKey};
+                            use crate::crypto::signal::PreKeyManager;
+                            let prekey_manager = PreKeyManager::new(store.key_store());
+                            let mut rng = rand::rngs::StdRng::from_os_rng();
+
+                            let res = (|| {
+                                let identity = futures::executor::block_on(store.get_identity_key_pair())
+                                    .map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?;
+
+                                // Generate new signed prekey
+                                let spk_id = prekey_manager.get_next_signed_prekey_id().map_err(ServiceError::Crypto)?;
+                                let spk = prekey_manager.generate_signed_prekey(&mut rng, spk_id, &identity)
+                                    .map_err(ServiceError::Crypto)?;
+
+                                let spk_proto = crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord {
+                                    id: u32::from(spk.id().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?),
+                                    public_key: spk.public_key().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.serialize().to_vec(),
+                                    signature: spk.signature().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.to_vec(),
+                                    timestamp: spk.timestamp().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.epoch_millis(),
+                                };
+
+                                // Generate new Kyber prekey (PQXDH pairing — must rotate together)
+                                let kpk_id = prekey_manager.get_next_kyber_prekey_id().map_err(ServiceError::Crypto)?;
+                                let kpk = prekey_manager.generate_kyber_prekey(kpk_id, &identity)
+                                    .map_err(ServiceError::Crypto)?;
+
+                                let kpk_proto = crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord {
+                                    id: u32::from(kpk.id().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?),
+                                    public_key: kpk.public_key().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.serialize().to_vec(),
+                                    signature: kpk.signature().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.to_vec(),
+                                    timestamp: kpk.timestamp().map_err(|e| ServiceError::Crypto(CryptoError::Protocol(e.to_string())))?.epoch_millis(),
+                                };
+
+                                Ok((spk_proto, kpk_proto))
+                            })();
+                            let _ = response.send(res);
+                        }
+
                         SignalCommand::GenerateSafetyNumber { local_user_id, peer_user_id, response } => {
                             use libsignal_protocol::{IdentityKey, IdentityKeyStore};
                             let res = (|| async {
@@ -590,6 +637,15 @@ impl SignalActorHandle {
 
     pub async fn has_session(&self, address: ProtocolAddress) -> Result<bool, ServiceError> {
         self.send(|tx| SignalCommand::HasSession { address, response: tx }).await?
+    }
+
+    /// Rotate signed prekey + Kyber prekey (PQXDH pairing).
+    /// Returns proto types ready for upload via RefreshPreKeysRequest.
+    pub async fn rotate_signed_prekey(&self) -> Result<(
+        crate::proto::chat_v1::signal_pre_key_bundle::SignedPreKeyRecord,
+        crate::proto::chat_v1::signal_pre_key_bundle::KyberPreKeyRecord,
+    ), ServiceError> {
+        self.send(|tx| SignalCommand::RotateSignedPreKey { response: tx }).await?
     }
 
     /// Generate a 60-digit safety number for verifying a peer's identity.

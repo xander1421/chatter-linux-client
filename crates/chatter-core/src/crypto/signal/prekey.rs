@@ -264,6 +264,51 @@ impl PreKeyManager {
         Ok(count < threshold)
     }
 
+    /// Check if signed prekey rotation is needed.
+    ///
+    /// Returns `true` if the latest signed prekey is older than `max_age_hours`.
+    /// Signal rotates signed prekeys every 2 days (48 hours).
+    pub fn needs_signed_prekey_rotation(&self, max_age_hours: u64) -> Result<bool, CryptoError> {
+        let created_at = self
+            .key_store
+            .get_latest_signed_prekey_created_at()
+            .map_err(CryptoError::Storage)?;
+
+        match created_at {
+            Some(dt) => {
+                let age = chrono::Utc::now().signed_duration_since(dt);
+                Ok(age.num_hours() >= max_age_hours as i64)
+            }
+            // No signed prekey exists — rotation needed
+            None => Ok(true),
+        }
+    }
+
+    /// Get the next available signed prekey ID.
+    pub fn get_next_signed_prekey_id(&self) -> Result<u32, CryptoError> {
+        let max_id = self
+            .key_store
+            .max_signed_prekey_id()
+            .map_err(CryptoError::Storage)?;
+        Ok(max_id + 1)
+    }
+
+    /// Get the next available Kyber prekey ID.
+    pub fn get_next_kyber_prekey_id(&self) -> Result<u32, CryptoError> {
+        let max_id = self
+            .key_store
+            .max_kyber_prekey_id()
+            .map_err(CryptoError::Storage)?;
+        Ok(max_id + 1)
+    }
+
+    /// Clean up expired signed prekeys older than `max_age_days`.
+    pub fn cleanup_expired_signed_prekeys(&self, max_age_days: u64) -> Result<u32, CryptoError> {
+        self.key_store
+            .cleanup_expired_signed_prekeys(max_age_days)
+            .map_err(CryptoError::Storage)
+    }
+
     /// Get a signed prekey by ID.
     pub fn get_signed_prekey(&self, id: u32) -> Result<Option<SignedPreKeyRecord>, CryptoError> {
         let bytes = self

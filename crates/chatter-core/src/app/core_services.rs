@@ -362,13 +362,16 @@ impl CoreServices {
     /// Spawn the prekey replenishment background task.
     ///
     /// Periodically checks the server for available prekey count and
-    /// generates + uploads new prekeys when below threshold. This
-    /// maintains forward secrecy by ensuring one-time prekeys are
-    /// always available for new session establishment.
+    /// generates + uploads new prekeys when below threshold. Also checks
+    /// signed prekey age and rotates signed + Kyber prekeys when older
+    /// than 48 hours (Signal standard). This maintains forward secrecy
+    /// by ensuring one-time prekeys are always available and signed
+    /// prekeys are fresh.
     ///
     /// Returns a JoinHandle that should be stored for graceful shutdown.
     pub fn spawn_prekey_replenishment(&self) -> tokio::task::JoinHandle<()> {
         use std::time::Duration;
+        use crate::crypto::signal::PreKeyManager;
 
         /// How often to check prekey count (6 hours).
         const REPLENISH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
@@ -378,10 +381,13 @@ impl CoreServices {
         const PREKEY_BATCH_SIZE: u32 = 100;
         /// Maximum backoff on failure.
         const MAX_BACKOFF: Duration = Duration::from_secs(5 * 60);
+        /// Signed prekey rotation threshold — 48 hours (Signal standard).
+        const SIGNED_PREKEY_MAX_AGE_HOURS: u64 = 48;
 
         let grpc_pool = self.grpc_pool.clone();
         let signal_service = self.signal_service.clone();
         let settings_repo = signal_service.settings_repo.clone();
+        let key_store = signal_service.key_store.clone();
 
         tokio::spawn(async move {
             let mut backoff = Duration::from_secs(30);
@@ -431,6 +437,34 @@ impl CoreServices {
                                 "PreKey count healthy, no replenishment needed"
                             );
                         }
+
+                        // Check signed prekey age — rotate if older than 48h
+                        let prekey_manager = PreKeyManager::new(key_store.clone());
+                        match prekey_manager.needs_signed_prekey_rotation(SIGNED_PREKEY_MAX_AGE_HOURS) {
+                            Ok(true) => {
+                                tracing::info!(
+                                    max_age_hours = SIGNED_PREKEY_MAX_AGE_HOURS,
+                                    "Signed prekey stale, rotating signed + Kyber prekey pair"
+                                );
+                                let mut rotation_client = grpc_pool.auth_client();
+                                match signal_service.rotate_signed_prekey(&mut rotation_client).await {
+                                    Ok(()) => {
+                                        tracing::info!("Signed prekey rotation complete");
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Signed prekey rotation failed: {}", e);
+                                        // Don't block the main cycle — retry next iteration
+                                    }
+                                }
+                            }
+                            Ok(false) => {
+                                tracing::debug!("Signed prekey still fresh, no rotation needed");
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to check signed prekey age: {}", e);
+                            }
+                        }
+
                         backoff = Duration::from_secs(30); // Reset backoff on success
                     }
                     Err(e) => {
