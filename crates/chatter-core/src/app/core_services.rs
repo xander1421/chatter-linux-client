@@ -359,6 +359,94 @@ impl CoreServices {
         }
     }
 
+    /// Spawn the prekey replenishment background task.
+    ///
+    /// Periodically checks the server for available prekey count and
+    /// generates + uploads new prekeys when below threshold. This
+    /// maintains forward secrecy by ensuring one-time prekeys are
+    /// always available for new session establishment.
+    ///
+    /// Returns a JoinHandle that should be stored for graceful shutdown.
+    pub fn spawn_prekey_replenishment(&self) -> tokio::task::JoinHandle<()> {
+        use std::time::Duration;
+
+        /// How often to check prekey count (6 hours).
+        const REPLENISH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+        /// Prekey count threshold — refill when below this.
+        const PREKEY_THRESHOLD: i32 = 20;
+        /// Number of new prekeys to generate per refill.
+        const PREKEY_BATCH_SIZE: u32 = 100;
+        /// Maximum backoff on failure.
+        const MAX_BACKOFF: Duration = Duration::from_secs(5 * 60);
+
+        let grpc_pool = self.grpc_pool.clone();
+        let signal_service = self.signal_service.clone();
+        let settings_repo = signal_service.settings_repo.clone();
+
+        tokio::spawn(async move {
+            let mut backoff = Duration::from_secs(30);
+
+            loop {
+                // Get device ID from settings (follows sender cert pre-fetch pattern)
+                let device_id: Option<u32> = settings_repo
+                    .get(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)
+                    .ok()
+                    .flatten();
+
+                let Some(did) = device_id else {
+                    tracing::debug!("PreKey replenishment: no device ID set, skipping cycle");
+                    tokio::time::sleep(REPLENISH_INTERVAL).await;
+                    continue;
+                };
+
+                // Check server stats (authoritative source per CTO)
+                let mut auth_client = grpc_pool.auth_client();
+                match auth_client.get_pre_key_stats(did).await {
+                    Ok(stats) => {
+                        if stats.should_refill || stats.available_count < PREKEY_THRESHOLD {
+                            tracing::info!(
+                                available = stats.available_count,
+                                threshold = PREKEY_THRESHOLD,
+                                should_refill = stats.should_refill,
+                                "PreKey count low, generating new batch"
+                            );
+
+                            match signal_service.refresh_prekeys(&mut auth_client, PREKEY_BATCH_SIZE).await {
+                                Ok(uploaded) => {
+                                    tracing::info!(
+                                        uploaded,
+                                        "PreKey replenishment complete"
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!("PreKey refresh failed: {}", e);
+                                    tokio::time::sleep(backoff).await;
+                                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                                    continue;
+                                }
+                            }
+                        } else {
+                            tracing::debug!(
+                                available = stats.available_count,
+                                "PreKey count healthy, no replenishment needed"
+                            );
+                        }
+                        backoff = Duration::from_secs(30); // Reset backoff on success
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to check prekey stats: {}", e);
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                        continue;
+                    }
+                }
+
+                // Wait for next cycle
+                tokio::time::sleep(REPLENISH_INTERVAL).await;
+            }
+        })
+    }
+
     /// Initialize the call service if not already set.
     ///
     /// Safe to call multiple times — uses `get_or_init` internally.

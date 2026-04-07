@@ -1154,13 +1154,16 @@ impl ChatterClient {
             });
         }
 
+        // ── PreKey replenishment (runs initial check immediately) ────
+        let h_prekey = self.ui.spawn_prekey_replenishment();
+
         // ── Presence ────────────────────────────────────────────────
         self.set_presence(crate::proto::UserPresence::Online).await;
         self.touch_activity();
 
         // ── Store handles for shutdown ───────────────────────────────
         let mut tasks = self.tasks.lock();
-        tasks.extend([h_events, h_inbox, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, jarvis.maintenance, h_ai]);
+        tasks.extend([h_events, h_inbox, h_channel_stream, h_channel_bootstrap, h_dm_bootstrap, jarvis.maintenance, h_ai, h_prekey]);
         if let Some(observer) = jarvis.observer {
             tasks.push(observer);
         }
