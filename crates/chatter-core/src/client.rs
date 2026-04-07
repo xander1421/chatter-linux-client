@@ -1296,6 +1296,7 @@ impl ChatterClient {
             needs_prekey_upload,
             keys_restored: false,
             keys_missing: !identity_manager.has_identity().unwrap_or(false),
+            backup_destroyed: false,
             recovery_codes: None,
         })
     }
@@ -1822,6 +1823,13 @@ impl ChatterClient {
         // 3. Fetch and decrypt backup from server
         let restore_result = match self.svr_backup().fetch_and_restore_backup(&svr_secret).await {
             Ok(r) => r,
+            Err(crate::services::svr_backup_service::SvrBackupError::BackupDestroyed) => {
+                svr_secret.zeroize();
+                tracing::error!("SVR backup permanently destroyed (too many failed PIN attempts). User must re-register PIN.");
+                result.keys_missing = true;
+                result.backup_destroyed = true;
+                return;
+            }
             Err(e) => {
                 svr_secret.zeroize();
                 tracing::warn!("SVR restore failed (non-fatal): {}", e);

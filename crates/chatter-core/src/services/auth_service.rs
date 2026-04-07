@@ -79,6 +79,9 @@ pub struct LoginResult {
     pub keys_restored: bool,
     /// Whether identity keys are missing locally (no backup available or restore failed).
     pub keys_missing: bool,
+    /// Whether the SVR backup was permanently destroyed (too many failed PIN attempts).
+    /// When true, user must re-register their PIN to create a new backup.
+    pub backup_destroyed: bool,
     /// One-time recovery codes returned during registration (shown once to user).
     pub recovery_codes: Option<Vec<String>>,
 }
@@ -571,9 +574,10 @@ impl AuthService {
             device_id,
             display_name,
             needs_prekey_upload: stored_device_id.is_none(), // New device needs prekey upload
-            keys_restored: false, // Set by caller after SVR restore attempt
-            keys_missing: false,  // Set by caller after SVR restore attempt
-            recovery_codes: None, // Login never returns recovery codes
+            keys_restored: false,    // Set by caller after SVR restore attempt
+            keys_missing: false,     // Set by caller after SVR restore attempt
+            backup_destroyed: false, // Set by caller after SVR restore attempt
+            recovery_codes: None,    // Login never returns recovery codes
         })
     }
 
@@ -858,6 +862,7 @@ impl AuthService {
             needs_prekey_upload: false, // Prekeys already generated (upload them next)
             keys_restored: false, // Not applicable for registration (keys are freshly generated)
             keys_missing: false,
+            backup_destroyed: false,
             recovery_codes,
         })
     }
