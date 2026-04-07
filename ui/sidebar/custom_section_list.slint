@@ -201,13 +201,17 @@ component CustomSectionHeader inherits Rectangle {
                 alignment: start;
 
                 // Collapse chevron
-                Image {
-                    source: Icons.chevron-right;
+                Rectangle {
                     width: 10px;
-                    height: 10px;
-                    colorize: Colors.text-muted;
-                    transform-rotation: root.is-expanded ? 90deg : 0deg;
-                    animate transform-rotation { duration: 150ms; easing: ease-out; }
+                    Image {
+                        source: Icons.chevron-right;
+                        width: 10px;
+                        height: 10px;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Colors.text-muted;
+                        transform-rotation: root.is-expanded ? 90deg : 0deg;
+                        animate transform-rotation { duration: 150ms; easing: ease-out; }
+                    }
                 }
 
                 // Emoji icon
@@ -357,11 +361,15 @@ export component CustomSectionList inherits Rectangle {
                 spacing: 6px;
                 alignment: start;
 
-                Image {
-                    source: Icons.plus;
+                Rectangle {
                     width: 12px;
-                    height: 12px;
-                    colorize: Colors.text-muted;
+                    Image {
+                        source: Icons.plus;
+                        width: 12px;
+                        height: 12px;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Colors.text-muted;
+                    }
                 }
                 Text {
                     text: "New Section";

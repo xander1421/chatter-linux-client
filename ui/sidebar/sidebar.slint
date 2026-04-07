@@ -146,11 +146,15 @@ export component Sidebar inherits Rectangle {
                     padding-left: Spacing.sm;
                     spacing: Spacing.sm;
                     alignment: start;
-                    Image {
-                        source: Icons.search;
+                    Rectangle {
                         width: 14px;
-                        height: 14px;
-                        colorize: Colors.text-muted;
+                        Image {
+                            source: Icons.search;
+                            width: 14px;
+                            height: 14px;
+                            y: (parent.height - self.height) / 2;
+                            colorize: Colors.text-muted;
+                        }
                     }
                     Text {
                         text: "Search...";
@@ -215,7 +219,9 @@ export component Sidebar inherits Rectangle {
                     accessible-label: "Saved Messages";
                     if !root.collapsed: HorizontalLayout {
                         padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        Image { source: Icons.bookmark; width: 14px; height: 14px; colorize: Colors.text-secondary; }
+                        Rectangle { width: 14px;
+                            Image { source: Icons.bookmark; width: 14px; height: 14px; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        }
                         Text { text: "Saved Messages"; color: Colors.text-secondary; font-size: 13px; vertical-alignment: center; }
                     }
                     if root.collapsed: TooltipArea {
@@ -233,7 +239,9 @@ export component Sidebar inherits Rectangle {
                     accessible-label: "Friends";
                     if !root.collapsed: HorizontalLayout {
                         padding-left: Spacing.sm; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                        Image { source: Icons.users; width: 14px; height: 14px; colorize: Colors.text-secondary; }
+                        Rectangle { width: 14px;
+                            Image { source: Icons.users; width: 14px; height: 14px; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
+                        }
                         Text { text: "Friends"; color: Colors.text-secondary; font-size: 13px; vertical-alignment: center; }
                     }
                     if root.collapsed: TooltipArea {
@@ -257,11 +265,15 @@ export component Sidebar inherits Rectangle {
                         padding-right: Spacing.sm;
                         spacing: Spacing.sm;
                         alignment: start;
-                        Image {
-                            source: Icons.message-circle;
+                        Rectangle {
                             width: 16px;
-                            height: 16px;
-                            colorize: Colors.primary;
+                            Image {
+                                source: Icons.message-circle;
+                                width: 16px;
+                                height: 16px;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Colors.primary;
+                            }
                         }
                         Text {
                             text: "Message Requests";
@@ -331,11 +343,15 @@ export component Sidebar inherits Rectangle {
                         padding-right: Spacing.sm;
                         spacing: Spacing.sm;
                         alignment: start;
-                        Image {
-                            source: Icons.shield;
+                        Rectangle {
                             width: 16px;
-                            height: 16px;
-                            colorize: Colors.group-accent;
+                            Image {
+                                source: Icons.shield;
+                                width: 16px;
+                                height: 16px;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Colors.group-accent;
+                            }
                         }
                         Text {
                             text: "Group Invites";
@@ -407,13 +423,17 @@ export component Sidebar inherits Rectangle {
                                 padding-left: 2px;
                                 spacing: 4px;
                                 alignment: start;
-                                Image {
-                                    source: Icons.chevron-right;
+                                Rectangle {
                                     width: 10px;
-                                    height: 10px;
-                                    colorize: Colors.text-muted;
-                                    transform-rotation: root.channels-expanded ? 90deg : 0deg;
-                                    animate transform-rotation { duration: 150ms; easing: ease-out; }
+                                    Image {
+                                        source: Icons.chevron-right;
+                                        width: 10px;
+                                        height: 10px;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Colors.text-muted;
+                                        transform-rotation: root.channels-expanded ? 90deg : 0deg;
+                                        animate transform-rotation { duration: 150ms; easing: ease-out; }
+                                    }
                                 }
                                 Text {
                                     text: "Channels";
@@ -539,13 +559,17 @@ export component Sidebar inherits Rectangle {
                                 padding-left: 2px;
                                 spacing: 4px;
                                 alignment: start;
-                                Image {
-                                    source: Icons.chevron-right;
+                                Rectangle {
                                     width: 10px;
-                                    height: 10px;
-                                    colorize: Colors.text-muted;
-                                    transform-rotation: root.messages-expanded ? 90deg : 0deg;
-                                    animate transform-rotation { duration: 150ms; easing: ease-out; }
+                                    Image {
+                                        source: Icons.chevron-right;
+                                        width: 10px;
+                                        height: 10px;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Colors.text-muted;
+                                        transform-rotation: root.messages-expanded ? 90deg : 0deg;
+                                        animate transform-rotation { duration: 150ms; easing: ease-out; }
+                                    }
                                 }
                                 Text {
                                     text: "Messages";
