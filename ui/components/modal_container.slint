@@ -54,9 +54,9 @@ export component ModalContainer inherits Rectangle {
         // Use preferred-height of the children (usually a VerticalLayout)
         height: min(self.preferred-height, min(root.max-modal-height, parent.height - 48px));
         
-        // Centering
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
+        // Centering — round to nearest pixel to avoid sub-pixel text rendering
+        x: Math.round((parent.width - self.width) / 2 / 1px) * 1px;
+        y: Math.round((parent.height - self.height) / 2 / 1px) * 1px;
         
         background: Colors.surface;
         border-radius: Spacing.radius-lg;

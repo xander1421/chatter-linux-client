@@ -43,20 +43,25 @@ component TemplateCard inherits Rectangle {
         padding: Spacing.md;
         spacing: Spacing.md;
 
-        // Icon container with colored background
-        Rectangle {
-            width: 48px;
-            height: 48px;
-            border-radius: Spacing.radius-md;
-            background: accent-color.with-alpha(0.15);
+        // Icon container — vertically centered in the row
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
 
-            Image {
-                source: icon;
-                width: 24px;
-                height: 24px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: accent-color;
+            Rectangle {
+                width: 48px;
+                height: 48px;
+                border-radius: Spacing.radius-md;
+                background: accent-color.with-alpha(0.15);
+
+                Image {
+                    source: icon;
+                    width: 24px;
+                    height: 24px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: accent-color;
+                }
             }
         }
 
@@ -71,6 +76,7 @@ component TemplateCard inherits Rectangle {
                 color: selected ? accent-color : Colors.text-primary;
                 font-size: Typography.base;
                 font-weight: Typography.semibold;
+                horizontal-alignment: left;
             }
 
             Text {
@@ -78,16 +84,21 @@ component TemplateCard inherits Rectangle {
                 color: Colors.text-secondary;
                 font-size: Typography.xs;
                 wrap: word-wrap;
+                horizontal-alignment: left;
             }
         }
 
-        // Selection indicator
-        if selected: Rectangle {
-            width: 8px;
-            height: 8px;
-            border-radius: 4px;
-            background: accent-color;
-            y: (parent.height - self.height) / 2;
+        // Selection indicator — vertically centered
+        if selected: VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: accent-color;
+            }
         }
     }
 }
