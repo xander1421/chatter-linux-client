@@ -20,11 +20,19 @@ export component JarvisMessage inherits Rectangle {
     private property <bool> is-user: message.role == "user";
 
     height: content-layout.preferred-height + 16px;
-    background: is-user ? Colors.surface-hover : Colors.primary.with-alpha(0.1);
-    border-radius: Spacing.radius-md;
+    background: is-user ? Colors.neo-inset-bg : Colors.surface;
+    border-radius: Spacing.radius-xl;
+    border-width: 1px;
+    border-color: is-user ? Colors.neo-inset-shadow : Colors.neo-highlight;
+    drop-shadow-blur: is-user ? 0px : Spacing.neo-blur-sm;
+    drop-shadow-offset-x: is-user ? 0px : Spacing.neo-offset-sm;
+    drop-shadow-offset-y: is-user ? 0px : Spacing.neo-offset-sm;
+    drop-shadow-color: is-user ? transparent : Colors.neo-shadow;
 
     content-layout := VerticalLayout {
         padding: Spacing.sm;
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
         spacing: 4px;
 
         HorizontalLayout {
@@ -34,7 +42,7 @@ export component JarvisMessage inherits Rectangle {
                 text: is-user ? "You" : "Jarvis";
                 font-weight: Typography.semibold;
                 font-size: Typography.xs;
-                color: is-user ? Colors.text-secondary : Colors.primary;
+                color: is-user ? Colors.text-secondary : Colors.glow-cyan;
             }
 
             Text {

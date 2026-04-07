@@ -16,6 +16,12 @@ component ParticipantTile inherits Rectangle {
 
     background: Colors.surface;
     border-radius: Spacing.radius-lg;
+    border-width: 1px;
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: Spacing.neo-blur-md;
+    drop-shadow-offset-x: Spacing.neo-offset-md;
+    drop-shadow-offset-y: Spacing.neo-offset-md;
+    drop-shadow-color: Colors.neo-shadow;
     clip: true;
 
     // Video frame or avatar placeholder
@@ -51,7 +57,7 @@ component ParticipantTile inherits Rectangle {
         }
     }
 
-    // Overlay: mute indicator
+    // Overlay: mute indicator — Neo depth
     if participant.is-muted: Rectangle {
         x: Spacing.sm;
         y: parent.height - 32px;
@@ -59,6 +65,8 @@ component ParticipantTile inherits Rectangle {
         height: 24px;
         border-radius: 12px;
         background: Colors.error.with-alpha(0.8);
+        drop-shadow-blur: Spacing.neo-blur-sm;
+        drop-shadow-color: Colors.error.with-alpha(0.3);
 
         Image {
             source: Icons.mic-off;
@@ -70,14 +78,16 @@ component ParticipantTile inherits Rectangle {
         }
     }
 
-    // Speaking indicator border
+    // Speaking indicator border — Neo glow
     if participant.is-speaking: Rectangle {
         width: 100%;
         height: 100%;
         border-radius: Spacing.radius-lg;
-        border-width: 3px;
+        border-width: 2px;
         border-color: Colors.primary;
         background: transparent;
+        drop-shadow-blur: Spacing.neo-blur-md;
+        drop-shadow-color: Colors.glow-primary;
     }
 
     // Name label
@@ -119,10 +129,15 @@ export component ActiveCallView inherits Rectangle {
     background: Colors.background;
 
     if show: VerticalLayout {
-        // Header
+        // Header — Neo glass surface
         Rectangle {
             height: 56px;
-            background: Colors.surface;
+            background: Colors.surface.with-alpha(0.85);
+            border-width: 1px;
+            border-color: Colors.neo-highlight;
+            drop-shadow-blur: Spacing.neo-blur-sm;
+            drop-shadow-offset-y: Spacing.neo-offset-sm;
+            drop-shadow-color: Colors.neo-shadow;
 
             HorizontalLayout {
                 padding: Spacing.lg;

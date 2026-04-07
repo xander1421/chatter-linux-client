@@ -23,15 +23,19 @@ export component IncomingCallModal inherits Rectangle {
     animate opacity { duration: 200ms; }
 
     if show: Rectangle {
-        // Center card
+        // Center card — Neo strong surface
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         width: min(320px, parent.width - 32px);
         height: min(380px, parent.height - 48px);
         background: Colors.surface;
         border-radius: Spacing.radius-lg;
-        drop-shadow-blur: 20px;
-        drop-shadow-color: Colors.shadow;
+        border-width: 1px;
+        border-color: Colors.neo-highlight-strong;
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-offset-x: Spacing.neo-offset-lg;
+        drop-shadow-offset-y: Spacing.neo-offset-lg;
+        drop-shadow-color: Colors.neo-shadow-strong;
 
         VerticalLayout {
             alignment: center;
@@ -44,14 +48,16 @@ export component IncomingCallModal inherits Rectangle {
                 height: 96px;
                 horizontal-stretch: 0;
 
-                // Pulse ring animation
+                // Pulse ring animation — Neo glow pulse
                 Rectangle {
                     width: 96px;
                     height: 96px;
                     border-radius: 48px;
                     background: transparent;
-                    border-width: 3px;
-                    border-color: Colors.primary.with-alpha(pulse-opacity);
+                    border-width: 2px;
+                    border-color: Colors.glow-cyan.with-alpha(pulse-opacity);
+                    drop-shadow-blur: Spacing.neo-blur-md;
+                    drop-shadow-color: Colors.glow-cyan-soft;
 
                     property <float> pulse-opacity: 0.0;
 
@@ -126,12 +132,16 @@ export component IncomingCallModal inherits Rectangle {
                 alignment: center;
                 spacing: Spacing.xxl;
 
-                // Decline button (red circle)
+                // Decline button (red circle) — Neo glow
                 Rectangle {
                     width: 64px;
                     height: 64px;
                     border-radius: 32px;
                     background: decline-hover.has-hover ? Colors.error-hover : Colors.error;
+                    drop-shadow-blur: decline-hover.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
+                    drop-shadow-offset-x: Spacing.neo-offset-sm;
+                    drop-shadow-offset-y: Spacing.neo-offset-sm;
+                    drop-shadow-color: Colors.error.with-alpha(0.4);
 
                     decline-hover := TouchArea {
                         clicked => { decline-call(); }
@@ -148,12 +158,16 @@ export component IncomingCallModal inherits Rectangle {
                     }
                 }
 
-                // Accept button (green circle)
+                // Accept button (green circle) — Neo glow
                 Rectangle {
                     width: 64px;
                     height: 64px;
                     border-radius: 32px;
                     background: accept-hover.has-hover ? Colors.success-hover : Colors.success;
+                    drop-shadow-blur: accept-hover.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
+                    drop-shadow-offset-x: Spacing.neo-offset-sm;
+                    drop-shadow-offset-y: Spacing.neo-offset-sm;
+                    drop-shadow-color: Colors.success.with-alpha(0.4);
 
                     accept-hover := TouchArea {
                         clicked => { accept-call(); }

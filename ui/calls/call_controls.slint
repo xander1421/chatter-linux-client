@@ -1,4 +1,5 @@
 // Call control bar with mute, video, screen share, and end call buttons
+// Neo 2.0 styled — raised buttons with glow on active states
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -25,8 +26,26 @@ component ControlButton inherits Rectangle {
             touch.has-hover ? Colors.surface-hover : Colors.surface
         }
     };
-    border-width: (!active && !danger) ? 1px : 0;
-    border-color: Colors.text-muted.with-alpha(0.3);
+    border-width: 1px;
+    border-color: {
+        if danger || active {
+            transparent
+        } else {
+            touch.has-hover ? Colors.neo-highlight-strong : Colors.neo-highlight
+        }
+    };
+    drop-shadow-blur: touch.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
+    drop-shadow-offset-x: Spacing.neo-offset-sm;
+    drop-shadow-offset-y: Spacing.neo-offset-sm;
+    drop-shadow-color: {
+        if danger {
+            Colors.error.with-alpha(0.3)
+        } else if active {
+            Colors.error.with-alpha(0.3)
+        } else {
+            Colors.neo-shadow
+        }
+    };
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -59,7 +78,11 @@ export component CallControls inherits Rectangle {
     background: Colors.surface;
     border-radius: 36px;
     border-width: 1px;
-    border-color: Colors.text-muted.with-alpha(0.2);
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: Spacing.neo-blur-md;
+    drop-shadow-offset-x: Spacing.neo-offset-md;
+    drop-shadow-offset-y: Spacing.neo-offset-md;
+    drop-shadow-color: Colors.neo-shadow;
 
     HorizontalLayout {
         alignment: center;
@@ -107,12 +130,16 @@ export component CallControls inherits Rectangle {
             background: transparent;
         }
 
-        // End call button (larger, always red)
+        // End call button (larger, always red) — Neo glow
         Rectangle {
             width: 56px;
             height: 48px;
             border-radius: 24px;
             background: end-touch.has-hover ? Colors.error-hover : Colors.error;
+            drop-shadow-blur: end-touch.has-hover ? Spacing.neo-blur-md : Spacing.neo-blur-sm;
+            drop-shadow-offset-x: Spacing.neo-offset-sm;
+            drop-shadow-offset-y: Spacing.neo-offset-sm;
+            drop-shadow-color: Colors.error.with-alpha(0.4);
 
             end-touch := TouchArea {
                 mouse-cursor: pointer;

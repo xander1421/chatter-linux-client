@@ -23,15 +23,12 @@ export component JarvisPanel inherits Rectangle {
     width: root.max-panel-width;
     background: Colors.surface;
     border-radius: Spacing.radius-md;
+    border-width: 1px;
+    border-color: Colors.neo-highlight;
+    drop-shadow-blur: Spacing.neo-blur-lg;
+    drop-shadow-offset-x: -1 * Spacing.neo-offset-lg;
+    drop-shadow-color: Colors.neo-shadow-strong;
     clip: true;
-
-    // Shadow/border on left edge
-    Rectangle {
-        x: 0;
-        width: 1px;
-        height: 100%;
-        background: Colors.text-muted.with-alpha(0.2);
-    }
 
     VerticalLayout {
         width: 100%;
@@ -48,12 +45,14 @@ export component JarvisPanel inherits Rectangle {
             HorizontalLayout {
                 spacing: Spacing.sm;
 
-                // Jarvis icon (AI indicator)
+                // Jarvis icon (AI indicator) — Neo glow
                 Rectangle {
                     width: 32px;
                     height: 32px;
                     border-radius: 16px;
                     background: Colors.primary;
+                    drop-shadow-blur: Spacing.neo-blur-sm;
+                    drop-shadow-color: Colors.glow-primary;
 
                     Text {
                         text: "J";
@@ -85,7 +84,7 @@ export component JarvisPanel inherits Rectangle {
                 }
             }
 
-            // Close button
+            // Close button — Neo hover
             close-touch := TouchArea {
                 width: 32px;
                 height: 32px;
@@ -94,7 +93,9 @@ export component JarvisPanel inherits Rectangle {
                     width: 100%;
                     height: 100%;
                     border-radius: Spacing.radius-sm;
-                    background: close-touch.has-hover ? Colors.surface-hover : transparent;
+                    background: close-touch.has-hover ? Colors.neo-inset-bg : transparent;
+                    border-width: close-touch.has-hover ? 1px : 0px;
+                    border-color: Colors.neo-inset-shadow;
 
                     Text {
                         text: "\u{2715}"; // X symbol
@@ -109,11 +110,11 @@ export component JarvisPanel inherits Rectangle {
             }
         }
 
-        // Divider
+        // Divider — Neo border
         Rectangle {
             width: 100%;
             height: 1px;
-            background: Colors.text-muted.with-alpha(0.2);
+            background: Colors.neo-highlight;
         }
 
         // Messages area
@@ -131,12 +132,14 @@ export component JarvisPanel inherits Rectangle {
                     message: msg;
                 }
 
-                // Thinking indicator
+                // Thinking indicator — Neo inset with glow
                 if thinking: Rectangle {
                     width: 100%;
                     height: 40px;
-                    background: Colors.primary.with-alpha(0.1);
+                    background: Colors.neo-inset-bg;
                     border-radius: Spacing.radius-md;
+                    border-width: 1px;
+                    border-color: Colors.neo-inset-shadow;
 
                     HorizontalLayout {
                         padding: Spacing.sm;
