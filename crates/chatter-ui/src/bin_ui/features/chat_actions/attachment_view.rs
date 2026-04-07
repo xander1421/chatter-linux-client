@@ -597,6 +597,7 @@ fn display_pdf_from_buffer(
     let data = secure_buffer.as_slice().to_vec();
     let filename_for_ui = filename.to_string();
     let filename_for_state = filename.to_string();
+    let data_for_render = data.clone();
 
     // Store content for "open external" feature
     preview_state::set_pdf_preview_content(filename_for_state, data);
@@ -607,7 +608,11 @@ fn display_pdf_from_buffer(
             w.set_pdf_preview_page_count(0);
             w.set_pdf_preview_error("".into());
             w.set_pdf_preview_visible(true);
-            tracing::info!("Opened PDF preview from memory");
+
+            // Render first page inline (desktop only — uses pdfium-render)
+            super::pdf_preview::render_pdf_preview(&w, &data_for_render);
+
+            tracing::info!("Opened PDF preview");
         }
     });
 }

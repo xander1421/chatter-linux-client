@@ -239,9 +239,13 @@ export component App inherits Rectangle {
     in-out property <bool> pdf-preview-visible: false;
     in property <string> pdf-preview-filename: "";
     in property <int> pdf-preview-page-count: 0;
+    in property <int> pdf-preview-current-page: 1;
     in property <string> pdf-preview-error: "";
+    in property <image> pdf-preview-image;
     callback close-pdf-preview();
     callback open-pdf-external();
+    callback pdf-page-prev();
+    callback pdf-page-next();
 
     // ========== Video player state ==========
     in-out property <bool> video-player-visible: false;
@@ -2231,8 +2235,8 @@ export component App inherits Rectangle {
         Rectangle {
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            width: min(parent.width - 80px, 500px);
-            height: min(parent.height - 80px, 400px);
+            width: min(parent.width - 40px, 900px);
+            height: min(parent.height - 40px, 800px);
 
             // Block backdrop clicks
             TouchArea { }
@@ -2242,7 +2246,9 @@ export component App inherits Rectangle {
                 height: 100%;
                 file-name: root.pdf-preview-filename;
                 page-count: root.pdf-preview-page-count;
+                current-page: root.pdf-preview-current-page;
                 error-message: root.pdf-preview-error;
+                page-image: root.pdf-preview-image;
 
                 close-clicked => {
                     root.pdf-preview-visible = false;
@@ -2252,6 +2258,14 @@ export component App inherits Rectangle {
                 open-external-clicked => {
                     root.pdf-preview-visible = false;
                     root.open-pdf-external();
+                }
+
+                page-prev-clicked => {
+                    root.pdf-page-prev();
+                }
+
+                page-next-clicked => {
+                    root.pdf-page-next();
                 }
             }
         }

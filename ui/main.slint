@@ -190,9 +190,13 @@ export component MainWindow inherits Window {
     in-out property <bool> pdf-preview-visible <=> app.pdf-preview-visible;
     in property <string> pdf-preview-filename <=> app.pdf-preview-filename;
     in property <int> pdf-preview-page-count <=> app.pdf-preview-page-count;
+    in property <int> pdf-preview-current-page <=> app.pdf-preview-current-page;
     in property <string> pdf-preview-error <=> app.pdf-preview-error;
+    in property <image> pdf-preview-image <=> app.pdf-preview-image;
     callback close-pdf-preview <=> app.close-pdf-preview;
     callback open-pdf-external <=> app.open-pdf-external;
+    callback pdf-page-prev <=> app.pdf-page-prev;
+    callback pdf-page-next <=> app.pdf-page-next;
 
     // ========== Video player state ==========
     in-out property <bool> video-player-visible <=> app.video-player-visible;

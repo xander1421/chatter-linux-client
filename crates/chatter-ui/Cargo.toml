@@ -46,6 +46,7 @@ gstreamer-video = "0.23"
 gstreamer-gl = "0.23"
 rand = "0.9"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+pdfium-render = { version = "0.9", optional = true }
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
@@ -81,7 +82,7 @@ slint-build = "1.15.1"
 
 [features]
 default = ["desktop"]
-desktop = ["dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", "slint/renderer-femtovg", "chatter-core/desktop-system", "chatter-core/desktop-media"]
+desktop = ["dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", "slint/renderer-femtovg", "chatter-core/desktop-system", "chatter-core/desktop-media", "dep:pdfium-render"]
 local-ai = ["chatter-core/local-ai"]
 mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "slint/backend-android-activity-06"]
 

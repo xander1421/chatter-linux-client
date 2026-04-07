@@ -1,8 +1,7 @@
 // PDF preview panel component
 //
-// Displays PDF file info and controls for external viewer delegation.
-// Since PDF rendering is handled by external applications, this panel
-// shows metadata and provides an "Open in PDF Viewer" action.
+// Renders PDF pages inline using pdfium-render. Shows page image
+// with navigation controls and export option.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -14,6 +13,7 @@ export component PdfPreviewPanel inherits Rectangle {
     in property <int> page-count: 0;
     in property <int> current-page: 1;
     in property <string> error-message: "";
+    in property <image> page-image;
 
     // Callbacks
     callback close-clicked();
@@ -23,6 +23,7 @@ export component PdfPreviewPanel inherits Rectangle {
 
     // Computed properties
     property <bool> has-error: root.error-message != "";
+    property <bool> has-image: root.page-image.width > 0 && root.page-image.height > 0;
     property <bool> can-prev: root.current-page > 1;
     property <bool> can-next: root.current-page < root.page-count;
 
@@ -73,138 +74,125 @@ export component PdfPreviewPanel inherits Rectangle {
                             vertical-alignment: center;
                         }
                     }
-                }
 
-                // Right side: close button
-                Rectangle {
-                    width: 32px;
-                    height: 32px;
-                    background: close-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                    border-radius: Spacing.radius-sm;
-
-                    Text {
-                        width: 100%;
-                        height: 100%;
-                        text: "\u{2715}"; // X mark
-                        font-size: Typography.sm;
-                        color: close-touch.has-hover ? Colors.error : Colors.text-secondary;
-                        horizontal-alignment: center;
+                    // Page count
+                    if root.page-count > 0: Text {
+                        text: root.current-page + " / " + root.page-count;
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
                         vertical-alignment: center;
                     }
-
-                    close-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.close-clicked();
-                        }
-                    }
-                }
-            }
-        }
-
-        // Main content area (centered)
-        Rectangle {
-            vertical-stretch: 1;
-            background: Colors.surface;
-
-            VerticalLayout {
-                alignment: center;
-                spacing: Spacing.lg;
-                padding: Spacing.xl;
-
-                // Error state
-                if root.has-error: VerticalLayout {
-                    alignment: center;
-                    spacing: Spacing.md;
-
-                    // Error icon
-                    Text {
-                        text: "\u{26A0}"; // Warning
-                        font-size: 48px;
-                        color: Colors.warning;
-                        horizontal-alignment: center;
-                    }
-
-                    // Error message
-                    Text {
-                        text: root.error-message;
-                        color: Colors.error;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                        wrap: word-wrap;
-                    }
                 }
 
-                // Normal state
-                if !root.has-error: VerticalLayout {
-                    alignment: center;
-                    spacing: Spacing.md;
+                // Right side: actions
+                HorizontalLayout {
+                    spacing: Spacing.xs;
+                    alignment: end;
 
-                    // Large PDF icon
-                    Text {
-                        text: "\u{1F4C4}\u{FE0F}"; // Page facing up (with emoji variant selector)
-                        font-size: 64px;
-                        horizontal-alignment: center;
-                    }
-
-                    // File name
-                    Text {
-                        text: root.file-name;
-                        color: Colors.text-primary;
-                        font-size: Typography.lg;
-                        font-weight: Typography.medium;
-                        horizontal-alignment: center;
-                        overflow: elide;
-                    }
-
-                    // Page count info
-                    if root.page-count > 0: Text {
-                        text: root.page-count == 1 ? "1 page" : root.page-count + " pages";
-                        color: Colors.text-muted;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                    }
-
-                    // Open in viewer button
+                    // Open external button
                     Rectangle {
-                        height: 40px;
-                        width: open-btn-layout.preferred-width;
-                        background: open-btn-touch.has-hover ? Colors.primary-hover : Colors.primary;
-                        border-radius: Spacing.radius-md;
+                        width: 32px;
+                        height: 32px;
+                        background: ext-touch.has-hover ? Colors.surface-hover : transparent;
+                        border-radius: Spacing.radius-sm;
 
-                        open-btn-layout := HorizontalLayout {
-                            padding-left: Spacing.lg;
-                            padding-right: Spacing.lg;
-                            spacing: Spacing.sm;
-                            alignment: center;
-
-                            Text {
-                                text: "\u{1F517}\u{FE0F}"; // Link (with emoji variant selector)
-                                font-size: Typography.sm;
-                                vertical-alignment: center;
-                            }
-
-                            Text {
-                                text: "Open in PDF Viewer";
-                                color: Colors.text-primary;
-                                font-size: Typography.sm;
-                                font-weight: Typography.medium;
-                                vertical-alignment: center;
-                            }
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "\u{2197}"; // North East Arrow
+                            font-size: Typography.sm;
+                            color: ext-touch.has-hover ? Colors.primary : Colors.text-secondary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
                         }
 
-                        open-btn-touch := TouchArea {
+                        ext-touch := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
                                 root.open-external-clicked();
                             }
                         }
                     }
+
+                    // Close button
+                    Rectangle {
+                        width: 32px;
+                        height: 32px;
+                        background: close-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+                        border-radius: Spacing.radius-sm;
+
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: "\u{2715}"; // X mark
+                            font-size: Typography.sm;
+                            color: close-touch.has-hover ? Colors.error : Colors.text-secondary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        close-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.close-clicked();
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // Footer bar with page navigation (for future embedded preview)
+        // Main content area
+        Rectangle {
+            vertical-stretch: 1;
+            background: Colors.background.mix(Colors.surface, 0.5);
+
+            // Error state
+            if root.has-error: VerticalLayout {
+                alignment: center;
+                spacing: Spacing.md;
+                padding: Spacing.xl;
+
+                Text {
+                    text: "\u{26A0}"; // Warning
+                    font-size: 48px;
+                    color: Colors.warning;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: root.error-message;
+                    color: Colors.error;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+            }
+
+            // Rendered page image
+            if !root.has-error && root.has-image: Image {
+                width: 100%;
+                height: 100%;
+                source: root.page-image;
+                image-fit: contain;
+            }
+
+            // Loading/fallback state (no image yet, no error)
+            if !root.has-error && !root.has-image: VerticalLayout {
+                alignment: center;
+                spacing: Spacing.md;
+                padding: Spacing.xl;
+
+                Text {
+                    text: "Loading PDF...";
+                    color: Colors.text-muted;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        // Footer bar with page navigation
         if root.page-count > 1 && !root.has-error: Rectangle {
             height: 40px;
             background: Colors.background;
