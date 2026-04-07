@@ -484,5 +484,8 @@ pub async fn handle_domain_event(
         DomainEvent::JarvisResponse { .. }
         | DomainEvent::JarvisStats { .. }
         | DomainEvent::JarvisCleared { .. } => {}
+
+        // Sync events — UI can subscribe for progress display
+        DomainEvent::SyncComplete { .. } => {}
     }
 }

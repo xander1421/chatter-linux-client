@@ -901,6 +901,20 @@ pub enum DomainEvent {
         /// Context ID.
         context_id: String,
     },
+
+    // ========================================================================
+    // Sync Events
+    // ========================================================================
+
+    /// Background sync cycle completed.
+    SyncComplete {
+        /// Number of channels synced.
+        channels_synced: usize,
+        /// Number of new messages synced.
+        messages_synced: usize,
+        /// Duration of the sync cycle in milliseconds.
+        duration_ms: u64,
+    },
 }
 
 impl DomainEvent {
@@ -967,6 +981,8 @@ impl DomainEvent {
             DomainEvent::JarvisResponse { .. } => None,
             DomainEvent::JarvisStats { .. } => None,
             DomainEvent::JarvisCleared { .. } => None,
+            // Sync events
+            DomainEvent::SyncComplete { .. } => None,
         }
     }
 

@@ -853,6 +853,13 @@ impl EventHandlers {
             | DomainEvent::JarvisCleared { .. } => {
                 // Jarvis events are handled by the UI directly
             }
+
+            // ================================================================
+            // Sync Events
+            // ================================================================
+            DomainEvent::SyncComplete { .. } => {
+                // Sync completion is handled by the UI directly
+            }
         }
     }
 
