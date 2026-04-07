@@ -446,8 +446,8 @@ export component Sidebar inherits Rectangle {
                             }
                         }
                         Rectangle {
-                            width: Spacing.touch-target-min;
-                            height: Spacing.touch-target-min;
+                            width: 28px;
+                            horizontal-stretch: 0;
 
                             Rectangle {
                                 width: 24px;
@@ -473,8 +473,8 @@ export component Sidebar inherits Rectangle {
                             }
                         }
                         Rectangle {
-                            width: Spacing.touch-target-min;
-                            height: Spacing.touch-target-min;
+                            width: 28px;
+                            horizontal-stretch: 0;
 
                             Rectangle {
                                 width: 24px;
@@ -582,8 +582,8 @@ export component Sidebar inherits Rectangle {
                             }
                         }
                         Rectangle {
-                            width: Spacing.touch-target-min;
-                            height: Spacing.touch-target-min;
+                            width: 28px;
+                            horizontal-stretch: 0;
 
                             Rectangle {
                                 width: 24px;
@@ -594,7 +594,6 @@ export component Sidebar inherits Rectangle {
                                 background: add-dm-touch.has-hover ? Colors.surface-hover : transparent;
 
                                 Image {
-                                    // Use user-plus instead of plus to distinguish from create channel/section
                                     source: Icons.user-plus;
                                     width: 14px;
                                     height: 14px;
@@ -666,28 +665,36 @@ export component Sidebar inherits Rectangle {
                     clicked => { root.profile-clicked(); }
                     HorizontalLayout {
                         spacing: Spacing.sm; alignment: start;
-                        Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
-                            presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
+                        VerticalLayout { alignment: center; horizontal-stretch: 0;
+                            Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
+                                presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
+                            }
                         }
                         Text { text: root.user-display-name; color: Colors.text-secondary; font-size: 12px; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                     }
                 }
-                Rectangle {
-                    width: 24px; height: 24px; border-radius: 4px;
-                    background: jarvis-touch.has-hover ? Colors.surface-hover : transparent;
-                    Image { source: Icons.jarvis; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
-                    jarvis-touch := TouchArea { clicked => { root.jarvis-clicked(); } }
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: 24px; height: 24px; border-radius: 4px;
+                        background: jarvis-touch.has-hover ? Colors.surface-hover : transparent;
+                        Image { source: Icons.jarvis; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.primary; }
+                        jarvis-touch := TouchArea { clicked => { root.jarvis-clicked(); } }
+                    }
                 }
-                Rectangle {
-                    width: 24px; height: 24px; border-radius: 4px;
-                    background: sett-touch.has-hover ? Colors.surface-hover : transparent;
-                    Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                    sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: 24px; height: 24px; border-radius: 4px;
+                        background: sett-touch.has-hover ? Colors.surface-hover : transparent;
+                        Image { source: Icons.settings; width: 16px; height: 16px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        sett-touch := TouchArea { clicked => { root.settings-clicked(); } }
+                    }
                 }
-                Rectangle {
-                    width: 24px; height: 24px;
-                    Image { source: Icons.chevron-left; width: 14px; height: 14px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
-                    TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
+                VerticalLayout { alignment: center; horizontal-stretch: 0;
+                    Rectangle {
+                        width: 24px; height: 24px;
+                        Image { source: Icons.chevron-left; width: 14px; height: 14px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-muted; }
+                        TouchArea { clicked => { root.collapsed = !root.collapsed; root.toggle-collapsed(); } }
+                    }
                 }
             }
 
