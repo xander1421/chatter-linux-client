@@ -68,7 +68,7 @@ The Signal Protocol infrastructure is **fully built AND wired**. The `MessageGat
 - [x] Wrap plaintext in DataMessage proto before encryption
 - [x] Include timestamp in DataMessage
 - [x] Add message ID for deduplication
-- [ ] Handle send failures with retry
+- [x] Handle send failures with retry (send_to_mailbox_retried: 3 retries, exponential backoff)
 
 ### Part 2: Channel Encryption (Sender Keys)
 
@@ -594,7 +594,7 @@ RECV: recv → detect sender_key → route_encrypted_message → decrypt → Dat
 
 | Feature | Priority | Notes |
 |---------|----------|-------|
-| Message retry on failure | Medium | Queue failed messages for retry |
+| ~~Message retry on failure~~ | ~~Medium~~ | ✅ Done — `send_to_mailbox_retried()` with 3 retries, exponential backoff |
 | SKDM request queue | Low | Buffer messages awaiting SKDM |
 | Local certificate cache | Low | Reduce RPC calls per message |
 
