@@ -165,7 +165,7 @@ impl ChannelService {
     pub fn get_unsectioned_channels_for_user(&self) -> Result<Vec<Channel>, ChannelError> {
         let channels = self.get_channels_for_user()?;
         let sectioned = self.section_repo.all_conversation_ids()
-            .unwrap_or_default();
+            .map_err(ChannelError::Storage)?;
         Ok(channels.into_iter().filter(|ch| !sectioned.contains(&ch.id.to_string())).collect())
     }
 

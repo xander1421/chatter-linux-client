@@ -11,7 +11,9 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::SectionId;
 use chatter_core::domain::message::ConversationType;
 
-use crate::bin_ui::converters::{avatar_bytes_to_image, get_initials};
+use chatter_core::services::channel::ChannelService;
+
+use crate::bin_ui::converters::{avatar_bytes_to_image, channel_to_slint, get_initials};
 use crate::{CustomSectionData, MainWindow, SectionConversationData};
 
 /// Send-safe intermediate for `SectionConversationData`.
@@ -265,6 +267,7 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let conv_type_str = conv_type.to_string();
         let section_id_str = section_id.to_string();
         let section_service = ui_ctx.sections().clone();
+        let channel_service = ui_ctx.channels().clone();
         let weak = weak.clone();
 
         tokio::spawn(async move {
@@ -287,6 +290,7 @@ fn wire_move_to_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         "Moved conversation to section"
                     );
                     refresh_sections_ui(&weak, &section_service);
+                    refresh_channel_list(&weak, &channel_service);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to move conversation to section");
@@ -303,6 +307,7 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_remove_from_section(move |conv_id: SharedString| {
         let conv_id_str = conv_id.to_string();
         let section_service = ui_ctx.sections().clone();
+        let channel_service = ui_ctx.channels().clone();
         let weak = weak.clone();
 
         tokio::spawn(async move {
@@ -310,6 +315,7 @@ fn wire_remove_from_section(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(()) => {
                     tracing::info!(conversation_id = %conv_id_str, "Removed conversation from section");
                     refresh_sections_ui(&weak, &section_service);
+                    refresh_channel_list(&weak, &channel_service);
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "Failed to remove conversation from section");
@@ -404,6 +410,32 @@ fn refresh_sections_ui(
                 send_data.into_iter().map(|d| d.to_slint()).collect();
             w.set_custom_sections(ModelRc::new(VecModel::from(section_models)));
             w.set_section_conversations(ModelRc::new(VecModel::from(conversation_models)));
+        }
+    });
+}
+
+/// Refresh the main (unsectioned) channel list in the sidebar.
+///
+/// Must be called after moving a channel to/from a section so the
+/// unsectioned list no longer shows the moved channel.
+fn refresh_channel_list(
+    weak: &slint::Weak<MainWindow>,
+    channel_service: &Arc<ChannelService>,
+) {
+    let channels = match channel_service.get_channels_mru() {
+        Ok(ch) => ch,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to refresh channel list after section change");
+            return;
+        }
+    };
+
+    let channel_list: Vec<_> = channels.iter().map(channel_to_slint).collect();
+
+    let weak = weak.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_channels(ModelRc::new(VecModel::from(channel_list)));
         }
     });
 }
