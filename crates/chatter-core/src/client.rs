@@ -2405,6 +2405,24 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
+    // ── Message forwarding ─────────────────────────────────────────
+
+    /// Forward a message to another channel.
+    pub async fn forward_message(
+        &self,
+        source_message_id: &crate::domain::ids::MessageId,
+        target_channel_id: &crate::domain::ids::ChannelId,
+        comment: Option<&str>,
+    ) -> Result<Message, ClientError> {
+        let mut msg_client = self.ui.grpc_pool.message_client();
+        let mut auth_client = self.ui.grpc_pool.auth_client();
+        let mut ch_client = self.ui.grpc_pool.channel_client();
+        self.messages()
+            .forward_message(&mut msg_client, &mut auth_client, &mut ch_client, source_message_id, target_channel_id, comment)
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))
+    }
+
     // ── Organization management ────────────────────────────────────
 
     /// List all organizations the current user belongs to.
