@@ -7,6 +7,7 @@ import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Toggle } from "../components/toggle.slint";
+import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 
 export component SettingsScreen inherits Rectangle {
     // User profile data
@@ -1226,8 +1227,9 @@ export component SettingsScreen inherits Rectangle {
                                         }
                                     }
 
-                                    Toggle {
+                                    NeoActionToggle {
                                         checked: root.local-ai-enabled;
+                                        glow-mode: "cyan";
                                         toggled(value) => {
                                             root.local-ai-enabled = value;
                                             root.local-ai-enabled-changed(value);

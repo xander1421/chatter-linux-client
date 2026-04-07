@@ -27,11 +27,15 @@ export component Tooltip inherits Rectangle {
     height: text-content.preferred-height + Spacing.sm * 2;
     animate opacity { duration: 150ms; }
 
-    // Tooltip background - slightly darker than surface
+    // Tooltip background — Neo 2.0 with subtle shadow
     background: Colors.tooltip-bg;
     border-radius: Spacing.radius-sm;
-    border-color: Colors.surface-hover;
+    border-color: Colors.neo-highlight;
     border-width: 1px;
+    drop-shadow-blur: Spacing.neo-blur-sm;
+    drop-shadow-offset-x: Spacing.neo-offset-sm;
+    drop-shadow-offset-y: Spacing.neo-offset-sm;
+    drop-shadow-color: Colors.neo-shadow;
 
     // Tooltip text
     text-content := Text {

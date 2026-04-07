@@ -1,4 +1,5 @@
-// Color definitions for Chatter
+// Color definitions for Chatter — Neomorphism 2.0 "Ink & Neon"
+// Deep charcoal base with navy/plum shadows, cyan/violet glows
 
 export global Colors {
     // Primary colors (dark teal)
@@ -10,22 +11,22 @@ export global Colors {
     out property <color> accent: #f97316;
     out property <color> accent-hover: #ea580c;
 
-    // Background colors (OLED Black)
-    out property <color> background: #000000;
-    out property <color> surface: #0a0a0a;
-    out property <color> surface-hover: #141414;
+    // Background colors — Deep Charcoal (Neo 2.0)
+    out property <color> background: #1A1A1B;
+    out property <color> surface: #222224;
+    out property <color> surface-hover: #2a2a2d;
 
-    // Text colors
-    out property <color> text-primary: #ffffff;
+    // Text colors (4.5:1 contrast minimum on charcoal)
+    out property <color> text-primary: #f0f0f2;
     out property <color> text-secondary: #a0aec0;
-    out property <color> text-muted: #718096;
+    out property <color> text-muted: #7d8b9e;  // Lightened from #718096 for 4.5:1 on all Neo surfaces
 
     // Status colors
     out property <color> success: #10b981;
     out property <color> warning: #f59e0b;
     out property <color> error: #ef4444;
     out property <color> info: #3b82f6;
-    out property <color> accent-purple: #f97316;  // Now orange (kept name for compatibility)
+    out property <color> accent-purple: #8b5cf6;
 
     // Presence colors
     out property <color> online: #10b981;
@@ -34,10 +35,10 @@ export global Colors {
     out property <color> offline: #6b7280;
 
     // Borders and dividers
-    out property <color> border: #2d3748;
+    out property <color> border: #35353a;
 
     // Overlays and tooltips
-    out property <color> tooltip-bg: #0a0a1a;
+    out property <color> tooltip-bg: #18181c;
     out property <color> overlay: #00000080;
     out property <color> overlay-heavy: #000000cc;
     out property <color> overlay-light: #00000040;
@@ -54,11 +55,11 @@ export global Colors {
     // Group accent (purple for private groups)
     out property <color> group-accent: #9333ea;
 
-    // Message bubbles
-    out property <color> bubble-own: #0a2725;           // Dark teal tint
-    out property <color> bubble-other: #141414;         // Surface-hover equivalent
-    out property <color> bubble-own-hover: #0f3533;     // Lighter teal on hover
-    out property <color> bubble-other-hover: #1c1c1c;   // Slightly lighter surface
+    // Message bubbles — Neo 2.0 tactile depth
+    out property <color> bubble-own: #0f2f2d;           // Dark teal tint on charcoal
+    out property <color> bubble-other: #2a2a2d;         // Surface-hover, matches background
+    out property <color> bubble-own-hover: #153f3c;     // Lighter teal on hover
+    out property <color> bubble-other-hover: #323236;   // Slightly lighter surface
 
     // File category colors
     out property <color> cat-image: #4ade80;
@@ -67,4 +68,26 @@ export global Colors {
     out property <color> cat-document: #60a5fa;
     out property <color> cat-code: #fbbf24;
     out property <color> cat-archive: #fb923c;
+
+    // === Neomorphism 2.0 tokens ===
+
+    // Neo shadow pair — 145° angle: top-left highlight, bottom-right shadow
+    // Highlight: white at reduced opacity (subtle on dark surfaces)
+    out property <color> neo-highlight: #ffffff12;       // ~7% white highlight
+    out property <color> neo-highlight-strong: #ffffff1f; // ~12% for interactive elements
+    // Shadow: navy-tinted dark (never pure black — "Ink & Neon" spec)
+    out property <color> neo-shadow: #0a0a1e66;          // Navy-black at 40%
+    out property <color> neo-shadow-strong: #0a0a1e99;   // Navy-black at 60% for deeper elements
+
+    // Glow colors — "Ink & Neon" active states
+    out property <color> glow-cyan: #06b6d4;
+    out property <color> glow-cyan-soft: #06b6d433;      // 20% for bloom effect
+    out property <color> glow-violet: #8b5cf6;
+    out property <color> glow-violet-soft: #8b5cf633;    // 20% for bloom effect
+    out property <color> glow-primary: #0d948833;        // Primary teal glow at 20%
+
+    // Inset surface — for concave (pressed-in) elements
+    out property <color> neo-inset-bg: #181819;          // Slightly darker than background
+    out property <color> neo-inset-shadow: #0a0a1e4d;   // Inner shadow (navy at 30%)
+    out property <color> neo-inset-highlight: #ffffff0a; // Very subtle inner highlight
 }

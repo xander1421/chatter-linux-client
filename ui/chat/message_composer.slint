@@ -65,6 +65,10 @@ export component MessageComposer inherits Rectangle {
     // Reply bar height
     property <length> reply-bar-height: is-replying ? 48px : 0px;
 
+    // Ghost-writing AI suggestion (UI-only placeholder — backend wires later)
+    in property <string> ghost-text: "";
+    in property <bool> ghost-writing-enabled: false;
+
     // Callbacks
     callback send(string);
     callback send-edit(string, string);  // (message_id, new_text)
@@ -78,6 +82,7 @@ export component MessageComposer inherits Rectangle {
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback process-text(string) -> string;  // Insert word breaks for wrapping
     callback format-text(string);  // Apply formatting: "bold", "italic", "code", "strikethrough"
+    callback accept-ghost-text();  // Accept the AI suggestion (e.g. Tab key)
 
     // Formatting toolbar always visible
     property <bool> show-formatting: true;
@@ -85,11 +90,16 @@ export component MessageComposer inherits Rectangle {
     // Formatting bar height
     property <length> format-bar-height: show-formatting ? 32px : 0px;
 
+    // Bento Box — expands when user is actively typing (text is non-empty)
+    property <bool> bento-expanded: root.text != "" && text-input.has-focus;
+    property <length> bento-height: bento-expanded ? 44px : 0px;
+
     // Forward focus to input
     forward-focus: text-input;
 
-    // Layout - dynamic height based on content
-    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + Spacing.sm * 2 + 1px;
+    // Layout - dynamic height based on content (includes Bento Box when expanded)
+    height: content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + bento-height + Spacing.sm * 2 + 1px;
+    animate height { duration: 150ms; easing: ease-out; }
     background: Colors.surface;
     border-width: 1px;
     border-color: Colors.neo-highlight;
@@ -401,6 +411,205 @@ export component MessageComposer inherits Rectangle {
             }
         }
 
+        // Bento Box — quick-action cells that appear when typing
+        if root.bento-expanded: Rectangle {
+            width: 100%;
+            height: 44px;
+            background: Colors.background;
+            opacity: root.bento-expanded ? 1.0 : 0.0;
+
+            animate opacity { duration: 150ms; easing: ease-in-out; }
+
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                padding-top: Spacing.xs;
+                padding-bottom: Spacing.xs;
+                spacing: Spacing.sm;
+                alignment: start;
+
+                // AI Suggest cell
+                Rectangle {
+                    width: 80px;
+                    height: 36px;
+                    border-radius: Spacing.radius-md;
+                    background: bento-ai-touch.has-hover ? Colors.glow-cyan.with-alpha(0.15) : Colors.neo-inset-bg;
+                    border-width: 1px;
+                    border-color: bento-ai-touch.has-hover ? Colors.glow-cyan.with-alpha(0.3) : Colors.neo-inset-shadow;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.xs;
+                        alignment: center;
+
+                        Text {
+                            text: "\u{2728}";
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "AI";
+                            color: bento-ai-touch.has-hover ? Colors.glow-cyan : Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.medium;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    bento-ai-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        // Placeholder — backend will wire AI suggestion trigger
+                    }
+                }
+
+                // Mention cell
+                Rectangle {
+                    width: 80px;
+                    height: 36px;
+                    border-radius: Spacing.radius-md;
+                    background: bento-mention-touch.has-hover ? Colors.primary.with-alpha(0.12) : Colors.neo-inset-bg;
+                    border-width: 1px;
+                    border-color: bento-mention-touch.has-hover ? Colors.primary.with-alpha(0.3) : Colors.neo-inset-shadow;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.xs;
+                        alignment: center;
+
+                        Text {
+                            text: "@";
+                            color: bento-mention-touch.has-hover ? Colors.primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: Typography.bold;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "Mention";
+                            color: bento-mention-touch.has-hover ? Colors.primary : Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.medium;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    bento-mention-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.mention-triggered("@");
+                        }
+                    }
+                }
+
+                // Emoji cell
+                Rectangle {
+                    width: 72px;
+                    height: 36px;
+                    border-radius: Spacing.radius-md;
+                    background: bento-emoji-touch.has-hover ? Colors.accent.with-alpha(0.12) : Colors.neo-inset-bg;
+                    border-width: 1px;
+                    border-color: bento-emoji-touch.has-hover ? Colors.accent.with-alpha(0.3) : Colors.neo-inset-shadow;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.xs;
+                        alignment: center;
+
+                        Text {
+                            text: "\u{1F600}";
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "Emoji";
+                            color: bento-emoji-touch.has-hover ? Colors.accent : Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.medium;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    bento-emoji-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.emoji-clicked();
+                        }
+                    }
+                }
+
+                // GIF cell
+                Rectangle {
+                    width: 64px;
+                    height: 36px;
+                    border-radius: Spacing.radius-md;
+                    background: bento-gif-touch.has-hover ? Colors.glow-violet.with-alpha(0.12) : Colors.neo-inset-bg;
+                    border-width: 1px;
+                    border-color: bento-gif-touch.has-hover ? Colors.glow-violet.with-alpha(0.3) : Colors.neo-inset-shadow;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.xs;
+                        alignment: center;
+
+                        Text {
+                            text: "GIF";
+                            color: bento-gif-touch.has-hover ? Colors.glow-violet : Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.bold;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    bento-gif-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.gif-clicked();
+                        }
+                    }
+                }
+
+                // File cell
+                Rectangle {
+                    width: 64px;
+                    height: 36px;
+                    border-radius: Spacing.radius-md;
+                    background: bento-file-touch.has-hover ? Colors.info.with-alpha(0.12) : Colors.neo-inset-bg;
+                    border-width: 1px;
+                    border-color: bento-file-touch.has-hover ? Colors.info.with-alpha(0.3) : Colors.neo-inset-shadow;
+
+                    HorizontalLayout {
+                        padding-left: Spacing.sm;
+                        padding-right: Spacing.sm;
+                        spacing: Spacing.xs;
+                        alignment: center;
+
+                        Text {
+                            text: "\u{1F4CE}";
+                            font-size: Typography.sm;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "File";
+                            color: bento-file-touch.has-hover ? Colors.info : Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-weight: Typography.medium;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    bento-file-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.attachment-clicked();
+                        }
+                    }
+                }
+            }
+        }
+
         // Attachment tray (shown when there are pending attachments)
         if root.has-attachments: Rectangle {
             width: 100%;
@@ -627,6 +836,7 @@ export component MessageComposer inherits Rectangle {
                     single-line: false;
 
                     // Handle Enter key - send on Enter, newline on Shift+Enter
+                    // Tab accepts ghost text when available
                     key-pressed(event) => {
                         if (event.text == "\n" && !event.modifiers.shift) {
                             // Enter without Shift - send message
@@ -638,6 +848,10 @@ export component MessageComposer inherits Rectangle {
                                 }
                                 root.text = "";
                             }
+                            return accept;
+                        }
+                        if (event.text == Key.Tab && root.ghost-writing-enabled && root.ghost-text != "") {
+                            root.accept-ghost-text();
                             return accept;
                         }
                         return reject;
@@ -652,6 +866,22 @@ export component MessageComposer inherits Rectangle {
                         // Emit typing state change
                         root.typing-changed(self.text != "");
                     }
+                }
+
+                // Ghost-writing overlay — low-contrast italicized AI suggestion
+                if root.ghost-writing-enabled && root.ghost-text != "" && root.text != "": Text {
+                    x: Spacing.md;
+                    y: Spacing.sm;
+                    width: parent.width - Spacing.md * 2;
+                    text: root.text + root.ghost-text;
+                    color: Colors.text-muted.with-alpha(0.4);
+                    font-size: Typography.base;
+                    font-italic: true;
+                    font-weight: Typography.light;
+                    wrap: word-wrap;
+                    opacity: 0.8;
+
+                    animate opacity { duration: 200ms; easing: ease-in-out; }
                 }
             }
 

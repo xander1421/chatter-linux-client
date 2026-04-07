@@ -1,4 +1,4 @@
-// Spacing and sizing tokens for Chatter
+// Spacing and sizing tokens for Chatter — Neomorphism 2.0
 
 export global Spacing {
     // Base spacing
@@ -11,10 +11,11 @@ export global Spacing {
     out property <length> xxl: 32px;
     out property <length> xxxl: 48px;
 
-    // Border radius
-    out property <length> radius-sm: 4px;
-    out property <length> radius-md: 8px;
-    out property <length> radius-lg: 12px;
+    // Border radius — Neo 2.0 uses generous radii (superellipse-approximate)
+    out property <length> radius-sm: 6px;
+    out property <length> radius-md: 10px;
+    out property <length> radius-lg: 16px;
+    out property <length> radius-xl: 20px;            // Neo bubble radius (18-24px range)
     out property <length> radius-full: 9999px;
 
     // Component sizes
@@ -29,4 +30,12 @@ export global Spacing {
     // Mobile-specific
     out property <length> touch-target-min: 48px;
     out property <length> bottom-nav-height: 56px;
+
+    // Neo 2.0 shadow offsets — 145° light angle
+    out property <length> neo-offset-sm: 3px;          // Small elements (toggles, chips)
+    out property <length> neo-offset-md: 5px;          // Buttons, inputs
+    out property <length> neo-offset-lg: 8px;          // Cards, modals, bubbles
+    out property <length> neo-blur-sm: 6px;            // Subtle depth
+    out property <length> neo-blur-md: 10px;           // Standard depth
+    out property <length> neo-blur-lg: 16px;           // Deep depth (modals, popups)
 }

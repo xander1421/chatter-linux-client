@@ -48,13 +48,13 @@ export component Toggle inherits Rectangle {
         background: track-color;
 
         animate background {
-            duration: 150ms;
-            easing: ease-in-out;
+            duration: 120ms;
+            easing: ease-out;
         }
 
         // Thumb - 20px circle that slides
         Rectangle {
-            width: 20px;
+            width: root.checked ? 20px : 20px;
             height: 20px;
             border-radius: 10px;
             background: Colors.text-primary;
@@ -62,8 +62,8 @@ export component Toggle inherits Rectangle {
             x: root.checked ? 22px : 2px;
 
             animate x {
-                duration: 150ms;
-                easing: ease-in-out;
+                duration: 180ms;
+                easing: cubic-bezier(0.34, 1.56, 0.64, 1);  // Slight overshoot for snappy feel
             }
         }
     }
