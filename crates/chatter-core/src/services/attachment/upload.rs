@@ -126,7 +126,7 @@ impl AttachmentService {
         filename: &str,
         file_size: u64,
     ) -> Result<crate::proto::chat_v1::FileMetadata, AttachmentError> {
-        let mut verify_client = self.grpc_pool().file_client();
+        let mut verify_client = self.grpc_pool()?.file_client();
 
         let response = verify_client
             .list_channel_files(&channel_id.to_string(), 20, 0)
@@ -177,14 +177,24 @@ impl AttachmentService {
         let file_path_owned = file_path.to_path_buf();
         let transfer_id_clone = transfer_id.clone();
 
+        // Open file before creating the stream so I/O errors are returned immediately
+        let file = tokio::fs::File::open(&file_path_owned).await
+            .map_err(|e| AttachmentError::FileError(format!(
+                "Failed to open file for upload: {}", e
+            )))?;
+
         let chunk_stream = async_stream::stream! {
-            let mut file = tokio::fs::File::open(&file_path_owned).await
-                .expect("Failed to open file for streaming upload");
+            let mut file = file;
             let mut buf = vec![0u8; CHUNK_SIZE];
             let mut sequence = 0u32;
             loop {
-                let n = tokio::io::AsyncReadExt::read(&mut file, &mut buf).await
-                    .expect("Failed to read chunk from file");
+                let n = match tokio::io::AsyncReadExt::read(&mut file, &mut buf).await {
+                    Ok(n) => n,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to read chunk from file during upload");
+                        break;
+                    }
+                };
                 if n == 0 { break; }
                 let mut hasher = Sha256::new();
                 hasher.update(&buf[..n]);
@@ -199,7 +209,7 @@ impl AttachmentService {
             }
         };
 
-        let mut file_client = self.grpc_pool().file_client();
+        let mut file_client = self.grpc_pool()?.file_client();
 
         let upload_result = file_client
             .upload_file_with_metadata(
@@ -241,7 +251,7 @@ impl AttachmentService {
         mime_type: &str,
         file_size: u64,
     ) -> Result<crate::proto::chat_v1::FileMetadata, AttachmentError> {
-        let mut file_client = self.grpc_pool().file_client();
+        let mut file_client = self.grpc_pool()?.file_client();
 
         // Initiate upload session
         let session = file_client
@@ -428,7 +438,7 @@ impl AttachmentService {
         );
 
         // Get presigned upload URL
-        let mut file_client = self.grpc_pool().file_client();
+        let mut file_client = self.grpc_pool()?.file_client();
         let upload_response = file_client
             .get_attachment_upload_url(encrypt_result.ciphertext_size)
             .await
@@ -586,7 +596,7 @@ impl AttachmentService {
         );
 
         // Get presigned upload URL
-        let mut file_client = self.grpc_pool().file_client();
+        let mut file_client = self.grpc_pool()?.file_client();
         let upload_response = file_client
             .get_attachment_upload_url(encrypted_size)
             .await

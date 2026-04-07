@@ -228,9 +228,11 @@ impl AttachmentService {
         self.attachment_repo.clone()
     }
 
-    /// Get the gRPC pool, panics if not configured (upload/download requires it).
-    pub(crate) fn grpc_pool(&self) -> &GrpcClientPool {
-        self.grpc_pool.as_ref().expect("AttachmentService: grpc_pool required for network operations")
+    /// Get the gRPC pool, returns error if not configured.
+    pub(crate) fn grpc_pool(&self) -> Result<&GrpcClientPool, AttachmentError> {
+        self.grpc_pool.as_ref().map(|p| p.as_ref()).ok_or_else(|| {
+            AttachmentError::NetworkError("gRPC pool not configured — cannot perform network operations".into())
+        })
     }
 
     /// Create a new AttachmentService with network capability.

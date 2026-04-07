@@ -41,7 +41,7 @@ impl AttachmentService {
         );
 
         // Get presigned download URL
-        let mut file_client = self.grpc_pool().file_client();
+        let mut file_client = self.grpc_pool()?.file_client();
         let download_response = file_client
             .get_attachment_download_url(cdn_key)
             .await
