@@ -24,6 +24,7 @@ use crate::services::channel::ChannelService;
 use crate::services::channel_event_service::ChannelEventService;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::device_service::DeviceService;
+use crate::services::organization_service::OrganizationService;
 use crate::services::draft_service::DraftService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::message::MessageService;
@@ -81,6 +82,7 @@ pub struct CoreServices {
     pub notification_service: Arc<NotificationService>,
     pub section_service: Arc<SectionService>,
     pub device_service: Arc<DeviceService>,
+    pub organization_service: Arc<OrganizationService>,
     /// Unified conversation repository.
     pub conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
 
@@ -165,6 +167,7 @@ impl CoreServices {
             },
             section_service: services.section_service.clone(),
             device_service: services.device_service.clone(),
+            organization_service: services.organization_service.clone(),
             conversation_repo: services.conversation_repo.clone(),
 
             // State stores

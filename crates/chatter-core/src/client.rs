@@ -204,6 +204,7 @@ impl ChatterClient {
     pub fn notifications(&self) -> &Arc<crate::services::notification_service::NotificationService> { &self.ui.notification_service }
     pub fn sections(&self) -> &Arc<SectionService> { &self.ui.section_service }
     pub fn devices(&self) -> &Arc<crate::services::device_service::DeviceService> { &self.ui.device_service }
+    pub fn organizations(&self) -> &Arc<crate::services::organization_service::OrganizationService> { &self.ui.organization_service }
 
     /// Get the SVR backup service (lazy-initialized, persistent instance).
     pub fn svr_backup(&self) -> &crate::services::svr_backup_service::SvrBackupService {

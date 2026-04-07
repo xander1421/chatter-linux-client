@@ -29,6 +29,7 @@ use crate::services::signal_service::SignalService;
 use crate::services::typing_service::TypingService;
 use crate::services::section_service::SectionService;
 use crate::services::device_service::DeviceService;
+use crate::services::organization_service::OrganizationService;
 use crate::services::user::UserService;
 
 use crate::state::OrgState;
@@ -100,6 +101,8 @@ pub struct ServiceContainer {
     pub memory_service: Arc<MemoryService>,
     /// Device service for multi-device management.
     pub device_service: Arc<DeviceService>,
+    /// Organization service for org management and membership.
+    pub organization_service: Arc<OrganizationService>,
     /// Unified conversation repository (available to services).
     pub(crate) conversation_repo: Arc<crate::storage::repositories::UnifiedConversationRepository>,
     /// Organization state (shared with AuthService for org context).
@@ -309,7 +312,13 @@ impl ServiceContainer {
             infra.settings_repo.clone(),
         ));
 
-        // 25. Unified conversation repository
+        // 25. Organization service
+        let organization_service = Arc::new(OrganizationService::new(
+            infra.grpc_pool.clone(),
+            infra.settings_repo.clone(),
+        ));
+
+        // 26. Unified conversation repository
         let conversation_repo = infra.unified_conversation_repo.clone();
 
         tracing::info!("Services initialized");
@@ -341,6 +350,7 @@ impl ServiceContainer {
             section_service,
             memory_service,
             device_service,
+            organization_service,
             conversation_repo,
             org_state,
         })
