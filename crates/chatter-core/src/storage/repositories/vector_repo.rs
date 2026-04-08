@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_f32_blob_roundtrip() {
-        let original = vec![1.0f32, -0.5, 0.0, 3.14159, f32::MIN, f32::MAX];
+        let original = vec![1.0f32, -0.5, 0.0, std::f32::consts::PI, f32::MIN, f32::MAX];
         let blob = f32_vec_to_blob(&original);
         let recovered = blob_to_f32_vec(&blob);
         assert_eq!(original, recovered);

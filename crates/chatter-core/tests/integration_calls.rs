@@ -450,66 +450,47 @@ fn test_audio_capture_stop_idempotent() {
 fn test_wayland_detection_variants() {
     let original = std::env::var("XDG_SESSION_TYPE").ok();
 
-    // Test various session types
-    let test_cases = vec![
-        ("wayland", true),
-        ("WAYLAND", true),
-        ("Wayland", true),
-        ("x11", false),
-        ("X11", false),
-        ("tty", false),
-        ("", false),
-    ];
+    // SAFETY: All env var manipulation in a single test to avoid races with parallel tests
+    unsafe {
+        // Test various session types
+        let test_cases = vec![
+            ("wayland", true),
+            ("WAYLAND", true),
+            ("Wayland", true),
+            ("x11", false),
+            ("X11", false),
+            ("tty", false),
+            ("", false),
+        ];
 
-    for (session_type, expected_wayland) in test_cases {
-        // SAFETY: Tests are single-threaded
-        unsafe {
+        for (session_type, expected_wayland) in &test_cases {
             std::env::set_var("XDG_SESSION_TYPE", session_type);
+
+            let is_wayland = std::env::var("XDG_SESSION_TYPE")
+                .map(|s| s.to_lowercase() == "wayland")
+                .unwrap_or(false);
+
+            assert_eq!(
+                is_wayland, *expected_wayland,
+                "Session type '{}' should {} be detected as Wayland",
+                session_type,
+                if *expected_wayland { "" } else { "not" }
+            );
         }
+
+        // Test unset case (previously a separate test that raced with this one)
+        std::env::remove_var("XDG_SESSION_TYPE");
 
         let is_wayland = std::env::var("XDG_SESSION_TYPE")
             .map(|s| s.to_lowercase() == "wayland")
             .unwrap_or(false);
 
-        assert_eq!(
-            is_wayland, expected_wayland,
-            "Session type '{}' should {} be detected as Wayland",
-            session_type,
-            if expected_wayland { "" } else { "not" }
-        );
-    }
+        assert!(!is_wayland, "Unset XDG_SESSION_TYPE should not be Wayland");
 
-    // SAFETY: Tests are single-threaded
-    unsafe {
         // Restore
         match original {
             Some(v) => std::env::set_var("XDG_SESSION_TYPE", v),
             None => std::env::remove_var("XDG_SESSION_TYPE"),
-        }
-    }
-}
-
-#[test]
-fn test_wayland_detection_unset() {
-    let original = std::env::var("XDG_SESSION_TYPE").ok();
-
-    // SAFETY: Tests are single-threaded
-    unsafe {
-        // Remove the variable
-        std::env::remove_var("XDG_SESSION_TYPE");
-    }
-
-    let is_wayland = std::env::var("XDG_SESSION_TYPE")
-        .map(|s| s.to_lowercase() == "wayland")
-        .unwrap_or(false);
-
-    assert!(!is_wayland, "Unset XDG_SESSION_TYPE should not be Wayland");
-
-    // SAFETY: Tests are single-threaded
-    unsafe {
-        // Restore
-        if let Some(v) = original {
-            std::env::set_var("XDG_SESSION_TYPE", v);
         }
     }
 }
