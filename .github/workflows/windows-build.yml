@@ -59,6 +59,16 @@ jobs:
       - name: Install pkg-config
         run: choco install pkgconfiglite -y
 
+      - name: Install OpenSSL (vcpkg)
+        shell: pwsh
+        run: |
+          vcpkg install openssl:x64-windows-static-md
+          $opensslDir = "C:\vcpkg\installed\x64-windows-static-md"
+          echo "OPENSSL_DIR=$opensslDir" >> $env:GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$opensslDir\lib" >> $env:GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=$opensslDir\include" >> $env:GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
+
       - name: Build (no local-ai)
         env:
           RUSTC_WRAPPER: ""
