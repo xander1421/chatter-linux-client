@@ -21,6 +21,7 @@ path = "src/main.rs"
 [[bin]]
 name = "test_thumbnail"
 path = "src/bin/test_thumbnail.rs"
+required-features = ["desktop-media"]
 
 [dependencies]
 chatter-core = { path = "../chatter-core", default-features = false }
