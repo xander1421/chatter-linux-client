@@ -270,20 +270,56 @@ impl AnonDmHandler {
         let peer_avatar_for_event = peer_avatar.clone();
 
         // Update conversation status
-        if let Err(e) = self.service.handle_acceptance(
+        let acceptance_result = self.service.handle_acceptance(
             conversation_id,
             sender_id,
             peer_mailbox_pk,
             profile_key,
             Some(peer_display_name.clone()),
             peer_avatar,
-        ) {
-            tracing::warn!(
-                "Failed to handle acceptance for {} from {}: {}",
-                conversation_id,
-                sender_id,
-                e
-            );
+        );
+
+        match &acceptance_result {
+            Ok(()) => {
+                // Auto-reciprocate: send our own avatar back over the freshly-
+                // established Signal session. The acceptor embedded their
+                // avatar in the acceptance message; we now reciprocate so both
+                // sides end up with each other's avatars without the user
+                // having to do anything. send_profile_update pulls our avatar
+                // bytes from the local settings repo (keys::AVATAR), encrypts
+                // with our profile key, and ships them inside an
+                // AnonDmProfileUpdate over the active session.
+                let service = self.service.clone();
+                tokio::spawn(async move {
+                    match service
+                        .send_profile_update(
+                            &conversation_id,
+                            None, // display name unchanged — covered separately
+                            None, // no URL — bytes come from local storage
+                            None, // no bio change
+                        )
+                        .await
+                    {
+                        Ok(()) => tracing::info!(
+                            conversation_id = %conversation_id,
+                            "Auto-reciprocated profile (avatar) to peer after acceptance"
+                        ),
+                        Err(e) => tracing::warn!(
+                            conversation_id = %conversation_id,
+                            error = %e,
+                            "Failed to auto-reciprocate profile after acceptance"
+                        ),
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to handle acceptance for {} from {}: {}",
+                    conversation_id,
+                    sender_id,
+                    e
+                );
+            }
         }
 
         // Emit event for UI
@@ -534,6 +570,7 @@ impl AnonDmHandler {
             conversation_id,
             user_id: sender_id,
             display_name: profile_update.display_name,
+            avatar: conv.peer_avatar.clone(),
             avatar_url: profile_update.avatar_url,
             bio: profile_update.bio,
             timestamp: profile_update.timestamp,

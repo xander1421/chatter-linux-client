@@ -13,7 +13,7 @@ use std::sync::Arc;
 use chatter_core::client::ChatterClient;
 
 use crate::bin_ui::audio_state;
-use crate::MainWindow;
+use crate::{MainWindow, run_ui};
 
 // Re-export public functions
 pub use channel::load_channel_into_ui;
@@ -56,26 +56,20 @@ pub(crate) fn apply_pinned_ui(
 ) {
     if message_ids.is_empty() {
         pinned_state.clear();
-        let weak = weak.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_has_pinned_messages(false);
-                w.set_pinned_message_preview("".into());
-                w.set_pinned_total_count(0);
-            }
+        run_ui!(weak, |w| {
+            w.set_has_pinned_messages(false);
+            w.set_pinned_message_preview("".into());
+            w.set_pinned_total_count(0);
         });
     } else {
         let total_count = message_ids.len() as i32;
         pinned_state.set_pinned_messages(channel_id, message_ids);
         let should_show = pinned_state.should_show();
-        let weak = weak.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_has_pinned_messages(should_show);
-                w.set_pinned_message_preview(preview.into());
-                w.set_pinned_current_index(1);
-                w.set_pinned_total_count(total_count);
-            }
+        run_ui!(weak, |w| {
+            w.set_has_pinned_messages(should_show);
+            w.set_pinned_message_preview(preview.into());
+            w.set_pinned_current_index(1);
+            w.set_pinned_total_count(total_count);
         });
     }
 }

@@ -190,17 +190,25 @@ impl ConversationHandle {
         let new_pinned = !unpin;
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
+                match self.client.anon_dms().set_message_pinned(id, target_sent_timestamp, new_pinned) {
+                    Ok(false) => tracing::warn!(conversation_id = %id, target_sent_timestamp, "AnonDm pin: 0 rows affected"),
+                    Err(e) => tracing::warn!(conversation_id = %id, error = %e, "AnonDm pin: local persist failed"),
+                    _ => {}
+                }
                 self.client.anon_dms()
                     .send_pin(id, target_author, target_sent_timestamp, unpin)
                     .await?;
-                let _ = self.client.anon_dms().set_message_pinned(id, target_sent_timestamp, new_pinned);
                 Ok(())
             }
             ActiveConversation::AnonGroup(id) => {
+                match self.client.anon_groups().set_message_pinned(id, target_sent_timestamp, new_pinned) {
+                    Ok(false) => tracing::warn!(group_id = %id, target_sent_timestamp, "AnonGroup pin: 0 rows affected"),
+                    Err(e) => tracing::warn!(group_id = %id, error = %e, "AnonGroup pin: local persist failed"),
+                    _ => {}
+                }
                 self.client.anon_groups()
                     .send_pin(id, target_author, target_sent_timestamp, unpin)
                     .await?;
-                let _ = self.client.anon_groups().set_message_pinned(id, target_sent_timestamp, new_pinned);
                 Ok(())
             }
             ActiveConversation::MailboxDm { peer_id, .. } => {

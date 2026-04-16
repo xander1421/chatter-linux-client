@@ -608,6 +608,8 @@ pub enum DomainEvent {
         user_id: UserId,
         /// Updated display name (if changed).
         display_name: Option<String>,
+        /// Updated avatar bytes (decrypted from encrypted_avatar).
+        avatar: Option<Vec<u8>>,
         /// Updated avatar URL (if changed).
         avatar_url: Option<String>,
         /// Updated bio/status message (if changed).

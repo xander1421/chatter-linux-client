@@ -856,6 +856,7 @@ impl EventHandlers {
                 conversation_id, 
                 user_id, 
                 display_name, 
+                avatar,
                 avatar_url, 
                 bio, 
                 timestamp 
@@ -865,6 +866,7 @@ impl EventHandlers {
                     ?conversation_id, 
                     ?user_id, 
                     ?display_name,
+                    has_avatar = avatar.is_some(),
                     ?avatar_url,
                     ?bio,
                     ?timestamp, 

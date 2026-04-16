@@ -198,6 +198,99 @@ impl ImageProcessor {
             .map_err(|e| MediaError::InvalidFormat(format!("cannot read dimensions: {}", e)))
     }
 
+    /// Process raw image bytes into a normalised avatar suitable for storage
+    /// and inline embedding in encrypted bootstrap / profile-update messages.
+    ///
+    /// Pipeline:
+    ///   1. Decode any supported format (PNG / JPEG / GIF / WebP).
+    ///   2. Center-crop to a square (avatars render in a circular mask, so
+    ///      cropping to square first prevents asymmetric cropping at display).
+    ///   3. Resize to [`AVATAR_SIZE_PX`] × [`AVATAR_SIZE_PX`] with Lanczos3
+    ///      for high-quality downscaling.
+    ///   4. Re-encode as **WebP lossless** (the only WebP encoder shipped
+    ///      with `image` 0.25 — adding lossy WebP would require an extra
+    ///      C-FFI dep).
+    ///   5. Verify the output is at most
+    ///      [`crate::domain::anon_dm_init::MAX_AVATAR_SIZE`] (1 MB),
+    ///      matching the wire-format cap baked into the `AnonDmInitMessage`
+    ///      v4 schema. A 512×512 photo at WebP-lossless typically lands at
+    ///      80-200 KB, comfortably under the cap.
+    ///
+    /// Used by both clients (Linux desktop + Android via the bridge) so the
+    /// processed-avatar bytes are byte-identical regardless of platform.
+    /// This is the source of truth for avatar normalisation; the UI layer
+    /// must not duplicate decode/resize/encode logic.
+    ///
+    /// # Errors
+    ///
+    /// Returns `MediaError::InvalidFormat` if the input cannot be decoded,
+    /// or `MediaError::ThumbnailGeneration` if encoding fails or the output
+    /// exceeds the `MAX_AVATAR_SIZE` cap.
+    pub fn process_avatar_from_memory(data: &[u8]) -> Result<Vec<u8>, MediaError> {
+        /// Final encoded avatar dimensions (square, both axes).
+        ///
+        /// 512 px is large enough for retina hero surfaces (Compose's
+        /// `Modifier.size(160.dp)` on a Galaxy S25 is ~360 px, so 512 leaves
+        /// headroom for a small zoom) and small enough to compress under
+        /// 200 KB at WebP-lossless.
+        const AVATAR_SIZE_PX: u32 = 512;
+
+        let image = Self::load_from_memory(data)?;
+
+        // Center-crop to square so the circular display mask doesn't
+        // asymmetrically crop the image content.
+        let w = image.width();
+        let h = image.height();
+        let side = w.min(h);
+        let x_off = (w - side) / 2;
+        let y_off = (h - side) / 2;
+        let cropped = image.crop_imm(x_off, y_off, side, side);
+
+        // Resize to the target dimensions (Lanczos3 for high-quality downscale).
+        let resized = if cropped.width() != AVATAR_SIZE_PX {
+            cropped.resize_exact(AVATAR_SIZE_PX, AVATAR_SIZE_PX, FilterType::Lanczos3)
+        } else {
+            cropped
+        };
+
+        // Encode as WebP lossless (the only WebP encoder in image 0.25).
+        // Lossless WebP at 512×512 is typically 80-200 KB for a photo,
+        // well under the 1 MB MAX_AVATAR_SIZE cap.
+        let rgba = resized.to_rgba8();
+        let mut bytes: Vec<u8> = Vec::with_capacity(64 * 1024);
+        let encoder = image::codecs::webp::WebPEncoder::new_lossless(&mut bytes);
+        encoder
+            .write_image(
+                rgba.as_raw(),
+                AVATAR_SIZE_PX,
+                AVATAR_SIZE_PX,
+                image::ExtendedColorType::Rgba8,
+            )
+            .map_err(|e| MediaError::ThumbnailGeneration(e.to_string()))?;
+
+        // Defense in depth: enforce the wire-format cap. In practice this
+        // never trips at 512×512 — but a future format change could push
+        // a pathological input over and we want to fail loudly here rather
+        // than silently in the init-message serializer.
+        let cap = crate::domain::anon_dm_init::MAX_AVATAR_SIZE;
+        if bytes.len() > cap {
+            return Err(MediaError::ThumbnailGeneration(format!(
+                "processed avatar is {} bytes, exceeds MAX_AVATAR_SIZE {}",
+                bytes.len(),
+                cap
+            )));
+        }
+
+        tracing::info!(
+            input_bytes = data.len(),
+            output_bytes = bytes.len(),
+            output_size = AVATAR_SIZE_PX,
+            "Processed avatar (WebP lossless)"
+        );
+
+        Ok(bytes)
+    }
+
     /// Generate thumbnail bytes from in-memory image data.
     ///
     /// Returns WebP-encoded thumbnail bytes with dimensions.

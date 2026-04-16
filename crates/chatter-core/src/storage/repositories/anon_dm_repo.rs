@@ -252,13 +252,21 @@ impl AnonDmRepository {
     }
 
     /// List pending message requests (incoming only).
+    ///
+    /// Filters by `initiated_by_us = 0` so that conversations the local user
+    /// initiated themselves do NOT appear here. Without this filter, the
+    /// caller's own outgoing friend-code requests would surface as fake
+    /// "incoming" requests in the message-requests UI, producing duplicate
+    /// Accept/Decline cards and confusing the user (and any acceptance
+    /// attempt would fail because chatter-core only accepts requests where
+    /// the local user is the recipient, not the initiator).
     pub fn list_message_requests(&self) -> Result<Vec<AnonDm>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
              (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
-             FROM anon_dm_conversations WHERE status = ?1 ORDER BY created_at DESC",
+             FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 0 ORDER BY created_at DESC",
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Pending.to_i32()])?;
@@ -271,14 +279,19 @@ impl AnonDmRepository {
         Ok(dms)
     }
 
-    /// List outgoing pending requests.
+    /// List outgoing pending requests (initiated by the local user, awaiting
+    /// the peer's acceptance).
+    ///
+    /// Filters by `initiated_by_us = 1`. Without this filter, this method
+    /// would return the same set as `list_message_requests` and the two
+    /// would be indistinguishable.
     pub fn list_outgoing_requests(&self) -> Result<Vec<AnonDm>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
              (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count \
-             FROM anon_dm_conversations WHERE status = ?1 ORDER BY created_at DESC",
+             FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 1 ORDER BY created_at DESC",
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Pending.to_i32()])?;

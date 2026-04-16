@@ -71,36 +71,43 @@ export component RecoveryCodesModal inherits Rectangle {
 
             Rectangle { height: Spacing.sm; }
 
-            // Recovery codes list (single column — works on all screen sizes)
+            // Recovery codes list (single column — scrollable when content exceeds space)
             Rectangle {
+                vertical-stretch: 1;
+                min-height: 120px;
                 background: Colors.background;
                 border-radius: Spacing.radius-md;
 
-                VerticalLayout {
-                    padding: Spacing.md;
-                    spacing: Spacing.xs;
+                Flickable {
+                    viewport-height: codes-list.preferred-height;
+                    viewport-width: parent.width;
 
-                    for code[i] in root.codes: Rectangle {
-                        height: 32px;
-                        background: Colors.surface;
-                        border-radius: Spacing.radius-sm;
+                    codes-list := VerticalLayout {
+                        padding: Spacing.md;
+                        spacing: Spacing.xs;
 
-                        HorizontalLayout {
-                            padding-left: Spacing.md;
-                            padding-right: Spacing.md;
-                            alignment: center;
+                        for code[i] in root.codes: Rectangle {
+                            height: 32px;
+                            background: Colors.surface;
+                            border-radius: Spacing.radius-sm;
 
-                            Text {
-                                text: (i + 1) + ". ";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                            }
-                            Text {
-                                text: code;
-                                color: Colors.text-primary;
-                                font-size: Typography.sm;
-                                font-weight: Typography.medium;
-                                letter-spacing: 1px;
+                            HorizontalLayout {
+                                padding-left: Spacing.md;
+                                padding-right: Spacing.md;
+                                alignment: center;
+
+                                Text {
+                                    text: (i + 1) + ". ";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.sm;
+                                }
+                                Text {
+                                    text: code;
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                    letter-spacing: 1px;
+                                }
                             }
                         }
                     }

@@ -125,19 +125,12 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Join channel callback
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channels().clone();
-    let message_service = ui_ctx.messages().clone();
-    let user_service = ui_ctx.users().clone();
-    let attachment_service = ui_ctx.attachments().clone();
+    let ui_ctx = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state().clone();
 
     window.on_join_channel(move |channel_id_str: SharedString| {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
-        let channel_service = channel_service.clone();
-        let message_service = message_service.clone();
-        let user_service = user_service.clone();
-        let attachment_service = attachment_service.clone();
         let chat_state = chat_state.clone();
         let channel_id_str = channel_id_str.to_string();
         tokio::spawn(async move {
@@ -175,14 +168,14 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // Set the joined channel as active
                     chat_state.set_active_channel(channel_id);
 
-                    // Convert channel to Slint format for sidebar
-                    let slint_channel = channel_to_slint(&channel);
-
-                    // Close modal and add channel to sidebar
+                    // Move domain Channel to UI thread; convert there (slint::Image is !Send).
+                    let channel_for_ui = channel.clone();
+                    let attachments_for_ui = ui_ctx.attachments().clone();
                     let weak_modal = weak.clone();
                     let channel_id_for_ui = channel_id_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_modal.upgrade() {
+                            let slint_channel = channel_to_slint(&channel_for_ui, &attachments_for_ui);
                             // Close modal and clear form
                             w.set_join_channel_joining(false);
                             w.set_join_channel_search_query("".into());
@@ -208,17 +201,12 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
 
                     // Load the joined channel properly (loads messages, sets header)
-                    let current_user_id = channel_service.current_user_id().ok().map(|id| id.to_string());
                     load_channel_into_ui(
                         weak,
-                        &channel_id,
-                        channel_service.clone(),
-                        message_service.clone(),
-                        user_service.clone(),
-                        attachment_service.clone(),
-                        current_user_id,
-                    )
-                    .await;
+                        channel_id,
+                        ui_ctx,
+                    ).await;
+
 
                     tracing::info!("Joined channel: {}", channel_id);
                 }

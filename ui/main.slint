@@ -320,6 +320,12 @@ export component MainWindow inherits Window {
     in-out property <[PrivateGroupFriend]> create-channel-available-friends <=> app.create-channel-available-friends;
     in-out property <int> create-channel-selected-friend-count <=> app.create-channel-selected-friend-count;
 
+    // Create channel icon upload properties
+    in-out property <string> create-channel-icon-url <=> app.create-channel-icon-url;
+    in-out property <image> create-channel-icon-preview <=> app.create-channel-icon-preview;
+    in-out property <bool> create-channel-has-icon-preview <=> app.create-channel-has-icon-preview;
+    callback create-channel-pick-icon <=> app.create-channel-pick-icon;
+
     // Invite to private group modal properties
     in-out property <string> invite-private-group-id <=> app.invite-private-group-id;
     in-out property <[PrivateGroupFriend]> invite-private-group-friends <=> app.invite-private-group-friends;

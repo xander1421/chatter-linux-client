@@ -4,11 +4,17 @@
 //! - Linux: XDG .desktop files in ~/.config/autostart/
 //! - Windows: Registry entry in HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 
+#[cfg(target_os = "linux")]
 use std::fs;
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 
 use crate::error::SystemError;
-use super::platform::{APP_ID, APP_DISPLAY_NAME, APP_BINARY};
+#[cfg(target_os = "linux")]
+use super::platform::APP_BINARY;
+use super::platform::APP_ID;
+#[cfg(target_os = "linux")]
+use super::platform::APP_DISPLAY_NAME;
 
 /// Manager for autostart entries.
 ///

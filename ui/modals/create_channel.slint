@@ -61,7 +61,9 @@ export component CreateChannelModal inherits Rectangle {
     in-out property <int> max-members: 0;       // 0 = unlimited
     in-out property <string> password: "";
     in-out property <bool> friends-only: false;
-    in-out property <string> icon-url: "";      // Custom channel icon URL
+    in-out property <string> icon-url: "";      // Upload cdn_key OR external URL (populated by pick-channel-icon handler after upload)
+    in-out property <image> icon-preview;        // Local preview image (set after file pick, before upload)
+    in-out property <bool> has-icon-preview: false;
 
     // AI configuration (for ai-assistant template)
     in-out property <string> ai-provider: "";
@@ -84,6 +86,7 @@ export component CreateChannelModal inherits Rectangle {
     // name, description, template, config, ai_provider, ai_model
     callback create(string, string, string, CreateChannelConfig, string, string);
     callback provider-selected(string);  // Callback to load models for provider
+    callback pick-channel-icon();        // Open file picker + upload the image
     callback create-private-group(string, [PrivateGroupFriend]);  // name, selected friends
     callback toggle-friend-selection(int);  // index to toggle selection
     callback toggle-friend-role(int);  // index to toggle role (member/admin)
@@ -110,6 +113,7 @@ export component CreateChannelModal inherits Rectangle {
             root.password = "";
             root.friends-only = false;
             root.icon-url = "";
+            root.has-icon-preview = false;
             root.ai-provider = "";
             root.ai-model = "";
         }
@@ -542,26 +546,55 @@ export component CreateChannelModal inherits Rectangle {
 
                         HorizontalLayout {
                             spacing: Spacing.sm;
-
                             Image {
-                                source: Icons.link;
+                                source: Icons.image;
                                 width: 16px;
                                 height: 16px;
                                 colorize: Colors.text-secondary;
                                 y: 2px;
                             }
-
                             Text {
-                                text: "Channel Icon URL (optional)";
+                                text: "Channel Icon (optional)";
                                 color: Colors.text-secondary;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
                             }
                         }
 
-                        Input {
-                            placeholder: "https://example.com/icon.png";
-                            text <=> root.icon-url;
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            alignment: start;
+
+                            // Preview square (48x48) — shows picked image or placeholder
+                            Rectangle {
+                                width: 48px;
+                                height: 48px;
+                                border-radius: Spacing.radius-sm;
+                                background: Colors.surface;
+                                border-width: 1px;
+                                border-color: Colors.neo-highlight;
+                                clip: true;
+
+                                if root.has-icon-preview: Image {
+                                    source: root.icon-preview;
+                                    width: 100%;
+                                    height: 100%;
+                                    image-fit: cover;
+                                }
+                                if !root.has-icon-preview: Image {
+                                    source: Icons.image;
+                                    width: 20px;
+                                    height: 20px;
+                                    colorize: Colors.text-muted;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                            }
+
+                            Button {
+                                text: root.has-icon-preview ? "Change image" : "Upload image";
+                                clicked => { root.pick-channel-icon(); }
+                            }
                         }
                     }
 

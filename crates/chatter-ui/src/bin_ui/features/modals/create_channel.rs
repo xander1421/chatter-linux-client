@@ -1,5 +1,6 @@
 //! Create channel modal callbacks.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -15,12 +16,56 @@ use crate::{AIModelOption, ChannelListItemData, CreateChannelConfig, MainWindow,
 pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ctx = ui_ctx.clone();
-    let channel_service = ctx.channels().clone();
-    let message_service = ctx.messages().clone();
-    let user_service = ctx.users().clone();
-    let attachment_service = ctx.attachments().clone();
     let chat_state = ctx.chat_state().clone();
-    let auth_state_global = ctx.auth_state().clone();
+
+    // File picker for channel icon — stores the chosen path so on_create can
+    // upload it through AttachmentService. Preview decoding is local UI state only.
+    let weak_pick = weak_window.clone();
+    window.on_create_channel_pick_icon(move || {
+        tracing::info!("[CHANNEL_ICON] pick-channel-icon callback fired");
+        #[cfg(not(target_os = "android"))]
+        {
+            let weak = weak_pick.clone();
+            tokio::spawn(async move {
+                let config = chatter_core::media::FilePickerConfig::new()
+                    .with_title("Select Channel Icon")
+                    .with_filter(chatter_core::media::FileFilter::images());
+
+                match chatter_core::media::FilePicker::pick_file(config).await {
+                    Some(path) => {
+                        tracing::info!(path = %path.display(), "[CHANNEL_ICON] file picked");
+                        match std::fs::read(&path) {
+                            Ok(data) => {
+                                let path_string = path.to_string_lossy().to_string();
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    // Stash picked path on the modal's icon-url property so
+                                    // on_create can read it (thread_local! is tokio-worker-local,
+                                    // which race-lost the value between pick and create).
+                                    if let Some(w) = weak.upgrade() {
+                                        w.set_create_channel_icon_url(path_string.into());
+                                    }
+                                    match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
+                                        Ok(slint_img) => {
+                                            if let Some(w) = weak.upgrade() {
+                                                w.set_create_channel_icon_preview(slint_img);
+                                                w.set_create_channel_has_icon_preview(true);
+                                                tracing::info!("[CHANNEL_ICON] preview set on modal");
+                                            }
+                                        }
+                                        Err(e) => tracing::error!("[CHANNEL_ICON] Failed to decode preview: {}", e),
+                                    }
+                                });
+                            }
+                            Err(e) => tracing::error!("[CHANNEL_ICON] Failed to read picked file: {}", e),
+                        }
+                    }
+                    None => tracing::info!("[CHANNEL_ICON] file pick cancelled"),
+                }
+            });
+        }
+        #[cfg(target_os = "android")]
+        tracing::warn!("File picker not supported on Android");
+    });
 
     window.on_create_channel(
         move |name: SharedString,
@@ -31,23 +76,28 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
               ai_model: SharedString| {
             let weak = weak_window.clone();
             let ui_ctx = ctx.clone();
-            let channel_service = channel_service.clone();
-            let message_service = message_service.clone();
-            let user_service = user_service.clone();
-            let attachment_service = attachment_service.clone();
             let chat_state = chat_state.clone();
             let name = name.to_string();
             let description = description.to_string();
             let template = template.to_string();
             let ai_provider = ai_provider.to_string();
             let ai_model = ai_model.to_string();
-            let auth_state = auth_state_global.clone();
 
             let is_private = config.is_private;
             let is_ephemeral = config.is_ephemeral;
             let ttl_hours = config.ttl_hours;
             let max_members = config.max_members;
             let password = config.password.to_string();
+
+            // Icon path comes in via config.icon_url (set by the file picker).
+            let icon_path_str = config.icon_url.to_string();
+            let pending_icon: Option<PathBuf> = if icon_path_str.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(&icon_path_str))
+            };
+            tracing::info!(has_icon = pending_icon.is_some(), "[CHANNEL_ICON] on_create_channel entry");
+            let attachment_service = ui_ctx.attachments().clone();
 
             tokio::spawn(async move {
                 let weak_loading = weak.clone();
@@ -62,6 +112,30 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let description_opt = if description.is_empty() { None } else { Some(description.as_str()) };
                 let password_opt = if password.is_empty() { None } else { Some(password.as_str()) };
 
+                // Upload channel icon to CDN if one was picked.
+                // Service handles encryption + in-memory pixel cache so sidebar
+                // can render immediately. Returned cdn_key becomes the channel's img_url.
+                let image_url: Option<String> = if let Some(path) = pending_icon {
+                    match attachment_service.upload_channel_icon(&path).await {
+                        Ok(cdn_key) => {
+                            tracing::info!("Uploaded channel icon to CDN: {}", cdn_key);
+                            Some(cdn_key)
+                        }
+                        Err(e) => {
+                            let error_msg = format!("Failed to upload channel icon: {}", e);
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.set_create_channel_loading(false);
+                                    w.set_create_channel_error(error_msg.into());
+                                }
+                            });
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
+
                 let domain_config = ChannelConfig {
                     persistence: if is_ephemeral { MessagePersistence::Ephemeral } else { MessagePersistence::Permanent },
                     max_members: if max_members > 0 { Some(max_members as u32) } else { None },
@@ -70,7 +144,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     ..Default::default()
                 };
 
-                match ui_ctx.create_channel(&name, channel_type, Some(domain_config), description_opt, password_opt, vec![]).await {
+                match ui_ctx.create_channel(&name, channel_type, Some(domain_config), description_opt, image_url.as_deref(), password_opt, vec![]).await {
                     Ok(channel) => {
                         let channel_id = channel.id;
                         let channel_id_str: SharedString = channel_id.to_string().into();
@@ -88,14 +162,20 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
                         }
 
-                        let slint_channel = channel_to_slint(&channel);
                         let weak_modal = weak.clone();
                         let channel_id_for_ui = channel_id_str.clone();
+                        // Move Channel (Send) + AttachmentService Arc to UI thread;
+                        // slint::Image is !Send so conversion happens there.
+                        let channel_for_ui = channel.clone();
+                        let attachments_for_ui = attachment_service.clone();
                         let _ = slint::invoke_from_event_loop(move || {
+                            let slint_channel = channel_to_slint(&channel_for_ui, &attachments_for_ui);
                             if let Some(w) = weak_modal.upgrade() {
                                 w.set_create_channel_loading(false);
                                 w.set_create_channel_name("".into());
                                 w.set_create_channel_description("".into());
+                                w.set_create_channel_icon_url("".into());
+                                w.set_create_channel_has_icon_preview(false);
                                 w.set_active_modal("".into());
                                 let current_channels = w.get_channels();
                                 let mut channels: Vec<ChannelListItemData> = (0..current_channels.row_count()).filter_map(|i| current_channels.row_data(i)).collect();
@@ -105,8 +185,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
                         });
 
-                        let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string());
-                        load_channel_into_ui(weak, &channel_id, channel_service.clone(), message_service.clone(), user_service.clone(), attachment_service.clone(), current_user_id).await;
+                        load_channel_into_ui(weak, channel_id, ui_ctx).await;
                     }
                     Err(e) => {
                         let error_msg = e.to_string();

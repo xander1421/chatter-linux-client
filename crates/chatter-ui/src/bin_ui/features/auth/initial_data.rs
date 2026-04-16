@@ -14,7 +14,7 @@ use chatter_core::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{
     channel_to_slint, dm_to_send_data, get_initials, messages_to_display_batch,
-    DMListItemSendData, FriendRequestSendData,
+    DMListItemExt, DMListItemSendData, FriendRequestExt, FriendRequestSendData,
 };
 use crate::{ChannelListItemData, DMListItemData, FriendRequestData, MainWindow, PrivateGroupListItemData};
 
@@ -69,8 +69,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // Get current user ID for DM peer detection
     let current_user_id = ui_ctx.auth_state().get().current_user_id;
 
-    // Separate channels and DMs (using Send-safe types for DMs)
-    let mut channel_list: Vec<ChannelListItemData> = Vec::new();
+    // Separate channels and DMs (using Send-safe types for DMs).
+    // ChannelListItemData contains a slint::Image (not Send) — hold domain
+    // Channels here and convert inside the UI-thread closure below.
+    let mut channel_domain_list: Vec<chatter_core::domain::channel::Channel> = Vec::new();
     let mut dm_list: Vec<DMListItemSendData> = Vec::new();
 
     for channel in &channels {
@@ -129,7 +131,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 dm_list.push(dm_item);
             }
             ChannelType::Public | ChannelType::Private => {
-                channel_list.push(channel_to_slint(channel));
+                channel_domain_list.push(channel.clone());
             }
             ChannelType::SavedMessages => {
                 // Saved messages has its own sidebar button, not listed with channels
@@ -320,7 +322,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     },
                     last_message,
                     timestamp,
-                    unread_count: dm.unread_count as i32,
+                    unread_count: dm.unread_count,
                     is_typing: false,
                 };
                 dm_list.push(dm_item);
@@ -510,8 +512,13 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // Update UI with channels, DMs, private groups, and friend requests
     let window_weak_ui = window_weak.clone();
     let pending_message_requests_count = private_requests_ui.len() as i32;
+    let attachments_for_ui = ui_ctx.attachments().clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = window_weak_ui.upgrade() {
+            let channel_list: Vec<ChannelListItemData> = channel_domain_list
+                .iter()
+                .map(|c| channel_to_slint(c, &attachments_for_ui))
+                .collect();
             w.set_channels(ModelRc::new(VecModel::from(channel_list)));
             // Convert Send-safe DM data to Slint types inside event loop
             let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter().map(|d| d.to_slint()).collect();
@@ -853,7 +860,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             },
                             last_message,
                             timestamp,
-                            unread_count: dm.unread_count as i32,
+                            unread_count: dm.unread_count,
                             is_typing: false,
                         };
                         dm_list.push(dm_item);

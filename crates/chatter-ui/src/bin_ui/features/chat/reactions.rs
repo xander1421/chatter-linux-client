@@ -8,7 +8,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
 
-use crate::MainWindow;
+use crate::{MainWindow, run_ui};
 
 /// Wire reaction selected callback for DM and channel conversations.
 pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -63,10 +63,8 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             }
 
             // Update UI
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    super::helpers::update_reaction_in_ui(&w, &sender_id_str, &timestamp_ns_str, &emoji_str, remove);
-                }
+            run_ui!(weak, |w| {
+                super::helpers::update_reaction_in_ui(&w, &sender_id_str, &timestamp_ns_str, &emoji_str, remove);
             });
         });
     });

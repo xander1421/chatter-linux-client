@@ -12,7 +12,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::services::user::FriendRequestFilter;
 
-use crate::bin_ui::converters::{get_initials, DMListItemSendData, FriendRequestSendData};
+use crate::bin_ui::converters::{get_initials, DMListItemExt, DMListItemSendData, FriendRequestExt, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
 
 thread_local! {
@@ -563,7 +563,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         presence_status: "offline".to_string(),
                         last_message: String::new(),
                         timestamp: String::new(),
-                        unread_count: unread,
+                        unread_count: unread as u32,
                         is_typing: false,
                     };
 

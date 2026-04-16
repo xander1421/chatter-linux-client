@@ -8,8 +8,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::UserId;
 use chatter_core::services::conversation::ConversationHandle;
 
-use crate::MessageItemData;
-use crate::MainWindow;
+use crate::{MessageItemData, MainWindow, run_ui};
 
 /// Unregister any GIF animations from a message's attachments.
 ///
@@ -77,10 +76,8 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 "Delete-for-me completed"
             );
 
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
-                }
+            run_ui!(weak, |w| {
+                super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
             });
         });
     });
@@ -124,10 +121,8 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             // Persistence is handled by ConversationHandle::send_delete()
 
             // Update UI — remove message from model
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
-                }
+            run_ui!(weak, |w| {
+                super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
             });
         });
     });

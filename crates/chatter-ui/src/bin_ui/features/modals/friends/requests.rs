@@ -8,7 +8,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::services::channel::ChannelService;
 use chatter_core::services::user::{FriendRequestFilter, UserService};
 
-use crate::bin_ui::converters::{get_initials, FriendRequestSendData};
+use crate::bin_ui::converters::{get_initials, FriendRequestExt, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
 
 pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

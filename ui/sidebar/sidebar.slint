@@ -18,7 +18,7 @@ import { DMList, DMListItemData } from "dm_list.slint";
 import { PrivateGroupList, PrivateGroupListItemData } from "private_group_list.slint";
 import { OrgSwitcher, OrgListItemData } from "org_switcher.slint";
 import { CustomSectionList, CustomSectionData, SectionConversationData } from "custom_section_list.slint";
-import { SectionContextMenu } from "section_context_menu.slint";
+import { SectionContextMenu, SectionHeaderContextMenu } from "section_context_menu.slint";
 import { Avatar } from "../components/avatar.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 
@@ -95,6 +95,12 @@ export component Sidebar inherits Rectangle {
     property <string> ctx-menu-conv-id: "";
     property <string> ctx-menu-conv-type: "";
     property <string> ctx-menu-current-section-id: "";
+
+    // Section header context menu state
+    property <bool> section-header-ctx-menu-show: false;
+    property <length> section-header-ctx-menu-x: 0;
+    property <length> section-header-ctx-menu-y: 0;
+    property <string> section-header-ctx-menu-section-id: "";
 
     // ── Sizing ──
     width: root.mobile-mode ? root.mobile-width
@@ -640,6 +646,20 @@ export component Sidebar inherits Rectangle {
                     section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
                     delete-section-clicked(id) => { root.delete-section-clicked(id); }
                     rename-section-clicked(id) => { root.rename-section-clicked(id); }
+                    section-conversation-context-menu-requested(conv-id, conv-type, section-id, x, y) => {
+                        root.ctx-menu-conv-id = conv-id;
+                        root.ctx-menu-conv-type = conv-type;
+                        root.ctx-menu-x = x;
+                        root.ctx-menu-y = y;
+                        root.ctx-menu-current-section-id = section-id;
+                        root.ctx-menu-show = true;
+                    }
+                    section-header-context-menu-requested(section-id, x, y) => {
+                        root.section-header-ctx-menu-section-id = section-id;
+                        root.section-header-ctx-menu-x = x;
+                        root.section-header-ctx-menu-y = y;
+                        root.section-header-ctx-menu-show = true;
+                    }
                 }
 
                 Rectangle { vertical-stretch: 1; }
@@ -752,6 +772,21 @@ export component Sidebar inherits Rectangle {
         }
         create-section-clicked => {
             root.create-section-clicked();
+        }
+    }
+
+    // Section header context menu overlay (right-click on section header)
+    SectionHeaderContextMenu {
+        show: root.section-header-ctx-menu-show;
+        position-x: root.section-header-ctx-menu-x;
+        position-y: root.section-header-ctx-menu-y;
+        section-id: root.section-header-ctx-menu-section-id;
+
+        close => {
+            root.section-header-ctx-menu-show = false;
+        }
+        remove-section(section-id) => {
+            root.delete-section-clicked(section-id);
         }
     }
 }

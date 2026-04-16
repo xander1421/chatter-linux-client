@@ -88,11 +88,12 @@ export component MessageContextMenu inherits Rectangle {
         clicked => { root.close(); }
     }
 
-    // Menu container - positioned at click location
+    // Menu container - positioned at click location, with a small offset
+    // so the cursor lands on the menu content rather than the corner.
     menu-container := Rectangle {
         // Position at click, but ensure menu stays on screen
-        x: min(root.position-x, parent.width - self.width - Spacing.md);
-        y: min(root.position-y, parent.height - self.height - Spacing.md);
+        x: min(root.position-x - Spacing.sm, parent.width - self.width - Spacing.md);
+        y: min(root.position-y + Spacing.sm, parent.height - self.height - Spacing.md);
         width: 200px;
         height: menu-layout.preferred-height + Spacing.sm * 2;
         background: Colors.surface;

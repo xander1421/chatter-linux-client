@@ -9,7 +9,7 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::services::session_service::Session;
 
-use crate::{MainWindow, SessionInfo};
+use crate::{MainWindow, SessionInfo, spawn_async_action, run_ui};
 
 /// Convert domain Session to Slint SessionInfo.
 fn session_to_slint(s: Session) -> SessionInfo {
@@ -43,120 +43,49 @@ pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
     // View sessions
     let weak_window = window.as_weak();
-    let session_service_view = session_service.clone();
+    let service_view = session_service.clone();
 
     window.on_settings_view_sessions(move || {
-        let weak = weak_window.clone();
-        let service = session_service_view.clone();
+        let service = service_view.clone();
+        run_ui!(weak_window, |w| w.set_active_modal("sessions".into()));
 
-        tokio::spawn(async move {
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_sessions_loading(true);
-                    w.set_active_modal("sessions".into());
-                }
-            });
-
-            match service.list_sessions().await {
-                Ok(sessions) => update_sessions_ui(weak, sessions),
-                Err(e) => {
-                    tracing::error!("Failed to list sessions: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_sessions_loading(false);
-                        }
-                    });
-                }
-            }
-        });
+        spawn_async_action!(weak_window, set_sessions_loading,
+            async { service.list_sessions().await },
+            |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
+        );
     });
 
     // Revoke single session
     let weak_window = window.as_weak();
-    let session_service_revoke = session_service.clone();
+    let service_revoke = session_service.clone();
 
     window.on_revoke_session(move |device_id: i32| {
-        let weak = weak_window.clone();
-        let service = session_service_revoke.clone();
+        let service = service_revoke.clone();
+        let service_refresh = service_revoke.clone();
 
-        tokio::spawn(async move {
-            let weak_revoking = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_revoking.upgrade() {
-                    w.set_sessions_revoking(true);
-                }
-            });
-
-            match service.revoke_session(device_id as u32).await {
-                Ok(()) => {
-                    tracing::info!("Revoked session for device {}", device_id);
-                    // Refresh sessions list
-                    match service.list_sessions().await {
-                        Ok(sessions) => update_sessions_ui(weak, sessions),
-                        Err(e) => {
-                            tracing::error!("Failed to refresh sessions after revoke: {}", e);
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak.upgrade() {
-                                    w.set_sessions_revoking(false);
-                                }
-                            });
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to revoke session: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_sessions_revoking(false);
-                        }
-                    });
-                }
-            }
-        });
+        spawn_async_action!(weak_window, set_sessions_revoking,
+            async { 
+                service.revoke_session(device_id as u32).await?;
+                service_refresh.list_sessions().await
+            },
+            |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
+        );
     });
 
     // Revoke all other sessions
     let weak_window = window.as_weak();
-    let session_service_revoke_all = session_service.clone();
+    let service_revoke_all = session_service.clone();
 
     window.on_revoke_all_sessions(move || {
-        let weak = weak_window.clone();
-        let service = session_service_revoke_all.clone();
+        let service = service_revoke_all.clone();
+        let service_refresh = service_revoke_all.clone();
 
-        tokio::spawn(async move {
-            let weak_revoking = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_revoking.upgrade() {
-                    w.set_sessions_revoking(true);
-                }
-            });
-
-            match service.revoke_all_other_sessions().await {
-                Ok(()) => {
-                    tracing::info!("Revoked all other sessions");
-                    // Refresh sessions list
-                    match service.list_sessions().await {
-                        Ok(sessions) => update_sessions_ui(weak, sessions),
-                        Err(e) => {
-                            tracing::error!("Failed to refresh sessions after revoke all: {}", e);
-                            let _ = slint::invoke_from_event_loop(move || {
-                                if let Some(w) = weak.upgrade() {
-                                    w.set_sessions_revoking(false);
-                                }
-                            });
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Failed to revoke all sessions: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_sessions_revoking(false);
-                        }
-                    });
-                }
-            }
-        });
+        spawn_async_action!(weak_window, set_sessions_revoking,
+            async {
+                service.revoke_all_other_sessions().await?;
+                service_refresh.list_sessions().await
+            },
+            |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
+        );
     });
 }

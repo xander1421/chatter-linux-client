@@ -112,7 +112,7 @@ pub async fn poll_group_mailboxes(
             }
         }
         Err(e) => {
-            tracing::debug!(error = %e, "Group mailbox poll failed (may be normal if no active groups)");
+            tracing::warn!(error = %e, "Group mailbox poll failed");
         }
     }
 }

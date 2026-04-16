@@ -8,7 +8,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::UserId;
 
-use crate::{ForwardTarget, MainWindow};
+use crate::{ForwardTarget, MainWindow, run_ui};
 
 /// Wire reply-message callback from context menu.
 /// Gets sender name and preview from the UI message model directly.
@@ -18,12 +18,9 @@ pub fn wire_reply_message(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     window.on_reply_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
-        let weak = weak_window.clone();
 
         // Get reply info directly from UI message model (works for all message types)
-        let _ = slint::invoke_from_event_loop(move || {
-            let Some(w) = weak.upgrade() else { return };
-
+        run_ui!(weak_window, |w| {
             let messages = w.get_messages();
             let mut display_name = String::new();
             let mut preview_text = String::new();
@@ -108,63 +105,61 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 .map(|t| chatter_core::services::gateway::shared::truncate_preview(&t))
                 .unwrap_or_else(|| "Message".to_string());
 
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_forward_message_preview(preview.into());
+            run_ui!(weak, |w| {
+                w.set_forward_message_preview(preview.into());
 
-                    // Populate forward targets from sidebar data
-                    let mut targets: Vec<ForwardTarget> = Vec::new();
+                // Populate forward targets from sidebar data
+                let mut targets: Vec<ForwardTarget> = Vec::new();
 
-                    // Add DM conversations
-                    let dms = w.get_dm_conversations();
-                    for i in 0..dms.row_count() {
-                        if let Some(dm) = dms.row_data(i) {
-                            targets.push(ForwardTarget {
-                                id: dm.channel_id.clone(),
-                                name: dm.display_name.clone(),
-                                avatar_url: dm.avatar_url.clone(),
-                                target_type: "dm".into(),
-                            });
-                        }
+                // Add DM conversations
+                let dms = w.get_dm_conversations();
+                for i in 0..dms.row_count() {
+                    if let Some(dm) = dms.row_data(i) {
+                        targets.push(ForwardTarget {
+                            id: dm.channel_id.clone(),
+                            name: dm.display_name.clone(),
+                            avatar_url: dm.avatar_url.clone(),
+                            target_type: "dm".into(),
+                        });
                     }
-
-                    // Add channels
-                    let channels = w.get_channels();
-                    for i in 0..channels.row_count() {
-                        if let Some(ch) = channels.row_data(i) {
-                            targets.push(ForwardTarget {
-                                id: ch.channel_id.clone(),
-                                name: ch.name.clone(),
-                                avatar_url: "".into(),
-                                target_type: "channel".into(),
-                            });
-                        }
-                    }
-
-                    // Add private groups
-                    let groups = w.get_private_groups();
-                    for i in 0..groups.row_count() {
-                        if let Some(g) = groups.row_data(i) {
-                            targets.push(ForwardTarget {
-                                id: g.group_id.clone(),
-                                name: g.name.clone(),
-                                avatar_url: "".into(),
-                                target_type: "channel".into(),
-                            });
-                        }
-                    }
-
-                    w.set_forward_targets(ModelRc::from(
-                        std::rc::Rc::new(VecModel::from(targets)),
-                    ));
-
-                    w.set_active_modal("forward-message".into());
-                    tracing::debug!(
-                        sender_id = %sender_id_str,
-                        timestamp = %timestamp_ns_str,
-                        "Forward modal opened (Signal-style lookup)"
-                    );
                 }
+
+                // Add channels
+                let channels = w.get_channels();
+                for i in 0..channels.row_count() {
+                    if let Some(ch) = channels.row_data(i) {
+                        targets.push(ForwardTarget {
+                            id: ch.channel_id.clone(),
+                            name: ch.name.clone(),
+                            avatar_url: "".into(),
+                            target_type: "channel".into(),
+                        });
+                    }
+                }
+
+                // Add private groups
+                let groups = w.get_private_groups();
+                for i in 0..groups.row_count() {
+                    if let Some(g) = groups.row_data(i) {
+                        targets.push(ForwardTarget {
+                            id: g.group_id.clone(),
+                            name: g.name.clone(),
+                            avatar_url: "".into(),
+                            target_type: "channel".into(),
+                        });
+                    }
+                }
+
+                w.set_forward_targets(ModelRc::from(
+                    std::rc::Rc::new(VecModel::from(targets)),
+                ));
+
+                w.set_active_modal("forward-message".into());
+                tracing::debug!(
+                    sender_id = %sender_id_str,
+                    timestamp = %timestamp_ns_str,
+                    "Forward modal opened (Signal-style lookup)"
+                );
             });
         });
     });

@@ -22,6 +22,10 @@ pub struct ChannelListItemData {
     pub channel_type: String,
     /// Number of unread messages.
     pub unread_count: u32,
+    /// Last message preview text.
+    pub last_message: String,
+    /// Timestamp string (e.g., "2h", "Mon").
+    pub timestamp: String,
 }
 
 impl ChannelListItemData {
@@ -38,6 +42,8 @@ impl ChannelListItemData {
             name: name.into(),
             channel_type: channel_type.into(),
             unread_count,
+            last_message: String::new(),
+            timestamp: String::new(),
         }
     }
 
@@ -58,6 +64,20 @@ impl ChannelListItemData {
     pub fn dm(channel_id: impl Into<String>, name: impl Into<String>, unread_count: u32) -> Self {
         Self::new(channel_id, name, "dm", unread_count)
     }
+
+    /// Set last message preview.
+    #[must_use]
+    pub fn with_last_message(mut self, message: impl Into<String>) -> Self {
+        self.last_message = message.into();
+        self
+    }
+
+    /// Set timestamp.
+    #[must_use]
+    pub fn with_timestamp(mut self, timestamp: impl Into<String>) -> Self {
+        self.timestamp = timestamp.into();
+        self
+    }
 }
 
 impl From<&Channel> for ChannelListItemData {
@@ -74,6 +94,8 @@ impl From<&Channel> for ChannelListItemData {
             name: channel.name.clone(),
             channel_type: channel_type.to_string(),
             unread_count: channel.unread_count,
+            last_message: String::new(),
+            timestamp: String::new(),
         }
     }
 }
@@ -111,6 +133,8 @@ pub struct DMListItemData {
     pub timestamp: String,
     /// Number of unread messages.
     pub unread_count: u32,
+    /// Whether the user is currently typing.
+    pub is_typing: bool,
 }
 
 impl DMListItemData {
@@ -132,6 +156,7 @@ impl DMListItemData {
             last_message: String::new(),
             timestamp: String::new(),
             unread_count: 0,
+            is_typing: false,
         }
     }
 
@@ -169,7 +194,82 @@ impl DMListItemData {
         self.unread_count = count;
         self
     }
+
+    /// Set typing status.
+    #[must_use]
+    pub fn with_typing(mut self, is_typing: bool) -> Self {
+        self.is_typing = is_typing;
+        self
+    }
 }
+
+/// Send-safe intermediate struct for DMListItemData.
+///
+/// Contains raw pixel data or bytes that can be passed across thread boundaries
+/// before being converted into `slint::Image` in the UI thread.
+#[derive(Clone, Debug)]
+pub struct DMListItemSendData {
+    pub channel_id: String,
+    pub user_id: String,
+    pub display_name: String,
+    pub avatar_url: String,
+    /// Raw avatar bytes.
+    pub avatar_bytes: Option<Vec<u8>>,
+    /// Pre-decoded RGBA pixels (width, height, data).
+    pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
+    pub initials: String,
+    pub presence_status: String,
+    pub last_message: String,
+    pub timestamp: String,
+    pub unread_count: u32,
+    pub is_typing: bool,
+}
+
+impl DMListItemSendData {
+    /// Pre-decode avatar bytes to RGBA.
+    pub fn pre_decode_avatar(&mut self) {
+        if self.avatar_decoded.is_some() {
+            return;
+        }
+        if let Some(bytes) = &self.avatar_bytes {
+            if let Ok(img) = image::load_from_memory(bytes) {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                self.avatar_decoded = Some((w, h, rgba.into_raw()));
+            }
+        }
+    }
+}
+
+/// Send-safe intermediate struct for FriendRequestData.
+#[derive(Clone, Debug)]
+pub struct FriendRequestSendData {
+    pub user_id: String,
+    pub display_name: String,
+    pub username: String,
+    pub avatar_url: String,
+    pub avatar_bytes: Option<Vec<u8>>,
+    /// Pre-decoded RGBA pixels (width, height, data).
+    pub avatar_decoded: Option<(u32, u32, Vec<u8>)>,
+    pub sent_at: String,
+}
+
+impl FriendRequestSendData {
+    /// Pre-decode avatar bytes to RGBA.
+    pub fn pre_decode_avatar(&mut self) {
+        if self.avatar_decoded.is_some() {
+            return;
+        }
+        if let Some(bytes) = &self.avatar_bytes {
+            if let Ok(img) = image::load_from_memory(bytes) {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                self.avatar_decoded = Some((w, h, rgba.into_raw()));
+            }
+        }
+    }
+}
+
 
 /// Convert a presence status string to a hex color for Slint.
 ///

@@ -369,6 +369,12 @@ export component App inherits Rectangle {
     in-out property <[PrivateGroupFriend]> create-channel-available-friends: [];
     in-out property <int> create-channel-selected-friend-count: 0;
 
+    // Create channel icon upload properties
+    in-out property <string> create-channel-icon-url: "";
+    in-out property <image> create-channel-icon-preview;
+    in-out property <bool> create-channel-has-icon-preview: false;
+    callback create-channel-pick-icon();
+
     // Invite to private group modal properties
     in-out property <string> invite-private-group-id: "";
     in-out property <[PrivateGroupFriend]> invite-private-group-friends: [];
@@ -1362,6 +1368,9 @@ export component App inherits Rectangle {
         ai-models-error: root.create-channel-ai-models-error;
         available-friends <=> root.create-channel-available-friends;
         selected-friend-count <=> root.create-channel-selected-friend-count;
+        icon-url <=> root.create-channel-icon-url;
+        icon-preview <=> root.create-channel-icon-preview;
+        has-icon-preview <=> root.create-channel-has-icon-preview;
 
         close => {
             root.active-modal = "none";
@@ -1371,6 +1380,9 @@ export component App inherits Rectangle {
         }
         provider-selected(provider) => {
             root.create-channel-provider-selected(provider);
+        }
+        pick-channel-icon => {
+            root.create-channel-pick-icon();
         }
         create-private-group(name, friends) => {
             root.create-private-group(name, friends);

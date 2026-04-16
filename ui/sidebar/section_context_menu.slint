@@ -62,6 +62,63 @@ component MenuItem inherits Rectangle {
     }
 }
 
+// Right-click menu for a section header itself (acts on the section, not a conversation).
+export component SectionHeaderContextMenu inherits Rectangle {
+    in property <bool> show: false;
+    in property <length> position-x: 0;
+    in property <length> position-y: 0;
+    in property <string> section-id: "";
+
+    callback remove-section(/* section-id */ string);
+    callback close();
+
+    visible: root.show;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+
+    // Backdrop — click anywhere outside to close
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => { root.close(); }
+    }
+
+    // Menu card
+    Rectangle {
+        x: min(root.position-x, parent.width - self.width - Spacing.md);
+        y: min(root.position-y, parent.height - self.height - Spacing.md);
+        width: 180px;
+        height: header-menu-layout.preferred-height + Spacing.sm * 2;
+        background: Colors.surface;
+        border-radius: Spacing.radius-md;
+        border-width: 1px;
+        border-color: Colors.neo-highlight-strong;
+        drop-shadow-blur: Spacing.neo-blur-lg;
+        drop-shadow-offset-x: Spacing.neo-offset-lg;
+        drop-shadow-offset-y: Spacing.neo-offset-lg;
+        drop-shadow-color: Colors.neo-shadow-strong;
+
+        // Block backdrop clicks on menu area
+        TouchArea { }
+
+        header-menu-layout := VerticalLayout {
+            padding: Spacing.sm;
+            spacing: 2px;
+
+            MenuItem {
+                icon: Icons.trash;
+                label: "Remove section";
+                destructive: true;
+                clicked => {
+                    root.remove-section(root.section-id);
+                    root.close();
+                }
+            }
+        }
+    }
+}
+
 export component SectionContextMenu inherits Rectangle {
     // Visibility & position
     in property <bool> show: false;

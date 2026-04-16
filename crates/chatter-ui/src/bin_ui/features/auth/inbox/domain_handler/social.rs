@@ -163,17 +163,18 @@ pub(super) fn handle_anon_dm_profile_updated(
     conversation_id: chatter_core::domain::anon_dm::AnonDmId,
     user_id: UserId,
     display_name: Option<String>,
+    avatar: Option<Vec<u8>>,
     avatar_url: Option<String>,
     bio: Option<String>,
     timestamp: u64,
 ) {
     let weak = window.clone();
-    let conversation_id_str = conversation_id.to_string();
+    let channel_id_str = format!("anon_dm:{}", conversation_id);
     let display_name_clone = display_name.clone();
 
     // Update display name in sidebar immediately
     let weak_for_name = weak.clone();
-    let conv_id_for_name = conversation_id_str.clone();
+    let conv_id_for_name = channel_id_str.clone();
     let name_for_ui = display_name_clone.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_for_name.upgrade() {
@@ -192,23 +193,28 @@ pub(super) fn handle_anon_dm_profile_updated(
         }
     });
 
-    // Update avatar in sidebar — either download from URL or load from DB
-    // (inline encrypted avatars are already decrypted and stored by the inbox handler)
-    if let Some(url) = avatar_url.clone() {
+    // Update avatar in sidebar
+    if let Some(avatar_bytes) = avatar {
+        // Use decrypted bytes from the event (most efficient)
+        let weak_for_avatar = weak.clone();
+        let channel_id_for_avatar = channel_id_str.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak_for_avatar.upgrade() {
+                update_dm_avatar(&w, &channel_id_for_avatar, &avatar_bytes);
+            }
+        });
+    } else if let Some(ref url) = avatar_url {
+        // Fallback to URL if no inline avatar was provided
         let anon_dm_service = ui_ctx.anon_dms().clone();
         let weak_for_avatar = weak.clone();
-        let conv_id_for_avatar = conversation_id_str.clone();
+        let channel_id_for_avatar = channel_id_str.clone();
+        let url_for_task = url.clone();
 
         tokio::spawn(async move {
-            let conv_id = match conv_id_for_avatar.parse::<chatter_core::domain::anon_dm::AnonDmId>() {
-                Ok(id) => id,
-                Err(_) => return,
-            };
-
-            let bytes = match anon_dm_service.download_and_store_avatar(&conv_id, &url).await {
+            let bytes = match anon_dm_service.download_and_store_avatar(&conversation_id, &url_for_task).await {
                 Ok(b) => b,
                 Err(e) => {
-                    tracing::warn!("Failed to download avatar for anon DM {}: {}", conv_id_for_avatar, e);
+                    tracing::warn!("Failed to download avatar for anon DM {}: {}", conversation_id, e);
                     return;
                 }
             };
@@ -216,24 +222,24 @@ pub(super) fn handle_anon_dm_profile_updated(
             // Update avatar in sidebar UI
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_for_avatar.upgrade() {
-                    update_dm_avatar(&w, &conv_id_for_avatar, &bytes);
+                    update_dm_avatar(&w, &channel_id_for_avatar, &bytes);
                 }
             });
 
-            tracing::info!("Downloaded and stored avatar for anon DM");
+            tracing::info!("Downloaded and stored avatar for anon DM from URL");
         });
     } else {
-        // No URL — check if the inbox handler stored inline avatar bytes in DB
+        // No inline avatar or URL — check if the DB already has it (fallback)
         let anon_dm_service = ui_ctx.anon_dms().clone();
         let weak_for_avatar = weak.clone();
-        let conv_id_for_avatar = conversation_id_str.clone();
+        let channel_id_for_avatar = channel_id_str.clone();
 
         if let Ok(Some(dm)) = anon_dm_service.get_conversation(&conversation_id) {
             if let Some(ref avatar_bytes) = dm.peer_avatar {
                 let bytes = avatar_bytes.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak_for_avatar.upgrade() {
-                        update_dm_avatar(&w, &conv_id_for_avatar, &bytes);
+                        update_dm_avatar(&w, &channel_id_for_avatar, &bytes);
                     }
                 });
             }

@@ -201,10 +201,13 @@ harness = false
 [features]
 default = ["desktop-system", "desktop-media"]
 desktop-system = ["keyring/sync-secret-service", "keyring/windows-native"]
-desktop-media = [
+desktop-gstreamer = [
     "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video",
     "dep:gstreamer-audio", "dep:gstreamer-pbutils", "dep:gstreamer-gl",
     "dep:gstreamer-play", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys",
+]
+desktop-media = [
+    "desktop-gstreamer",
     "dep:livekit", "dep:livekit-api",
 ]
 local-ai = ["dep:mistralrs"]

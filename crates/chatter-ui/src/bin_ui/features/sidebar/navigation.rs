@@ -7,7 +7,7 @@ use slint::{ComponentHandle, SharedString};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
 
-use crate::MainWindow;
+use crate::{MainWindow, run_ui};
 
 /// Extract the first uppercase character from an org name for the collapsed badge.
 fn org_initial(name: &str) -> SharedString {
@@ -24,21 +24,14 @@ use super::stop_audio_playback;
 
 pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let auth_state = ui_ctx.auth_state().clone();
-    let chat_state = ui_ctx.chat_state().clone();
-    let channel_service = ui_ctx.channels().clone();
-    let message_service = ui_ctx.messages().clone();
-    let user_service = ui_ctx.users().clone();
-    let attachment_service = ui_ctx.attachments().clone();
+    let ui_ctx_clone = ui_ctx.clone();
 
     window.on_saved_messages_clicked(move || {
         let weak = weak_window.clone();
-        let auth_state = auth_state.clone();
-        let chat_state = chat_state.clone();
-        let channel_service = channel_service.clone();
-        let message_service = message_service.clone();
-        let user_service = user_service.clone();
-        let attachment_service = attachment_service.clone();
+        let ui_ctx = ui_ctx_clone.clone();
+        let auth_state = ui_ctx.auth_state().clone();
+        let chat_state = ui_ctx.chat_state().clone();
+        let channel_service = ui_ctx.channels().clone();
 
         // Stop any playing audio when switching channels
         stop_audio_playback();
@@ -46,70 +39,62 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         // Clear inline GIF animations to free memory
         crate::bin_ui::gif_state::clear_inline_gifs();
 
+        let channel_id_str = match auth_state.get().current_user_id {
+            Some(id) => id.to_string(),
+            None => {
+                tracing::warn!("Cannot open saved messages: not logged in");
+                return;
+            }
+        };
+
+        let channel_id_str_for_ui = channel_id_str.clone();
+        run_ui!(weak, |w| {
+            w.set_loading_messages(true);
+            w.set_selected_channel_id(channel_id_str_for_ui.into());
+            w.set_selected_dm_id("".into());
+            // Clear composer reply/edit state to prevent stale context
+            w.set_composer_is_replying(false);
+            w.set_composer_reply_to_sender("".into());
+            w.set_composer_reply_to_sender_name("".into());
+            w.set_composer_reply_to_timestamp("".into());
+            w.set_composer_reply_preview("".into());
+            w.set_composer_reply_has_thumbnail(false);
+            w.set_composer_reply_thumbnail(slint::Image::default());
+            w.set_composer_is_editing(false);
+            w.set_composer_edit_message_id("".into());
+            // Clear pinned bar immediately
+            w.set_has_pinned_messages(false);
+            w.set_pinned_message_preview("".into());
+            w.set_pinned_total_count(0);
+        });
+
         tokio::spawn(async move {
-            // Get current user ID - saved messages channel_id = user_id
-            let user_id = match auth_state.get().current_user_id {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Cannot open saved messages: not logged in");
+            let channel_id: ChannelId = match channel_id_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID for saved messages: {}", e);
                     return;
                 }
             };
-
-            // The saved messages channel ID is the same as the user ID
-            let channel_id: ChannelId = user_id.into();
-
-            // Set loading state
-            let weak_loading = weak.clone();
-            let channel_id_str: SharedString = channel_id.to_string().into();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_loading_messages(true);
-                    w.set_selected_channel_id(channel_id_str);
-                    w.set_selected_dm_id("".into());
-                    // Clear composer reply/edit state to prevent stale context
-                    w.set_composer_is_replying(false);
-                    w.set_composer_reply_to_sender("".into());
-                    w.set_composer_reply_to_sender_name("".into());
-                    w.set_composer_reply_to_timestamp("".into());
-                    w.set_composer_reply_preview("".into());
-                    w.set_composer_reply_has_thumbnail(false);
-                    w.set_composer_reply_thumbnail(slint::Image::default());
-                    w.set_composer_is_editing(false);
-                    w.set_composer_edit_message_id("".into());
-                }
-            });
 
             // Update chat state with active channel
             chat_state.set_active_channel(channel_id);
             chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
 
-            // Ensure the saved messages channel exists locally before loading.
-            // The server may not include it in list_channels, so fetch it on demand.
+            // Ensure the saved messages channel exists locally
             if let Ok(None) | Err(_) = channel_service.get_channel_local(&channel_id) {
-                tracing::info!("SavedMessages channel not in local repo, fetching from server");
                 if let Err(e) = channel_service.get_channel(&channel_id).await {
                     tracing::error!("Failed to fetch saved messages channel from server: {}", e);
-                    let weak_err = weak.clone();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak_err.upgrade() {
-                            w.set_loading_messages(false);
-                        }
-                    });
+                    run_ui!(weak, |w| w.set_loading_messages(false));
                     return;
                 }
             }
 
             // Load the saved messages channel and its messages
-            let current_user_id = Some(user_id.to_string());
             load_channel_into_ui(
                 weak,
-                &channel_id,
-                channel_service,
-                message_service,
-                user_service,
-                attachment_service,
-                current_user_id,
+                channel_id,
+                ui_ctx,
             ).await;
         });
     });

@@ -18,6 +18,7 @@ pub enum JarvisCommand {
 /// Parse a slash command from message text.
 ///
 /// Returns None if not a recognized Jarvis command.
+#[must_use]
 pub fn parse_slash_command(text: &str) -> Option<JarvisCommand> {
     let text = text.trim();
 

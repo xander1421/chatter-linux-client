@@ -20,6 +20,7 @@ use crate::services::message::MessageService;
 use crate::services::signal_service::SignalService;
 use crate::services::user::UserService;
 use crate::state::ActiveConversation;
+use crate::util::time::TimestampNanos;
 
 /// Processes inbox events and handles protocol-level concerns.
 ///
@@ -1535,6 +1536,7 @@ impl InboxEventProcessor {
 
             match result {
                 Ok(Ok((_dm, profile))) => {
+                    // Emit request received event
                     event_bus.emit_domain(DomainEvent::AnonDmRequestReceived {
                         conversation_id: anon_dm_id,
                         sender_id: peer_id,
@@ -1543,6 +1545,17 @@ impl InboxEventProcessor {
                         profile_key: profile.profile_key,
                         sender_display_name: Some(profile.display_name.clone()),
                         sender_avatar: profile.avatar.clone(),
+                    });
+
+                    // Also emit profile updated event to ensure UI updates avatars immediately
+                    event_bus.emit_domain(DomainEvent::AnonDmProfileUpdated {
+                        conversation_id: anon_dm_id,
+                        user_id: peer_id,
+                        display_name: Some(profile.display_name),
+                        avatar: profile.avatar,
+                        avatar_url: None,
+                        bio: None,
+                        timestamp: TimestampNanos::now().as_u64(),
                     });
                 }
                 Ok(Err(e)) => {
@@ -1611,6 +1624,7 @@ impl InboxEventProcessor {
 
             match result {
                 Ok(Ok(profile)) => {
+                    // Emit acceptance event
                     event_bus.emit_domain(DomainEvent::AnonDmRequestAccepted {
                         conversation_id: anon_dm_id,
                         peer_id,
@@ -1618,6 +1632,17 @@ impl InboxEventProcessor {
                         profile_key: profile.profile_key,
                         peer_display_name: profile.display_name.clone(),
                         peer_avatar: profile.avatar.clone(),
+                    });
+
+                    // Also emit profile updated event to ensure UI updates avatars immediately
+                    event_bus.emit_domain(DomainEvent::AnonDmProfileUpdated {
+                        conversation_id: anon_dm_id,
+                        user_id: peer_id,
+                        display_name: Some(profile.display_name),
+                        avatar: profile.avatar,
+                        avatar_url: None,
+                        bio: None,
+                        timestamp: TimestampNanos::now().as_u64(),
                     });
                 }
                 Ok(Err(e)) => {

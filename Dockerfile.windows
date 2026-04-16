@@ -9,9 +9,9 @@
 #
 # Output: ./linux-client/output/chatter.exe
 
-FROM rust:1.85-bookworm
+FROM rust:bookworm
 
-# Install cross-compilation toolchain for Windows
+# Install cross-compilation toolchain for Windows and MSI extraction tools
 RUN apt-get update && apt-get install -y \
     mingw-w64 \
     gcc-mingw-w64-x86-64 \
@@ -24,16 +24,26 @@ RUN apt-get update && apt-get install -y \
     unzip \
     python3 \
     meson \
+    clang \
+    lld \
+    mold \
+    msitools \
+    protobuf-compiler \
+    libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Add Windows target
 RUN rustup target add x86_64-pc-windows-gnu
 
 # Set up cargo config for cross-compilation
+# CRITICAL: Use lld instead of GNU ld — GNU ld 2.40 has known bugs with COFF
+# relocations in .pdata sections from GStreamer MinGW libraries, causing
+# "dangerous relocation" / segfault during linking.
 RUN mkdir -p /root/.cargo && echo '\
 [target.x86_64-pc-windows-gnu]\n\
 linker = "x86_64-w64-mingw32-gcc"\n\
 ar = "x86_64-w64-mingw32-ar"\n\
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]\n\
 \n\
 [env]\n\
 PKG_CONFIG_ALLOW_CROSS = "1"\n\
@@ -41,37 +51,33 @@ PKG_CONFIG_ALLOW_CROSS = "1"\n\
 
 # Download and install GStreamer for Windows (MinGW development files)
 WORKDIR /opt
-ENV GSTREAMER_VERSION=1.24.10
+ENV GSTREAMER_VERSION=1.24.13
 
-# Download GStreamer MinGW binaries
+# Download and extract GStreamer MinGW MSIs
 RUN mkdir -p /opt/gstreamer-win64 && \
-    wget -q https://gstreamer.freedesktop.org/data/pkg/windows/${GSTREAMER_VERSION}/mingw/gstreamer-1.0-mingw-x86_64-${GSTREAMER_VERSION}.zip -O gst.zip && \
-    unzip -q gst.zip -d /opt/gstreamer-win64 || \
-    wget -q https://gstreamer.freedesktop.org/data/pkg/windows/1.24.0/mingw/gstreamer-1.0-mingw-x86_64-1.24.0.zip -O gst.zip && \
-    unzip -q gst.zip -d /opt/gstreamer-win64 || \
-    echo "GStreamer runtime download failed"
+    wget -q https://gstreamer.freedesktop.org/data/pkg/windows/${GSTREAMER_VERSION}/mingw/gstreamer-1.0-mingw-x86_64-${GSTREAMER_VERSION}.msi -O gst.msi && \
+    msiextract gst.msi -C /opt/gstreamer-win64 && \
+    wget -q https://gstreamer.freedesktop.org/data/pkg/windows/${GSTREAMER_VERSION}/mingw/gstreamer-1.0-devel-mingw-x86_64-${GSTREAMER_VERSION}.msi -O gst-devel.msi && \
+    msiextract gst-devel.msi -C /opt/gstreamer-win64 && \
+    rm gst.msi gst-devel.msi
 
-RUN wget -q https://gstreamer.freedesktop.org/data/pkg/windows/${GSTREAMER_VERSION}/mingw/gstreamer-1.0-devel-mingw-x86_64-${GSTREAMER_VERSION}.zip -O gst-devel.zip && \
-    unzip -q gst-devel.zip -d /opt/gstreamer-win64 || \
-    wget -q https://gstreamer.freedesktop.org/data/pkg/windows/1.24.0/mingw/gstreamer-1.0-devel-mingw-x86_64-1.24.0.zip -O gst-devel.zip && \
-    unzip -q gst-devel.zip -d /opt/gstreamer-win64 || \
-    echo "GStreamer devel download failed"
+# GStreamer paths (used by target build only — NOT set as global OPENSSL_*)
+ENV GST_ROOT_DIR=/opt/gstreamer-win64/gstreamer/1.0/mingw_x86_64
+ENV GSTREAMER_1_0_ROOT_X86_64=${GST_ROOT_DIR}
 
-# Set up pkg-config for cross-compilation
-ENV PKG_CONFIG_PATH=/opt/gstreamer-win64/lib/pkgconfig
-ENV PKG_CONFIG_SYSROOT_DIR=/opt/gstreamer-win64
-ENV GSTREAMER_1_0_ROOT_X86_64=/opt/gstreamer-win64
-
-# Environment variables for cross-compilation
-ENV CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+# Cross-compiler toolchain for the Windows target
 ENV CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc
 ENV CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++
 ENV AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
 ENV WINDRES=x86_64-w64-mingw32-windres
 
-# Use vendored OpenSSL to avoid cross-compilation issues
-ENV OPENSSL_STATIC=1
-ENV OPENSSL_NO_VENDOR=0
+# Protobuf for libsignal/spqr
+ENV PROTOC=/usr/bin/protoc
+
+# NOTE: OPENSSL_DIR/OPENSSL_LIB_DIR are NOT set globally.
+# Setting them globally pollutes the HOST build — build scripts (like webrtc-sys)
+# compile for the host (Linux) but pick up Windows .a files from GStreamer,
+# causing linker failures. Instead, we set them target-scoped at build time.
 
 # Copy both projects (build context should be parent chatter/ directory)
 WORKDIR /build
@@ -81,14 +87,26 @@ COPY slint-code-view /build/slint-code-view
 WORKDIR /build/linux-client
 
 # Build for Windows
+# Target-scoped env vars ensure Windows GStreamer libs only affect the target build,
+# not host-compiled build scripts.
 CMD ["sh", "-c", "\
     echo '=== Chatter Windows Cross-Compilation ===' && \
     echo 'Target: x86_64-pc-windows-gnu' && \
-    cargo build --release --target x86_64-pc-windows-gnu 2>&1 | tee /tmp/build.log && \
-    if [ -f target/x86_64-pc-windows-gnu/release/chatter-linux.exe ]; then \
+    export RUSTC_WRAPPER= && \
+    export PKG_CONFIG_PATH_x86_64_pc_windows_gnu=${GST_ROOT_DIR}/lib/pkgconfig && \
+    export PKG_CONFIG_SYSROOT_DIR_x86_64_pc_windows_gnu=${GST_ROOT_DIR} && \
+    export OPENSSL_DIR_x86_64_pc_windows_gnu=${GST_ROOT_DIR} && \
+    export OPENSSL_INCLUDE_DIR_x86_64_pc_windows_gnu=${GST_ROOT_DIR}/include && \
+    export OPENSSL_LIB_DIR_x86_64_pc_windows_gnu=${GST_ROOT_DIR}/lib && \
+    export OPENSSL_STATIC_x86_64_pc_windows_gnu=1 && \
+    export CFLAGS_x86_64_pc_windows_gnu=\"-I${GST_ROOT_DIR}/include\" && \
+    # Fix paths in pkg-config files \
+    find ${GST_ROOT_DIR}/lib/pkgconfig -name '*.pc' -exec sed -i \"s|^prefix=.*|prefix=$GST_ROOT_DIR|\" {} + && \
+    cargo build --release --target x86_64-pc-windows-gnu --no-default-features --features windows-cross 2>&1 | tee /tmp/build.log && \
+    if [ -f target/x86_64-pc-windows-gnu/release/chatter-ui.exe ]; then \
         echo '=== Build Successful ===' && \
         mkdir -p /output && \
-        cp target/x86_64-pc-windows-gnu/release/chatter-linux.exe /output/chatter.exe && \
+        cp target/x86_64-pc-windows-gnu/release/chatter-ui.exe /output/chatter.exe && \
         echo 'Output: /output/chatter.exe' && \
         ls -lh /output/; \
     else \

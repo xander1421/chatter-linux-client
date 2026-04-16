@@ -369,6 +369,7 @@ impl ChatterClient {
     // ── Anonymous Call Orchestration ─────────────────────────────────
 
     /// Start an anonymous DM call: acquire token, send offer, store pending state.
+    #[cfg(feature = "desktop-media")]
     pub async fn start_anon_dm_call(
         &self,
         anon_dm_id: &crate::domain::anon_dm::AnonDmId,
@@ -578,6 +579,7 @@ impl ChatterClient {
     /// Accept an incoming DM call (mobile): ECDH key exchange, send answer, get LiveKit credentials.
     ///
     /// Returns `MobileCallSetup` with LiveKit credentials and encryption key.
+    #[cfg(feature = "desktop-media")]
     pub async fn accept_dm_call_mobile(
         &self,
         caller_ephemeral_pk: [u8; 32],
@@ -708,6 +710,7 @@ impl ChatterClient {
     ///
     /// The mobile client tracks call state in the ViewModel, so call_id and
     /// channel_id are passed as parameters.
+    #[cfg(feature = "desktop-media")]
     pub async fn end_dm_call_mobile(
         &self,
         call_id: &str,
@@ -739,6 +742,7 @@ impl ChatterClient {
     /// End an anonymous call (mobile): send hangup, store history.
     ///
     /// Returns the conversation_id if available (for UI bubble insertion).
+    #[cfg(feature = "desktop-media")]
     pub async fn end_anon_call_mobile(
         &self,
         room_name: &str,
@@ -2027,11 +2031,12 @@ impl ChatterClient {
         channel_type: ChannelType,
         config: Option<crate::domain::channel::ChannelConfig>,
         description: Option<&str>,
+        image_url: Option<&str>,
         password: Option<&str>,
         initial_members: Vec<crate::domain::ids::UserId>,
     ) -> Result<Channel, crate::services::channel::ChannelError> {
         let (channel, mailbox_setup) = self.channels()
-            .create_channel(name, channel_type, config, description, None, password, initial_members, true)
+            .create_channel(name, channel_type, config, description, image_url, password, initial_members, true)
             .await?;
         self.finalize_mailbox_setup(&channel.id, mailbox_setup).await;
         self.subscribe_channel_messages(&channel.id);
@@ -2323,6 +2328,97 @@ impl ChatterClient {
         status: Option<&crate::domain::user::StatusMessage>,
     ) -> Result<crate::domain::Profile, crate::services::user::UserError> {
         self.users().update_user_profile(display_name, avatar_url, status).await
+    }
+
+    /// Decode + crop + resize + WebP-encode raw image bytes into a normalised
+    /// avatar. Pure delegation to [`crate::media::ImageProcessor::process_avatar_from_memory`]
+    /// — exposed on the client so the FFI bridge can drive it without
+    /// importing internal modules.
+    ///
+    /// Output is byte-identical regardless of which client calls this, so
+    /// Android, Linux, and any future client all produce the same processed
+    /// bytes from the same source image.
+    pub fn process_avatar(
+        &self,
+        raw: &[u8],
+    ) -> Result<Vec<u8>, crate::error::MediaError> {
+        crate::media::ImageProcessor::process_avatar_from_memory(raw)
+    }
+
+    /// Store the user's avatar bytes locally without notifying anyone.
+    ///
+    /// Bytes are written verbatim into the encrypted SQLCipher settings repo
+    /// at `keys::AVATAR`. They are **never** uploaded to the server (Signal-
+    /// style: avatars travel only in encrypted bootstrap messages and over
+    /// established Signal sessions, peer-to-peer).
+    ///
+    /// Caller must enforce the size cap before calling — see
+    /// [`crate::domain::anon_dm_init::MAX_AVATAR_SIZE`] (currently 1 MB).
+    /// We re-check here as defense in depth.
+    pub fn set_avatar_bytes(&self, bytes: &[u8]) -> Result<(), crate::services::auth_service::AuthError> {
+        use crate::storage::repositories::settings_repo::keys;
+        if bytes.len() > crate::domain::anon_dm_init::MAX_AVATAR_SIZE {
+            return Err(crate::services::auth_service::AuthError::InvalidInput(
+                format!(
+                    "avatar too large: {} bytes, max {}",
+                    bytes.len(),
+                    crate::domain::anon_dm_init::MAX_AVATAR_SIZE,
+                ),
+            ));
+        }
+        self.signal()
+            .settings_repo
+            .set_bytes(keys::AVATAR, bytes)?;
+        tracing::info!(avatar_size = bytes.len(), "Stored avatar bytes locally");
+        Ok(())
+    }
+
+    /// Update the user's avatar AND broadcast it to every active anon DM.
+    ///
+    /// 1. Stores the new avatar locally (replaces any previous one).
+    /// 2. Iterates `anon_dms().list_ready_conversations()` and fires a
+    ///    profile-update message at each one. Each message carries the new
+    ///    avatar encrypted with the user's profile key (via
+    ///    `AnonDmService::send_profile_update`).
+    ///
+    /// Failures to push to individual conversations are logged but do not
+    /// fail the call — the local store has already succeeded, and missing
+    /// peers will see the new avatar on the next message they receive that
+    /// happens to bundle a profile update.
+    pub async fn update_avatar_and_broadcast(
+        &self,
+        bytes: &[u8],
+    ) -> Result<(), crate::services::auth_service::AuthError> {
+        // 1. Local store (with size validation) — fail loudly if this breaks.
+        self.set_avatar_bytes(bytes)?;
+
+        // 2. Broadcast to active anon DMs (best effort).
+        let conversations = match self.anon_dms().list_ready_conversations() {
+            Ok(convs) => convs,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to enumerate anon DMs for avatar broadcast");
+                return Ok(());
+            }
+        };
+
+        let total = conversations.len();
+        let mut sent = 0usize;
+        for conv in conversations {
+            match self
+                .anon_dms()
+                .send_profile_update(&conv.id, None, None, None)
+                .await
+            {
+                Ok(()) => sent += 1,
+                Err(e) => tracing::warn!(
+                    conversation_id = %conv.id,
+                    error = %e,
+                    "Failed to broadcast avatar update to conversation"
+                ),
+            }
+        }
+        tracing::info!(sent, total, "Broadcast avatar update to active anon DMs");
+        Ok(())
     }
 
     /// Change password.

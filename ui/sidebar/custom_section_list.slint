@@ -47,6 +47,7 @@ component SectionConversationItem inherits Rectangle {
     in property <bool> collapsed: false;
 
     callback clicked();
+    callback context-menu-requested(/* x */ length, /* y */ length);
 
     height: 36px;
     border-radius: Spacing.radius-sm;
@@ -160,6 +161,13 @@ component SectionConversationItem inherits Rectangle {
     touch := TouchArea {
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                root.context-menu-requested(
+                    self.absolute-position.x + self.mouse-x,
+                    self.absolute-position.y + self.mouse-y);
+            }
+        }
     }
 }
 
@@ -176,14 +184,23 @@ component CustomSectionHeader inherits Rectangle {
     callback toggle-expanded();
     callback rename-clicked();
     callback delete-clicked();
+    callback context-menu-requested(/* x */ length, /* y */ length);
 
     height: 32px;
 
-    // Hover detector — always present (not inside conditional)
+    // Hover detector — always present (not inside conditional).
+    // Also captures right-click to open section context menu.
     header-hover := TouchArea {
         width: 100%;
         height: 100%;
         mouse-cursor: default;
+        pointer-event(event) => {
+            if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
+                root.context-menu-requested(
+                    self.absolute-position.x + self.mouse-x,
+                    self.absolute-position.y + self.mouse-y);
+            }
+        }
     }
 
     if !root.collapsed: HorizontalLayout {
@@ -344,6 +361,8 @@ export component CustomSectionList inherits Rectangle {
     callback create-section-clicked();
     callback section-toggle-expanded(/* section-id */ string);
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ string);
+    callback section-conversation-context-menu-requested(/* conversation-id */ string, /* conversation-type */ string, /* section-id */ string, /* x */ length, /* y */ length);
+    callback section-header-context-menu-requested(/* section-id */ string, /* x */ length, /* y */ length);
     callback delete-section-clicked(/* section-id */ string);
     callback rename-section-clicked(/* section-id */ string);
 
@@ -401,6 +420,9 @@ export component CustomSectionList inherits Rectangle {
                 toggle-expanded => { root.section-toggle-expanded(section.section-id); }
                 rename-clicked => { root.rename-section-clicked(section.section-id); }
                 delete-clicked => { root.delete-section-clicked(section.section-id); }
+                context-menu-requested(x, y) => {
+                    root.section-header-context-menu-requested(section.section-id, x, y);
+                }
             }
 
             // Section conversations (only when expanded)
@@ -423,6 +445,9 @@ export component CustomSectionList inherits Rectangle {
                     collapsed: root.collapsed;
 
                     clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
+                    context-menu-requested(x, y) => {
+                        root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, x, y);
+                    }
                 }
             }
 

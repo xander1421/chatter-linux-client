@@ -18,6 +18,8 @@ export struct ChannelListItemData {
     unread-count: int,
     last-message: string,
     timestamp: string,
+    avatar-source: image,
+    has-avatar: bool,
 }
 
 export component ChannelList inherits Rectangle {
@@ -181,6 +183,8 @@ export component ChannelList inherits Rectangle {
                     unread-count: item.unread-count;
                     selected: item.channel-id == root.selected-channel-id;
                     collapsed: root.collapsed;
+                    avatar-source: item.avatar-source;
+                    has-avatar: item.has-avatar;
 
                     clicked => {
                         root.channel-selected(item.channel-id);

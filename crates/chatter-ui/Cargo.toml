@@ -23,7 +23,7 @@ name = "test_thumbnail"
 path = "src/bin/test_thumbnail.rs"
 
 [dependencies]
-chatter-core = { path = "../chatter-core" }
+chatter-core = { path = "../chatter-core", default-features = false }
 
 # ============================================================================
 # UI Framework - Slint
@@ -40,10 +40,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-gstreamer = "0.23"
-gstreamer-app = "0.23"
-gstreamer-video = "0.23"
-gstreamer-gl = "0.23"
+gstreamer = { version = "0.23", optional = true }
+gstreamer-app = { version = "0.23", optional = true }
+gstreamer-video = { version = "0.23", optional = true }
+gstreamer-gl = { version = "0.23", optional = true }
+livekit = { version = "0.7.32", features = ["native-tls"], optional = true }
+livekit-api = { version = "0.4.14", optional = true }
 rand = "0.9"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pdfium-render = { version = "0.9", optional = true }
@@ -64,8 +66,8 @@ arboard = { version = "3", features = ["wayland-data-control"], optional = true 
 # Platform-specific: Linux (GL video rendering)
 # ============================================================================
 [target.'cfg(target_os = "linux")'.dependencies]
-gstreamer-gl-egl = "0.23"
-glutin_egl_sys = "0.7"
+gstreamer-gl-egl = { version = "0.23", optional = true }
+glutin_egl_sys = { version = "0.7", optional = true }
 
 # ============================================================================
 # Platform-specific: Android
@@ -82,7 +84,29 @@ slint-build = "1.15.1"
 
 [features]
 default = ["desktop"]
-desktop = ["dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", "slint/renderer-femtovg", "chatter-core/desktop-system", "chatter-core/desktop-media", "dep:pdfium-render"]
+desktop = [
+    "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit", 
+    "slint/renderer-skia", "chatter-core/desktop-system", "chatter-core/desktop-media", 
+    "dep:pdfium-render", "desktop-media"
+]
+# windows-cross: No LiveKit (webrtc-sys requires MSVC, can't cross-compile with MinGW).
+# GStreamer still links (unconditional dep in chatter-ui). For full features, build
+# natively on Windows with the 'desktop' feature.
+# windows-cross: GStreamer only, no LiveKit (webrtc-sys requires MSVC, can't cross-compile
+# with MinGW). For full features including calls, build natively on Windows.
+windows-cross = [
+    "dep:i-slint-backend-winit", "dep:winit", "dep:arboard", "slint/backend-winit",
+    "slint/renderer-software", "chatter-core/desktop-system", "chatter-core/desktop-gstreamer",
+    "desktop-media-no-livekit"
+]
+desktop-media = [
+    "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-gl",
+    "dep:livekit", "dep:livekit-api", "dep:gstreamer-gl-egl", "dep:glutin_egl_sys"
+]
+desktop-media-no-livekit = [
+    "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video", "dep:gstreamer-gl",
+    "dep:gstreamer-gl-egl", "dep:glutin_egl_sys"
+]
 local-ai = ["chatter-core/local-ai"]
 mobile = ["dep:i-slint-backend-android-activity", "dep:android-activity", "slint/backend-android-activity-06"]
 

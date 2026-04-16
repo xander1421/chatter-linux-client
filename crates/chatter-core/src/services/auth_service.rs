@@ -62,6 +62,10 @@ pub enum AuthError {
     /// User is already logged in.
     #[error("already logged in")]
     AlreadyLoggedIn,
+
+    /// Caller-provided input violated a constraint (e.g. avatar too large).
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
 }
 
 /// Result of a successful login or registration.

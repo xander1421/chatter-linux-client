@@ -12,7 +12,7 @@ mod anon;
 mod anon_calls;
 mod calls;
 mod helpers;
-pub(crate) use helpers::recompute_total_unread;
+pub(crate) use helpers::{recompute_total_unread, update_unread_count};
 mod messaging;
 mod social;
 
@@ -375,6 +375,7 @@ pub async fn handle_domain_event(
             );
         }
 
+        #[cfg(feature = "desktop-media")]
         DomainEvent::AnonCallAnswerReceived {
             conversation_id,
             accepted,
@@ -385,6 +386,10 @@ pub async fn handle_domain_event(
             anon_calls::handle_anon_call_answer(
                 window, ui_ctx, conversation_id, accepted, call_room_id, callee_display_name,
             );
+        }
+        #[cfg(not(feature = "desktop-media"))]
+        DomainEvent::AnonCallAnswerReceived { .. } => {
+            tracing::debug!("Ignoring AnonCallAnswerReceived (desktop-media disabled)");
         }
 
         DomainEvent::AnonCallHangupReceived { conversation_id, .. } => {
@@ -410,6 +415,7 @@ pub async fn handle_domain_event(
             );
         }
 
+        #[cfg(feature = "desktop-media")]
         DomainEvent::AnonGroupCallAnswerReceived {
             group_id,
             accepted,
@@ -420,6 +426,10 @@ pub async fn handle_domain_event(
             anon_calls::handle_anon_group_call_answer(
                 window, ui_ctx, group_id, accepted, call_room_id, callee_display_name,
             );
+        }
+        #[cfg(not(feature = "desktop-media"))]
+        DomainEvent::AnonGroupCallAnswerReceived { .. } => {
+            tracing::debug!("Ignoring AnonGroupCallAnswerReceived (desktop-media disabled)");
         }
 
         DomainEvent::AnonGroupCallHangupReceived { group_id, .. } => {
@@ -468,12 +478,13 @@ pub async fn handle_domain_event(
             conversation_id,
             user_id,
             display_name,
+            avatar,
             avatar_url,
             bio,
             timestamp,
         } => {
             social::handle_anon_dm_profile_updated(
-                window, ui_ctx, conversation_id, user_id, display_name, avatar_url, bio, timestamp,
+                window, ui_ctx, conversation_id, user_id, display_name, avatar, avatar_url, bio, timestamp,
             );
         }
 

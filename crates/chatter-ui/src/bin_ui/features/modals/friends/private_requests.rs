@@ -9,7 +9,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::services::anon_dm::AnonDmService;
 
-use crate::bin_ui::converters::{get_initials, DMListItemSendData, FriendRequestSendData};
+use crate::bin_ui::converters::{get_initials, DMListItemExt, DMListItemSendData, FriendRequestExt, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
 
 /// Wire callback to accept an anonymous DM request.

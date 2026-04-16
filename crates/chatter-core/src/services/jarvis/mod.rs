@@ -32,6 +32,7 @@
 //! ```
 
 pub mod background;
+pub mod commands;
 pub mod context_builder;
 pub mod entity_extractor;
 pub mod error;
@@ -39,6 +40,7 @@ pub mod memory_manager;
 pub mod service;
 
 pub use background::{JarvisBackground, JarvisBackgroundBuilder, JarvisBackgroundHandles};
+pub use commands::{JarvisCommand, parse_slash_command};
 pub use context_builder::{BuiltContext, ContextBuilder};
 pub use entity_extractor::{EntityExtractor, ExtractedEntity};
 pub use error::JarvisError;

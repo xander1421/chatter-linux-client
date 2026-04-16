@@ -8,6 +8,21 @@
 /// Long enough for slow networks, short enough that users won't force-quit.
 pub const UI_SERVICE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Run a synchronous action on the UI thread.
+///
+/// Wraps `slint::invoke_from_event_loop` with weak reference handling.
+#[macro_export]
+macro_rules! run_ui {
+    ($weak:expr, |$window:ident| $action:expr) => {{
+        let weak = $weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some($window) = weak.upgrade() {
+                $action
+            }
+        });
+    }};
+}
+
 /// Run an async action with loading state management.
 ///
 /// Handles the common modal callback pattern:
@@ -43,9 +58,10 @@ macro_rules! spawn_async_action {
         });
 
         tokio::spawn(async move {
+            let action_future = $action;
             let result = tokio::time::timeout(
                 $crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                async { $action },
+                action_future,
             ).await;
 
             match result {

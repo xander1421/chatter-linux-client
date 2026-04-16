@@ -15,6 +15,8 @@ export component ChannelListItem inherits Rectangle {
     in property <int> unread-count: 0;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
+    in property <image> avatar-source;
+    in property <bool> has-avatar: false;
 
     // Callbacks
     callback clicked();
@@ -38,13 +40,27 @@ export component ChannelListItem inherits Rectangle {
         spacing: Spacing.sm;
         alignment: stretch;
 
-        // Channel icon container (20px wide for alignment)
+        // Channel icon container (24px wide for alignment; uploaded avatar when present, else type glyph)
         Rectangle {
-            width: 20px;
+            width: 24px;
             height: parent.height;
 
-            // Public: hash, Private: lock, DM: user
-            Image {
+            if root.has-avatar: Rectangle {
+                width: 20px;
+                height: 20px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                border-radius: 10px;
+                clip: true;
+                Image {
+                    source: root.avatar-source;
+                    width: 100%;
+                    height: 100%;
+                    image-fit: cover;
+                }
+            }
+
+            if !root.has-avatar: Image {
                 source: root.channel-type == "public" ? Icons.hash
                       : root.channel-type == "private" ? Icons.lock
                       : Icons.users;
@@ -69,15 +85,6 @@ export component ChannelListItem inherits Rectangle {
                 vertical-alignment: center;
                 overflow: elide;
                 horizontal-stretch: 1;
-            }
-
-            // Encryption lock indicator
-            Image {
-                source: Icons.lock;
-                width: 10px;
-                height: 10px;
-                colorize: Colors.success;
-                y: (parent.height - self.height) / 2;
             }
         }
 
@@ -113,8 +120,22 @@ export component ChannelListItem inherits Rectangle {
         tooltip-enabled: root.collapsed;
         placement: "right";
 
-        // Centered channel icon
-        Image {
+        if root.has-avatar: Rectangle {
+            width: 24px;
+            height: 24px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 12px;
+            clip: true;
+            Image {
+                source: root.avatar-source;
+                width: 100%;
+                height: 100%;
+                image-fit: cover;
+            }
+        }
+
+        if !root.has-avatar: Image {
             source: root.channel-type == "public" ? Icons.hash
                   : root.channel-type == "private" ? Icons.lock
                   : Icons.users;

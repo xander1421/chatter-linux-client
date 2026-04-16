@@ -92,6 +92,8 @@ impl AnonDmService {
             Some(ContentType::Receipt(_)) => "Receipt",
             Some(ContentType::Pin(_)) => "Pin",
             Some(ContentType::Edit(_)) => "Edit",
+            Some(ContentType::AnonDmPresence(_)) => "AnonDmPresence",
+            Some(ContentType::AnonDmProfileUpdate(_)) => "AnonDmProfileUpdate",
             Some(ContentType::AnonGroupInvite(_)) => "AnonGroupInvite",
             Some(ContentType::AnonGroupJoinAck(_)) => "AnonGroupJoinAck",
             Some(ContentType::AnonGroupMemberList(_)) => "AnonGroupMemberList",
@@ -110,6 +112,74 @@ impl AnonDmService {
 
         // Route based on inner content type
         match &inner_content.content {
+            Some(ContentType::AnonDmPresence(presence)) => {
+                use crate::proto::content_v1::anon_dm_presence;
+                use crate::proto::chat_v1::UserPresence;
+
+                let user_presence = match anon_dm_presence::Status::try_from(presence.status).ok() {
+                    Some(anon_dm_presence::Status::Online) => UserPresence::Online,
+                    Some(anon_dm_presence::Status::Away) => UserPresence::Away,
+                    Some(anon_dm_presence::Status::DoNotDisturb) => UserPresence::DoNotDisturb,
+                    Some(anon_dm_presence::Status::Offline) | _ => UserPresence::Offline,
+                };
+
+                events.push(DomainEvent::UserPresenceChanged {
+                    user_id: *sender_id,
+                    presence: user_presence,
+                    timestamp: presence.timestamp,
+                });
+            }
+            Some(ContentType::AnonDmProfileUpdate(profile_update)) => {
+                use crate::crypto::profile_crypto;
+
+                // Validate sender is part of the conversation (double-check already done above but keep for consistency)
+                if let Ok(Some(mut conv)) = self.anon_dm_repo.get_conversation(conversation_id) {
+                    // Update display name
+                    if let Some(name) = &profile_update.display_name {
+                        conv.peer_display_name = Some(name.clone());
+                    }
+
+                    // Parse profile key and decrypt avatar
+                    let mut decrypted_avatar = None;
+                    let profile_key: Option<[u8; 32]> = profile_update.profile_key.as_ref().and_then(|pk| {
+                        if pk.len() == 32 { Some(pk.as_slice().try_into().unwrap()) } else { None }
+                    });
+
+                    if let (Some(pk), Some(encrypted)) = (&profile_key, &profile_update.encrypted_avatar) {
+                        if !encrypted.is_empty() {
+                            match profile_crypto::decrypt_avatar(pk, encrypted) {
+                                Ok(avatar) => {
+                                    tracing::info!(
+                                        avatar_size = avatar.len(),
+                                        "Decrypted peer avatar from profile update"
+                                    );
+                                    decrypted_avatar = Some(avatar.clone());
+                                    conv.peer_avatar = Some(avatar);
+                                }
+                                Err(e) => {
+                                    tracing::debug!("Failed to decrypt avatar in profile update: {}", e);
+                                }
+                            }
+                        }
+                    }
+
+                    // Store the updated conversation
+                    if let Err(e) = self.anon_dm_repo.update_conversation(&conv) {
+                        tracing::warn!("Failed to update anon DM conversation with new profile: {}", e);
+                    }
+
+                    // Emit event for UI update
+                    events.push(DomainEvent::AnonDmProfileUpdated {
+                        conversation_id: *conversation_id,
+                        user_id: *sender_id,
+                        display_name: profile_update.display_name.clone(),
+                        avatar: decrypted_avatar,
+                        avatar_url: profile_update.avatar_url.clone(),
+                        bio: profile_update.bio.clone(),
+                        timestamp: profile_update.timestamp,
+                    });
+                }
+            }
             Some(ContentType::DataMessage(data_msg)) => {
                 // Check for delete first
                 if let Some(delete) = &data_msg.delete {
@@ -383,6 +453,8 @@ impl AnonDmService {
                 }
             }
             Some(ContentType::AnonGroupInvite(invite)) => {
+                use crate::crypto::profile_crypto;
+
                 let group_id = crate::domain::anon_group::AnonGroupId::try_from_slice(&invite.group_id)
                     .unwrap_or_default();
                 let mut pk = [0u8; 32];
@@ -390,9 +462,26 @@ impl AnonDmService {
                     pk.copy_from_slice(&invite.inviter_mailbox_pk);
                 }
 
+                // Decrypt profile if key is present
+                let mut display_name = None;
+                let mut avatar = None;
+                let profile_key: Option<[u8; 32]> = invite.profile_key.as_ref().and_then(|pk| {
+                    if pk.len() == 32 { Some(pk.as_slice().try_into().unwrap()) } else { None }
+                });
+
+                if let Some(pk) = &profile_key {
+                    if let Some(encrypted) = &invite.encrypted_display_name {
+                        display_name = profile_crypto::decrypt_display_name(pk, encrypted).ok();
+                    }
+                    if let Some(encrypted) = &invite.encrypted_avatar {
+                        avatar = profile_crypto::decrypt_avatar(pk, encrypted).ok();
+                    }
+                }
+
                 tracing::info!(
                     sender_id = %sender_id,
                     group_id = %group_id,
+                    has_profile = profile_key.is_some(),
                     "Processing anonymous group invite in anon DM"
                 );
 
@@ -401,27 +490,46 @@ impl AnonDmService {
                     group_name: invite.group_name.clone(),
                     inviter_id: *sender_id,
                     inviter_mailbox_pk: pk,
-                    profile_key: None,
-                    inviter_display_name: None,
-                    inviter_avatar: None,
+                    profile_key,
+                    inviter_display_name: display_name,
+                    inviter_avatar: avatar,
                 });
             }
             Some(ContentType::AnonGroupJoinAck(ack)) => {
+                use crate::crypto::profile_crypto;
+
                 let group_id = crate::domain::anon_group::AnonGroupId::try_from_slice(&ack.group_id)
                     .unwrap_or_default();
                 
+                // Decrypt profile if key is present
+                let mut display_name = None;
+                let mut avatar = None;
+                let profile_key: Option<[u8; 32]> = ack.profile_key.as_ref().and_then(|pk| {
+                    if pk.len() == 32 { Some(pk.as_slice().try_into().unwrap()) } else { None }
+                });
+
+                if let Some(pk) = &profile_key {
+                    if let Some(encrypted) = &ack.encrypted_display_name {
+                        display_name = profile_crypto::decrypt_display_name(pk, encrypted).ok();
+                    }
+                    if let Some(encrypted) = &ack.encrypted_avatar {
+                        avatar = profile_crypto::decrypt_avatar(pk, encrypted).ok();
+                    }
+                }
+
                 tracing::info!(
                     sender_id = %sender_id,
                     group_id = %group_id,
+                    has_profile = profile_key.is_some(),
                     "Processing anonymous group join ack in anon DM"
                 );
 
                 events.push(DomainEvent::AnonGroupMemberJoined {
                     group_id,
                     user_id: *sender_id,
-                    profile_key: None,
-                    display_name: None,
-                    avatar: None,
+                    profile_key,
+                    display_name,
+                    avatar,
                 });
             }
             Some(ContentType::AnonGroupMemberList(list)) => {

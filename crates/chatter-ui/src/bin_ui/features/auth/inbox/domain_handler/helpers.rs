@@ -24,7 +24,7 @@ pub(super) fn get_anon_member_name(
 }
 
 /// Update unread count badge in sidebar (DM + channel models).
-pub(super) fn update_unread_count(window: &MainWindow, channel_id: &str, count: u32) {
+pub(crate) fn update_unread_count(window: &MainWindow, channel_id: &str, count: u32) {
     let count_i32 = count as i32;
 
     // Try DM sidebar first (match by channel_id field)

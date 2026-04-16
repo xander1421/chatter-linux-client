@@ -70,7 +70,7 @@ pub fn wire_jarvis_panel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = weak.clone();
 
             // Check for slash commands
-            if let Some(cmd) = super::slash_commands::parse_slash_command(&text) {
+            if let Some(cmd) = super::parse_slash_command(&text) {
                 tokio::spawn(async move {
                     handle_jarvis_command(&ui_ctx, cmd, weak).await;
                 });
@@ -135,10 +135,10 @@ async fn handle_jarvis_question(
 /// Handle a Jarvis slash command.
 async fn handle_jarvis_command(
     ui_ctx: &Arc<ChatterClient>,
-    cmd: super::slash_commands::JarvisCommand,
+    cmd: super::JarvisCommand,
     weak: slint::Weak<MainWindow>,
 ) {
-    use super::slash_commands::JarvisCommand;
+    use super::JarvisCommand;
 
     ui_ctx.jarvis_state().set_thinking(true);
     update_thinking_ui(&weak, true);

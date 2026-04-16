@@ -327,7 +327,8 @@ pub async fn process_anon_dm_results(
                         sender_id = %sender_id,
                         conversation_id = %conversation_id,
                         has_display_name = profile_update.display_name.is_some(),
-                        has_avatar = profile_update.avatar_url.is_some(),
+                        has_avatar = profile_update.encrypted_avatar.is_some(),
+                        has_avatar_url = profile_update.avatar_url.is_some(),
                         has_bio = profile_update.bio.is_some(),
                         "[ANON_DM] Received profile update from peer"
                     );

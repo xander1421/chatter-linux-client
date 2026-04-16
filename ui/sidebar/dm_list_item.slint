@@ -106,15 +106,6 @@ export component DMListItem inherits Rectangle {
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
-
-                // Encryption lock indicator
-                Image {
-                    source: Icons.lock;
-                    width: 10px;
-                    height: 10px;
-                    colorize: Colors.success;
-                    y: (parent.height - self.height) / 2;
-                }
             }
 
             // Typing indicator or last message preview

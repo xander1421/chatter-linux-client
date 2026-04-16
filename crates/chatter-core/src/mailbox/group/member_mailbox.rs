@@ -631,13 +631,13 @@ impl GroupMailboxManager {
         );
 
         // Query from both tables using UNION
-        // group_mailboxes.group_id is TEXT, anon_group_mailboxes.group_id is BLOB
+        // Both group_mailboxes.group_id and anon_group_mailboxes.group_id are TEXT UUIDs.
         let mut stmt = conn
             .prepare(
                 "SELECT group_id, mailbox_public_key, mailbox_private_key, id, expires_at, 'server' as source
                  FROM group_mailboxes WHERE expires_at > ?1
                  UNION ALL
-                 SELECT hex(group_id) as group_id, mailbox_public_key, mailbox_private_key, id, expires_at, 'anon' as source
+                 SELECT group_id, mailbox_public_key, mailbox_private_key, id, expires_at, 'anon' as source
                  FROM anon_group_mailboxes WHERE expires_at > ?1",
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
