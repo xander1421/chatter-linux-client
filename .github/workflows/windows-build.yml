@@ -62,7 +62,7 @@ jobs:
       - name: Build (no local-ai)
         env:
           RUSTC_WRAPPER: ""
-        run: cargo build --release --no-default-features
+        run: cargo build --release
 
       - name: Bundle release artifact
         shell: pwsh
