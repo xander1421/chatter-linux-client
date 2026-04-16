@@ -1,0 +1,117 @@
+name: Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main, refactor/dry-cleanup]
+
+env:
+  CARGO_TERM_COLOR: always
+  GSTREAMER_VERSION: "1.24.13"
+
+jobs:
+  build-windows:
+    name: Build Windows Client
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install GStreamer
+        uses: blinemedical/setup-gstreamer@v1
+        with:
+          version: ${{ env.GSTREAMER_VERSION }}
+
+      - name: Set GStreamer env vars
+        shell: pwsh
+        run: |
+          $gstRoot = $null
+          $candidates = @(
+            "C:\gstreamer\1.0\msvc_x86_64",
+            "C:\gstreamer\1.0\x86_64",
+            "$env:GSTREAMER_1_0_ROOT_MSVC_X86_64"
+          )
+          foreach ($c in $candidates) {
+            if ($c -and (Test-Path "$c\bin")) {
+              $gstRoot = $c
+              break
+            }
+          }
+
+          if (!$gstRoot) {
+            Write-Host "Searching for GStreamer installation..."
+            Get-ChildItem "C:\gstreamer" -Recurse -Depth 2 -ErrorAction SilentlyContinue | Select-Object FullName
+            $gstRoot = "C:\gstreamer\1.0\msvc_x86_64"
+          }
+
+          Write-Host "GStreamer root: $gstRoot"
+          echo "GST_ROOT=$gstRoot" >> $env:GITHUB_ENV
+          echo "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gstRoot" >> $env:GITHUB_ENV
+          echo "$gstRoot\bin" >> $env:GITHUB_PATH
+          echo "PKG_CONFIG_PATH=$gstRoot\lib\pkgconfig" >> $env:GITHUB_ENV
+          echo "LIB=$gstRoot\lib;$env:LIB" >> $env:GITHUB_ENV
+
+      - name: Install pkg-config
+        run: choco install pkgconfiglite -y
+
+      - name: Build (no local-ai)
+        run: cargo build --release --no-default-features
+
+      - name: Bundle release artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "SilentlyContinue"
+          mkdir artifact | Out-Null
+          cp target/release/chatter-linux.exe artifact/chatter-windows.exe
+
+          $gstBin = "$env:GST_ROOT\bin"
+          $gstPlugins = "$env:GST_ROOT\lib\gstreamer-1.0"
+
+          $coreDlls = @(
+            "gstreamer-1.0-0.dll", "gstvideo-1.0-0.dll", "gstaudio-1.0-0.dll",
+            "gstapp-1.0-0.dll", "gstgl-1.0-0.dll", "gstpbutils-1.0-0.dll",
+            "gstplay-1.0-0.dll", "gstbase-1.0-0.dll", "gstsdp-1.0-0.dll",
+            "gstrtp-1.0-0.dll", "gstrtsp-1.0-0.dll", "gsttag-1.0-0.dll",
+            "gstnet-1.0-0.dll", "gstcontroller-1.0-0.dll",
+            "glib-2.0-0.dll", "gobject-2.0-0.dll", "gmodule-2.0-0.dll",
+            "gio-2.0-0.dll", "intl-8.dll", "ffi-8.dll", "z-1.dll",
+            "pcre2-8-0.dll", "orc-0.4-0.dll"
+          )
+          foreach ($dll in $coreDlls) {
+            if (Test-Path "$gstBin\$dll") { cp "$gstBin\$dll" artifact/ }
+          }
+
+          mkdir artifact/lib/gstreamer-1.0 -Force | Out-Null
+          $plugins = @(
+            "gstcoreelements.dll", "gstcoretracers.dll",
+            "gstplayback.dll", "gsttypefindfunctions.dll",
+            "gstvideoconvertscale.dll", "gstaudioconvert.dll",
+            "gstaudioresample.dll", "gstvolume.dll",
+            "gstautodetect.dll", "gstapp.dll",
+            "gstwasapi2.dll", "gstd3d11.dll", "gstd3d12.dll",
+            "gstisomp4.dll", "gstmatroska.dll",
+            "gstvideoparsersbad.dll", "gstaudioparsers.dll",
+            "gstopenh264.dll", "gstvpx.dll", "gstopus.dll",
+            "gstlibav.dll"
+          )
+          foreach ($p in $plugins) {
+            if (Test-Path "$gstPlugins\$p") { cp "$gstPlugins\$p" artifact/lib/gstreamer-1.0/ }
+          }
+
+          Write-Host "=== Artifact contents ==="
+          Get-ChildItem artifact -Recurse | ForEach-Object {
+            $size = if ($_.Length) { "{0:N0} KB" -f ($_.Length/1KB) } else { "dir" }
+            Write-Host "  $($_.FullName)  ($size)"
+          }
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatter-windows-x64
+          path: artifact/
+          retention-days: 30
