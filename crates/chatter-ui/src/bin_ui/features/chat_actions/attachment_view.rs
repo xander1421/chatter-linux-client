@@ -10,7 +10,6 @@ use slint::{ComponentHandle, SharedString};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
 use chatter_core::domain::ids::AttachmentId;
-use slint_code_view::CodeViewState;
 #[cfg(not(target_os = "android"))]
 use chatter_core::media::{FilePicker, FilePickerConfig};
 use chatter_core::media::ImageProcessor;
@@ -23,7 +22,6 @@ use crate::bin_ui::preview_state;
 use crate::bin_ui::video_state;
 use crate::MainWindow;
 
-use super::code_preview::set_code_view_state;
 use super::timers::{start_audio_progress_timer, start_video_progress_timer};
 use super::transfer_status::update_attachment_transfer_status;
 
@@ -542,13 +540,10 @@ fn play_video_from_buffer(
     );
 }
 
-/// Display code with syntax highlighting from decrypted buffer.
-/// Display code file from decrypted buffer with syntax highlighting.
+/// Display code file from decrypted buffer as plain text.
 ///
-/// TODO: CodeViewState::render() returns slint::Image which is not Send,
-/// so syntax highlighting currently happens on UI thread. To fix this,
-/// CodeViewState would need to be refactored to return raw pixel data
-/// that can be converted to slint::Image on the UI thread.
+/// Syntax-highlighted rendering (previously via `slint-code-view`) has been
+/// removed; the preview panel shows the file name, line count and plain text.
 fn display_code_from_buffer(
     weak: slint::Weak<MainWindow>,
     secure_buffer: chatter_core::crypto::SecureBuffer,
@@ -558,29 +553,19 @@ fn display_code_from_buffer(
     let text = String::from_utf8_lossy(&data).to_string();
     let filename_for_ui = filename.to_string();
     let filename_for_state = filename.to_string();
-    let filename_for_code = filename.to_string();
 
     // Store content for "open external" feature
     preview_state::set_code_preview_content(filename_for_state, data);
 
+    let line_count = text.lines().count() as i32;
+
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            // Create CodeViewState and render (on UI thread due to slint::Image not being Send)
-            let mut state = CodeViewState::new();
-            state.set_code_from_file(&text, &filename_for_code);
-            let image = state.render();
-            let line_count = state.line_count() as i32;
-            let language = state.language().to_string();
-            let plain_text = state.plain_text().to_string();
-
-            // Store state for selection handling
-            set_code_view_state(state);
-
             w.set_code_preview_filename(filename_for_ui.into());
-            w.set_code_preview_language(language.into());
+            w.set_code_preview_language("".into());
             w.set_code_preview_line_count(line_count);
-            w.set_code_preview_image(image);
-            w.set_code_preview_plain_text(plain_text.into());
+            w.set_code_preview_image(slint::Image::default());
+            w.set_code_preview_plain_text(text.into());
             w.set_code_preview_has_selection(false);
             w.set_code_preview_selected_text("".into());
             w.set_code_preview_visible(true);

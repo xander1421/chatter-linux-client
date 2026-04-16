@@ -26,7 +26,6 @@ chatter-core = { path = "../chatter-core" }
 slint = { version = "1.15.1", default-features = false, features = ["compat-1-2", "accessibility", "backend-android-activity-06"] }
 i-slint-backend-winit = { version = "1.15.1", optional = true }
 winit = { version = "0.30", optional = true }
-slint-code-view = { path = "../../../slint-code-view" }
 
 # ============================================================================
 # Shared runtime deps (needed directly by the binary)
