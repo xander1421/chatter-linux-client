@@ -60,6 +60,8 @@ jobs:
         run: choco install pkgconfiglite -y
 
       - name: Build (no local-ai)
+        env:
+          RUSTC_WRAPPER: ""
         run: cargo build --release --no-default-features
 
       - name: Bundle release artifact
