@@ -59,6 +59,12 @@ jobs:
       - name: Install pkg-config
         run: choco install pkgconfiglite -y
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install OpenSSL (vcpkg)
         shell: pwsh
         run: |
