@@ -128,6 +128,9 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             slint::spawn_local(async move {
+                // Read duration BEFORE stopping timer — stop_call_timer clears CALL_START_NS
+                let duration = get_call_duration_secs() as i64;
+
                 // IMPORTANT: Update UI immediately BEFORE async operations
                 // This prevents the modal from staying visible if network calls block
                 stop_call_timer();
@@ -138,7 +141,6 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 // End call via core (handles hangup signal, history storage, leave)
                 if is_anonymous {
-                    let duration = get_call_duration_secs() as i64;
                     let ctx = ui_ctx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = ctx.end_anon_call(duration).await {
@@ -146,7 +148,6 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     });
                 } else {
-                    let duration = get_call_duration_secs() as i64;
                     let ctx = ui_ctx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = ctx.end_dm_call(duration).await {

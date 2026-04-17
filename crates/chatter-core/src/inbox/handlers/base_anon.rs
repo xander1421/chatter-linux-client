@@ -15,6 +15,49 @@ use crate::proto::content_v1::{self, typing_message, receipt_message, Content};
 use super::{DomainEvent, HandlerContext, HandlerOutcome, HandlerResult, HandlerError};
 
 // ============================================================================
+// Quote / reply context (extracted from the inbound Content proto)
+// ============================================================================
+
+/// Reply/quote metadata persisted alongside an anonymous data message so
+/// reply bubbles survive a channel reload on the receiver side.
+#[derive(Debug, Clone)]
+pub struct QuoteContext {
+    pub reply_to: Option<MessageId>,
+    pub reply_to_author_id: Option<UserId>,
+    pub reply_to_text: Option<String>,
+}
+
+impl QuoteContext {
+    /// Extract reply context from a Content proto's DataMessage quote.
+    pub fn from_content(inner_content: &Content) -> Option<Self> {
+        let dm = match &inner_content.content {
+            Some(content_v1::content::Content::DataMessage(dm)) => dm,
+            _ => return None,
+        };
+        let quote = dm.quote.as_ref()?;
+        let reply_to = Some(MessageId::from_timestamp(quote.id));
+        let reply_to_author_id = if quote.author_aci.is_empty() {
+            None
+        } else {
+            UserId::from_str(&quote.author_aci).ok()
+        };
+        let reply_to_text = if quote.text.is_empty() {
+            None
+        } else {
+            Some(quote.text.clone())
+        };
+        if reply_to.is_none() && reply_to_author_id.is_none() && reply_to_text.is_none() {
+            return None;
+        }
+        Some(Self {
+            reply_to,
+            reply_to_author_id,
+            reply_to_text,
+        })
+    }
+}
+
+// ============================================================================
 // Service trait for operations that differ between DM and Group
 // ============================================================================
 
@@ -42,6 +85,11 @@ pub(super) trait AnonContentService {
     ) -> Result<bool, String>;
 
     /// Store a data message. Returns the message ID as a string.
+    ///
+    /// `quote` carries reply/quote metadata (target message id, author, preview
+    /// text) extracted from the Content proto so it can be persisted on the
+    /// message row. Without this, reply bubbles vanish for the receiver on
+    /// channel reload.
     fn store_message(
         &self,
         id: &Self::Id,
@@ -49,7 +97,34 @@ pub(super) trait AnonContentService {
         content_type: i32,
         content_json: &str,
         sent_at: u64,
+        quote: Option<QuoteContext>,
     ) -> Result<String, String>;
+
+    /// Persist a reaction to the unified reactions table.
+    ///
+    /// Uses (target_sender_id, target_sent_at_ns) to identify the message
+    /// (Signal-style message addressing). Returns true if persisted.
+    fn add_reaction(
+        &self,
+        id: &Self::Id,
+        target_sender_id: &UserId,
+        target_sent_at_ns: u64,
+        reactor_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, String>;
+
+    /// Remove a persisted reaction from the unified reactions table.
+    ///
+    /// Uses (target_sender_id, target_sent_at_ns) to identify the message.
+    /// Returns true if a matching reaction was removed.
+    fn remove_reaction(
+        &self,
+        id: &Self::Id,
+        target_sender_id: &UserId,
+        target_sent_at_ns: u64,
+        reactor_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, String>;
 
     /// The conversation type for this handler (AnonDm or AnonGroup).
     fn conversation_type(&self) -> ConversationType;
@@ -94,6 +169,10 @@ pub(super) fn handle_typing<S: AnonContentService>(
 }
 
 /// Handle a reaction (shared between DM and Group).
+///
+/// Persists the reaction to the unified reactions table before emitting the
+/// domain event. This guarantees the reaction survives a client restart; the
+/// emitted event still drives real-time UI updates.
 pub(super) fn handle_reaction<S: AnonContentService>(
     id: S::Id,
     sender_id: UserId,
@@ -104,6 +183,30 @@ pub(super) fn handle_reaction<S: AnonContentService>(
     let sender_id_target = UserId::from_str(&reaction.target_author_aci)
         .unwrap_or(sender_id);
     let sent_at_ns = reaction.target_sent_timestamp;
+
+    // Persist to DB first so reactions survive restart. We intentionally
+    // continue to emit the domain event even if persistence fails so that
+    // real-time UI updates are not lost (the UI re-queries from DB on reload,
+    // at which point a persistence failure would self-correct on next reaction).
+    if reaction.remove {
+        if let Err(e) = svc.remove_reaction(&id, &sender_id_target, sent_at_ns, &sender_id, &reaction.emoji) {
+            tracing::warn!(
+                label = svc.label(),
+                id = %id,
+                error = %e,
+                "Failed to remove reaction from DB"
+            );
+        }
+    } else {
+        if let Err(e) = svc.add_reaction(&id, &sender_id_target, sent_at_ns, &sender_id, &reaction.emoji) {
+            tracing::warn!(
+                label = svc.label(),
+                id = %id,
+                error = %e,
+                "Failed to add reaction to DB"
+            );
+        }
+    }
 
     let event = if reaction.remove {
         DomainEvent::ReactionRemoved {
@@ -272,8 +375,10 @@ pub(super) fn handle_data_message<S: AnonContentService>(
 ) -> HandlerResult {
     let (content_type, content_json) = content_to_storage(inner_content);
     let sent_at = inner_content.timestamp;
+    let quote = QuoteContext::from_content(inner_content);
 
-    let message_id_str = svc.store_message(&id, &sender_id, content_type, &content_json, sent_at)
+    let message_id_str = svc
+        .store_message(&id, &sender_id, content_type, &content_json, sent_at, quote)
         .map_err(|e| HandlerError::parse_failed(format!("storage error: {}", e)))?;
 
     tracing::debug!(

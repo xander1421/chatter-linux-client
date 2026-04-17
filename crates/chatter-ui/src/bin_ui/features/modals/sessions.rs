@@ -39,34 +39,31 @@ fn update_sessions_ui(weak: slint::Weak<MainWindow>, sessions: Vec<Session>) {
 }
 
 pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let session_service = ui_ctx.sessions().clone();
-
     // View sessions
     let weak_window = window.as_weak();
-    let service_view = session_service.clone();
+    let ui_ctx_view = ui_ctx.clone();
 
     window.on_settings_view_sessions(move || {
-        let service = service_view.clone();
+        let ui_ctx = ui_ctx_view.clone();
         run_ui!(weak_window, |w| w.set_active_modal("sessions".into()));
 
         spawn_async_action!(weak_window, set_sessions_loading,
-            async { service.list_sessions().await },
+            async { ui_ctx.list_sessions().await },
             |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
         );
     });
 
     // Revoke single session
     let weak_window = window.as_weak();
-    let service_revoke = session_service.clone();
+    let ui_ctx_revoke = ui_ctx.clone();
 
     window.on_revoke_session(move |device_id: i32| {
-        let service = service_revoke.clone();
-        let service_refresh = service_revoke.clone();
+        let ui_ctx = ui_ctx_revoke.clone();
 
         spawn_async_action!(weak_window, set_sessions_revoking,
-            async { 
-                service.revoke_session(device_id as u32).await?;
-                service_refresh.list_sessions().await
+            async {
+                ui_ctx.revoke_session(device_id as u32).await?;
+                ui_ctx.list_sessions().await
             },
             |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
         );
@@ -74,16 +71,15 @@ pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
     // Revoke all other sessions
     let weak_window = window.as_weak();
-    let service_revoke_all = session_service.clone();
+    let ui_ctx_all = ui_ctx.clone();
 
     window.on_revoke_all_sessions(move || {
-        let service = service_revoke_all.clone();
-        let service_refresh = service_revoke_all.clone();
+        let ui_ctx = ui_ctx_all.clone();
 
         spawn_async_action!(weak_window, set_sessions_revoking,
             async {
-                service.revoke_all_other_sessions().await?;
-                service_refresh.list_sessions().await
+                ui_ctx.revoke_all_other_sessions().await?;
+                ui_ctx.list_sessions().await
             },
             |w: &MainWindow, sessions| { update_sessions_ui(w.as_weak(), sessions); }
         );

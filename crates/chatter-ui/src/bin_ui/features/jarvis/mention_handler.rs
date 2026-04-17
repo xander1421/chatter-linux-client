@@ -83,11 +83,7 @@ pub async fn handle_jarvis_mention(
         .add_user_message(query, channel_id_str.as_deref());
 
     // Call Jarvis
-    match ui_ctx
-        .jarvis()
-        .ask(&context, query, author_id.as_ref())
-        .await
-    {
+    match ui_ctx.jarvis_ask(&context, query, author_id.as_ref()).await {
         Ok(response) => {
             // Add assistant response to state
             ui_ctx.jarvis_state().add_assistant_message(&response);

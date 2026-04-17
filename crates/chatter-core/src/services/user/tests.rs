@@ -171,8 +171,10 @@ mod tests {
             grpc_pool: Arc<crate::network::grpc::client_pool::GrpcClientPool>,
             settings_repo: Arc<SettingsRepository>,
             user_repo: Arc<UserRepository>,
+            anon_dm_repo: Arc<crate::storage::repositories::anon_dm_repo::AnonDmRepository>,
+            anon_group_repo: Arc<crate::storage::repositories::anon_group_repo::AnonGroupRepository>,
         ) {
-            let _service = UserService::new(grpc_pool, settings_repo, user_repo);
+            let _service = UserService::new(grpc_pool, settings_repo, user_repo, anon_dm_repo, anon_group_repo);
         }
     }
 

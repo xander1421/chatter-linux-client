@@ -447,15 +447,18 @@ impl UnifiedMessageRepository {
     // ========================================================================
 
     /// Add a reaction using Signal-style (sender_id, sent_at_ns) message identification.
-    /// Inserts into `unified_reactions` and updates blobs on the message row.
-    /// No-op if the (sender_id, sent_at_ns, user_id, emoji) tuple already exists.
+    /// Inserts into `unified_reactions` and rebuilds the per-user blob cache on
+    /// the message row using `current_user_id` (the locally-logged-in user) so
+    /// the blob remains a view of *this device's* user, regardless of who the
+    /// reactor was.
     ///
     /// Returns `true` if a new reaction was added.
     pub fn add_reaction(
         &self,
         sender_id: &UserId,
         sent_at_ns: u64,
-        user_id: &UserId,
+        reactor_id: &UserId,
+        current_user_id: &UserId,
         emoji: &str,
     ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
@@ -469,7 +472,7 @@ impl UnifiedMessageRepository {
                 reaction_id.to_string(),
                 sender_id.to_string(),
                 sent_at_ns as i64,
-                user_id.to_string(),
+                reactor_id.to_string(),
                 emoji,
                 now,
             ],
@@ -479,35 +482,62 @@ impl UnifiedMessageRepository {
             return Ok(false); // Already exists
         }
 
-        // Rebuild blobs from ground truth in unified_reactions
-        self.rebuild_reaction_blobs_with_conn(&conn, sender_id, sent_at_ns, user_id)?;
+        self.rebuild_reaction_blobs_with_conn(&conn, sender_id, sent_at_ns, current_user_id)?;
         Ok(true)
     }
 
-    /// Remove a reaction by (sender_id, sent_at_ns, user_id, emoji).
-    /// Updates blobs on the message row.
+    /// Remove a reaction by (sender_id, sent_at_ns, reactor_id, emoji).
+    /// Rebuilds the per-user blob for `current_user_id` (see `add_reaction`).
     ///
     /// Returns `true` if a reaction was actually removed.
     pub fn remove_reaction(
         &self,
         sender_id: &UserId,
         sent_at_ns: u64,
-        user_id: &UserId,
+        reactor_id: &UserId,
+        current_user_id: &UserId,
         emoji: &str,
     ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let deleted = conn.execute(
             "DELETE FROM unified_reactions
              WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND emoji = ?4",
-            params![sender_id.to_string(), sent_at_ns as i64, user_id.to_string(), emoji],
+            params![sender_id.to_string(), sent_at_ns as i64, reactor_id.to_string(), emoji],
         )?;
 
         if deleted == 0 {
             return Ok(false);
         }
 
-        self.rebuild_reaction_blobs_with_conn(&conn, sender_id, sent_at_ns, user_id)?;
+        self.rebuild_reaction_blobs_with_conn(&conn, sender_id, sent_at_ns, current_user_id)?;
         Ok(true)
+    }
+
+    /// Check whether the current user has reacted with a given emoji on a message.
+    ///
+    /// Reads the per-user cache on the message row (`current_user_reactions_blob`).
+    /// The blob is maintained to reflect the locally-logged-in user's reactions
+    /// across all conversation types (anon DM/group rebuild the blob for the
+    /// logged-in user; regular DM/channel receive it from the server via proto).
+    pub fn user_has_reacted(
+        &self,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        emoji: &str,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        let blob: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT current_user_reactions_blob FROM messages
+                 WHERE sender_id = ?1 AND sent_at = ?2",
+                params![sender_id.to_string(), sent_at_ns as i64],
+                |row| row.get(0),
+            )
+            .ok();
+        let reactions: Vec<String> = blob
+            .and_then(|b| db_deserialize(&b).ok())
+            .unwrap_or_default();
+        Ok(reactions.iter().any(|e| e == emoji))
     }
 
     /// Get all reactions on a message identified by (sender_id, sent_at_ns).

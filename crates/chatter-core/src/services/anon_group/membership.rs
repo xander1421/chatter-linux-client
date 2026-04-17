@@ -416,7 +416,21 @@ impl AnonGroupService {
         self.anon_group_repo
             .delete_pending(&group_id, &joiner_id, PendingActionType::Invite)?;
 
-        // 4. Broadcast updated member list to all confirmed members
+        // 4. Drain any messages queued for this member while mailbox_pk was
+        //    unknown. Failures are logged and left for retry (rows persist).
+        if let Err(e) = self
+            .drain_pending_messages(&group_id, &joiner_id, &joiner_mailbox_pk)
+            .await
+        {
+            tracing::warn!(
+                group_id = %group_id,
+                joiner_id = %joiner_id,
+                error = %e,
+                "Failed to drain pending anon group messages after JoinAck"
+            );
+        }
+
+        // 5. Broadcast updated member list to all confirmed members
         if group.is_owner() {
             self.broadcast_member_list(&group_id).await?;
         }

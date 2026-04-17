@@ -32,7 +32,7 @@ use openssl::sign::Signer;
 use openssl::symm::{Cipher, Crypter, Mode};
 use rand::RngCore;
 use subtle::ConstantTimeEq;
-use zeroize::ZeroizeOnDrop;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::crypto::secure_buffer::SecureBuffer;
 use crate::error::CryptoError;
@@ -452,9 +452,14 @@ impl AttachmentCrypto {
             });
         }
 
-        // Generate random key and IV
-        let mut key = [0u8; KEY_SET_LENGTH];
-        rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+        // Generate random key and IV.
+        // Wrap `key` in `Zeroizing` so any early `?` return zeroizes the 64-byte
+        // key material before unwinding. On the success path the key is copied
+        // into `StreamingEncryptResult` (which itself is `ZeroizeOnDrop`), and
+        // the local `Zeroizing` wrapper is dropped (zeroizing its copy) at
+        // function exit.
+        let mut key: Zeroizing<[u8; KEY_SET_LENGTH]> = Zeroizing::new([0u8; KEY_SET_LENGTH]);
+        rand::RngCore::fill_bytes(&mut rand::rng(), key.as_mut_slice());
         let aes_key = &key[..AES_KEY_LENGTH];
         let mac_key = &key[AES_KEY_LENGTH..];
 
@@ -619,7 +624,7 @@ impl AttachmentCrypto {
             .len();
 
         Ok(StreamingEncryptResult {
-            key,
+            key: *key,
             digest,
             ciphertext_size,
             plaintext_size: plaintext_size as u64,

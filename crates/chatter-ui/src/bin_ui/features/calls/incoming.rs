@@ -18,14 +18,12 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     let ctx_call_service = ui_ctx.call_service().clone();
-    let ctx_session_service = ui_ctx.sessions().clone();
 
     // Accept call callback
     window.on_accept_incoming_call({
         let weak = weak.clone();
         let ui_ctx = ui_ctx.clone();
         let call_service = ctx_call_service.clone();
-        let session_service = ctx_session_service.clone();
 
         move |call_id| {
             let call_id_str = call_id.to_string();
@@ -152,7 +150,6 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             let weak = weak.clone();
-            let session_service = session_service.clone();
             let ui_ctx = ui_ctx.clone();
             let call_service = call_service.clone();
 
@@ -205,7 +202,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 };
 
                 // Get current user ID
-                let user_id = match session_service.current_user_id() {
+                let user_id = match ui_ctx.session_current_user_id() {
                     Some(id) => id,
                     None => {
                         tracing::error!("No user ID available");

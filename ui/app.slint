@@ -148,11 +148,8 @@ export component App inherits Rectangle {
 
     // ========== Sidebar properties ==========
     in property <[ChannelListItemData]> channels: [];
-    in property <string> selected-channel-id: "";
     in property <[DMListItemData]> dm-conversations: [];
-    in property <string> selected-dm-id: "";
     in property <[PrivateGroupListItemData]> private-groups: [];
-    in property <string> selected-private-group-id: "";
     in property <[CustomSectionData]> custom-sections: [];
     in property <[SectionConversationData]> section-conversations: [];
     in property <int> total-unread-count: 0;
@@ -993,11 +990,8 @@ export component App inherits Rectangle {
                 mobile-mode: root.is-mobile-screen && root.mobile-active-tab == "chats" && !root.has-active-conversation;
                 mobile-width: root.width;
                 channels: root.channels;
-                selected-channel-id: root.selected-channel-id;
                 dm-conversations: root.dm-conversations;
-                selected-dm-id: root.selected-dm-id;
                 private-groups: root.private-groups;
-                selected-private-group-id: root.selected-private-group-id;
                 custom-sections: root.custom-sections;
                 section-conversations: root.section-conversations;
                 user-display-name: root.user-display-name;
@@ -1123,10 +1117,38 @@ export component App inherits Rectangle {
                     width: 100%;
                     height: 100%;
 
-                    // Chat layout (fills remaining space, minus side panels)
-                    // On mobile: hide chat when a panel (members/thread) is open — panel goes full-screen
+                    // Chat column: call dock (when active) on top of ChatLayout.
+                    // The dock collapses to 0px when no call is active so the chat
+                    // layout fills the full space. On mobile, hide the whole column
+                    // when a side panel (members/thread) is open.
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        vertical-stretch: 1;
+                        visible: !(root.is-mobile-screen && (root.members-panel-visible || root.thread-panel-visible));
+
+                        ActiveCallView {
+                            show: root.active-call-visible;
+                            call-data: root.active-call-data;
+                            is-muted: root.call-is-muted;
+                            is-video-enabled: root.call-is-video-enabled;
+                            is-screen-sharing: root.call-is-screen-sharing;
+                            local-video-frame: root.call-local-video-frame;
+                            remote-video-frames: root.call-remote-video-frames;
+
+                            toggle-mute => { root.call-toggle-mute(); }
+                            toggle-video => { root.call-toggle-video(); }
+                            toggle-screen-share => {
+                                if root.call-is-screen-sharing {
+                                    root.call-toggle-screen-share();
+                                } else {
+                                    root.show-screen-source-picker();
+                                }
+                            }
+                            end-call => { root.call-end(); }
+                            show-audio-settings => { root.show-audio-device-picker(); }
+                        }
+
                     ChatLayout {
-                    horizontal-stretch: 1;
                     vertical-stretch: 1;
                     visible: !(root.is-mobile-screen && (root.members-panel-visible || root.thread-panel-visible));
                     show-back-button: root.is-mobile-screen;
@@ -1238,6 +1260,7 @@ export component App inherits Rectangle {
                     format-text(fmt) => { root.format-text(fmt); }
                     scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
                 }
+                    } // end VerticalLayout (call dock + ChatLayout)
 
                 // Members panel (side panel on desktop, full-screen overlay on mobile)
                 if root.members-panel-visible: MembersPanel {
@@ -2054,39 +2077,7 @@ export component App inherits Rectangle {
         }
     }
 
-    // Active call view (full screen when visible)
-    ActiveCallView {
-        show: root.active-call-visible;
-        call-data: root.active-call-data;
-        is-muted: root.call-is-muted;
-        is-video-enabled: root.call-is-video-enabled;
-        is-screen-sharing: root.call-is-screen-sharing;
-        local-video-frame: root.call-local-video-frame;
-        remote-video-frames: root.call-remote-video-frames;
-
-        toggle-mute => {
-            root.call-toggle-mute();
-        }
-        toggle-video => {
-            root.call-toggle-video();
-        }
-        toggle-screen-share => {
-            // Show screen source picker instead of directly toggling
-            if root.call-is-screen-sharing {
-                // If already sharing, stop it
-                root.call-toggle-screen-share();
-            } else {
-                // Show picker to select source
-                root.show-screen-source-picker();
-            }
-        }
-        end-call => {
-            root.call-end();
-        }
-        show-audio-settings => {
-            root.show-audio-device-picker();
-        }
-    }
+    // (Active call view is now docked above ChatLayout — see chat column block.)
 
     // Device picker modal (for audio devices and screen sources)
     DevicePicker {

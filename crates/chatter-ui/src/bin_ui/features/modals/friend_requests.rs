@@ -15,8 +15,6 @@ use crate::bin_ui::converters::get_initials;
 use crate::{DMListItemData, MainWindow};
 
 pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let channel_service = ui_ctx.channels().clone();
-
     // Switch tab
     let weak_window = window.as_weak();
     window.on_friend_requests_switch_tab(move |tab: SharedString| {
@@ -34,12 +32,10 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Accept friend request
     let weak_window = window.as_weak();
     let ui_ctx_accept = ui_ctx.clone();
-    let channel_service_accept = channel_service.clone();
 
     window.on_friend_request_accept(move |user_id: SharedString| {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_accept.clone();
-        let channel_service = channel_service_accept.clone();
         let user_id_str = user_id.to_string();
 
         tokio::spawn(async move {
@@ -71,8 +67,7 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if let Some(channel_id) = result.dm_channel_id {
                         add_dm_to_sidebar_on_accept(
                             weak.clone(),
-                            channel_service.clone(),
-                            ui_ctx.users().clone(),
+                            ui_ctx.clone(),
                             &channel_id,
                             &user_id_str,
                         )
@@ -221,8 +216,7 @@ pub fn wire_friend_requests(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Add a DM channel to the sidebar after friend request acceptance.
 async fn add_dm_to_sidebar_on_accept(
     weak_window: slint::Weak<MainWindow>,
-    channel_service: Arc<ChannelService>,
-    user_service: Arc<UserService>,
+    ui_ctx: Arc<ChatterClient>,
     channel_id: &str,
     other_user_id: &str,
 ) {
@@ -244,14 +238,14 @@ async fn add_dm_to_sidebar_on_accept(
         }
     };
 
-    // Fetch channel and sync memberships using ChannelService
-    match channel_service
+    // Fetch channel and sync memberships
+    match ui_ctx
         .get_channel_with_memberships(&channel_id_parsed)
         .await
     {
         Ok(_channel) => {
-            // Fetch the OTHER user's profile to get their display name using UserService
-            let other_user_name = match user_service.get_user_profile(&other_user_id_parsed).await {
+            // Fetch the OTHER user's profile to get their display name
+            let other_user_name = match ui_ctx.get_user_profile(&other_user_id_parsed).await {
                 Ok(profile) => {
                     if profile.display_name.is_empty() {
                         other_user_id.to_string()
@@ -298,6 +292,8 @@ async fn add_dm_to_sidebar_on_accept(
                         timestamp: SharedString::default(),
                         unread_count: 0,
                         is_typing: false,
+                        is_anon: false,
+                        is_selected: false,
                     };
                     dm_vec.push(dm_item);
 

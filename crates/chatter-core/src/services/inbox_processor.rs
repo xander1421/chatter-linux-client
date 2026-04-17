@@ -1252,6 +1252,7 @@ impl InboxEventProcessor {
                         };
 
                         // Build content JSON (with quote if present)
+                        let quote_ctx = crate::inbox::handlers::base_anon::QuoteContext::from_content(inner_content);
                         let store_result = if let Some(ref q) = data_msg.quote {
                             let content_json = serde_json::json!({
                                 "text": text,
@@ -1262,11 +1263,11 @@ impl InboxEventProcessor {
                                 }
                             }).to_string();
                             self.anon_group_service.store_message_with_content_json(
-                                &anon_group_id, &peer_id, 3, &content_json, &attachment_ids, sent_at,
+                                &anon_group_id, &peer_id, 3, &content_json, &attachment_ids, sent_at, quote_ctx,
                             )
                         } else {
                             self.anon_group_service.store_message_with_attachments(
-                                &anon_group_id, &peer_id, text, &attachment_ids, sent_at,
+                                &anon_group_id, &peer_id, text, &attachment_ids, sent_at, quote_ctx,
                             )
                         };
 

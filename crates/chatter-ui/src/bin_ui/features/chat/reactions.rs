@@ -1,10 +1,12 @@
 //! Reaction callbacks for DM and channel conversations.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
-use slint::{ComponentHandle, Model, SharedString};
+use slint::{ComponentHandle, SharedString};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::domain::UserId;
 use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
 
@@ -20,24 +22,25 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         let timestamp_ns_str = timestamp_ns.to_string();
         let emoji_str = emoji.to_string();
 
-        // Check if user already reacted with this emoji — toggle it off if so
-        let already_reacted = weak_window.upgrade().map(|w| {
-            let current_model = w.get_messages();
-            (0..current_model.row_count())
-                .filter_map(|i| current_model.row_data(i))
-                .any(|m| {
-                    m.sender_id.as_str() == sender_id_str
-                        && m.timestamp_ns.as_str() == timestamp_ns_str
-                        && m.reaction_summary.to_string().contains(&emoji_str)
-                })
-        }).unwrap_or(false);
-
-        let remove = already_reacted;
-
         let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
             Ok(ts) => ts,
             Err(_) => return,
         };
+
+        // Toggle decision must be per-user, not per-aggregate. The previous
+        // check against `reaction_summary` collapsed all users' reactions,
+        // so a second user clicking an emoji already used by someone else
+        // would send `remove=true` and wipe the first user's reaction.
+        let sender_user_id = match UserId::from_str(&sender_id_str) {
+            Ok(id) => id,
+            Err(_) => return,
+        };
+        let already_reacted = ui_ctx
+            .messages()
+            .user_has_reacted(&sender_user_id, target_sent_timestamp, &emoji_str)
+            .unwrap_or(false);
+
+        let remove = already_reacted;
 
         let conversation = ui_ctx.chat_state().active_conversation();
         if matches!(conversation, ActiveConversation::None) {

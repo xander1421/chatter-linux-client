@@ -111,11 +111,7 @@ async fn handle_jarvis_question(
     let author_id = ui_ctx.auth_state().get().current_user_id;
 
     // Call Jarvis
-    match ui_ctx
-        .jarvis()
-        .ask(&context, query, author_id.as_ref())
-        .await
-    {
+    match ui_ctx.jarvis_ask(&context, query, author_id.as_ref()).await {
         Ok(response) => {
             ui_ctx.jarvis_state().add_assistant_message(&response);
             ui_ctx.jarvis_state().set_thinking(false);
@@ -157,16 +153,13 @@ async fn handle_jarvis_command(
             update_messages_ui(ui_ctx, &weak);
 
             let author_id = ui_ctx.auth_state().get().current_user_id;
-            ui_ctx
-                .jarvis()
-                .ask(&context, &query, author_id.as_ref())
-                .await
+            ui_ctx.jarvis_ask(&context, &query, author_id.as_ref()).await
         }
         JarvisCommand::Summarize => {
             ui_ctx.jarvis_state().add_user_message("/summarize", None);
             update_messages_ui(ui_ctx, &weak);
 
-            ui_ctx.jarvis().summarize_conversation(&context).await
+            ui_ctx.jarvis_summarize_conversation(&context).await
         }
         JarvisCommand::Knowledge(entity) => {
             ui_ctx
@@ -174,7 +167,7 @@ async fn handle_jarvis_command(
                 .add_user_message(&format!("/knowledge {}", entity), None);
             update_messages_ui(ui_ctx, &weak);
 
-            match ui_ctx.jarvis().get_entity_knowledge(&entity) {
+            match ui_ctx.jarvis_get_entity_knowledge(&entity) {
                 Ok(knowledge) => Ok(knowledge.to_summary()),
                 Err(e) => Err(e),
             }
@@ -188,8 +181,7 @@ async fn handle_jarvis_command(
             // For /remember, we use observe_message to store the fact
             let author_id = ui_ctx.auth_state().get().current_user_id;
             match ui_ctx
-                .jarvis()
-                .observe_message(&context, &fact, author_id.as_ref(), None)
+                .jarvis_observe_message(&context, &fact, author_id.as_ref(), None)
                 .await
             {
                 Ok(_) => Ok("I'll remember that.".to_string()),

@@ -24,39 +24,30 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         }
     };
     
-    let anon_group_service = ui_ctx.anon_groups().clone();
-    let user_service = ui_ctx.users().clone();
-    let attachment_service = ui_ctx.attachments().clone();
+    let ui_ctx = ui_ctx.clone();
     let auth_state = ui_ctx.auth_state().clone();
     let weak_window = window.as_weak();
     let group_id_str = group_id_str.to_string();
-    
+
     tokio::spawn(async move {
         // Get group details
-        let group = match anon_group_service.get_group(&group_id) {
-            Ok(Some(g)) => g,
-            Ok(None) => {
+        let group = match ui_ctx.get_anon_group(&group_id) {
+            Some(g) => g,
+            None => {
                 tracing::error!("Private group {} not found", group_id);
                 return;
             }
-            Err(e) => {
-                tracing::error!("Failed to get private group {}: {}", group_id, e);
-                return;
-            }
         };
-        
+
         // Get member count for header display
-        let member_count = anon_group_service
-            .get_members(&group_id)
-            .map(|m| m.len() as i32)
-            .unwrap_or(0);
-        
+        let member_count = ui_ctx.get_anon_group_members(&group_id).len() as i32;
+
         // Get current user ID for is_own calculation
         let current_user_id = auth_state.get().current_user_id;
         let current_user_id_str = current_user_id.map(|id| id.to_string()).unwrap_or_default();
-        
+
         // Load messages for this group
-        let mut messages = match anon_group_service.get_messages_asc(&group_id, None, 50) {
+        let mut messages = match ui_ctx.get_anon_group_messages_asc(&group_id, None, 50) {
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::error!("Failed to load messages for private group {}: {}", group_id, e);
@@ -65,17 +56,16 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         };
 
         // Load reaction counts from DB and populate messages
-        if let Ok(reaction_map) = anon_group_service.get_all_reaction_counts(&group_id) {
-            for msg in &mut messages {
-                if let Some(counts) = reaction_map.get(&msg.sent_at) {
-                    msg.reaction_counts = counts
-                        .iter()
-                        .map(|(emoji, count): &(String, u32)| chatter_core::domain::message::ReactionCount {
-                            emoji: emoji.clone(),
-                            count: *count,
-                        })
-                        .collect();
-                }
+        let reaction_map = ui_ctx.get_anon_group_reaction_counts(&group_id);
+        for msg in &mut messages {
+            if let Some(counts) = reaction_map.get(&msg.sent_at) {
+                msg.reaction_counts = counts
+                    .iter()
+                    .map(|(emoji, count): &(String, u32)| chatter_core::domain::message::ReactionCount {
+                        emoji: emoji.clone(),
+                        count: *count,
+                    })
+                    .collect();
             }
         }
 
@@ -84,28 +74,25 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         for msg in &messages {
             let sender_id = msg.sender_id.as_ref();
             let mut sender_name = sender_id
-                .map(|id| user_service.get_display_name(id))
+                .map(|id| ui_ctx.display_name(id))
                 .unwrap_or_default();
             let mut sender_avatar = None;
 
             if let Some(sid) = sender_id {
-                match anon_group_service.get_member(&group_id, sid) {
-                    Ok(Some(member)) => {
-                        if let Some(ref name) = member.display_name {
-                            if !name.is_empty() {
-                                sender_name = name.clone();
-                            }
+                if let Some(member) = ui_ctx.get_anon_group_member(&group_id, sid) {
+                    if let Some(ref name) = member.display_name {
+                        if !name.is_empty() {
+                            sender_name = name.clone();
                         }
-                        sender_avatar = member.avatar.clone();
                     }
-                    _ => {}
+                    sender_avatar = member.avatar.clone();
                 }
             }
 
             // Resolve attachments from stored IDs
             let resolved_attachments: Vec<chatter_core::domain::Attachment> = msg.attachments
                 .iter()
-                .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
+                .filter_map(|att_id| ui_ctx.get_attachment(att_id))
                 .collect();
 
             let mut display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
@@ -115,14 +102,10 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 &resolved_attachments,
             );
 
-            // Resolve reply-to sender name if this is a reply/quote
+            // Resolve reply-to sender name (UserService handles fallback).
             if display_data.is_reply {
                 if let Some(ref author_id) = msg.reply_to_author_id {
-                    display_data.reply_to_sender_name = anon_group_service
-                        .get_member_display_name(&group_id, author_id)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| user_service.get_display_name(author_id));
+                    display_data.reply_to_sender_name = ui_ctx.display_name(author_id);
                 }
             }
 
@@ -136,13 +119,8 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
         
         // Update UI to show selected group and messages
         let group_name = group.name.clone();
-        let attachment_service_for_gifs = attachment_service.clone();
+        let ui_ctx_gifs = ui_ctx.clone();
         run_ui!(weak_window, |w| {
-            // Clear other selections
-            w.set_selected_channel_id("".into());
-            w.set_selected_dm_id("".into());
-            w.set_selected_private_group_id(group_id_str.clone().into());
-            
             // Clear unread count in sidebar
             crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &group_id_str, 0);
 
@@ -174,7 +152,7 @@ pub fn load_private_group_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             w.set_loading_messages(false);
             
             // Auto-register GIF animations
-            crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), attachment_service_for_gifs);
+            crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
         });
     });
 }
@@ -204,19 +182,20 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
 
             // Set typed active conversation
             ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));
+            let ui_ctx_for_sel = ui_ctx.clone();
+            run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
             // Load pinned messages
-            let anon_group_service = ui_ctx.anon_groups().clone();
-            let (msg_ids, preview) = match anon_group_service.list_pinned(&group_id) {
-                Ok(pinned) if !pinned.is_empty() => {
-                    let ids = pinned.iter().map(|m| m.id).collect();
-                    let preview = pinned[0].as_text()
-                        .filter(|t| !t.is_empty())
-                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
-                        .unwrap_or_else(|| "[Pinned message]".to_string());
-                    (ids, preview)
-                }
-                _ => (vec![], String::new()),
+            let pinned = ui_ctx.list_anon_group_pinned(&group_id);
+            let (msg_ids, preview) = if pinned.is_empty() {
+                (vec![], String::new())
+            } else {
+                let ids = pinned.iter().map(|m| m.id).collect();
+                let preview = pinned[0].as_text()
+                    .filter(|t| !t.is_empty())
+                    .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
+                    .unwrap_or_else(|| "[Pinned message]".to_string());
+                (ids, preview)
             };
             let channel_id = group_id.to_string().parse().unwrap_or_else(|_| ChannelId::new());
             super::apply_pinned_ui(&weak, &ui_ctx.pinned_state(), channel_id, msg_ids, preview);
@@ -239,52 +218,45 @@ async fn load_private_group_messages_internal(
     group_id: AnonGroupId,
     ui_ctx: Arc<ChatterClient>,
 ) {
-    let anon_group_service = ui_ctx.anon_groups().clone();
-    let user_service = ui_ctx.users().clone();
-    let attachment_service = ui_ctx.attachments().clone();
     let auth_state = ui_ctx.auth_state().clone();
-    
+
     // Get group info
-    let group = match anon_group_service.get_group(&group_id) {
-        Ok(Some(g)) => g,
-        _ => {
+    let group = match ui_ctx.get_anon_group(&group_id) {
+        Some(g) => g,
+        None => {
             run_ui!(weak, |w| w.set_loading_messages(false));
             return;
         }
     };
 
-    let member_count = anon_group_service
-        .get_members(&group_id)
-        .map(|m| m.len() as i32)
-        .unwrap_or(0);
+    let member_count = ui_ctx.get_anon_group_members(&group_id).len() as i32;
 
     let current_user_id_str = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
 
-    let mut messages = anon_group_service.get_messages_asc(&group_id, None, 50).unwrap_or_default();
+    let mut messages = ui_ctx.get_anon_group_messages_asc(&group_id, None, 50).unwrap_or_default();
 
     // Populate reactions
-    if let Ok(reaction_map) = anon_group_service.get_all_reaction_counts(&group_id) {
-        for msg in &mut messages {
-            if let Some(counts) = reaction_map.get(&msg.sent_at) {
-                msg.reaction_counts = counts
-                    .iter()
-                    .map(|(emoji, count)| chatter_core::domain::message::ReactionCount {
-                        emoji: emoji.clone(),
-                        count: *count,
-                    })
-                    .collect();
-            }
+    let reaction_map = ui_ctx.get_anon_group_reaction_counts(&group_id);
+    for msg in &mut messages {
+        if let Some(counts) = reaction_map.get(&msg.sent_at) {
+            msg.reaction_counts = counts
+                .iter()
+                .map(|(emoji, count)| chatter_core::domain::message::ReactionCount {
+                    emoji: emoji.clone(),
+                    count: *count,
+                })
+                .collect();
         }
     }
 
     let mut display_messages = Vec::with_capacity(messages.len());
     for msg in &messages {
         let sender_id = msg.sender_id.as_ref();
-        let mut sender_name = sender_id.map(|id| user_service.get_display_name(id)).unwrap_or_default();
+        let mut sender_name = sender_id.map(|id| ui_ctx.display_name(id)).unwrap_or_default();
         let mut sender_avatar = None;
 
         if let Some(sid) = sender_id {
-            if let Ok(Some(member)) = anon_group_service.get_member(&group_id, sid) {
+            if let Some(member) = ui_ctx.get_anon_group_member(&group_id, sid) {
                 if let Some(ref name) = member.display_name {
                     if !name.is_empty() { sender_name = name.clone(); }
                 }
@@ -294,7 +266,7 @@ async fn load_private_group_messages_internal(
 
         let resolved_attachments: Vec<_> = msg.attachments
             .iter()
-            .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
+            .filter_map(|att_id| ui_ctx.get_attachment(att_id))
             .collect();
 
         let mut display_data = crate::bin_ui::converters::anon_group_message_to_display_data(
@@ -306,11 +278,7 @@ async fn load_private_group_messages_internal(
 
         if display_data.is_reply {
             if let Some(ref author_id) = msg.reply_to_author_id {
-                display_data.reply_to_sender_name = anon_group_service
-                    .get_member_display_name(&group_id, author_id)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_else(|| user_service.get_display_name(author_id));
+                display_data.reply_to_sender_name = ui_ctx.display_name(author_id);
             }
         }
         display_messages.push(display_data);
@@ -322,11 +290,8 @@ async fn load_private_group_messages_internal(
 
     let group_name = group.name.clone();
     let group_id_str = group_id.to_string();
+    let ui_ctx_gifs = ui_ctx.clone();
     run_ui!(weak, |w| {
-        w.set_selected_private_group_id(group_id_str.clone().into());
-        w.set_selected_channel_id("".into());
-        w.set_selected_dm_id("".into());
-        
         // Clear unread count in sidebar
         crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &group_id_str, 0);
 
@@ -341,7 +306,7 @@ async fn load_private_group_messages_internal(
         w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
         w.set_loading_messages(false);
         
-        crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), attachment_service);
+        crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
     });
 }
 
@@ -367,6 +332,7 @@ pub fn add_private_group_to_sidebar(window: &MainWindow, group_id: &str, name: &
             last_message: SharedString::default(),
             timestamp: SharedString::default(),
             is_typing: false,
+            is_selected: false,
         });
 
         w.set_private_groups(ModelRc::new(VecModel::from(groups)));

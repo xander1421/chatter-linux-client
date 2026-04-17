@@ -38,7 +38,7 @@ use crate::MainWindow;
 /// Wire all UI callbacks to their handlers.
 pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     auth::wire(window, ui_ctx);
-    navigation::wire(window);
+    navigation::wire(window, ui_ctx);
     chat::wire(window, ui_ctx);
     sidebar::wire(window, ui_ctx);
     chat_actions::wire(window, ui_ctx);

@@ -79,10 +79,8 @@ async fn download_and_send_gif(
     ui_ctx: Arc<ChatterClient>,
     weak: slint::Weak<MainWindow>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Download GIF from CDN and upload to our CDN (via core service)
-    let upload_result = ui_ctx.attachments()
-        .download_and_upload_gif(url, gif_id)
-        .await?;
+    // Download GIF from CDN and upload to our CDN (via core façade)
+    let upload_result = ui_ctx.download_and_upload_gif(url, gif_id).await?;
 
     tracing::info!(
         "GIF uploaded to CDN: {} -> {} (encrypted on filesystem)",
@@ -131,13 +129,12 @@ pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         }
 
         tokio::spawn(async move {
-            let att_svc = ui_ctx.attachments().clone();
             let raw_gifs = if query_str.is_empty() {
                 fetch_trending_gifs_raw(&ui_ctx).await
             } else {
                 search_gifs_raw(&query_str, &ui_ctx).await
             };
-            load_gif_previews(raw_gifs, weak, att_svc);
+            load_gif_previews(raw_gifs, weak, ui_ctx);
         });
     });
 }
@@ -150,8 +147,8 @@ struct RawGifFrames {
     frames: Vec<(Vec<u8>, u32, u32, u64)>,
 }
 
-async fn fetch_full_gif_frames(id: String, url: &str, attachment_service: &std::sync::Arc<chatter_core::services::attachment::AttachmentService>) -> Option<RawGifFrames> {
-    let bytes = match attachment_service.download_url_bytes(url).await {
+async fn fetch_full_gif_frames(id: String, url: &str, ui_ctx: &std::sync::Arc<ChatterClient>) -> Option<RawGifFrames> {
+    let bytes = match ui_ctx.download_url_bytes(url).await {
         Ok(b) => b,
         Err(e) => {
             tracing::debug!("Failed to download GIF frames: {}", e);
@@ -201,7 +198,7 @@ async fn fetch_full_gif_frames(id: String, url: &str, attachment_service: &std::
 fn load_gif_previews(
     raw_gifs: Vec<RawGifData>,
     weak_window: slint::Weak<MainWindow>,
-    attachment_service: std::sync::Arc<chatter_core::services::attachment::AttachmentService>,
+    ui_ctx: std::sync::Arc<ChatterClient>,
 ) {
     let raw_gifs_clone: Vec<_> = raw_gifs
         .iter()
@@ -234,10 +231,10 @@ fn load_gif_previews(
     for (id, preview_url, _full_url, _width, _height) in raw_gifs {
         let weak = weak_window.clone();
         let gif_id = id.clone();
-        let att_svc = attachment_service.clone();
+        let ui_ctx_fetch = ui_ctx.clone();
 
         tokio::spawn(async move {
-            if let Some(decoded) = fetch_full_gif_frames(gif_id, &preview_url, &att_svc).await {
+            if let Some(decoded) = fetch_full_gif_frames(gif_id, &preview_url, &ui_ctx_fetch).await {
                 let id_for_ui = decoded.id.clone();
                 let first_frame_raw = decoded.frames.first().unwrap();
                 let frame_bytes = first_frame_raw.0.clone();

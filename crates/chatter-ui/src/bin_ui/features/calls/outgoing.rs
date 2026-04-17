@@ -18,10 +18,6 @@ use super::timers::{start_call_timer, start_video_frame_timer};
 pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ctx_call_service = ui_ctx.call_service().clone();
-    let ctx_session_service = ui_ctx.sessions().clone();
-    let ctx_message_service = ui_ctx.messages().clone();
-    let ctx_mailbox_manager = ui_ctx.mailbox_manager().clone();
-    let ctx_channel_service = ui_ctx.channels().clone();
     let ctx_chat_state = ui_ctx.chat_state().clone();
     let ctx_ui = ui_ctx.clone();
 
@@ -29,19 +25,11 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_start_voice_call({
         let weak = weak.clone();
         let call_service = ctx_call_service.clone();
-        let session_service = ctx_session_service.clone();
-        let message_service = ctx_message_service.clone();
-        let mailbox_manager = ctx_mailbox_manager.clone();
-        let channel_service = ctx_channel_service.clone();
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
 
         move || {
             let weak = weak.clone();
-            let session_service = session_service.clone();
-            let message_service = message_service.clone();
-            let mailbox_manager = mailbox_manager.clone();
-            let channel_service = channel_service.clone();
             let conversation = chat_state.active_conversation();
             let ui_ctx = ui_ctx.clone();
 
@@ -57,17 +45,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             slint::spawn_local(async move {
                 if tokio::time::timeout(
                     std::time::Duration::from_secs(30),
-                    start_call_impl(
-                        weak.clone(),
-                        call_service,
-                        session_service,
-                        CallType::Voice,
-                        message_service,
-                        mailbox_manager,
-                        channel_service,
-                        conversation,
-                        ui_ctx,
-                    ),
+                    start_call_impl(weak.clone(), call_service, CallType::Voice, conversation, ui_ctx),
                 ).await.is_err() {
                     tracing::error!("Call setup timed out");
                     if let Some(w) = weak.upgrade() {
@@ -82,19 +60,11 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_start_video_call({
         let weak = weak.clone();
         let call_service = ctx_call_service.clone();
-        let session_service = ctx_session_service.clone();
-        let message_service = ctx_message_service.clone();
-        let mailbox_manager = ctx_mailbox_manager.clone();
-        let channel_service = ctx_channel_service.clone();
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
 
         move || {
             let weak = weak.clone();
-            let session_service = session_service.clone();
-            let message_service = message_service.clone();
-            let mailbox_manager = mailbox_manager.clone();
-            let channel_service = channel_service.clone();
             let conversation = chat_state.active_conversation();
             let ui_ctx = ui_ctx.clone();
 
@@ -110,17 +80,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             slint::spawn_local(async move {
                 if tokio::time::timeout(
                     std::time::Duration::from_secs(30),
-                    start_call_impl(
-                        weak.clone(),
-                        call_service,
-                        session_service,
-                        CallType::Video,
-                        message_service,
-                        mailbox_manager,
-                        channel_service,
-                        conversation,
-                        ui_ctx,
-                    ),
+                    start_call_impl(weak.clone(), call_service, CallType::Video, conversation, ui_ctx),
                 ).await.is_err() {
                     tracing::error!("Call setup timed out");
                     if let Some(w) = weak.upgrade() {
@@ -132,15 +92,10 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn start_call_impl(
     weak: slint::Weak<MainWindow>,
     call_service: CallWorkerHandle,
-    session_service: Arc<chatter_core::services::session_service::SessionService>,
     call_type: CallType,
-    _message_service: Arc<chatter_core::services::message::MessageService>,
-    _mailbox_manager: Arc<chatter_core::services::mailbox_manager::MailboxManager>,
-    channel_service: Arc<chatter_core::services::channel::ChannelService>,
     conversation: ActiveConversation,
     ui_ctx: Arc<ChatterClient>,
 ) {
@@ -153,7 +108,7 @@ async fn start_call_impl(
         }
     };
 
-    let display_name = ui_ctx.anon_dms().get_my_display_name().unwrap_or_else(|| "Anonymous".to_string());
+    let display_name = ui_ctx.my_display_name().unwrap_or_else(|| "Anonymous".to_string());
 
     let is_video_call = matches!(call_type, CallType::Video);
     let call_type_str = match call_type {
@@ -213,27 +168,19 @@ async fn start_call_impl(
         // Get peer ID - different lookup for anon DMs vs regular DMs
         let peer_id = if let ActiveConversation::AnonDm(anon_dm_id) = conversation {
             // For anon DMs, look up the conversation to get peer_id
-            match ui_ctx.anon_dms().get_conversation(&anon_dm_id) {
-                Ok(Some(dm)) => dm.peer_id,
-                Ok(None) => {
+            match ui_ctx.get_anon_dm_conversation(&anon_dm_id) {
+                Some(dm) => dm.peer_id,
+                None => {
                     tracing::error!("Anon DM conversation not found: {}", anon_dm_id);
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to get anon DM conversation: {}", e);
                     return;
                 }
             }
         } else {
             // Regular DM - look up from channel membership
-            match channel_service.get_dm_peer_local(&channel_id) {
-                Ok(Some(id)) => id,
-                Ok(None) => {
+            match ui_ctx.get_dm_peer_local(&channel_id) {
+                Some(id) => id,
+                None => {
                     tracing::error!("Could not determine peer ID for DM call");
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to get peer ID: {}", e);
                     return;
                 }
             }

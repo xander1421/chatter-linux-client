@@ -223,6 +223,8 @@ pub struct DMListItemSendData {
     pub timestamp: String,
     pub unread_count: u32,
     pub is_typing: bool,
+    /// True for anonymous (ephemeral) DMs, false for regular server DMs.
+    pub is_anon: bool,
 }
 
 impl DMListItemSendData {

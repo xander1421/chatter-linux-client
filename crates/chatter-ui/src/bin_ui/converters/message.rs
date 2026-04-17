@@ -13,7 +13,7 @@ use super::attachment::{attachment_to_display_data, AttachmentDisplayData};
 use super::markdown::{parse_markdown, strip_markdown};
 use super::utils::{
     avatar_bytes_to_image, extract_quote_from_content_json, format_count, get_initials,
-    insert_word_breaks, parse_reaction_summary_to_entries,
+    insert_word_breaks, reaction_counts_to_entries,
 };
 
 /// Data needed to create message UI (can be sent across threads).
@@ -34,7 +34,8 @@ pub struct MessageDisplayData {
     pub attachment_count: i32,
     pub attachments: Vec<AttachmentDisplayData>,
     pub has_reactions: bool,
-    pub reaction_summary: String,
+    /// Typed reaction counts (source of truth; no string round-trips).
+    pub reaction_counts: Vec<chatter_core::domain::message::ReactionCount>,
     pub reply_count: i32,
     pub reply_count_text: String,
     pub is_thread_reply: bool,
@@ -171,8 +172,8 @@ impl MessageDisplayData {
         attachment_count: (slint_attachments.len() as i32).max(self.attachment_count),
         attachments: ModelRc::new(VecModel::from(slint_attachments)),
         has_reactions: self.has_reactions,
-        reaction_summary: self.reaction_summary.clone().into(),
-        reactions: ModelRc::new(VecModel::from(parse_reaction_summary_to_entries(&self.reaction_summary))),
+        reaction_summary: chatter_core::domain::message::ReactionCount::summary_string(&self.reaction_counts).into(),
+        reactions: ModelRc::new(VecModel::from(reaction_counts_to_entries(&self.reaction_counts))),
         reply_count: self.reply_count,
         reply_count_text: self.reply_count_text.clone().into(),
         is_thread_reply: self.is_thread_reply,
@@ -276,12 +277,7 @@ pub fn message_to_display_data_with_replies(
         attachment_count: msg.attachments.len() as i32,
         attachments: attachment_data,
         has_reactions: !msg.reaction_counts.is_empty(),
-        reaction_summary: msg
-            .reaction_counts
-            .iter()
-            .map(|r| format!("{} {}", r.emoji, r.count))
-            .collect::<Vec<_>>()
-            .join("  "),
+        reaction_counts: msg.reaction_counts.clone(),
         sender_avatar_bytes: sender_avatar,
         sender_avatar_decoded: None,
         reply_count,
@@ -383,12 +379,7 @@ pub fn anon_message_to_display_data(
         attachment_count: attachment_data.len() as i32,
         attachments: attachment_data,
         has_reactions: !msg.reaction_counts().is_empty(),
-        reaction_summary: msg
-            .reaction_counts()
-            .iter()
-            .map(|r| format!("{} {}", r.emoji, r.count))
-            .collect::<Vec<_>>()
-            .join("  "),
+        reaction_counts: msg.reaction_counts().to_vec(),
         reply_count: 0,
         reply_count_text: String::new(),
         is_thread_reply: false,

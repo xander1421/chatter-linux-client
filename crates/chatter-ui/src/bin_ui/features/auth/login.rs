@@ -38,8 +38,8 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
 
             // Update server URL and connect if different from current
-            if ui_ctx.auth().endpoint() != server_url {
-                if let Err(e) = ui_ctx.auth().set_server_url(&server_url) {
+            if ui_ctx.endpoint() != server_url {
+                if let Err(e) = ui_ctx.set_server_url(&server_url) {
                     let error_msg = format!("Invalid Server URL: {}", e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -52,8 +52,8 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             // Ensure we are connected to the selected server
-            if !ui_ctx.auth().is_connected() {
-                if let Err(e) = ui_ctx.auth().connect().await {
+            if !ui_ctx.is_connected() {
+                if let Err(e) = ui_ctx.connect().await {
                     let error_msg = format!("Failed to connect to server: {}", e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -143,15 +143,15 @@ fn wire_sso_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
 
             // Update server URL and connect
-            if ui_ctx.auth().endpoint() != server_url {
-                if let Err(e) = ui_ctx.auth().set_server_url(&server_url) {
+            if ui_ctx.endpoint() != server_url {
+                if let Err(e) = ui_ctx.set_server_url(&server_url) {
                     set_login_error(&weak, format!("Invalid Server URL: {}", e));
                     return;
                 }
             }
 
-            if !ui_ctx.auth().is_connected() {
-                if let Err(e) = ui_ctx.auth().connect().await {
+            if !ui_ctx.is_connected() {
+                if let Err(e) = ui_ctx.connect().await {
                     set_login_error(&weak, format!("Failed to connect to server: {}", e));
                     return;
                 }

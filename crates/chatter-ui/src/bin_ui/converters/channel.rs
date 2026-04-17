@@ -2,20 +2,21 @@
 
 use slint::SharedString;
 
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::Channel;
-use chatter_core::services::attachment::AttachmentService;
 use chatter_core::ui::sidebar_data::{DMListItemSendData, FriendRequestSendData};
 
 use super::utils::{avatar_bytes_to_image, channel_type_to_string, get_initials};
 
 /// Convert a domain Channel to Slint ChannelListItemData.
 ///
-/// Queries the attachment service's channel-icon cache for the decoded pixels
-/// of `channel.image_url`. Builds a slint::Image from the pixels at the UI-thread
-/// boundary only — no image-decode or caching logic lives here.
-pub fn channel_to_slint(channel: &Channel, attachments: &AttachmentService) -> crate::ChannelListItemData {
+/// Queries the attachment channel-icon cache via the `ChatterClient` façade for
+/// the decoded pixels of `channel.image_url`. Builds a slint::Image from the
+/// pixels at the UI-thread boundary only — no image-decode or caching logic
+/// lives here.
+pub fn channel_to_slint(channel: &Channel, ui_ctx: &ChatterClient) -> crate::ChannelListItemData {
     let (avatar_source, has_avatar) = match channel.image_url.as_deref() {
-        Some(url) if !url.is_empty() => match attachments.get_channel_icon_pixels(url) {
+        Some(url) if !url.is_empty() => match ui_ctx.get_channel_icon_pixels(url) {
             Some(pixels) => {
                 let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                     &pixels.rgba, pixels.width, pixels.height,
@@ -36,6 +37,7 @@ pub fn channel_to_slint(channel: &Channel, attachments: &AttachmentService) -> c
         timestamp: SharedString::default(),
         avatar_source,
         has_avatar,
+        is_selected: false,
     }
 }
 
@@ -72,6 +74,8 @@ impl DMListItemExt for DMListItemSendData {
             timestamp: self.timestamp.into(),
             unread_count: self.unread_count as i32,
             is_typing: self.is_typing,
+            is_anon: self.is_anon,
+            is_selected: false,
         }
     }
 }
@@ -91,6 +95,7 @@ pub fn dm_to_send_data(channel: &Channel, other_user_name: &str, other_user_id: 
         timestamp: String::new(),
         unread_count: channel.unread_count,
         is_typing: false,
+        is_anon: false,
     }
 }
 
@@ -109,6 +114,8 @@ pub fn dm_to_slint(channel: &Channel, other_user_name: &str, other_user_id: &str
         timestamp: SharedString::default(),
         unread_count: channel.unread_count as i32,
         is_typing: false,
+        is_anon: false,
+        is_selected: false,
     }
 }
 

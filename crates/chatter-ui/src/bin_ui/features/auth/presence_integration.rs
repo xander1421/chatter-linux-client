@@ -62,7 +62,7 @@ pub async fn notify_chat_opened(
     }
     
     // Send current presence to this specific conversation
-    if let Err(e) = ui_ctx.anon_dms().send_presence_update(conversation_id, current).await {
+    if let Err(e) = ui_ctx.send_anon_dm_presence_update(conversation_id, current).await {
         tracing::debug!("Failed to send presence on chat open: {}", e);
     }
 }

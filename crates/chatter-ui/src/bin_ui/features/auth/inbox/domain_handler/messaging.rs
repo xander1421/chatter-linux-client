@@ -5,7 +5,6 @@ use std::sync::Arc;
 use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::message::{ConversationType, Message};
 use chatter_core::domain::anon_dm::AnonDmId;
@@ -28,45 +27,37 @@ pub(super) fn handle_message_received(
     let timestamp = message.sent_at;
     let conv_type = message.conversation_type.clone();
 
-    // Resolve sender display name and avatar
-    let (sender_name, sender_avatar) = match conv_type {
+    // Resolve sender display name (UserService handles profile / anon DM peer
+    /// / anon group member fallback — see `UserService::get_display_name`).
+    let sender_name = sender_id
+        .map(|sid| ui_ctx.display_name(&sid))
+        .unwrap_or_else(|| "Anonymous".to_string());
+
+    // Resolve sender avatar (conversation-type specific).
+    let sender_avatar = match conv_type {
         ConversationType::AnonDm => {
             let dm_id = AnonDmId::from_uuid(*conversation_id.as_uuid());
-            let dm = ui_ctx.anon_dms().get_conversation(&dm_id).ok().flatten();
-            let is_own = ui_ctx.sessions().current_user_id().map(|uid| sender_id == Some(uid)).unwrap_or(false);
-            
-            let name = sender_id.map(|id| ui_ctx.users().get_display_name(&id)).unwrap_or_else(|| "Anonymous".to_string());
-            let final_name = if name == sender_id.map(|id| id.to_string()).unwrap_or_default() && !is_own {
-                dm.as_ref().and_then(|d| d.peer_display_name.as_ref().filter(|n| !n.is_empty()).cloned()).unwrap_or(name)
+            let is_own = ui_ctx
+                .session_current_user_id()
+                .map(|uid| sender_id == Some(uid))
+                .unwrap_or(false);
+            if is_own {
+                ui_ctx.my_avatar()
             } else {
-                name
-            };
-
-            let avatar = if is_own {
-                ui_ctx.anon_dms().get_my_avatar()
-            } else {
-                dm.and_then(|d| d.peer_avatar)
-            };
-            (final_name, avatar)
+                ui_ctx.get_anon_dm_conversation(&dm_id).and_then(|d| d.peer_avatar)
+            }
         }
         ConversationType::AnonGroup => {
             let group_id = AnonGroupId::from_uuid(*conversation_id.as_uuid());
             let sid = sender_id.unwrap_or_else(UserId::new);
-            let name = super::helpers::get_anon_member_name(ui_ctx, &group_id, &sid);
-            let avatar = ui_ctx.anon_groups().get_member(&group_id, &sid).ok().flatten().and_then(|m| m.avatar);
-            (name, avatar)
+            ui_ctx.get_anon_group_member(&group_id, &sid).and_then(|m| m.avatar)
         }
-        _ => {
-            let name = sender_id
-                .map(|sid| ui_ctx.users().get_display_name(&sid))
-                .unwrap_or_else(|| "Anonymous".to_string());
-            (name, None)
-        }
+        _ => None,
     };
 
     // Resolve attachments from attachment service
     let resolved_attachments: Vec<_> = message.attachments.iter()
-        .filter_map(|att_id| ui_ctx.attachments().get(att_id).ok().flatten())
+        .filter_map(|att_id| ui_ctx.get_attachment(att_id))
         .collect();
 
     // Build display data on this thread (before moving to UI thread)
@@ -76,52 +67,20 @@ pub(super) fn handle_message_received(
     );
     display_data.decode_attachment_thumbnails();
 
-    // Resolve reply-to sender name if this is a reply/quote
+    // Resolve reply-to sender name (UserService fallback handles all types).
     if display_data.is_reply {
         if let Some(ref author_id) = message.reply_to_author_id {
-            let reply_name = ui_ctx.users().get_display_name(author_id);
-            display_data.reply_to_sender_name = match conv_type {
-                ConversationType::AnonDm => {
-                    if reply_name == author_id.to_string() {
-                        let dm_id = AnonDmId::from_uuid(*conversation_id.as_uuid());
-                        ui_ctx.anon_dms().get_conversation(&dm_id).ok().flatten()
-                            .filter(|d| d.peer_id == *author_id)
-                            .and_then(|d| d.peer_display_name.as_ref().filter(|n| !n.is_empty()).cloned())
-                            .unwrap_or(reply_name)
-                    } else {
-                        reply_name
-                    }
-                }
-                ConversationType::AnonGroup => {
-                    if reply_name == author_id.to_string() {
-                        let group_id = AnonGroupId::from_uuid(*conversation_id.as_uuid());
-                        super::helpers::get_anon_member_name(ui_ctx, &group_id, author_id)
-                    } else {
-                        reply_name
-                    }
-                }
-                _ => reply_name,
-            };
+            display_data.reply_to_sender_name = ui_ctx.display_name(author_id);
         }
     }
 
     let current_user_id = ui_ctx.auth_state().get().current_user_id
         .map(|id| id.to_string())
-        .unwrap_or_else(|| ui_ctx.sessions().current_user_id().map(|id| id.to_string()).unwrap_or_default());
+        .unwrap_or_else(|| ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default());
 
-    // Build sidebar preview
-    let text = message.as_text().unwrap_or_default();
-    let att_count = message.attachments.len();
-    let preview = if text.is_empty() && att_count > 0 {
-        format!("\u{1F4CE} {} attachment{}", att_count, if att_count == 1 { "" } else { "s" })
-    } else if text.is_empty() {
-        "[Message]".to_string()
-    } else if text.chars().count() > 50 {
-        let truncated: String = text.chars().take(47).collect();
-        format!("{}...", truncated)
-    } else {
-        text.to_string()
-    };
+    // Build sidebar preview via the shared core helper.
+    let current_user = ui_ctx.auth_state().get().current_user_id;
+    let preview = message.sidebar_preview(current_user.as_ref());
     let timestamp_str = super::super::utils::format_timestamp(timestamp);
 
     // Determine if this conversation is currently active
@@ -129,32 +88,19 @@ pub(super) fn handle_message_received(
         .map(|id| id == conversation_id)
         .unwrap_or(false);
 
-    // Determine conversation type for sidebar update
-    let sidebar_conversation = match conv_type {
-        ConversationType::AnonDm => {
-            let dm_id = AnonDmId::from_uuid(*conversation_id.as_uuid());
-            chatter_core::state::ActiveConversation::AnonDm(dm_id)
+    // If the user is looking at this conversation, flip the incoming message
+    // (and any previously-stored unreads) to read so the sidebar badge doesn't
+    // accumulate. Unread count is computed from messages.is_read.
+    if is_active {
+        if let Err(e) = ui_ctx.mark_conversation_read(&conversation_id, &conv_type) {
+            tracing::warn!(error = %e, "Failed to mark active conversation as read on incoming message");
         }
-        ConversationType::AnonGroup => {
-            let group_id = AnonGroupId::from_uuid(*conversation_id.as_uuid());
-            chatter_core::state::ActiveConversation::AnonGroup(group_id)
-        }
-        _ => {
-            if let Ok(Some(channel)) = ui_ctx.channels().get_channel_local(&conversation_id) {
-                if channel.channel_type == ChannelType::DirectMessage {
-                    if let Some(sid) = sender_id {
-                        chatter_core::state::ActiveConversation::MailboxDm { channel_id: conversation_id, peer_id: sid }
-                    } else {
-                        chatter_core::state::ActiveConversation::Channel(conversation_id)
-                    }
-                } else {
-                    chatter_core::state::ActiveConversation::Channel(conversation_id)
-                }
-            } else {
-                chatter_core::state::ActiveConversation::Channel(conversation_id)
-            }
-        }
-    };
+    }
+
+    // Classify into the typed ActiveConversation via the core helper.
+    let sidebar_conversation = ui_ctx
+        .messages()
+        .classify_active_conversation(&conversation_id, &conv_type, sender_id);
 
     // Trigger attachment auto-download in background
     let downloadable: Vec<_> = resolved_attachments.iter()
@@ -169,7 +115,7 @@ pub(super) fn handle_message_received(
         tokio::spawn(async move {
             super::super::attachment_download::download_attachments(
                 &downloadable,
-                ui_ctx_dl.attachments().clone(),
+                ui_ctx_dl,
                 weak_dl,
                 conv_id,
             ).await;
@@ -234,7 +180,7 @@ pub(super) fn handle_message_received(
 
                 crate::bin_ui::gif_state::auto_register_gifs_from_messages(
                     weak.clone(),
-                    ui_ctx_ui.attachments().clone(),
+                    ui_ctx_ui.clone(),
                 );
             }
 
@@ -246,13 +192,13 @@ pub(super) fn handle_message_received(
 
         // Always update sidebar preview
         crate::bin_ui::features::sidebar::update_sidebar_preview(
-            &w, sidebar_conversation, &preview, &timestamp_str, true,
+            &w, &ui_ctx_ui, sidebar_conversation, &preview, &timestamp_str, true,
         );
 
         // Create DM sidebar entry if new peer (non-anon only)
         if conv_type == ConversationType::ServerDm || conv_type == ConversationType::MailboxDm {
             if let Some(peer_id) = peer_id_opt {
-                if !crate::bin_ui::features::sidebar::sidebar_has_dm(&w, &peer_id) {
+                if !crate::bin_ui::features::sidebar::sidebar_has_dm(&ui_ctx_ui, &peer_id) {
                     crate::bin_ui::features::sidebar::create_dm_sidebar_entry(
                         &w, &ui_ctx_ui, &peer_id, &sender_name, &preview, &timestamp_str,
                     );
@@ -295,11 +241,12 @@ pub(super) fn handle_dm_bootstrap_completed(
 ) {
     let weak = window.clone();
     let peer_id_str = peer_id.to_string();
+    let ui_ctx_active = ui_ctx.clone();
 
     // Flush any pending messages for this peer
-    let dm_bootstrap = ui_ctx.dm_bootstrap().clone();
+    let ui_ctx_flush = ui_ctx.clone();
     tokio::spawn(async move {
-        let _ = dm_bootstrap.flush_pending_ui_messages(&peer_id).await;
+        ui_ctx_flush.flush_pending_dm_messages(&peer_id).await;
     });
 
     // Update UI: enable composer + flip delivery status
@@ -308,11 +255,9 @@ pub(super) fn handle_dm_bootstrap_completed(
 
         w.set_composer_placeholder("Type a message...".into());
 
-        // Check if this peer's DM is currently active
-        let selected_dm = w.get_selected_dm_id().to_string();
-        let peer_channel_id = crate::bin_ui::features::chat::get_dm_channel_from_peer(&w, &peer_id_str);
-        let is_active = peer_channel_id.as_deref() == Some(selected_dm.as_str())
-            || selected_dm == peer_id_str;
+        // Check if this peer's DM is currently active via the typed predicate.
+        let is_active = ui_ctx_active.active_conversation().matches_dm_peer(&peer_id);
+        let _ = &peer_id_str;
 
         if is_active {
             let messages = w.get_messages();
@@ -391,15 +336,15 @@ pub(super) fn handle_reaction_update(
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
                 if msg.sender_id.as_str() == sender_id && msg.timestamp_ns.as_str() == sent_at_ns_str {
+                    use chatter_core::domain::message::ReactionCount;
+                    use crate::bin_ui::converters::{reaction_counts_to_entries, reactions_model_to_counts};
+
                     let mut updated = msg.clone();
-                    let new_summary = super::super::utils::update_reaction_summary(
-                        &msg.reaction_summary.to_string(), &emoji, remove,
-                    );
-                    updated.reaction_summary = new_summary.clone().into();
-                    updated.has_reactions = !new_summary.is_empty();
-                    updated.reactions = ModelRc::new(VecModel::from(
-                        crate::bin_ui::converters::parse_reaction_summary_to_entries(&new_summary),
-                    ));
+                    let mut counts = reactions_model_to_counts(&msg.reactions);
+                    ReactionCount::apply(&mut counts, &emoji, remove);
+                    updated.has_reactions = !counts.is_empty();
+                    updated.reaction_summary = ReactionCount::summary_string(&counts).into();
+                    updated.reactions = ModelRc::new(VecModel::from(reaction_counts_to_entries(&counts)));
                     if let Some(model) = messages.as_any().downcast_ref::<VecModel<MessageItemData>>() {
                         model.set_row_data(i, updated);
                     }
@@ -425,6 +370,7 @@ pub(super) fn refresh_sidebar_for_reaction(
         return;
     }
 
+    let ui_ctx_for_sidebar = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
         if remove {
@@ -433,7 +379,7 @@ pub(super) fn refresh_sidebar_for_reaction(
         let preview = format!("Reacted {}", emoji);
         let now = chrono::Local::now().format("%H:%M").to_string();
         crate::bin_ui::features::sidebar::update_sidebar_preview(
-            &w, conversation, &preview, &now, false,
+            &w, &ui_ctx_for_sidebar, conversation, &preview, &now, false,
         );
     });
 }
@@ -570,10 +516,7 @@ pub(super) fn update_active_channel_member_count(
         return;
     }
 
-    let member_count = ui_ctx.channels()
-        .list_members_local(&channel_id)
-        .map(|m| m.len() as i32)
-        .unwrap_or(0);
+    let member_count = ui_ctx.list_channel_members_local(&channel_id).len() as i32;
 
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {

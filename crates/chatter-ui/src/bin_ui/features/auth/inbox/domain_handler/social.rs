@@ -121,13 +121,13 @@ pub(super) fn handle_presence_changed(
             }
         }
 
-        // 2. Update chat header presence indicator for active DM
+        // 2. Update chat header presence indicator for active DM.
+        // Read is_selected (Rust-maintained) from the DM model — avoids a
+        // stringly-typed selected-id comparison.
         if w.get_is_dm() {
-            let selected_dm = w.get_selected_dm_id().to_string();
-            // Check if the active DM belongs to this user
             for i in 0..dms.row_count() {
                 if let Some(dm) = dms.row_data(i) {
-                    if dm.channel_id == selected_dm && dm.user_id == user_id_str {
+                    if dm.is_selected && dm.user_id == user_id_str {
                         w.set_header_presence_status(presence_slint.clone());
                         break;
                     }
@@ -169,7 +169,7 @@ pub(super) fn handle_anon_dm_profile_updated(
     timestamp: u64,
 ) {
     let weak = window.clone();
-    let channel_id_str = format!("anon_dm:{}", conversation_id);
+    let channel_id_str = conversation_id.to_string();
     let display_name_clone = display_name.clone();
 
     // Update display name in sidebar immediately
@@ -205,13 +205,13 @@ pub(super) fn handle_anon_dm_profile_updated(
         });
     } else if let Some(ref url) = avatar_url {
         // Fallback to URL if no inline avatar was provided
-        let anon_dm_service = ui_ctx.anon_dms().clone();
+        let ui_ctx_avatar = ui_ctx.clone();
         let weak_for_avatar = weak.clone();
         let channel_id_for_avatar = channel_id_str.clone();
         let url_for_task = url.clone();
 
         tokio::spawn(async move {
-            let bytes = match anon_dm_service.download_and_store_avatar(&conversation_id, &url_for_task).await {
+            let bytes = match ui_ctx_avatar.download_and_store_anon_dm_avatar(&conversation_id, &url_for_task).await {
                 Ok(b) => b,
                 Err(e) => {
                     tracing::warn!("Failed to download avatar for anon DM {}: {}", conversation_id, e);
@@ -230,11 +230,10 @@ pub(super) fn handle_anon_dm_profile_updated(
         });
     } else {
         // No inline avatar or URL — check if the DB already has it (fallback)
-        let anon_dm_service = ui_ctx.anon_dms().clone();
         let weak_for_avatar = weak.clone();
         let channel_id_for_avatar = channel_id_str.clone();
 
-        if let Ok(Some(dm)) = anon_dm_service.get_conversation(&conversation_id) {
+        if let Some(dm) = ui_ctx.get_anon_dm_conversation(&conversation_id) {
             if let Some(ref avatar_bytes) = dm.peer_avatar {
                 let bytes = avatar_bytes.clone();
                 let _ = slint::invoke_from_event_loop(move || {

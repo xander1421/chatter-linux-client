@@ -309,6 +309,18 @@ impl PreKeyManager {
             .map_err(CryptoError::Storage)
     }
 
+    /// Clean up expired Kyber prekeys older than `max_age_days`.
+    ///
+    /// Kyber prekeys are rotated alongside signed prekeys (PQXDH pairing)
+    /// and must be pruned on the same cadence to avoid unbounded growth
+    /// in the local key store. Keeps the most recent Kyber prekey so
+    /// freshly-initiated PQXDH handshakes can still complete.
+    pub fn cleanup_expired_kyber_prekeys(&self, max_age_days: u64) -> Result<u32, CryptoError> {
+        self.key_store
+            .cleanup_expired_kyber_prekeys(max_age_days)
+            .map_err(CryptoError::Storage)
+    }
+
     /// Get a signed prekey by ID.
     pub fn get_signed_prekey(&self, id: u32) -> Result<Option<SignedPreKeyRecord>, CryptoError> {
         let bytes = self

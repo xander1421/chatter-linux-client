@@ -26,9 +26,8 @@ pub(super) fn handle_dm_request_received(
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             super::super::super::initial_data::refresh_anon_dms(&w, &ui_ctx);
-            if let Ok(requests) = ui_ctx.anon_dms().list_message_requests() {
-                w.set_pending_message_requests(requests.len() as i32);
-            }
+            let requests = ui_ctx.list_anon_dm_message_requests();
+            w.set_pending_message_requests(requests.len() as i32);
         }
     });
 }
@@ -122,8 +121,8 @@ pub(super) fn handle_group_member_list_received(
     let group_id_str = group_id.to_string();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            let selected_group = w.get_selected_private_group_id().to_string();
-            if selected_group == group_id_str {
+            let is_active = ui_ctx.active_conversation().matches_anon_group(&group_id);
+            if is_active {
                 tracing::debug!("Refreshing message list for group {} after member list update", group_id_str);
                 crate::bin_ui::features::sidebar::private_group::load_private_group_messages(
                     &w,

@@ -1,4 +1,9 @@
-// Active call view with video grid and controls
+// Active call view as a dock on top of the chat pane (Discord-style).
+//
+// Renders a compact header strip (title + duration + verification), a bounded
+// video/avatar grid, and a floating control pill. Not full-screen. Hidden when
+// `show` is false — collapses to zero height so the surrounding chat layout
+// reclaims the space.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -18,10 +23,6 @@ component ParticipantTile inherits Rectangle {
     border-radius: Spacing.radius-lg;
     border-width: 1px;
     border-color: Colors.neo-highlight;
-    drop-shadow-blur: Spacing.neo-blur-md;
-    drop-shadow-offset-x: Spacing.neo-offset-md;
-    drop-shadow-offset-y: Spacing.neo-offset-md;
-    drop-shadow-color: Colors.neo-shadow;
     clip: true;
 
     // Video frame or avatar placeholder
@@ -39,46 +40,45 @@ component ParticipantTile inherits Rectangle {
 
         VerticalLayout {
             alignment: center;
-            spacing: Spacing.md;
+            spacing: Spacing.sm;
 
             Avatar {
-                width: 64px;
-                height: 64px;
-                size: 64px;
+                width: 56px;
+                height: 56px;
+                size: 56px;
                 fallback-text: participant.display-name;
             }
 
             Text {
                 text: participant.display-name;
-                font-size: Typography.sm;
+                font-size: Typography.xs;
                 color: Colors.text-primary;
                 horizontal-alignment: center;
+                overflow: elide;
             }
         }
     }
 
-    // Overlay: mute indicator — Neo depth
+    // Mute indicator
     if participant.is-muted: Rectangle {
-        x: Spacing.sm;
-        y: parent.height - 32px;
-        width: 24px;
-        height: 24px;
-        border-radius: 12px;
-        background: Colors.error.with-alpha(0.8);
-        drop-shadow-blur: Spacing.neo-blur-sm;
-        drop-shadow-color: Colors.error.with-alpha(0.3);
+        x: Spacing.xs;
+        y: parent.height - 24px;
+        width: 20px;
+        height: 20px;
+        border-radius: 10px;
+        background: Colors.error.with-alpha(0.85);
 
         Image {
             source: Icons.mic-off;
-            width: 14px;
-            height: 14px;
+            width: 12px;
+            height: 12px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             colorize: Colors.text-primary;
         }
     }
 
-    // Speaking indicator border — Neo glow
+    // Speaking glow
     if participant.is-speaking: Rectangle {
         width: 100%;
         height: 100%;
@@ -86,21 +86,19 @@ component ParticipantTile inherits Rectangle {
         border-width: 2px;
         border-color: Colors.primary;
         background: transparent;
-        drop-shadow-blur: Spacing.neo-blur-md;
-        drop-shadow-color: Colors.glow-primary;
     }
 
-    // Name label
+    // Name label (bottom-right)
     Rectangle {
-        x: Spacing.sm;
-        y: Spacing.sm;
-        width: name-text.preferred-width + Spacing.lg;
-        height: 24px;
+        x: parent.width - self.width - Spacing.xs;
+        y: parent.height - self.height - Spacing.xs;
+        width: name-text.preferred-width + Spacing.md;
+        height: 18px;
         border-radius: Spacing.radius-sm;
         background: Colors.overlay-heavy;
 
         name-text := Text {
-            x: Spacing.sm;
+            x: Spacing.xs;
             text: is-local ? "You" : participant.display-name;
             font-size: Typography.xs;
             color: Colors.text-primary;
@@ -124,127 +122,104 @@ export component ActiveCallView inherits Rectangle {
     callback end-call();
     callback show-audio-settings();
 
-    // Only visible when show is true
+    // Dock: collapses to zero height when hidden so parent VerticalLayout
+    // reclaims the space and the underlying chat header/messages fill it.
     visible: show;
-    background: Colors.background;
+    height: show ? 280px : 0px;
+    background: Colors.surface.with-alpha(0.6);
+    border-width: 1px;
+    border-color: Colors.neo-inset-shadow;
+    drop-shadow-blur: Spacing.neo-blur-md;
+    drop-shadow-offset-y: Spacing.neo-offset-sm;
+    drop-shadow-color: Colors.neo-shadow;
 
     if show: VerticalLayout {
-        // Header — Neo glass surface
+        // Compact header strip
         Rectangle {
-            height: 56px;
-            background: Colors.surface.with-alpha(0.85);
+            height: 32px;
+            background: Colors.surface.with-alpha(0.9);
             border-width: 1px;
             border-color: Colors.neo-highlight;
-            drop-shadow-blur: Spacing.neo-blur-sm;
-            drop-shadow-offset-y: Spacing.neo-offset-sm;
-            drop-shadow-color: Colors.neo-shadow;
 
             HorizontalLayout {
-                padding: Spacing.lg;
-                alignment: space-between;
+                padding-left: Spacing.md;
+                padding-right: Spacing.md;
+                spacing: Spacing.sm;
+                alignment: start;
 
-                VerticalLayout {
-                    alignment: center;
+                Text {
+                    text: call-data.title;
+                    font-size: Typography.sm;
+                    font-weight: Typography.semibold;
+                    color: Colors.text-primary;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
 
-                    Text {
-                        text: call-data.title;
-                        font-size: Typography.base;
-                        font-weight: Typography.semibold;
-                        color: Colors.text-primary;
-                    }
+                if call-data.is-encrypted: Image {
+                    source: Icons.lock;
+                    width: 12px;
+                    height: 12px;
+                    colorize: Colors.primary;
+                    y: (parent.height - self.height) / 2;
+                }
 
-                    HorizontalLayout {
-                        spacing: Spacing.sm;
+                if call-data.is-encrypted && call-data.verification-emoji-1 != "": Rectangle {
+                    width: verification-emojis.preferred-width + Spacing.sm;
+                    height: 18px;
+                    border-radius: Spacing.radius-sm;
+                    background: Colors.primary.with-alpha(0.2);
+                    y: (parent.height - self.height) / 2;
 
-                        if call-data.is-encrypted: Image {
-                            source: Icons.lock;
-                            width: 14px;
-                            height: 14px;
-                            colorize: Colors.primary;
-                        }
+                    verification-emojis := HorizontalLayout {
+                        padding-left: 4px;
+                        padding-right: 4px;
+                        spacing: 1px;
 
-                        // Verification emojis - compare with other party
-                        if call-data.is-encrypted && call-data.verification-emoji-1 != "": Rectangle {
-                            width: verification-emojis.preferred-width + Spacing.md;
-                            height: 20px;
-                            border-radius: Spacing.radius-sm;
-                            background: Colors.primary.with-alpha(0.2);
-
-                            verification-emojis := HorizontalLayout {
-                                padding-left: Spacing.xs;
-                                padding-right: Spacing.xs;
-                                spacing: 2px;
-
-                                Text {
-                                    text: call-data.verification-emoji-1;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: call-data.verification-emoji-2;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: call-data.verification-emoji-3;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: call-data.verification-emoji-4;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    // TODO: Show verification info dialog
-                                }
-                            }
-                        }
-
-                        Text {
-                            text: format-duration(call-data.duration-seconds);
-                            font-size: Typography.xs;
-                            color: Colors.text-secondary;
-                        }
-
-                        Text {
-                            text: "• " + call-data.participant-count + " participants";
-                            font-size: Typography.xs;
-                            color: Colors.text-secondary;
-                        }
+                        Text { text: call-data.verification-emoji-1; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { text: call-data.verification-emoji-2; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { text: call-data.verification-emoji-3; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { text: call-data.verification-emoji-4; font-size: Typography.xs; vertical-alignment: center; }
                     }
                 }
+
+                Text {
+                    text: format-duration(call-data.duration-seconds);
+                    font-size: Typography.xs;
+                    color: Colors.text-secondary;
+                    vertical-alignment: center;
+                }
+
+                if call-data.participant-count > 2: Text {
+                    text: "• " + call-data.participant-count + " participants";
+                    font-size: Typography.xs;
+                    color: Colors.text-secondary;
+                    vertical-alignment: center;
+                }
+
+                Rectangle { horizontal-stretch: 1; }
             }
         }
 
-        // Video grid
+        // Video grid area — bounded, tiles scale to fit
         Rectangle {
             vertical-stretch: 1;
-            background: Colors.background;
-
-            // Grid layout depends on participant count
-            // For 1 participant: full screen
-            // For 2: side by side
-            // For 3-4: 2x2 grid
-            // For 5+: scrollable grid
+            background: transparent;
 
             if call-data.participant-count == 1: ParticipantTile {
-                width: parent.width - Spacing.xxl;
-                height: parent.height - Spacing.xxl;
-                x: Spacing.lg;
-                y: Spacing.lg;
+                x: Spacing.sm;
+                y: Spacing.sm;
+                width: parent.width - 2 * Spacing.sm;
+                height: parent.height - 2 * Spacing.sm - 56px; // leave room for floating controls
                 participant: call-data.participants[0];
                 video-frame: local-video-frame;
                 is-local: true;
             }
 
             if call-data.participant-count == 2: HorizontalLayout {
-                padding: Spacing.lg;
-                spacing: Spacing.lg;
+                padding: Spacing.sm;
+                padding-bottom: 56px; // leave room for floating controls
+                spacing: Spacing.sm;
 
                 ParticipantTile {
                     horizontal-stretch: 1;
@@ -260,14 +235,13 @@ export component ActiveCallView inherits Rectangle {
                 }
             }
 
-            // 3-4 participants: 2x2 grid using nested layouts
             if call-data.participant-count >= 3 && call-data.participant-count <= 4: VerticalLayout {
-                padding: Spacing.lg;
-                spacing: Spacing.lg;
+                padding: Spacing.sm;
+                padding-bottom: 56px;
+                spacing: Spacing.sm;
 
-                // Top row
                 HorizontalLayout {
-                    spacing: Spacing.lg;
+                    spacing: Spacing.sm;
 
                     ParticipantTile {
                         horizontal-stretch: 1;
@@ -281,9 +255,8 @@ export component ActiveCallView inherits Rectangle {
                     }
                 }
 
-                // Bottom row
                 HorizontalLayout {
-                    spacing: Spacing.lg;
+                    spacing: Spacing.sm;
 
                     ParticipantTile {
                         horizontal-stretch: 1;
@@ -295,22 +268,17 @@ export component ActiveCallView inherits Rectangle {
                         participant: call-data.participants.length > 3 ? call-data.participants[3] : call-data.participants[0];
                         video-frame: local-video-frame;
                         is-local: call-data.participant-count >= 4;
-                        // Hide 4th tile if only 3 participants
                         opacity: call-data.participant-count >= 4 ? 1.0 : 0.0;
                     }
                 }
             }
-        }
 
-        // Controls bar
-        Rectangle {
-            height: 88px;
-            background: transparent;
-
+            // Floating control pill overlay — centered horizontally, bottom
             CallControls {
                 x: (parent.width - self.width) / 2;
-                y: Spacing.sm;
-                width: min(340px, parent.width - 20px);
+                y: parent.height - self.height - Spacing.sm;
+                width: min(320px, parent.width - 2 * Spacing.md);
+                height: 48px;
                 is-muted: is-muted;
                 is-video-enabled: is-video-enabled;
                 is-screen-sharing: is-screen-sharing;
@@ -326,7 +294,6 @@ export component ActiveCallView inherits Rectangle {
     }
 
     pure function format-duration(seconds: int) -> string {
-        // Format as mm:ss or h:mm:ss
         if seconds < 3600 {
             return Math.floor(seconds / 60) + ":" + (Math.mod(seconds, 60) < 10 ? "0" : "") + Math.mod(seconds, 60);
         } else {

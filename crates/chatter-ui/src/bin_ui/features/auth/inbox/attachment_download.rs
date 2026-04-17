@@ -9,7 +9,6 @@ use slint::{Model, VecModel};
 
 use chatter_core::domain::Attachment;
 use chatter_core::domain::ids::AttachmentId;
-use chatter_core::services::attachment::AttachmentService;
 
 use crate::MainWindow;
 
@@ -19,7 +18,7 @@ use crate::MainWindow;
 /// Takes resolved `Attachment` domain objects (not proto types).
 pub async fn download_attachments(
     attachments: &[Attachment],
-    attachment_service: Arc<AttachmentService>,
+    ui_ctx: Arc<chatter_core::client::ChatterClient>,
     weak_window: slint::Weak<MainWindow>,
     conversation_id: String,
 ) {
@@ -45,50 +44,24 @@ pub async fn download_attachments(
         );
 
         // Verify attachment record exists
-        match attachment_service.get_metadata(&att_id) {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                tracing::error!(
-                    attachment_id = %att_id,
-                    cdn_key = %cdn_key,
-                    "BUG: Attachment not found in DB"
-                );
-                continue;
-            }
-            Err(e) => {
-                tracing::error!(
-                    attachment_id = %att_id,
-                    error = %e,
-                    "Failed to check attachment record"
-                );
-                continue;
-            }
+        if ui_ctx.get_attachment_metadata(&att_id).is_none() {
+            tracing::error!(
+                attachment_id = %att_id,
+                cdn_key = %cdn_key,
+                "BUG: Attachment not found in DB"
+            );
+            continue;
         }
 
         // Download encrypted content to filesystem
-        match attachment_service
-            .download_to_filesystem(&att_id)
-            .await
-        {
+        match ui_ctx.download_attachment_to_filesystem(&att_id).await {
             Ok(()) => {
                 tracing::info!(cdn_key = %cdn_key, "Attachment downloaded");
 
                 if is_gif {
-                    handle_gif(
-                        &attachment_service,
-                        &att_id,
-                        &cdn_key,
-                        &weak_window,
-                        &conversation_id,
-                    );
+                    handle_gif(&ui_ctx, &att_id, &cdn_key, &weak_window, &conversation_id);
                 } else if is_image && !has_thumbnail {
-                    handle_image(
-                        &attachment_service,
-                        &att_id,
-                        &cdn_key,
-                        &weak_window,
-                        &conversation_id,
-                    );
+                    handle_image(&ui_ctx, &att_id, &cdn_key, &weak_window, &conversation_id);
                 }
             }
             Err(e) => {
@@ -105,14 +78,14 @@ pub async fn download_attachments(
 /// 2. Decodes remaining frames in background
 /// 3. Registers for inline animation (reuses decoded frames)
 fn handle_gif(
-    attachment_service: &Arc<AttachmentService>,
+    ui_ctx: &Arc<chatter_core::client::ChatterClient>,
     att_id: &AttachmentId,
     cdn_key: &str,
     weak_window: &slint::Weak<MainWindow>,
     conversation_id: &str,
 ) {
     // Service layer: decrypt and decode first frame (SINGLE DECRYPT)
-    let decode_result = match attachment_service.decrypt_and_decode_gif_first_frame(att_id) {
+    let decode_result = match ui_ctx.decrypt_and_decode_gif_first_frame(att_id) {
         Ok(Some(result)) => result,
         Ok(None) => {
             tracing::debug!(cdn_key = %cdn_key, "Not a GIF");
@@ -127,6 +100,7 @@ fn handle_gif(
     let att_id_str = att_id.to_string();
     let weak = weak_window.clone();
     let conv_id = conversation_id.to_string();
+    let ui_ctx_gif = ui_ctx.clone();
 
     // Show first frame immediately
     let first_frame = decode_result.first_frame;
@@ -146,7 +120,7 @@ fn handle_gif(
         let first_image = slint::Image::from_rgba8(buffer);
 
         if let Some(window) = weak_first.upgrade() {
-            update_attachment_thumbnail(&window, &att_id_first, first_image, &conv_id_first);
+            update_attachment_thumbnail(&window, &ui_ctx_gif, &att_id_first, first_image, &conv_id_first);
             tracing::info!("GIF first frame displayed: {}", att_id_first);
         }
     });
@@ -205,13 +179,13 @@ fn handle_gif(
 
 /// Handle image: generate thumbnail if missing.
 fn handle_image(
-    attachment_service: &Arc<AttachmentService>,
+    ui_ctx: &Arc<chatter_core::client::ChatterClient>,
     att_id: &AttachmentId,
     cdn_key: &str,
     weak_window: &slint::Weak<MainWindow>,
     conversation_id: &str,
 ) {
-    let image_result = match attachment_service.decrypt_and_get_image_info(att_id) {
+    let image_result = match ui_ctx.decrypt_and_get_image_info(att_id) {
         Ok(result) => result,
         Err(e) => {
             tracing::error!(cdn_key = %cdn_key, error = %e, "Failed to process image");
@@ -225,6 +199,7 @@ fn handle_image(
     let width = image_result.width;
     let height = image_result.height;
     let image_bytes = image_result.image_bytes;
+    let ui_ctx_img = ui_ctx.clone();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(window) = weak.upgrade() {
@@ -232,6 +207,7 @@ fn handle_image(
                 Ok(image) => {
                     update_attachment_thumbnail_with_dims(
                         &window,
+                        &ui_ctx_img,
                         &cdn_key_for_ui,
                         image,
                         width as i32,
@@ -250,11 +226,12 @@ fn handle_image(
 /// Update attachment thumbnail in message list.
 pub fn update_attachment_thumbnail(
     window: &MainWindow,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
     attachment_id: &str,
     image: slint::Image,
     conversation_id: &str,
 ) {
-    if !is_conversation_active(window, conversation_id) && !conversation_id.is_empty() {
+    if !is_conversation_active(ui_ctx, conversation_id) && !conversation_id.is_empty() {
         return;
     }
 
@@ -290,13 +267,14 @@ pub fn update_attachment_thumbnail(
 /// Update attachment thumbnail with dimensions.
 pub fn update_attachment_thumbnail_with_dims(
     window: &MainWindow,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
     cdn_key: &str,
     image: slint::Image,
     width: i32,
     height: i32,
     conversation_id: &str,
 ) {
-    if !is_conversation_active(window, conversation_id) {
+    if !is_conversation_active(ui_ctx, conversation_id) {
         return;
     }
 
@@ -333,30 +311,32 @@ pub fn update_attachment_thumbnail_with_dims(
     }
 }
 
-/// Check if conversation is currently active.
-fn is_conversation_active(window: &MainWindow, conversation_id: &str) -> bool {
-    // Check anon groups
-    let selected_group = window.get_selected_private_group_id().to_string();
-    if !selected_group.is_empty() && selected_group == conversation_id {
-        return true;
-    }
-
-    // Check channels
-    let selected_channel = window.get_selected_channel_id().to_string();
-    if !selected_channel.is_empty() && selected_channel == conversation_id {
-        return true;
-    }
-
-    // Check DMs (regular and anon)
-    let selected_dm = window.get_selected_dm_id().to_string();
-
-    // Anon DM with prefix
-    if let Some(anon_id) = selected_dm.strip_prefix("anon_dm:") {
-        if anon_id == conversation_id {
-            return true;
-        }
-    }
-
-    // Direct comparison
-    selected_dm == conversation_id
+/// Check if the given (stringly-typed) conversation identifier refers to the
+/// currently-viewed conversation. Delegates to the typed `matches_*`
+/// predicates on `ActiveConversation` in `chatter-core`.
+fn is_conversation_active(
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
+    conversation_id: &str,
+) -> bool {
+    let active = ui_ctx.active_conversation();
+    // A conversation_id string from the UI may be any of: ChannelId uuid,
+    // AnonDmId uuid, AnonGroupId uuid, or peer UserId uuid. Try each shape
+    // against the matching predicate — exactly one (or none) will hit.
+    let channel_match = conversation_id
+        .parse()
+        .map(|id| active.matches_channel(&id))
+        .unwrap_or(false);
+    let anon_dm_match = conversation_id
+        .parse()
+        .map(|id| active.matches_anon_dm(&id))
+        .unwrap_or(false);
+    let anon_group_match = conversation_id
+        .parse()
+        .map(|id| active.matches_anon_group(&id))
+        .unwrap_or(false);
+    let peer_match = conversation_id
+        .parse()
+        .map(|id| active.matches_dm_peer(&id))
+        .unwrap_or(false);
+    channel_match || anon_dm_match || anon_group_match || peer_match
 }

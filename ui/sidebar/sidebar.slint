@@ -27,11 +27,8 @@ export { ChannelListItemData, DMListItemData, PrivateGroupListItemData, OrgListI
 export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
     in property <[ChannelListItemData]> channels: [];
-    in property <string> selected-channel-id: "";
     in property <[DMListItemData]> dm-conversations: [];
-    in property <string> selected-dm-id: "";
     in property <[PrivateGroupListItemData]> private-groups: [];
-    in property <string> selected-private-group-id: "";
     in property <[CustomSectionData]> custom-sections: [];
     in property <[SectionConversationData]> section-conversations: [];
 
@@ -520,7 +517,6 @@ export component Sidebar inherits Rectangle {
                 if root.channels-expanded: ChannelList {
                     vertical-stretch: 0;
                     channels: root.channels;
-                    selected-channel-id: root.selected-channel-id;
                     collapsed: root.collapsed;
                     show-header: false;
                     channel-selected(id) => { root.channel-selected(id); }
@@ -537,7 +533,6 @@ export component Sidebar inherits Rectangle {
                 if root.channels-expanded && root.private-groups.length > 0: PrivateGroupList {
                     vertical-stretch: 0;
                     groups: root.private-groups;
-                    selected-group-id: root.selected-private-group-id;
                     collapsed: root.collapsed;
                     show-header: false;
                     group-selected(id) => { root.private-group-selected(id); }
@@ -620,7 +615,6 @@ export component Sidebar inherits Rectangle {
                 if root.messages-expanded: DMList {
                     vertical-stretch: 0;
                     conversations: root.dm-conversations;
-                    selected-conversation-id: root.selected-dm-id;
                     collapsed: root.collapsed;
                     show-header: false;
                     conversation-selected(id) => { root.dm-selected(id); }
@@ -639,7 +633,6 @@ export component Sidebar inherits Rectangle {
                     vertical-stretch: 0;
                     sections: root.custom-sections;
                     section-conversations: root.section-conversations;
-                    selected-conversation-id: root.selected-dm-id;
                     collapsed: root.collapsed;
                     create-section-clicked => { root.create-section-clicked(); }
                     section-toggle-expanded(id) => { root.section-toggle-expanded(id); }

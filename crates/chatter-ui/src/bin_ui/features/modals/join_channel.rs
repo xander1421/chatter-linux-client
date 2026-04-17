@@ -22,12 +22,12 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Search channels callback (with debounce)
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channels().clone();
+    let ui_ctx_search = ui_ctx.clone();
     let search_counter_clone = search_counter.clone();
 
     window.on_search_channels(move |query: SharedString| {
         let weak = weak_window.clone();
-        let channel_service = channel_service.clone();
+        let ui_ctx = ui_ctx_search.clone();
         let query = query.to_string();
         let counter = search_counter_clone.clone();
 
@@ -72,8 +72,8 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             // Perform search using ChannelService
-            match channel_service
-                .search_channels(
+            match ui_ctx
+                .search_channels_filtered(
                     &query,
                     20,
                     0,
@@ -170,12 +170,12 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                     // Move domain Channel to UI thread; convert there (slint::Image is !Send).
                     let channel_for_ui = channel.clone();
-                    let attachments_for_ui = ui_ctx.attachments().clone();
+                    let ui_ctx_convert = ui_ctx.clone();
                     let weak_modal = weak.clone();
                     let channel_id_for_ui = channel_id_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_modal.upgrade() {
-                            let slint_channel = channel_to_slint(&channel_for_ui, &attachments_for_ui);
+                            let slint_channel = channel_to_slint(&channel_for_ui, &ui_ctx_convert);
                             // Close modal and clear form
                             w.set_join_channel_joining(false);
                             w.set_join_channel_search_query("".into());
@@ -195,8 +195,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                             // Set loading state for channel switch
                             w.set_loading_messages(true);
-                            w.set_selected_channel_id(channel_id_for_ui);
-                            w.set_selected_dm_id("".into());
+                            w.invoke_channel_selected(channel_id_for_ui);
                         }
                     });
 

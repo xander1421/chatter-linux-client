@@ -36,29 +36,28 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Clear inline GIF animations
         crate::bin_ui::gif_state::clear_inline_gifs();
 
-        // Look up peer_id BEFORE spawning (we're on UI thread here)
-        let peer_id_for_dm = if !dm_id_str.starts_with("anon_dm:") {
-            weak.upgrade().and_then(|w| {
+        // Look up is_anon + peer_id BEFORE spawning (we're on UI thread here).
+        // The DM model stores raw uuids; the `is_anon` flag discriminates
+        // anon conversations from regular ones.
+        let (is_anon_dm, peer_id_for_dm) = weak
+            .upgrade()
+            .map(|w| {
                 let conversations = w.get_dm_conversations();
                 for i in 0..conversations.row_count() {
                     if let Some(item) = conversations.row_data(i) {
                         if item.channel_id.as_str() == dm_id_str {
-                            return item.user_id.to_string().parse::<UserId>().ok();
+                            let peer = item.user_id.to_string().parse::<UserId>().ok();
+                            return (item.is_anon, peer);
                         }
                     }
                 }
-                None
+                (false, None)
             })
-        } else {
-            None
-        };
+            .unwrap_or((false, None));
 
         let dm_id_str_for_ui = dm_id_str.clone();
         run_ui!(weak, |w| {
             w.set_loading_messages(true);
-            w.set_selected_dm_id(dm_id.clone());
-            w.set_selected_channel_id("".into());
-            w.set_selected_private_group_id("".into());
 
             // Clear unread count in sidebar
             crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &dm_id_str_for_ui, 0);
@@ -84,12 +83,10 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tokio::spawn(async move {
             let chat_state = ui_ctx.chat_state().clone();
             let pinned_state = ui_ctx.pinned_state().clone();
-            let user_service = ui_ctx.users().clone();
-            let attachment_service = ui_ctx.attachments().clone();
 
             // 1. Handle Anon DM selection
-            if let Some(anon_dm_id_str) = dm_id_str.strip_prefix("anon_dm:") {
-                let anon_dm_id: AnonDmId = match anon_dm_id_str.parse() {
+            if is_anon_dm {
+                let anon_dm_id: AnonDmId = match dm_id_str.parse() {
                     Ok(id) => id,
                     Err(e) => {
                         tracing::error!("Invalid anon DM ID: {}", e);
@@ -99,25 +96,26 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 };
 
                 chat_state.set_active_conversation(chatter_core::state::ActiveConversation::AnonDm(anon_dm_id));
+                let ui_ctx_for_sel = ui_ctx.clone();
+                run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
                 // Load pins for anon DM
-                let anon_dm_service = ui_ctx.anon_dms().clone();
-                let (msg_ids, preview) = match anon_dm_service.list_pinned(&anon_dm_id) {
-                    Ok(pinned) if !pinned.is_empty() => {
-                        let ids = pinned.iter().map(|m| m.id).collect();
-                        let preview = pinned[0].as_text()
-                            .filter(|t| !t.is_empty())
-                            .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
-                            .unwrap_or_else(|| "[Pinned message]".to_string());
-                        (ids, preview)
-                    }
-                    _ => (vec![], String::new()),
+                let pinned = ui_ctx.list_anon_dm_pinned(&anon_dm_id);
+                let (msg_ids, preview) = if pinned.is_empty() {
+                    (vec![], String::new())
+                } else {
+                    let ids = pinned.iter().map(|m| m.id).collect();
+                    let preview = pinned[0].as_text()
+                        .filter(|t| !t.is_empty())
+                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
+                        .unwrap_or_else(|| "[Pinned message]".to_string());
+                    (ids, preview)
                 };
                 let channel_id = anon_dm_id.to_string().parse().unwrap_or_else(|_| ChannelId::new());
                 super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
 
                 // Load messages
-                let messages = match anon_dm_service.get_messages_asc(&anon_dm_id, None, 50) {
+                let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, 50) {
                     Ok(msgs) => msgs,
                     Err(e) => {
                         tracing::error!("Failed to list anon DM messages: {}", e);
@@ -128,21 +126,21 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 let display_messages = messages_to_display_batch(
                     &messages,
-                    |uid| user_service.get_display_name(uid),
-                    |att_id| attachment_service.get(att_id).ok().flatten(),
+                    |uid| ui_ctx.display_name(uid),
+                    |att_id| ui_ctx.get_attachment(att_id),
                 );
 
                 // Get conversation info for the header
-                let (title, subtitle) = match anon_dm_service.get_conversation(&anon_dm_id) {
-                    Ok(Some(conv)) => (
+                let (title, subtitle) = match ui_ctx.get_anon_dm_conversation(&anon_dm_id) {
+                    Some(conv) => (
                         conv.peer_display_name.clone().unwrap_or_else(|| "Private Chat".to_string()),
                         "Private Chat".to_string()
                     ),
-                    _ => ("Private Chat".to_string(), "NDSS'21 Protocol".to_string()),
+                    None => ("Private Chat".to_string(), "NDSS'21 Protocol".to_string()),
                 };
 
                 run_ui!(weak, |w| {
-                    let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
+                    let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                     let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                     w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
                     w.set_loading_messages(false);
@@ -151,7 +149,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_channel_name(title.into());
                     w.set_topic(subtitle.into());
                     w.set_header_presence_status("online".into());
-                    crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), attachment_service.clone());
+                    crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
                 });
                 return;
             }
@@ -175,9 +173,11 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 peer_id: peer_id.clone(),
                 channel_id,
             });
+            let ui_ctx_for_sel = ui_ctx.clone();
+            run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
             // Load pins
-            let (msg_ids, preview) = match ui_ctx.pins().load_pinned_for_channel(&channel_id, &chatter_core::domain::message::ConversationType::ServerDm).await {
+            let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &chatter_core::domain::message::ConversationType::ServerDm).await {
                 Ok(pinned) if !pinned.is_empty() => {
                     let ids = pinned.iter().map(|p| p.message_id).collect();
                     let preview = pinned[0].preview.clone();
@@ -188,8 +188,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             super::apply_pinned_ui(&weak, &pinned_state, channel_id, msg_ids, preview);
 
             // Load messages
-            let message_service = ui_ctx.messages().clone();
-            let messages = match message_service.get_messages_local_asc(&channel_id, &chatter_core::domain::message::ConversationType::ServerDm, None, 50) {
+            let messages = match ui_ctx.get_messages_local_asc(&channel_id, &chatter_core::domain::message::ConversationType::ServerDm, None, 50) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to list DM messages: {}", e);
@@ -198,7 +197,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            let peer_profile = user_service.get_user_profile(&peer_id).await.ok();
+            let peer_profile = ui_ctx.get_user_profile(&peer_id).await.ok();
             let title = peer_profile.as_ref()
                 .map(|p| p.display_name.clone())
                 .unwrap_or_else(|| peer_id.to_string());
@@ -214,12 +213,12 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let display_messages = messages_to_display_batch(
                 &messages,
-                |uid| user_service.get_display_name(uid),
-                |att_id| attachment_service.get(att_id).ok().flatten(),
+                |uid| ui_ctx.display_name(uid),
+                |att_id| ui_ctx.get_attachment(att_id),
             );
 
             run_ui!(weak, |w| {
-                let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
+                let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
                 w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
                 w.set_loading_messages(false);

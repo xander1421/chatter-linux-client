@@ -31,7 +31,6 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         let ui_ctx = ui_ctx_clone.clone();
         let auth_state = ui_ctx.auth_state().clone();
         let chat_state = ui_ctx.chat_state().clone();
-        let channel_service = ui_ctx.channels().clone();
 
         // Stop any playing audio when switching channels
         stop_audio_playback();
@@ -47,11 +46,9 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             }
         };
 
-        let channel_id_str_for_ui = channel_id_str.clone();
+        let _ = channel_id_str.clone();
         run_ui!(weak, |w| {
             w.set_loading_messages(true);
-            w.set_selected_channel_id(channel_id_str_for_ui.into());
-            w.set_selected_dm_id("".into());
             // Clear composer reply/edit state to prevent stale context
             w.set_composer_is_replying(false);
             w.set_composer_reply_to_sender("".into());
@@ -80,10 +77,12 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             // Update chat state with active channel
             chat_state.set_active_channel(channel_id);
             chat_state.set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+            let ui_ctx_for_sel = ui_ctx.clone();
+            run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
             // Ensure the saved messages channel exists locally
-            if let Ok(None) | Err(_) = channel_service.get_channel_local(&channel_id) {
-                if let Err(e) = channel_service.get_channel(&channel_id).await {
+            if ui_ctx.get_channel_local(&channel_id).is_none() {
+                if let Err(e) = ui_ctx.get_channel(&channel_id).await {
                     tracing::error!("Failed to fetch saved messages channel from server: {}", e);
                     run_ui!(weak, |w| w.set_loading_messages(false));
                     return;
@@ -103,7 +102,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let auth_state = ui_ctx.auth_state().clone();
     let privacy_state = ui_ctx.privacy_state().clone();
-    let signal_service = ui_ctx.signal().clone();
+    let ui_ctx_fp = ui_ctx.clone();
 
     let weak_window = window.as_weak();
 
@@ -111,7 +110,7 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         let weak = weak_window.clone();
         let auth_state = auth_state.clone();
         let privacy_state = privacy_state.clone();
-        let signal_service = signal_service.clone();
+        let ui_ctx_fp = ui_ctx_fp.clone();
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
@@ -137,7 +136,7 @@ pub(crate) fn wire_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         // Fetch identity fingerprint asynchronously and set it on the UI
         let weak_fp = weak_window.clone();
         tokio::spawn(async move {
-            match signal_service.get_identity_fingerprint().await {
+            match ui_ctx_fp.my_identity_fingerprint().await {
                 Ok(fingerprint) => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_fp.upgrade() {

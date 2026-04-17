@@ -16,6 +16,22 @@ use crate::storage::repositories::settings_keys;
 
 use super::{AnonGroupError, AnonGroupService};
 
+/// Default mailbox TTL (server-enforced) when creating or refreshing an
+/// anonymous group mailbox.
+///
+/// Matches the original `create_group_mailbox` TTL; refresh keeps this
+/// unchanged so we preserve the existing forward-secrecy window.
+pub const DEFAULT_GROUP_MAILBOX_TTL_DAYS: i64 = 30;
+
+/// How far in advance of expiry to proactively refresh a group mailbox.
+///
+/// A 7 day lead time gives peers ample opportunity to receive the new
+/// `mailbox_pk` broadcast before the old address stops accepting deliveries,
+/// minimising in-flight message loss given that the on-disk schema can only
+/// hold a single mailbox per group (`UNIQUE(group_id)` in
+/// `anon_group_mailboxes`).
+pub const GROUP_MAILBOX_REFRESH_LEAD_DAYS: i64 = 7;
+
 impl AnonGroupService {
     /// Get the current user ID.
     pub fn current_user_id(&self) -> Result<UserId, AnonGroupError> {
@@ -262,7 +278,7 @@ impl AnonGroupService {
 
         // Register the mailbox with the server using the blind signature (ANONYMOUS - no auth headers)
         // Retry on transient transport errors with channel disconnect to avoid stale HTTP/2 connections
-        let ttl_seconds = 30 * 24 * 60 * 60; // 30 days in seconds
+        let ttl_seconds = DEFAULT_GROUP_MAILBOX_TTL_DAYS as u64 * 24 * 60 * 60;
         let mut last_err = None;
         let mut response_result = None;
         for attempt in 0..3u32 {
@@ -316,7 +332,7 @@ impl AnonGroupService {
             private_key,
             token_id: token.id.clone(),
             created_at: now,
-            expires_at: now + chrono::Duration::days(30), // 30 day expiry
+            expires_at: now + chrono::Duration::days(DEFAULT_GROUP_MAILBOX_TTL_DAYS),
         };
 
         // Mark the token as used
@@ -391,5 +407,222 @@ impl AnonGroupService {
             inviter_id
         );
         Ok(group)
+    }
+
+    /// Refresh (rotate) our mailbox for a specific anonymous group.
+    ///
+    /// Creates a fresh mailbox on the server using a new blind-signed token,
+    /// persists it in place of the existing one (`anon_group_mailboxes` enforces
+    /// `UNIQUE(group_id)`), updates our own entry in
+    /// `anon_group_members.mailbox_pk`, and announces the new public key to
+    /// group peers so they route future messages to the new address.
+    ///
+    /// # Announcement mechanism
+    ///
+    /// We reuse existing group-control messages rather than introducing a new
+    /// proto type:
+    ///
+    /// - **Owner**: re-broadcasts the authoritative member list via
+    ///   [`broadcast_member_list`](AnonGroupService::broadcast_member_list).
+    ///   Our updated entry (with the new `mailbox_pk`) is included, so every
+    ///   confirmed peer will overwrite our stored mailbox key when they apply
+    ///   the list.
+    /// - **Non-owner**: sends a fresh `AnonGroupJoinAck` (which already carries
+    ///   `joiner_mailbox_pk`) to the owner. The owner's existing
+    ///   [`handle_join_ack`](AnonGroupService::handle_join_ack) handler updates
+    ///   our member row and re-broadcasts the full member list to the rest of
+    ///   the group, so all peers eventually learn our new address.
+    ///
+    /// # Grace period
+    ///
+    /// Because the local schema only stores a single mailbox per group
+    /// (`anon_group_mailboxes.group_id UNIQUE`), we cannot persist the old
+    /// mailbox alongside the new one. Instead, callers should invoke this
+    /// proactively well before expiry (see
+    /// [`refresh_expiring_group_mailboxes`](AnonGroupService::refresh_expiring_group_mailboxes)
+    /// which defaults to `GROUP_MAILBOX_REFRESH_LEAD_DAYS` days of lead time).
+    /// The old mailbox continues to exist server-side until its TTL elapses,
+    /// so late-arriving in-flight messages are preserved; peers will, however,
+    /// only route to the new address once they process the announcement above.
+    pub async fn refresh_group_mailbox(
+        &self,
+        group_id: &AnonGroupId,
+    ) -> Result<AnonGroupMailbox, AnonGroupError> {
+        let current_user = self.current_user_id()?;
+
+        // 1. Verify the group still exists and we're a member.
+        let group = self
+            .anon_group_repo
+            .get_group(group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+
+        // Refuse to refresh if the group is blocked — no legitimate use case
+        // and it would leak a control message to a blocked party.
+        if group.is_blocked() {
+            return Err(AnonGroupError::GroupBlocked(*group_id));
+        }
+
+        let old_mailbox = self.anon_group_repo.get_mailbox(group_id)?;
+
+        // 2. Create a fresh mailbox on the server (new blind-signed token,
+        //    new Ed25519 keypair, fresh TTL). Reuses the same flow as initial
+        //    creation, including retry-on-transient-error.
+        let new_mailbox = self.create_group_mailbox(group_id).await?;
+
+        // 3. Persist the new mailbox (INSERT OR REPLACE on group_id).
+        self.anon_group_repo.insert_mailbox(&new_mailbox)?;
+
+        // 4. Update our own row in the member roster so local sends/fanout
+        //    use the new mailbox address, and so the owner's subsequent
+        //    `broadcast_member_list` carries our fresh key.
+        if let Err(e) = self.anon_group_repo.update_member_mailbox(
+            group_id,
+            &current_user,
+            &new_mailbox.public_key,
+        ) {
+            // Self-row may not exist if the group is in a weird state; log but
+            // keep going — the broadcast below still rotates on the peer side.
+            tracing::warn!(
+                group_id = %group_id,
+                error = %e,
+                "Failed to update our own mailbox_pk in member roster during refresh"
+            );
+        }
+
+        tracing::info!(
+            group_id = %group_id,
+            mailbox_id = %new_mailbox.id,
+            expires_at = %new_mailbox.expires_at.to_rfc3339(),
+            old_mailbox_id = ?old_mailbox.as_ref().map(|m| &m.id),
+            "[ANON_GROUP_REFRESH] Rotated mailbox; announcing new public key to peers"
+        );
+
+        // 5. Announce the new mailbox to peers.
+        if group.is_owner() {
+            // Owner is authoritative for the member list — a broadcast carries
+            // our updated mailbox_pk to every confirmed member.
+            if let Err(e) = self.broadcast_member_list(group_id).await {
+                tracing::warn!(
+                    group_id = %group_id,
+                    error = %e,
+                    "Failed to broadcast member list after mailbox refresh"
+                );
+            }
+        } else {
+            // Non-owner: re-ack to the owner with our new mailbox_pk. The
+            // owner updates our member row and re-broadcasts the roster to
+            // everyone else via the existing handle_join_ack path.
+            //
+            // We locate the owner's current mailbox_pk from the local member
+            // roster. If it's unknown (bootstrap incomplete) we log and skip —
+            // peers will still converge when the owner eventually broadcasts.
+            let members = self.anon_group_repo.get_members(group_id)?;
+            match members
+                .iter()
+                .find(|m| m.user_id == group.owner_id)
+                .and_then(|m| m.mailbox_pk)
+            {
+                Some(owner_mailbox_pk) => {
+                    if let Err(e) = self
+                        .send_join_ack(
+                            &group.owner_id,
+                            *group_id,
+                            &owner_mailbox_pk,
+                            &new_mailbox.public_key,
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            group_id = %group_id,
+                            owner_id = %group.owner_id,
+                            error = %e,
+                            "Failed to send refresh JoinAck to owner"
+                        );
+                    }
+                }
+                None => {
+                    tracing::warn!(
+                        group_id = %group_id,
+                        owner_id = %group.owner_id,
+                        "Cannot announce refreshed mailbox: owner mailbox_pk unknown"
+                    );
+                }
+            }
+        }
+
+        Ok(new_mailbox)
+    }
+
+    /// Proactively refresh any anonymous group mailboxes that are close to
+    /// expiry.
+    ///
+    /// Intended to be invoked periodically (e.g. on app start and from a
+    /// background tick) by the orchestration layer. Uses
+    /// [`GROUP_MAILBOX_REFRESH_LEAD_DAYS`] as the default lead time.
+    ///
+    /// Errors for individual groups are logged and swallowed so one failing
+    /// group does not block refresh of the others. Returns the list of group
+    /// IDs that were successfully refreshed.
+    pub async fn refresh_expiring_group_mailboxes(&self) -> Result<Vec<AnonGroupId>, AnonGroupError> {
+        self.refresh_expiring_group_mailboxes_within(chrono::Duration::days(
+            GROUP_MAILBOX_REFRESH_LEAD_DAYS,
+        ))
+        .await
+    }
+
+    /// Refresh any anonymous group mailbox whose `expires_at` is within the
+    /// supplied `lead` window of `now`.
+    ///
+    /// Separated from [`refresh_expiring_group_mailboxes`] so tests and
+    /// callers with non-default cadence can pick their own window.
+    pub async fn refresh_expiring_group_mailboxes_within(
+        &self,
+        lead: chrono::Duration,
+    ) -> Result<Vec<AnonGroupId>, AnonGroupError> {
+        let groups = self.anon_group_repo.list_groups()?;
+        let threshold = Utc::now() + lead;
+        let mut refreshed = Vec::new();
+
+        for group in groups {
+            // Skip blocked groups — no refresh necessary and avoids leaking
+            // control traffic to blocked peers.
+            if group.is_blocked() {
+                continue;
+            }
+
+            let mailbox = match self.anon_group_repo.get_mailbox(&group.id)? {
+                Some(m) => m,
+                // No mailbox yet (e.g. group pending bootstrap); nothing to
+                // refresh.
+                None => continue,
+            };
+
+            if mailbox.expires_at > threshold {
+                // Not close enough to expiry to warrant rotation yet.
+                continue;
+            }
+
+            match self.refresh_group_mailbox(&group.id).await {
+                Ok(new_mailbox) => {
+                    tracing::info!(
+                        group_id = %group.id,
+                        new_mailbox_id = %new_mailbox.id,
+                        old_expires_at = %mailbox.expires_at.to_rfc3339(),
+                        new_expires_at = %new_mailbox.expires_at.to_rfc3339(),
+                        "[ANON_GROUP_REFRESH] Auto-refreshed expiring mailbox"
+                    );
+                    refreshed.push(group.id);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        group_id = %group.id,
+                        error = %e,
+                        "[ANON_GROUP_REFRESH] Failed to refresh expiring mailbox; will retry on next cycle"
+                    );
+                }
+            }
+        }
+
+        Ok(refreshed)
     }
 }

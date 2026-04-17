@@ -71,13 +71,20 @@ impl SignalService {
             .await
             .map_err(ServiceError::Network)?;
 
-        // Prune signed prekeys older than 30 days (retain for in-flight sessions)
+        // Prune signed + Kyber prekeys older than 30 days (retain for in-flight
+        // sessions). Both are rotated together as the PQXDH pair; both must be
+        // pruned together to avoid unbounded Kyber key-store growth.
         use crate::crypto::signal::PreKeyManager;
         let prekey_manager = PreKeyManager::new(self.key_store.clone());
-        let pruned = prekey_manager.cleanup_expired_signed_prekeys(30)
+        let pruned_spk = prekey_manager.cleanup_expired_signed_prekeys(30)
             .map_err(ServiceError::Crypto)?;
-        if pruned > 0 {
-            tracing::info!(count = pruned, "Pruned expired signed prekeys");
+        if pruned_spk > 0 {
+            tracing::info!(count = pruned_spk, "Pruned expired signed prekeys");
+        }
+        let pruned_kpk = prekey_manager.cleanup_expired_kyber_prekeys(30)
+            .map_err(ServiceError::Crypto)?;
+        if pruned_kpk > 0 {
+            tracing::info!(count = pruned_kpk, "Pruned expired Kyber prekeys");
         }
 
         tracing::info!("Rotated signed prekey + Kyber prekey (PQXDH pair)");

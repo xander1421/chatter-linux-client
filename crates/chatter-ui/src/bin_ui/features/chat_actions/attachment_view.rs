@@ -27,14 +27,13 @@ use super::transfer_status::update_attachment_transfer_status;
 
 /// Wire the view attachment callback.
 pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let attachment_service = ui_ctx.attachments().clone();
+    let ui_ctx = ui_ctx.clone();
     let tokio_handle = ui_ctx.runtime_handle().clone();
     let weak_window = window.as_weak();
 
     window.on_view_attachment(move |attachment_id: SharedString| {
         let attachment_id_str = attachment_id.to_string();
-        let attachment_service = attachment_service.clone();
-        let attachment_service_for_download = attachment_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
         let handle = tokio_handle.clone();
 
@@ -52,14 +51,10 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // Look up attachment from service (now in background thread)
-            let attachment = match attachment_service.get(&att_id) {
-                Ok(Some(att)) => att,
-                Ok(None) => {
+            let attachment = match ui_ctx.get_attachment(&att_id) {
+                Some(att) => att,
+                None => {
                     tracing::warn!("Attachment {} not found in local repository", att_id);
-                    return;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to lookup attachment {}: {}", att_id, e);
                     return;
                 }
             };
@@ -93,7 +88,7 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if content_available && attachment.status == AttachmentStatus::Ready {
                 handle_local_attachment(
                     weak,
-                    attachment_service,
+                    ui_ctx.clone(),
                     att_id,
                     attachment_id,
                     &attachment.metadata.name,
@@ -108,7 +103,7 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 handle_download_attachment(
                     handle,
                     weak,
-                    attachment_service_for_download,
+                    ui_ctx.clone(),
                     attachment,
                     att_id,
                 );
@@ -155,7 +150,7 @@ pub fn wire_view_attachment(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// so we can do synchronous decryption here without blocking the UI.
 fn handle_local_attachment(
     weak: slint::Weak<MainWindow>,
-    attachment_service: Arc<chatter_core::services::attachment::AttachmentService>,
+    ui_ctx: Arc<ChatterClient>,
     att_id: AttachmentId,
     attachment_id: SharedString,
     filename: &str,
@@ -183,7 +178,7 @@ fn handle_local_attachment(
     let is_image = FileMetadata::is_image_file(&filename, &mime_type);
     let is_gif = mime_type == "image/gif" || filename.to_lowercase().ends_with(".gif");
     if is_image && !is_gif {
-        show_image_preview(&weak, &attachment_service, &att_id, &filename, file_size);
+        show_image_preview(&weak, &ui_ctx, &att_id, &filename, file_size);
     }
 
     // OPTIMIZATION: For GIFs, try to reuse inline animation frames (avoids re-decryption)
@@ -193,7 +188,7 @@ fn handle_local_attachment(
         let filename_for_gif = filename.clone();
         let size_display = format_file_size(file_size);
         let weak_for_gif = weak.clone();
-        let attachment_service_for_gif = attachment_service.clone();
+        let ui_ctx_for_gif = ui_ctx.clone();
         let att_id_for_gif = att_id.clone();
 
         // Schedule on UI thread: check inline cache, then decrypt only if needed
@@ -220,7 +215,7 @@ fn handle_local_attachment(
                 let weak_decrypt = weak_inner.clone();
                 let att_id_str_decrypt = att_id_str.clone();
                 std::thread::spawn(move || {
-                    match attachment_service_for_gif.decrypt_auto(&att_id_for_gif) {
+                    match ui_ctx_for_gif.decrypt_attachment_auto(&att_id_for_gif) {
                         Ok(buffer) => {
                             let data = buffer.as_slice().to_vec();
                             let _ = slint::invoke_from_event_loop(move || {
@@ -251,7 +246,7 @@ fn handle_local_attachment(
     }
 
     // Decrypt synchronously (we're already in a background thread)
-    let secure_buffer = match attachment_service.decrypt_auto(&att_id) {
+    let secure_buffer = match ui_ctx.decrypt_attachment_auto(&att_id) {
         Ok(buffer) => buffer,
         Err(e) => {
             tracing::error!("Failed to decrypt attachment: {}", e);
@@ -308,7 +303,7 @@ fn toggle_audio_playback(weak: &slint::Weak<MainWindow>) {
 /// Show image preview (thumbnail) while loading full image.
 fn show_image_preview(
     weak: &slint::Weak<MainWindow>,
-    attachment_service: &Arc<chatter_core::services::attachment::AttachmentService>,
+    ui_ctx: &Arc<ChatterClient>,
     att_id: &AttachmentId,
     filename: &str,
     file_size: u64,
@@ -318,7 +313,7 @@ fn show_image_preview(
     let preview_size = format_file_size(file_size);
 
     // Get preview from service layer (fast, sync)
-    let preview_data = attachment_service.get_preview_image(att_id);
+    let preview_data = ui_ctx.get_attachment_preview_image(att_id);
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_loading.upgrade() {
@@ -665,14 +660,14 @@ fn save_file_from_buffer(
 fn handle_download_attachment(
     handle: tokio::runtime::Handle,
     weak: slint::Weak<MainWindow>,
-    attachment_service: Arc<chatter_core::services::attachment::AttachmentService>,
+    ui_ctx: Arc<ChatterClient>,
     attachment: chatter_core::domain::attachment::Attachment,
     att_id: AttachmentId,
 ) {
     // Mark as downloading immediately to prevent duplicate downloads
     let mut att_to_update = attachment.clone();
     att_to_update.status = AttachmentStatus::Downloading;
-    if let Err(e) = attachment_service.update(&att_to_update) {
+    if let Err(e) = ui_ctx.update_attachment(&att_to_update) {
         tracing::warn!("Failed to mark attachment as downloading: {}", e);
     }
 
@@ -700,10 +695,10 @@ fn handle_download_attachment(
     // Spawn async download task using provided runtime handle
     let weak_for_completion = weak.clone();
     let att_id_str_for_task = att_id_str.clone();
-    let attachment_service_for_task = attachment_service.clone();
+    let ui_ctx_for_task = ui_ctx.clone();
 
     handle.spawn(async move {
-        match attachment_service_for_task.download_to_filesystem(&att_id).await {
+        match ui_ctx_for_task.download_attachment_to_filesystem(&att_id).await {
             Ok(()) => {
                 tracing::info!(
                     cdn_key = %cdn_key,

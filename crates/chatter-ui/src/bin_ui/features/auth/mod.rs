@@ -10,7 +10,6 @@ pub mod presence_integration;
 mod recovery;
 mod register;
 
-pub use inbox::update_reaction_summary;
 pub use initial_data::load_initial_data;
 
 use std::sync::Arc;

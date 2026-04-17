@@ -448,6 +448,7 @@ mod tests {
 // ============================================================================
 
 use crate::crypto::call_key_provider::EphemeralCallKey;
+use zeroize::Zeroizing;
 
 /// Result of completing a DM call key exchange (caller or callee side).
 ///
@@ -467,14 +468,15 @@ pub struct CallSetupResult {
 /// Result of completing an anonymous call setup (either side).
 ///
 /// Contains everything the UI needs to display the active anonymous call.
-#[derive(Debug)]
+/// `encryption_key` is wrapped in `Zeroizing` so the E2EE key is wiped
+/// from memory when this struct is dropped.
 pub struct AnonCallSetupResult {
     /// The room name (used as call_id for anonymous calls).
     pub room_name: String,
     /// The channel ID (synthetic for anon calls).
     pub channel_id: ChannelId,
-    /// E2EE encryption key for LiveKit (32 bytes).
-    pub encryption_key: Vec<u8>,
+    /// E2EE encryption key for LiveKit (32 bytes). Zeroized on drop.
+    pub encryption_key: Zeroizing<Vec<u8>>,
     /// Verification emojis for secure call verification (4 emojis).
     pub verification_emojis: [String; 4],
     /// Whether this is a video call.
@@ -483,12 +485,28 @@ pub struct AnonCallSetupResult {
     pub peer_display_name: String,
 }
 
+impl std::fmt::Debug for AnonCallSetupResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnonCallSetupResult")
+            .field("room_name", &self.room_name)
+            .field("channel_id", &self.channel_id)
+            .field("encryption_key", &"<redacted 32 bytes>")
+            .field("verification_emojis", &self.verification_emojis)
+            .field("is_video", &self.is_video)
+            .field("peer_display_name", &self.peer_display_name)
+            .finish()
+    }
+}
+
 /// Call setup data for mobile clients (Android/iOS).
 ///
 /// Contains LiveKit connection info and encryption key so the mobile client
 /// can connect via the platform-native LiveKit SDK instead of the desktop
-/// GStreamer-based media stack.
-#[derive(Debug, Clone)]
+/// GStreamer-based media stack. `encryption_key` is wrapped in `Zeroizing`
+/// so the E2EE key is wiped from memory when this struct is dropped; the
+/// custom `Debug` impl redacts the key + LiveKit token so they cannot leak
+/// through log statements or `format!("{:?}", ...)`.
+#[derive(Clone)]
 pub struct MobileCallSetup {
     /// The call ID.
     pub call_id: CallId,
@@ -502,8 +520,22 @@ pub struct MobileCallSetup {
     pub livekit_url: String,
     /// LiveKit room access token.
     pub livekit_token: String,
-    /// E2EE encryption key (32 bytes) for LiveKit frame encryption.
-    pub encryption_key: Vec<u8>,
+    /// E2EE encryption key (32 bytes) for LiveKit frame encryption. Zeroized on drop.
+    pub encryption_key: Zeroizing<Vec<u8>>,
+}
+
+impl std::fmt::Debug for MobileCallSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MobileCallSetup")
+            .field("call_id", &self.call_id)
+            .field("channel_id", &self.channel_id)
+            .field("verification_emojis", &self.verification_emojis)
+            .field("is_video", &self.is_video)
+            .field("livekit_url", &self.livekit_url)
+            .field("livekit_token", &"<redacted>")
+            .field("encryption_key", &"<redacted 32 bytes>")
+            .finish()
+    }
 }
 
 /// Pending DM call state during offer→answer exchange.

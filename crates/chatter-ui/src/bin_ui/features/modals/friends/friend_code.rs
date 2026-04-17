@@ -17,17 +17,17 @@ use crate::MainWindow;
 /// When private_mode is true: generates `chatter://private/{base32}` with embedded keys.
 pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx_gen = ui_ctx.clone();
 
     window.on_friends_generate_code(move |private_mode: bool| {
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx_gen.clone();
 
         // Generate appropriate friend code based on mode
         let result = if private_mode {
-            user_service.generate_private_friend_code()
+            ui_ctx.generate_private_friend_code()
         } else {
-            user_service.generate_friend_code()
+            ui_ctx.generate_friend_code()
         };
 
         match result {
@@ -62,17 +62,17 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<Chatte
 /// Wire callback to generate QR code image for the friend code.
 fn wire_generate_qr_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx_qr = ui_ctx.clone();
 
     window.on_friends_generate_qr(move |private_mode: bool| {
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx_qr.clone();
 
         // Generate appropriate QR code based on mode (150x150 pixels)
         let result = if private_mode {
-            user_service.generate_private_friend_qr(150)
+            ui_ctx.generate_private_friend_qr(150)
         } else {
-            user_service.generate_friend_qr(150)
+            ui_ctx.generate_friend_qr(150)
         };
 
         match result {
@@ -169,11 +169,11 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
 /// - `{user_id}` (plain UUID)
 pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx_connect = ui_ctx.clone();
 
     window.on_friends_connect_via_code(move |code: SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx_connect.clone();
         let code_str = code.to_string();
 
         if code_str.trim().is_empty() {
@@ -189,13 +189,13 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                 }
             });
 
-            match user_service.connect_via_friend_code(&code_str, None).await {
+            match ui_ctx.connect_via_friend_code(&code_str, None).await {
                 Ok(friendship) => {
                     let friend_id = friendship.friend_id.to_string();
                     tracing::info!("Sent friend request via code to {}", friend_id);
 
                     // Refresh sent requests list
-                    refresh_sent_requests(weak.clone(), user_service.clone()).await;
+                    refresh_sent_requests(weak.clone(), ui_ctx.clone()).await;
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -241,12 +241,11 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
 /// who is contacting whom.
 pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_dm_service = ui_ctx.anon_dms().clone();
     let auth_state = ui_ctx.auth_state().clone();
+    let _ = ui_ctx;
 
     window.on_friends_connect_private(move |code: SharedString| {
         let weak = weak_window.clone();
-        let anon_dm_service = anon_dm_service.clone();
         let auth_state = auth_state.clone();
         let code_str = code.to_string();
 
@@ -307,7 +306,7 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                             if let Some(w) = weak.upgrade() {
                                 // Create DM sidebar entry
                                 let dm_item = crate::DMListItemData {
-                                    channel_id: format!("anon_dm:{}", dm_id).into(),
+                                    channel_id: dm_id.to_string().into(),
                                     user_id: peer_id.to_string().into(),
                                     display_name: "\u{1F512} Private (pending)".into(), // Lock emoji, pending until accepted
                                     avatar_url: "".into(),
@@ -323,6 +322,8 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                                         .into(),
                                     unread_count: 0,
                                     is_typing: false,
+                                    is_anon: true,
+                                    is_selected: false,
                                 };
 
                                 // Add to DM list

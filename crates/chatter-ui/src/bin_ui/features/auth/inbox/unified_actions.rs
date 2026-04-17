@@ -35,7 +35,7 @@ fn typing_key(chat_state: &ChatState, source: &EventSource) -> String {
     let active = chat_state.active_conversation();
     match active {
         ActiveConversation::MailboxDm { peer_id, .. } | ActiveConversation::ServerDm { peer_id, .. } => peer_id.to_string(),
-        ActiveConversation::AnonDm(id) => format!("anon_dm:{}", ChannelId::from(id)),
+        ActiveConversation::AnonDm(id) => id.to_string(),
         ActiveConversation::AnonGroup(id) => id.to_string(),
         ActiveConversation::Channel(id) => id.to_string(),
         ActiveConversation::None => match source {

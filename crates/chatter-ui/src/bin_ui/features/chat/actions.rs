@@ -286,14 +286,10 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let download_dir = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
 
             for att_id in attachment_ids {
-                let attachment = match ui_ctx.attachments().get(&att_id) {
-                    Ok(Some(att)) => att,
-                    Ok(None) => {
+                let attachment = match ui_ctx.get_attachment(&att_id) {
+                    Some(att) => att,
+                    None => {
                         tracing::warn!("Attachment {} not found", att_id);
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to get attachment {}", att_id);
                         continue;
                     }
                 };
@@ -308,12 +304,11 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 if needs_download {
                     // Download first, then save
-                    let attachment_service = ui_ctx.attachments().clone();
+                    let ui_ctx_dl = ui_ctx.clone();
                     ui_ctx.runtime_handle().spawn(async move {
-                        match attachment_service.download_to_filesystem(&att_id).await {
+                        match ui_ctx_dl.download_attachment_to_filesystem(&att_id).await {
                             Ok(()) => {
-                                // Now decrypt and save
-                                match attachment_service.decrypt_auto(&att_id) {
+                                match ui_ctx_dl.decrypt_attachment_auto(&att_id) {
                                     Ok(buffer) => {
                                         if let Err(e) = std::fs::write(&dest_path, buffer.as_slice()) {
                                             tracing::error!(error = %e, "Failed to save attachment");
@@ -333,7 +328,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
                 } else {
                     // Already downloaded, just decrypt and save
-                    match ui_ctx.attachments().decrypt_auto(&att_id) {
+                    match ui_ctx.decrypt_attachment_auto(&att_id) {
                         Ok(buffer) => {
                             if let Err(e) = std::fs::write(&dest_path, buffer.as_slice()) {
                                 tracing::error!(error = %e, "Failed to save attachment");

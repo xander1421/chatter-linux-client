@@ -81,14 +81,10 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // DM/Channel: get pin state and attachments from service data
                 let msg = match handle.conversation() {
                     ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
-                        match ui_ctx.messages().get_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
-                            Ok(Some(msg)) => msg,
-                            Ok(None) => {
+                        match ui_ctx.get_message_by_sender_timestamp(&target_sender_id, target_sent_timestamp) {
+                            Some(msg) => msg,
+                            None => {
                                 tracing::error!("Message not found for context menu");
-                                return;
-                            }
-                            Err(e) => {
-                                tracing::error!(error = %e, "Failed to look up message for context menu");
                                 return;
                             }
                         }

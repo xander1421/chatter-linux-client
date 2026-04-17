@@ -43,6 +43,111 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     sections::load_sections(window, ui_ctx);
 }
 
+/// Recompute `is_selected` on every sidebar model item from the typed
+/// `ActiveConversation` held by the client. Call after any selection change
+/// so highlighting stays in sync without stringly-typed window properties.
+///
+/// Match logic is delegated to `ActiveConversation::matches_*` in `chatter-core`;
+/// this function only iterates Slint models and writes the flag.
+pub(crate) fn refresh_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    use slint::Model;
+
+    let active = ui_ctx.active_conversation();
+
+    // Channels (regular server channels only — DMs live in a separate model).
+    {
+        let model = window.get_channels();
+        let rows: Vec<_> = (0..model.row_count())
+            .filter_map(|i| model.row_data(i))
+            .map(|mut item| {
+                item.is_selected = item
+                    .channel_id
+                    .parse()
+                    .map(|id| active.matches_channel(&id))
+                    .unwrap_or(false);
+                item
+            })
+            .collect();
+        window.set_channels(slint::ModelRc::new(slint::VecModel::from(rows)));
+    }
+
+    // DM conversations (regular + anon, disambiguated via is_anon).
+    {
+        let model = window.get_dm_conversations();
+        let rows: Vec<_> = (0..model.row_count())
+            .filter_map(|i| model.row_data(i))
+            .map(|mut item| {
+                item.is_selected = if item.is_anon {
+                    item.channel_id
+                        .parse()
+                        .map(|id| active.matches_anon_dm(&id))
+                        .unwrap_or(false)
+                } else {
+                    match (item.channel_id.parse(), item.user_id.parse()) {
+                        (Ok(cid), Ok(pid)) => active.matches_dm(&cid, &pid),
+                        _ => false,
+                    }
+                };
+                item
+            })
+            .collect();
+        window.set_dm_conversations(slint::ModelRc::new(slint::VecModel::from(rows)));
+    }
+
+    // Private (anonymous) groups.
+    {
+        let model = window.get_private_groups();
+        let rows: Vec<_> = (0..model.row_count())
+            .filter_map(|i| model.row_data(i))
+            .map(|mut item| {
+                item.is_selected = item
+                    .group_id
+                    .parse()
+                    .map(|id| active.matches_anon_group(&id))
+                    .unwrap_or(false);
+                item
+            })
+            .collect();
+        window.set_private_groups(slint::ModelRc::new(slint::VecModel::from(rows)));
+    }
+
+    // Custom-section conversations mirror the above across all kinds.
+    {
+        let model = window.get_section_conversations();
+        let rows: Vec<_> = (0..model.row_count())
+            .filter_map(|i| model.row_data(i))
+            .map(|mut item| {
+                let kind = item.conversation_type.as_str();
+                let conv_id = item.conversation_id.as_str();
+                item.is_selected = match kind {
+                    "channel" => conv_id
+                        .parse()
+                        .map(|id| active.matches_channel(&id))
+                        .unwrap_or(false),
+                    "dm" => {
+                        // Section rows may carry anon_dm_id, channel_id, or peer_id
+                        // in `conversation_id`. Match against all shapes.
+                        let anon = conv_id.parse().map(|id| active.matches_anon_dm(&id)).unwrap_or(false);
+                        let peer = conv_id.parse().map(|p| active.matches_dm_peer(&p)).unwrap_or(false);
+                        let chan = match (conv_id.parse(), conv_id.parse()) {
+                            (Ok(cid), Ok(pid)) => active.matches_dm(&cid, &pid),
+                            _ => false,
+                        };
+                        anon || peer || chan
+                    }
+                    "private_group" => conv_id
+                        .parse()
+                        .map(|id| active.matches_anon_group(&id))
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                item
+            })
+            .collect();
+        window.set_section_conversations(slint::ModelRc::new(slint::VecModel::from(rows)));
+    }
+}
+
 /// Apply pinned message state to the UI.
 ///
 /// Shared helper used by channel, DM, and private group sidebar handlers
@@ -85,6 +190,7 @@ pub(crate) fn apply_pinned_ui(
 /// Pass `false` for sent messages.
 pub(crate) fn update_sidebar_preview(
     window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
     conversation: chatter_core::state::ActiveConversation,
     preview: &str,
     timestamp: &str,
@@ -93,21 +199,11 @@ pub(crate) fn update_sidebar_preview(
     use chatter_core::state::ActiveConversation;
     use slint::Model;
 
-    // Determine if the conversation being updated is the one currently viewed.
-    // If so, don't increment unread — the user is looking at it.
+    // Determine if the conversation being updated is the one currently viewed
+    // by comparing against the typed `ActiveConversation` in chat_state.
+    // Avoids stringly-typed window-prop comparisons.
     let is_currently_viewed = if increment_unread {
-        let selected_dm = window.get_selected_dm_id().to_string();
-        let selected_channel = window.get_selected_channel_id().to_string();
-        let selected_group = window.get_selected_private_group_id().to_string();
-
-        match conversation {
-            ActiveConversation::MailboxDm { peer_id, channel_id, .. } | ActiveConversation::ServerDm { peer_id, channel_id, .. } => {
-                selected_dm == channel_id.to_string() || selected_dm == peer_id.to_string()
-            }
-            ActiveConversation::Channel(id) => selected_channel == id.to_string(),
-            ActiveConversation::AnonGroup(id) => selected_group == id.to_string(),
-            _ => false,
-        }
+        conversation == ui_ctx.chat_state().active_conversation()
     } else {
         true // sent messages: never increment
     };
@@ -196,14 +292,14 @@ pub(crate) fn update_sidebar_preview(
             }
         }
         ActiveConversation::AnonDm(anon_dm_id) => {
-            let channel_id_str = format!("anon_dm:{}", anon_dm_id);
+            let channel_id_str = anon_dm_id.to_string();
             let model = window.get_dm_conversations();
             let mut others = Vec::new();
             let mut updated = None;
 
             for i in 0..model.row_count() {
                 if let Some(item) = model.row_data(i) {
-                    if item.channel_id.as_str() == channel_id_str {
+                    if item.is_anon && item.channel_id.as_str() == channel_id_str {
                         let mut u = item.clone();
                         u.last_message = preview.into();
                         u.timestamp = timestamp.into();
@@ -228,14 +324,15 @@ pub(crate) fn update_sidebar_preview(
     }
 }
 
-/// Check if a DM conversation for a peer exists in the sidebar.
-pub(crate) fn sidebar_has_dm(window: &MainWindow, peer_id: &chatter_core::domain::UserId) -> bool {
-    use slint::Model;
-    let peer_id_str = peer_id.to_string();
-    let model = window.get_dm_conversations();
-    (0..model.row_count())
-        .filter_map(|i| model.row_data(i))
-        .any(|item| item.user_id.as_str() == peer_id_str)
+/// Check if a DM conversation for a peer exists (in the local channel DB).
+///
+/// Authoritative source — does not depend on whether the Slint sidebar model
+/// has been populated yet.
+pub(crate) fn sidebar_has_dm(
+    ui_ctx: &Arc<ChatterClient>,
+    peer_id: &chatter_core::domain::UserId,
+) -> bool {
+    ui_ctx.get_dm_channel_for_peer(peer_id).is_some()
 }
 
 /// Create a new DM sidebar entry for a peer not yet in the list.
@@ -253,8 +350,8 @@ pub(crate) fn create_dm_sidebar_entry(
     use slint::Model;
     let peer_id_str = peer_id.to_string();
 
-    match ui_ctx.channels().get_dm_channel_for_peer(peer_id) {
-        Ok(Some(channel)) => {
+    match ui_ctx.get_dm_channel_for_peer(peer_id) {
+        Some(channel) => {
             let mut new_dm = crate::bin_ui::converters::dm_to_slint(&channel, sender_name, &peer_id_str);
             new_dm.last_message = preview.into();
             new_dm.timestamp = timestamp.into();

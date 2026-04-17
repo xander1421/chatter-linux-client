@@ -73,7 +73,7 @@ impl AnonGroupService {
 
         // Store message locally first with the same timestamp we'll send
         let message_id =
-            self.store_message_with_attachments(group_id, &current_user, text, &attachment_ids, sent_at)?;
+            self.store_message_with_attachments(group_id, &current_user, text, &attachment_ids, sent_at, None)?;
 
         // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
         // so the server can't correlate the authenticated upload with this write.
@@ -110,13 +110,22 @@ impl AnonGroupService {
     ) -> Result<(AnonGroupMessageId, u64), AnonGroupError> {
         let current_user = self.current_user_id()?;
 
-        // Look up the original message to get preview text
+        // Look up the original message to build preview text.
+        // Falls back to "📷 Photo" / "🎬 Video" / etc. for media-only replies
+        // so the receiver sees a non-empty reply bubble on reload.
         let channel_id: ChannelId = (*group_id).into();
         let preview_text = self
             .message_service
             .message_repo
             .get_by_conversation_timestamp(&channel_id, reply_to_timestamp)?
-            .and_then(|msg| msg.as_text().map(|t| shared::truncate_preview(t)))
+            .map(|msg| {
+                let attachments: Vec<_> = msg
+                    .attachments
+                    .iter()
+                    .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                    .collect();
+                shared::message_reply_preview(&msg, &attachments)
+            })
             .unwrap_or_default();
 
         let quote = shared::build_quote(
@@ -149,6 +158,12 @@ impl AnonGroupService {
             &preview_text,
         );
 
+        let quote_ctx = Some(crate::inbox::handlers::base_anon::QuoteContext {
+            reply_to: Some(crate::domain::ids::MessageId::from_timestamp(reply_to_timestamp)),
+            reply_to_author_id: Some(*reply_to_sender),
+            reply_to_text: (!preview_text.is_empty()).then(|| preview_text.clone()),
+        });
+
         let message_id = self.store_message_with_content_json(
             group_id,
             &current_user,
@@ -156,6 +171,7 @@ impl AnonGroupService {
             &content_json,
             &attachment_ids,
             sent_at,
+            quote_ctx,
         )?;
 
         // NDSS '21 decorrelation: delay anonymous mailbox send after CDN upload
@@ -191,6 +207,7 @@ impl AnonGroupService {
         inner_content: Content,
     ) -> Result<(), AnonGroupError> {
         use crate::proto::content_v1::AnonGroupMessage;
+        use prost::Message as ProstMessage;
 
         let current_user = self.current_user_id()?;
 
@@ -208,6 +225,9 @@ impl AnonGroupService {
 
         // Get confirmed members (those with mailbox keys)
         let members = self.anon_group_repo.get_members_with_mailbox(group_id)?;
+        // Get pending members (mailbox_pk not yet confirmed). Messages for
+        // these members are enqueued and drained when their JoinAck lands.
+        let pending_members = self.anon_group_repo.get_members_without_mailbox(group_id)?;
 
         // Wrap the content in AnonGroupMessage
         let group_message = AnonGroupMessage {
@@ -247,11 +267,114 @@ impl AnonGroupService {
             }
         }
 
+        // Queue the same Content for members whose JoinAck hasn't been
+        // received yet. Encode once and reuse; drained in handle_join_ack.
+        let mut queued_count = 0usize;
+        if !pending_members.is_empty() {
+            let content_blob = content.encode_to_vec();
+            for member in &pending_members {
+                if member.user_id == current_user {
+                    continue;
+                }
+                if let Err(e) = self.anon_group_repo.enqueue_pending_message(
+                    group_id,
+                    &member.user_id,
+                    &content_blob,
+                ) {
+                    tracing::warn!(
+                        group_id = %group_id,
+                        recipient = %member.user_id,
+                        error = %e,
+                        "Failed to enqueue pending anon group message"
+                    );
+                } else {
+                    queued_count += 1;
+                }
+            }
+        }
+
         tracing::debug!(
-            "Sent message to group {} ({} members)",
+            "Sent message to group {} ({} members, {} queued for pending joiners)",
             group_id,
-            sent_count
+            sent_count,
+            queued_count,
         );
+        Ok(())
+    }
+
+    /// Drain any pending outbound anon group messages for a member whose
+    /// mailbox_pk just became available (e.g. after their JoinAck arrives).
+    ///
+    /// Each row is re-decoded into a `Content` proto and delivered via
+    /// `send_to_anon_mailbox`. Rows are deleted on success, left in place on
+    /// failure for retry on the next JoinAck or subsequent drain.
+    pub(crate) async fn drain_pending_messages(
+        &self,
+        group_id: &AnonGroupId,
+        recipient_user_id: &crate::domain::UserId,
+        recipient_mailbox_pk: &[u8; 32],
+    ) -> Result<(), AnonGroupError> {
+        use prost::Message as ProstMessage;
+
+        let pending = self
+            .anon_group_repo
+            .get_pending_messages_for_member(group_id, recipient_user_id)?;
+
+        if pending.is_empty() {
+            return Ok(());
+        }
+
+        tracing::info!(
+            group_id = %group_id,
+            recipient = %recipient_user_id,
+            count = pending.len(),
+            "Draining pending anon group messages after JoinAck"
+        );
+
+        for (row_id, blob) in pending {
+            let content = match Content::decode(blob.as_slice()) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(
+                        row_id,
+                        error = %e,
+                        "Pending anon group message blob failed to decode; dropping"
+                    );
+                    // Undecodable row is poison — remove it to avoid re-trying forever.
+                    let _ = self.anon_group_repo.delete_pending_message(row_id);
+                    continue;
+                }
+            };
+
+            match self
+                .send_to_anon_mailbox(recipient_user_id, recipient_mailbox_pk, content)
+                .await
+            {
+                Ok(()) => {
+                    if let Err(e) = self.anon_group_repo.delete_pending_message(row_id) {
+                        tracing::warn!(
+                            row_id,
+                            error = %e,
+                            "Failed to delete drained pending anon group message row"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        row_id,
+                        recipient = %recipient_user_id,
+                        error = %e,
+                        "Failed to drain pending anon group message; leaving for retry"
+                    );
+                    let _ = self
+                        .anon_group_repo
+                        .increment_pending_message_attempts(row_id);
+                    // Stop draining on first failure so messages stay in order.
+                    break;
+                }
+            }
+        }
+
         Ok(())
     }
 

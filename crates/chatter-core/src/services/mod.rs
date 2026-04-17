@@ -59,6 +59,7 @@ pub mod sealed_sender;
 pub mod fanout;
 pub mod anon_group;
 pub mod anon_dm;
+pub(crate) mod anon_shared;
 pub mod svr_backup_service;
 pub mod jarvis;
 pub mod validation;

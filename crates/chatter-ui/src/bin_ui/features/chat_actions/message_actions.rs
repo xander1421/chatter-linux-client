@@ -224,19 +224,13 @@ pub fn wire_cancel_reply(window: &MainWindow) {
 pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let chat_state = ui_ctx.chat_state().clone();
-    let message_service = ui_ctx.messages().clone();
-    let user_service = ui_ctx.users().clone();
-    let attachment_service = ui_ctx.attachments().clone();
-    let channel_service = ui_ctx.channels().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_thread_clicked(move |message_id: SharedString| {
         let message_id_str = message_id.to_string();
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
-        let message_service = message_service.clone();
-        let user_service = user_service.clone();
-        let attachment_service = attachment_service.clone();
-        let channel_service = channel_service.clone();
+        let ui_ctx = ui_ctx.clone();
 
         let msg_id: MessageId = match message_id_str.parse() {
             Ok(id) => id,
@@ -261,10 +255,7 @@ pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         crate::bin_ui::features::thread::load_thread_data(
             weak,
             chat_state,
-            message_service,
-            user_service,
-            attachment_service,
-            channel_service,
+            ui_ctx,
             channel_id,
             msg_id,
         );

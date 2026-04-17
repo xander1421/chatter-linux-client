@@ -6,6 +6,8 @@
 //!
 //! Phase 3 of messaging consolidation.
 
+use crate::domain::attachment::{Attachment, FileCategory};
+use crate::domain::message::Message;
 use crate::domain::AttachmentId;
 use crate::proto::content_v1::{AttachmentPointer, Quote, quote};
 
@@ -28,6 +30,50 @@ pub fn truncate_preview(text: &str) -> String {
     } else {
         text.to_string()
     }
+}
+
+/// Build the reply-preview string for a message, falling back to an
+/// attachment-type placeholder ("📷 Photo", "🎬 Video", etc.) when the
+/// message has no text.
+///
+/// Empty return only when the message has neither text nor attachments.
+/// Used by both the sender (to populate `Quote.text` before send) and the
+/// UI quote-preview extraction path, so the receiver's reply bubble never
+/// shows an empty preview for media-only replies.
+pub fn message_reply_preview(msg: &Message, attachments: &[Attachment]) -> String {
+    if let Some(text) = msg.as_text() {
+        if !text.is_empty() {
+            return truncate_preview(text);
+        }
+    }
+
+    if attachments.len() == 1 {
+        let (emoji, label) = match attachments[0].metadata.category() {
+            FileCategory::Image => ("📷", "Photo"),
+            FileCategory::Video => ("🎬", "Video"),
+            FileCategory::Audio => ("🎵", "Voice message"),
+            FileCategory::Document => ("📄", "Document"),
+            FileCategory::Code => ("📝", "Code"),
+            FileCategory::Archive => ("📦", "Archive"),
+            FileCategory::Other => ("📎", "File"),
+        };
+        return format!("{} {}", emoji, label);
+    }
+    if attachments.len() > 1 {
+        return format!("📎 {} attachments", attachments.len());
+    }
+
+    // Attachment IDs on the row but repo didn't resolve (e.g. peer hasn't
+    // downloaded). Still give a non-empty hint.
+    if !msg.attachments.is_empty() {
+        return if msg.attachments.len() == 1 {
+            "📎 Attachment".to_string()
+        } else {
+            format!("📎 {} attachments", msg.attachments.len())
+        };
+    }
+
+    String::new()
 }
 
 // =============================================================================

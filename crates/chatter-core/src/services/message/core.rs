@@ -4,8 +4,6 @@
 
 use std::path::Path;
 
-use prost::Message as ProstMessage;
-
 use crate::domain::ephemeral::MessageTTL;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
 use crate::domain::message::{Message, MessageContent};
@@ -15,10 +13,8 @@ use crate::network::grpc::channel_client::ChannelClient;
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::chat_v1;
 use crate::proto::content_v1::AttachmentPointer;
-use crate::services::gateway::builders::build_data_message_content_with_channel;
 use crate::services::attachment::AttachmentService;
 use crate::services::current_user::CurrentUserProvider;
-use crate::util::time::TimestampNanos;
 
 use super::{MessageError, MessageService};
 
@@ -104,26 +100,14 @@ impl MessageService {
             "[SEND_MESSAGE] Server API success, message_id={}", proto_message.id
         );
 
-        // Also send via group mailboxes if available (NDSS '21 paper)
-        // Per Signal Protocol: Use pairwise sealed sender encryption for each member.
-        // Sender identity is revealed via SSDecVer, NOT from plaintext metadata.
-        if let Some(fanout) = group_fanout {
-            if require_encryption {
-                // Build a proper Content proto with DataMessage including attachments
-                let sent_at = TimestampNanos::now().as_u64();
-                let content_proto = build_data_message_content_with_channel(
-                    trimmed_text,
-                    attachment_pointers.clone(),
-                    &channel_id.to_string(),
-                    sent_at,
-                );
-                let plaintext = content_proto.encode_to_vec();
-
-                // Use pairwise encryption (Double Ratchet sealed sender) per NDSS '21
-                self.send_pairwise_to_group_mailboxes(fanout, channel_id, &plaintext, auth_client)
-                    .await?;
-            }
-        }
+        // Server-managed channels: delivery happens via server → device inbox fanout
+        // only. Pairwise group-mailbox fanout is reserved for anon groups (which go
+        // through AnonGroupService::send_message). Sending both here causes receivers
+        // to store the same message twice — once with plaintext (after SKDM arrives),
+        // once as an "[Encrypted message]" placeholder (race where pairwise copy
+        // arrives before the sender key).
+        let _ = group_fanout;
+        let _ = attachment_pointers;
 
         // Convert to domain message and preserve attachment IDs
         let mut message = proto_to_domain_message(&proto_message, sender_id)?;
@@ -526,6 +510,56 @@ impl MessageService {
         self.message_repo.update(&message)?;
 
         Ok(())
+    }
+
+    /// Patch an already-stored outgoing message with reply-quote context.
+    ///
+    /// Used by the outgoing router: channel sends (`send_with_pointers` /
+    /// `send_with_files`) do not carry the quote, so the local row is written
+    /// without `reply_to`/`reply_to_author_id`/`reply_to_text`. When the user
+    /// is replying we fill those columns in here so the quote bubble survives
+    /// a channel reload.
+    ///
+    /// Returns the updated message on success, or `(original, error)` if the
+    /// update failed — callers can choose to log and continue.
+    pub fn persist_outgoing_reply_context(
+        &self,
+        mut message: Message,
+        quote: &crate::services::gateway::QuoteIntent,
+    ) -> Result<Message, (Message, crate::error::StorageError)> {
+        // Resolve quoted message locally to fill in any missing fields.
+        let original = self
+            .message_repo
+            .get_by_sender_timestamp(&quote.author_id, quote.timestamp)
+            .ok()
+            .flatten();
+        let reply_to_id = original
+            .as_ref()
+            .map(|m| m.id)
+            .unwrap_or_else(|| crate::domain::ids::MessageId::from_timestamp(quote.timestamp));
+        let reply_to_text = quote
+            .preview_text
+            .clone()
+            .or_else(|| {
+                original.as_ref().map(|m| {
+                    let attachments: Vec<_> = m
+                        .attachments
+                        .iter()
+                        .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                        .collect();
+                    crate::services::gateway::shared::message_reply_preview(m, &attachments)
+                })
+            })
+            .filter(|t| !t.is_empty());
+
+        message.reply_to = Some(reply_to_id);
+        message.reply_to_author_id = Some(quote.author_id);
+        message.reply_to_text = reply_to_text;
+
+        match self.message_repo.update(&message) {
+            Ok(()) => Ok(message),
+            Err(e) => Err((message, e)),
+        }
     }
 
     /// Send a reply (quote) to an existing message.

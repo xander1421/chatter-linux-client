@@ -4,7 +4,7 @@ use chrono::Utc;
 
 use crate::domain::anon_group::{AnonGroupId, AnonGroupMessageId};
 use crate::domain::ids::{ChannelId, MessageId};
-use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent, SystemMessage};
+use crate::domain::message::{ConversationType, Message, MessageContent, SystemMessage};
 use crate::domain::{AttachmentId, UserId};
 use crate::services::AttachmentService;
 
@@ -35,9 +35,6 @@ impl AnonGroupService {
     }
 
     /// Store a message received from a group member.
-    ///
-    /// The `sent_at` parameter is the sender's timestamp (nanoseconds since epoch),
-    /// used for consistent ordering across devices.
     pub fn store_message(
         &self,
         group_id: &AnonGroupId,
@@ -45,12 +42,22 @@ impl AnonGroupService {
         content_type: i32,
         content_json: &str,
         sent_at: u64,
+        quote: Option<crate::inbox::handlers::base_anon::QuoteContext>,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let content = Self::content_from_type_and_json(content_type, content_json);
-        let mut message = Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), String::new(), sent_at);
-        message.content = content;
-
+        let content = crate::services::anon_shared::message_content_from_type_and_json(
+            content_type,
+            content_json,
+        );
+        let message = crate::services::anon_shared::build_anon_message(
+            channel_id,
+            ConversationType::AnonGroup,
+            *sender_id,
+            content,
+            Vec::new(),
+            sent_at,
+            quote,
+        );
         let msg_id_str = message.id.to_string();
         self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
@@ -63,9 +70,6 @@ impl AnonGroupService {
     }
 
     /// Store a text message in a group.
-    ///
-    /// The `sent_at` parameter is the sender's timestamp (nanoseconds since epoch),
-    /// used for consistent ordering across devices.
     pub fn store_text_message(
         &self,
         group_id: &AnonGroupId,
@@ -74,8 +78,19 @@ impl AnonGroupService {
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let message = Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), text.to_string(), sent_at);
-
+        let content = crate::services::anon_shared::message_content_from_text_and_attachments(
+            text,
+            &[],
+        );
+        let message = crate::services::anon_shared::build_anon_message(
+            channel_id,
+            ConversationType::AnonGroup,
+            *sender_id,
+            content,
+            Vec::new(),
+            sent_at,
+            None,
+        );
         let msg_id_str = message.id.to_string();
         self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
@@ -89,8 +104,8 @@ impl AnonGroupService {
 
     /// Store a message with text and/or attachments.
     ///
-    /// The `sent_at` parameter is the sender's timestamp (nanoseconds since epoch),
-    /// used for consistent ordering across devices.
+    /// `quote` carries reply metadata from the inbound proto so reply bubbles
+    /// survive a channel reload on the receiver side.
     pub fn store_message_with_attachments(
         &self,
         group_id: &AnonGroupId,
@@ -98,14 +113,22 @@ impl AnonGroupService {
         text: &str,
         attachment_ids: &[AttachmentId],
         sent_at: u64,
+        quote: Option<crate::inbox::handlers::base_anon::QuoteContext>,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let content = Self::build_message_content(text, attachment_ids);
-
-        let mut message = Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), String::new(), sent_at);
-        message.content = content;
-        message.attachments = attachment_ids.to_vec();
-
+        let content = crate::services::anon_shared::message_content_from_text_and_attachments(
+            text,
+            attachment_ids,
+        );
+        let message = crate::services::anon_shared::build_anon_message(
+            channel_id,
+            ConversationType::AnonGroup,
+            *sender_id,
+            content,
+            attachment_ids.to_vec(),
+            sent_at,
+            quote,
+        );
         let msg_id_str = message.id.to_string();
         self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
@@ -118,7 +141,11 @@ impl AnonGroupService {
         Ok(AnonGroupMessageId::from_string(msg_id_str))
     }
 
-    /// Store a message with explicit content_json (used for replies with quote metadata).
+    /// Store a message with explicit wire-format `content_type` + `content_json`
+    /// (used for replies that embed quote metadata in the JSON envelope).
+    ///
+    /// `quote` additionally populates the unified reply columns so the bubble
+    /// survives a channel reload.
     pub fn store_message_with_content_json(
         &self,
         group_id: &AnonGroupId,
@@ -127,14 +154,22 @@ impl AnonGroupService {
         content_json: &str,
         attachment_ids: &[AttachmentId],
         sent_at: u64,
+        quote: Option<crate::inbox::handlers::base_anon::QuoteContext>,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
-        let content = Self::content_from_type_and_json(content_type, content_json);
-
-        let mut message = Message::new_text(channel_id, ConversationType::AnonGroup, Some(*sender_id), String::new(), sent_at);
-        message.content = content;
-        message.attachments = attachment_ids.to_vec();
-
+        let content = crate::services::anon_shared::message_content_from_type_and_json(
+            content_type,
+            content_json,
+        );
+        let message = crate::services::anon_shared::build_anon_message(
+            channel_id,
+            ConversationType::AnonGroup,
+            *sender_id,
+            content,
+            attachment_ids.to_vec(),
+            sent_at,
+            quote,
+        );
         let msg_id_str = message.id.to_string();
         self.message_service.message_repo.insert(&message)?;
         Ok(AnonGroupMessageId::from_string(msg_id_str))
@@ -339,8 +374,9 @@ impl AnonGroupService {
         reactor_id: &UserId,
         emoji: &str,
     ) -> Result<bool, AnonGroupError> {
+        let current_user_id = self.current_user_id()?;
         Ok(self.message_service.message_repo
-            .add_reaction(sender_id, sent_at_ns, reactor_id, emoji)?)
+            .add_reaction(sender_id, sent_at_ns, reactor_id, &current_user_id, emoji)?)
     }
 
     /// Remove a reaction from a message in the DB.
@@ -354,8 +390,9 @@ impl AnonGroupService {
         reactor_id: &UserId,
         emoji: &str,
     ) -> Result<bool, AnonGroupError> {
+        let current_user_id = self.current_user_id()?;
         Ok(self.message_service.message_repo
-            .remove_reaction(sender_id, sent_at_ns, reactor_id, emoji)?)
+            .remove_reaction(sender_id, sent_at_ns, reactor_id, &current_user_id, emoji)?)
     }
 
     /// Get all reaction counts for a group's messages.
@@ -369,60 +406,4 @@ impl AnonGroupService {
         Ok(self.message_service.message_repo.get_reaction_counts_for_conversation(&channel_id, &ConversationType::AnonGroup)?)
     }
 
-    // ========================================================================
-    // Helper methods for content conversion
-    // ========================================================================
-
-    /// Build MessageContent from text and attachment IDs.
-    fn build_message_content(text: &str, attachment_ids: &[AttachmentId]) -> MessageContent {
-        match (!text.is_empty(), !attachment_ids.is_empty()) {
-            (true, true) => MessageContent::Mixed(MixedContent::new(
-                text.to_string(),
-                attachment_ids.to_vec(),
-            )),
-            (true, false) => MessageContent::Text(text.to_string()),
-            (false, true) => MessageContent::Mixed(MixedContent::attachments_only(
-                attachment_ids.to_vec(),
-            )),
-            (false, false) => MessageContent::Text(String::new()),
-        }
-    }
-
-    /// Convert a content_type integer and content_json string to MessageContent.
-    ///
-    /// This bridges the old anon_group content format to the unified Message format.
-    fn content_from_type_and_json(content_type: i32, content_json: &str) -> MessageContent {
-        match content_type {
-            // Text
-            1 => {
-                let text = serde_json::from_str::<serde_json::Value>(content_json)
-                    .ok()
-                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(String::from))
-                    .unwrap_or_default();
-                MessageContent::Text(text)
-            }
-            // Mixed (text + attachments) or reply with quote metadata
-            3 => {
-                // For mixed/reply content, store as Mixed with the text extracted
-                let text = serde_json::from_str::<serde_json::Value>(content_json)
-                    .ok()
-                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(String::from));
-                MessageContent::Mixed(MixedContent {
-                    text,
-                    attachment_ids: Vec::new(),
-                })
-            }
-            // Attachment only or unknown - store as Mixed with no text
-            _ => {
-                let text = serde_json::from_str::<serde_json::Value>(content_json)
-                    .ok()
-                    .and_then(|v| v.get("text").and_then(|t| t.as_str()).map(String::from));
-                if let Some(t) = text {
-                    MessageContent::Text(t)
-                } else {
-                    MessageContent::Text(String::new())
-                }
-            }
-        }
-    }
 }

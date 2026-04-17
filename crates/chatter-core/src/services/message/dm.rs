@@ -383,15 +383,46 @@ impl MessageService {
             quote_text,
             sent_at,
         );
-        
+
         // Send the message
         self.send_dm(peer_id, content, mailbox_manager).await?;
-        
+
         // Store the message locally
         let our_user_id = self.settings_repo.current_user_id()?;
         let mut message = Message::new_text(*dm_channel_id, ConversationType::MailboxDm, Some(our_user_id), text.to_string(), sent_at);
         message.attachments = attachment_ids.clone();
-        
+
+        // Populate reply-quote context so the quote bubble survives reload.
+        // Prefer resolving the original message locally for the id/preview;
+        // fall back to the synthetic timestamp-derived id + caller's preview.
+        let original = self
+            .message_repo
+            .get_by_sender_timestamp(quote_author_id, quote_timestamp)
+            .ok()
+            .flatten();
+        message.reply_to = Some(
+            original
+                .as_ref()
+                .map(|m| m.id)
+                .unwrap_or_else(|| crate::domain::ids::MessageId::from_timestamp(quote_timestamp)),
+        );
+        message.reply_to_author_id = Some(*quote_author_id);
+        message.reply_to_text = {
+            if !quote_text.is_empty() {
+                Some(crate::services::gateway::shared::truncate_preview(quote_text))
+            } else {
+                original.as_ref().map(|m| {
+                    let attachments: Vec<_> = m
+                        .attachments
+                        .iter()
+                        .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                        .collect();
+                    crate::services::gateway::shared::message_reply_preview(m, &attachments)
+                })
+            }
+            .filter(|t| !t.is_empty())
+        };
+
         // Store in database
         if let Err(e) = self.message_repo.insert(&message) {
             tracing::warn!(

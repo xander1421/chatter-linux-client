@@ -21,6 +21,8 @@ use crate::network::grpc::user_client::UserClient;
 use crate::proto::chat_v1::{friend_requests_filter, user_event, FriendStatus, UserProfile};
 use crate::services::current_user::{CurrentUserError, CurrentUserProvider};
 use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
+use crate::storage::repositories::anon_dm_repo::AnonDmRepository;
+use crate::storage::repositories::anon_group_repo::AnonGroupRepository;
 use crate::storage::repositories::user_repo::UserRepository;
 
 mod conversions;
@@ -116,6 +118,11 @@ pub struct UserService {
     grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
     user_repo: Arc<UserRepository>,
+    /// Peers of anonymous DMs and members of anonymous groups are stored here
+    /// instead of `user_repo` (they are outside the user directory).
+    /// `get_display_name` consults these to avoid raw-UUID fallback.
+    anon_dm_repo: Arc<AnonDmRepository>,
+    anon_group_repo: Arc<AnonGroupRepository>,
 }
 
 impl UserService {
@@ -124,11 +131,15 @@ impl UserService {
         grpc_pool: Arc<GrpcClientPool>,
         settings_repo: Arc<SettingsRepository>,
         user_repo: Arc<UserRepository>,
+        anon_dm_repo: Arc<AnonDmRepository>,
+        anon_group_repo: Arc<AnonGroupRepository>,
     ) -> Self {
         Self {
             grpc_pool,
             settings_repo,
             user_repo,
+            anon_dm_repo,
+            anon_group_repo,
         }
     }
 
@@ -678,12 +689,32 @@ impl UserService {
     }
 
     /// Get a user's display name from local storage.
+    ///
+    /// Resolution order:
+    /// 1. User directory profile (server DMs, channel members, contacts)
+    /// 2. User directory username (any registered peer)
+    /// 3. Anon DM peer (peer isn't in the user directory — stored on the
+    ///    anon DM conversation row)
+    /// 4. Anon group member (stored on the group's member row in any group)
+    /// 5. Raw UUID fallback
     pub fn get_display_name(&self, user_id: &UserId) -> String {
         if let Ok(Some(profile)) = self.user_repo.get_profile(user_id) {
             return profile.display_name;
         }
         if let Ok(Some(user)) = self.user_repo.get(user_id) {
             return user.username;
+        }
+        if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(user_id) {
+            if let Some(name) = anon_dm.peer_display_name {
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+        if let Ok(Some(name)) = self.anon_group_repo.find_display_name_for_user(user_id) {
+            if !name.is_empty() {
+                return name;
+            }
         }
         user_id.to_string()
     }

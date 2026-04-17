@@ -1,0 +1,50 @@
+thread 'rustc' panicked at /rustc-dev/03749d625404994801804ab9f2a539936c50bfea/compiler/rustc_middle/src/verify_ich.rs:80:9:
+Found unstable fingerprints for eval_to_allocation_raw(ce87991cce9d51a0-8188ac33ea0914ce): Err(Reported(ReportedErrorInfo { error: ErrorGuaranteed(()), allowed_in_infallible: true }, crates/chatter-core/src/proto/chat.v1.rs:4804:28: 4804:44 (#82640)))
+stack backtrace:
+   0:     0x7ffa9f10672b - <std[a6c0ae91c5aa0b93]::backtrace::Backtrace>::create
+   1:     0x7ffa9f106675 - <std[a6c0ae91c5aa0b93]::backtrace::Backtrace>::force_capture
+   2:     0x7ffa9e11490b - std[a6c0ae91c5aa0b93]::panicking::update_hook::<alloc[355204f71ca55a93]::boxed::Box<rustc_driver_impl[87ca72731bff22f8]::install_ice_hook::{closure#1}>>::{closure#0}
+   3:     0x7ffa9f118ca2 - std[a6c0ae91c5aa0b93]::panicking::panic_with_hook
+   4:     0x7ffa9f0fb6f8 - std[a6c0ae91c5aa0b93]::panicking::panic_handler::{closure#0}
+   5:     0x7ffa9f0f2429 - std[a6c0ae91c5aa0b93]::sys::backtrace::__rust_end_short_backtrace::<std[a6c0ae91c5aa0b93]::panicking::panic_handler::{closure#0}, !>
+   6:     0x7ffa9f0fd15d - __rustc[237cbd0936fb197a]::rust_begin_unwind
+   7:     0x7ffa9bcd963c - core[efeaeb4991f6c907]::panicking::panic_fmt
+   8:     0x7ffa9e752335 - rustc_middle[7a8f798ea3fd616a]::verify_ich::incremental_verify_ich_failed
+   9:     0x7ffaa00053a4 - rustc_middle[7a8f798ea3fd616a]::verify_ich::incremental_verify_ich::<rustc_middle[7a8f798ea3fd616a]::query::erase::ErasedData<[u8; 24usize]>>
+  10:     0x7ffaa039bf88 - rustc_query_impl[c0cf82c679ca6fc0]::execution::try_execute_query::<rustc_middle[7a8f798ea3fd616a]::query::caches::DefaultCache<rustc_middle[7a8f798ea3fd616a]::ty::PseudoCanonicalInput<rustc_middle[7a8f798ea3fd616a]::mir::interpret::GlobalId>, rustc_middle[7a8f798ea3fd616a]::query::erase::ErasedData<[u8; 24usize]>>, true>
+  11:     0x7ffaa039b36e - rustc_query_impl[c0cf82c679ca6fc0]::query_impl::eval_to_allocation_raw::execute_query_incr::__rust_end_short_backtrace
+  12:     0x7ffa9fb283fa - rustc_const_eval[33b306ce244fefcb]::const_eval::eval_queries::eval_to_const_value_raw_provider
+  13:     0x7ffa9fb27f56 - rustc_query_impl[c0cf82c679ca6fc0]::query_impl::eval_to_const_value_raw::invoke_provider_fn::__rust_begin_short_backtrace
+  14:     0x7ffaa039bf18 - rustc_query_impl[c0cf82c679ca6fc0]::execution::try_execute_query::<rustc_middle[7a8f798ea3fd616a]::query::caches::DefaultCache<rustc_middle[7a8f798ea3fd616a]::ty::PseudoCanonicalInput<rustc_middle[7a8f798ea3fd616a]::mir::interpret::GlobalId>, rustc_middle[7a8f798ea3fd616a]::query::erase::ErasedData<[u8; 24usize]>>, true>
+  15:     0x7ffaa039b1ee - rustc_query_impl[c0cf82c679ca6fc0]::query_impl::eval_to_const_value_raw::execute_query_incr::__rust_end_short_backtrace
+  16:     0x7ffaa04502ef - <rustc_middle[7a8f798ea3fd616a]::ty::context::TyCtxt>::const_eval_resolve
+  17:     0x7ffaa019d023 - <rustc_mir_transform[ae6ce4c5f9cb71aa]::known_panics_lint::ConstPropagator as rustc_middle[7a8f798ea3fd616a]::mir::visit::Visitor>::visit_assign
+  18:     0x7ffaa019892b - <rustc_mir_transform[ae6ce4c5f9cb71aa]::known_panics_lint::ConstPropagator as rustc_middle[7a8f798ea3fd616a]::mir::visit::Visitor>::visit_body
+  19:     0x7ffaa0195b04 - <rustc_mir_transform[ae6ce4c5f9cb71aa]::known_panics_lint::KnownPanicsLint as rustc_mir_transform[ae6ce4c5f9cb71aa]::pass_manager::MirLint>::run_lint
+  20:     0x7ffa9f80d17c - rustc_mir_transform[ae6ce4c5f9cb71aa]::run_analysis_to_runtime_passes
+  21:     0x7ffaa0573e04 - rustc_mir_transform[ae6ce4c5f9cb71aa]::mir_drops_elaborated_and_const_checked
+  22:     0x7ffaa0573859 - rustc_query_impl[c0cf82c679ca6fc0]::query_impl::mir_drops_elaborated_and_const_checked::invoke_provider_fn::__rust_begin_short_backtrace
+  23:     0x7ffa9f955944 - rustc_query_impl[c0cf82c679ca6fc0]::execution::try_execute_query::<rustc_data_structures[d809856508294706]::vec_cache::VecCache<rustc_span[b6780d8d60149515]::def_id::LocalDefId, rustc_middle[7a8f798ea3fd616a]::query::erase::ErasedData<[u8; 8usize]>, rustc_middle[7a8f798ea3fd616a]::dep_graph::graph::DepNodeIndex>, true>
+  24:     0x7ffa9f95c9ce - rustc_query_impl[c0cf82c679ca6fc0]::query_impl::mir_drops_elaborated_and_const_checked::execute_query_incr::__rust_end_short_backtrace
+  25:     0x7ffa9f95ae48 - <rustc_middle[7a8f798ea3fd616a]::ty::context::TyCtxt>::par_hir_body_owners::<rustc_interface[60585b84be2cb447]::passes::run_required_analyses::{closure#1}::{closure#0}>::{closure#0}
+  26:     0x7ffa9f95a233 - rustc_interface[60585b84be2cb447]::passes::analysis
+  27:     0x7ffaa0aba295 - rustc_query_impl[c0cf82c679ca6fc0]::execution::try_execute_query::<rustc_middle[7a8f798ea3fd616a]::query::caches::SingleCache<rustc_middle[7a8f798ea3fd616a]::query::erase::ErasedData<[u8; 0usize]>>, true>
+  28:     0x7ffaa0ab9b1e - rustc_query_impl[c0cf82c679ca6fc0]::query_impl::analysis::execute_query_incr::__rust_end_short_backtrace
+  29:     0x7ffaa0a4e638 - rustc_interface[60585b84be2cb447]::interface::run_compiler::<(), rustc_driver_impl[87ca72731bff22f8]::run_compiler::{closure#0}>::{closure#1}
+  30:     0x7ffaa0a3393e - std[a6c0ae91c5aa0b93]::sys::backtrace::__rust_begin_short_backtrace::<rustc_interface[60585b84be2cb447]::util::run_in_thread_with_globals<rustc_interface[60585b84be2cb447]::util::run_in_thread_pool_with_globals<rustc_interface[60585b84be2cb447]::interface::run_compiler<(), rustc_driver_impl[87ca72731bff22f8]::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>
+  31:     0x7ffaa0a341e0 - <std[a6c0ae91c5aa0b93]::thread::lifecycle::spawn_unchecked<rustc_interface[60585b84be2cb447]::util::run_in_thread_with_globals<rustc_interface[60585b84be2cb447]::util::run_in_thread_pool_with_globals<rustc_interface[60585b84be2cb447]::interface::run_compiler<(), rustc_driver_impl[87ca72731bff22f8]::run_compiler::{closure#0}>::{closure#1}, ()>::{closure#0}, ()>::{closure#0}::{closure#0}, ()>::{closure#1} as core[efeaeb4991f6c907]::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+  32:     0x7ffaa0a3506c - <std[a6c0ae91c5aa0b93]::sys::thread::unix::Thread>::new::thread_start
+  33:     0x7ffa9a4a597a - <unknown>
+  34:     0x7ffa9a5292bc - <unknown>
+  35:                0x0 - <unknown>
+
+
+rustc version: 1.96.0-nightly (03749d625 2026-03-14)
+platform: x86_64-unknown-linux-gnu
+
+query stack during panic:
+#0 [eval_to_allocation_raw] const-evaluating + checking `proto::chat_v1::<impl at crates/chatter-core/src/proto/chat.v1.rs:4804:28: 4804:44>::encoded_len::promoted[2]`
+#1 [eval_to_const_value_raw] simplifying constant for the type system `proto::chat_v1::<impl at crates/chatter-core/src/proto/chat.v1.rs:4804:28: 4804:44>::encoded_len::promoted[2]`
+#2 [mir_drops_elaborated_and_const_checked] elaborating drops for `proto::chat_v1::<impl at crates/chatter-core/src/proto/chat.v1.rs:4804:28: 4804:44>::encoded_len`
+#3 [analysis] running analysis passes on crate `chatter_core`
+end of query stack

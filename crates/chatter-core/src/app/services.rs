@@ -188,6 +188,8 @@ impl ServiceContainer {
             infra.grpc_pool.clone(),
             infra.settings_repo.clone(),
             infra.user_repo.clone(),
+            infra.anon_dm_repo.clone(),
+            infra.anon_group_repo.clone(),
         ));
 
         // 8. Channel service

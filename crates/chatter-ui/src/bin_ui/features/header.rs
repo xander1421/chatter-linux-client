@@ -46,9 +46,7 @@ fn wire_search_clicked(window: &MainWindow) {
 fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Search messages
     let weak_window = window.as_weak();
-    let message_service = ui_ctx.messages().clone();
-    let channel_service = ui_ctx.channels().clone();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx_search = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state().clone();
 
     window.on_search_messages(move |query: slint::SharedString| {
@@ -64,9 +62,7 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
 
         let weak = weak_window.clone();
-        let message_service = message_service.clone();
-        let channel_service = channel_service.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx_search.clone();
         let chat_state = chat_state.clone();
 
         // Get search scope and set searching state - already on UI thread
@@ -87,7 +83,7 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // Perform search using message service's local search
-            let results = match message_service.search_local(&query_str, channel_id.as_ref(), 50) {
+            let results = match ui_ctx.search_messages_local(&query_str, channel_id.as_ref(), 50) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::error!("Search failed: {}", e);
@@ -105,16 +101,14 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let mut display_results: Vec<crate::SearchResult> = Vec::with_capacity(results.len());
             for result in &results {
                 // Get message details
-                let msg = match message_service.get_message_local(&result.message_id) {
-                    Ok(Some(m)) => m,
-                    _ => continue,
+                let msg = match ui_ctx.get_message_local(&result.message_id) {
+                    Some(m) => m,
+                    None => continue,
                 };
 
                 // Get channel name
-                let channel_name = channel_service
+                let channel_name = ui_ctx
                     .get_channel_local(&result.conversation_id)
-                    .ok()
-                    .flatten()
                     .map(|c| c.name)
                     .unwrap_or_else(|| "Unknown".to_string());
 
@@ -122,7 +116,7 @@ fn wire_search_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let sender_name = msg
                     .sender_id
                     .as_ref()
-                    .map(|id| user_service.get_display_name(id))
+                    .map(|id| ui_ctx.display_name(id))
                     .unwrap_or_else(|| "Unknown".to_string());
 
                 // Format timestamp (convert UTC to local time)
@@ -193,25 +187,23 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Previous pinned message
     let pinned_state = ui_ctx.pinned_state().clone();
     let weak_window = window.as_weak();
-    let pin_service = ui_ctx.pins().clone();
-    let anon_group_service = ui_ctx.anon_groups().clone();
+    let ui_ctx_prev = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_prev_clicked(move || {
         pinned_state.navigate_prev();
-        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), pin_service.clone(), anon_group_service.clone(), chat_state.active_conversation());
+        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), ui_ctx_prev.clone(), chat_state.active_conversation());
     });
 
     // Next pinned message
     let pinned_state = ui_ctx.pinned_state().clone();
     let weak_window = window.as_weak();
-    let pin_service = ui_ctx.pins().clone();
-    let anon_group_service = ui_ctx.anon_groups().clone();
+    let ui_ctx_next = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_next_clicked(move || {
         pinned_state.navigate_next();
-        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), pin_service.clone(), anon_group_service.clone(), chat_state.active_conversation());
+        update_pinned_ui_from_loaded_messages(weak_window.clone(), pinned_state.clone(), ui_ctx_next.clone(), chat_state.active_conversation());
     });
 
     // Dismiss pinned bar
@@ -229,8 +221,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Re-show dismissed pinned bar (pin button in header)
     let pinned_state = ui_ctx.pinned_state().clone();
     let weak_window = window.as_weak();
-    let pin_service = ui_ctx.pins().clone();
-    let anon_group_service = ui_ctx.anon_groups().clone();
+    let ui_ctx_show = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state().clone();
 
     window.on_pinned_show_clicked(move || {
@@ -244,8 +235,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         update_pinned_ui_from_loaded_messages(
             weak_window.clone(),
             pinned_state.clone(),
-            pin_service.clone(),
-            anon_group_service.clone(),
+            ui_ctx_show.clone(),
             chat_state.active_conversation(),
         );
     });
@@ -303,8 +293,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn update_pinned_ui_from_loaded_messages(
     weak_window: slint::Weak<MainWindow>,
     pinned_state: chatter_core::state::PinnedState,
-    pin_service: Arc<chatter_core::services::pin_service::PinService>,
-    anon_group_service: Arc<chatter_core::services::anon_group::AnonGroupService>,
+    ui_ctx: Arc<ChatterClient>,
     conversation: ActiveConversation,
 ) {
     let state = pinned_state.get();
@@ -343,24 +332,20 @@ fn update_pinned_ui_from_loaded_messages(
     // Fall back to DB lookup in background thread
     std::thread::spawn(move || {
         let preview = if let Some(msg_id) = current_msg_id {
-            if let ActiveConversation::AnonGroup(group_id) = conversation {
+            if let ActiveConversation::AnonGroup(_group_id) = conversation {
                 // Private group: look up from unified messages repo
-                if let Ok(Some(msg)) = anon_group_service.get_message(&chatter_core::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string())) {
-                    msg.as_text()
-                        .filter(|t| !t.is_empty())
-                        .map(|t| if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() })
-                        .unwrap_or_else(|| "[Pinned message]".to_string())
-                } else {
-                    let _ = group_id; // suppress unused warning
-                    "[Pinned message]".to_string()
-                }
+                let anon_id = chatter_core::domain::anon_group::AnonGroupMessageId::from_string(msg_id.to_string());
+                ui_ctx.get_anon_group_message(&anon_id)
+                    .and_then(|msg| msg.as_text().filter(|t| !t.is_empty()).map(|t| {
+                        if t.len() > 80 { format!("{}...", &t[..77]) } else { t.to_string() }
+                    }))
+                    .unwrap_or_else(|| "[Pinned message]".to_string())
             } else {
                 // Regular channel/DM: use PinService
-                if let Ok(Some(pinned_data)) = pin_service.get_pinned_message(&msg_id) {
-                    pinned_data.preview
-                } else {
-                    "[Pinned message]".to_string()
-                }
+                ui_ctx
+                    .get_pinned_message(&msg_id)
+                    .map(|d| d.preview)
+                    .unwrap_or_else(|| "[Pinned message]".to_string())
             }
         } else {
             String::new()
@@ -380,42 +365,35 @@ fn update_pinned_ui_from_loaded_messages(
 fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let chat_state = ui_ctx.chat_state().clone();
-    let channel_service = ui_ctx.channels().clone();
-    let user_service = ui_ctx.users().clone();
-    let anon_group_service = ui_ctx.anon_groups().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_chat_settings_clicked(move || {
         let conversation = chat_state.active_conversation();
 
         if let ActiveConversation::AnonGroup(group_id) = conversation {
             // Private group settings - move DB queries to background thread
-            let anon_group_service = anon_group_service.clone();
-            let user_service = user_service.clone();
+            let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
 
             std::thread::spawn(move || {
 
                 // Get group info for settings modal (DB query in background)
-                let group = match anon_group_service.get_group(&group_id) {
-                    Ok(Some(g)) => g,
-                    Ok(None) => {
+                let group = match ui_ctx.get_anon_group(&group_id) {
+                    Some(g) => g,
+                    None => {
                         tracing::error!("Private group not found: {}", group_id);
-                        return;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to get private group: {}", e);
                         return;
                     }
                 };
 
-                let members = anon_group_service.get_members(&group_id).unwrap_or_default();
+                let members = ui_ctx.get_anon_group_members(&group_id);
                 let member_count = members.len() as i32;
                 let group_name = group.name.clone();
 
                 // Get current user ID to check if owner
-                let current_user_id = match anon_group_service.current_user_id() {
-                    Ok(id) => id,
-                    _ => return,
+                let current_user_id = match ui_ctx.session_current_user_id() {
+                    Some(id) => id,
+                    None => return,
                 };
                 let is_owner = group.owner_id == current_user_id || group.my_role == chatter_core::domain::anon_group::AnonGroupRole::Owner;
                 let is_admin = group.my_role == chatter_core::domain::anon_group::AnonGroupRole::Admin;
@@ -426,7 +404,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     let display_name = if let Some(ref name) = member.display_name {
                         name.clone()
                     } else {
-                        user_service.get_display_name(&member.user_id)
+                        ui_ctx.display_name(&member.user_id)
                     };
 
                     let role = match member.role {
@@ -477,8 +455,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
         super::modals::open_channel_settings(
             weak_window.clone(),
-            channel_service.clone(),
-            user_service.clone(),
+            ui_ctx.clone(),
             channel_id,
         );
     });
@@ -517,18 +494,14 @@ fn wire_invite_member(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let chat_state = ui_ctx.chat_state().clone();
-    let message_service = ui_ctx.messages().clone();
+    let ui_ctx_load = ui_ctx.clone();
     let message_state = ui_ctx.message_state().clone();
-    let user_service = ui_ctx.users().clone();
-    let attachment_service = ui_ctx.attachments().clone();
 
     window.on_load_more(move || {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
-        let message_service = message_service.clone();
+        let ui_ctx = ui_ctx_load.clone();
         let message_state = message_state.clone();
-        let user_service = user_service.clone();
-        let attachment_service = attachment_service.clone();
 
         // Load messages in background thread (DB queries are sync)
         std::thread::spawn(move || {
@@ -565,7 +538,7 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let before = cursor.and_then(|c| c.oldest_message_id);
 
-            let older_messages = match message_service.get_messages_local_asc(&channel_id, &conversation_type, before.as_ref(), 50) {
+            let older_messages = match ui_ctx.get_messages_local_asc(&channel_id, &conversation_type, before.as_ref(), 50) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to load more messages: {}", e);
@@ -589,13 +562,13 @@ fn wire_load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Convert older messages to display data
             let display_messages = messages_to_display_batch(
                 &older_messages,
-                |uid| user_service.get_display_name(uid),
-                |att_id| attachment_service.get(att_id).ok().flatten(),
+                |uid| ui_ctx.display_name(uid),
+                |att_id| ui_ctx.get_attachment(att_id),
             );
 
             let msg_count = older_messages.len();
             // Get current user ID for is_own calculation
-            let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
+            let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
@@ -645,13 +618,12 @@ fn wire_members_panel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tokio::spawn(async move {
             let members = match conversation {
                 ActiveConversation::Channel(channel_id) => {
-                    match ui_ctx.channels().get_channel_members(&channel_id, 200, 0).await {
+                    match ui_ctx.get_channel_members(&channel_id, 200, 0).await {
                         Ok(memberships) => {
                             memberships.into_iter().map(|m| {
                                 let role = format!("{:?}", m.role).to_lowercase();
-                                let display_name = ui_ctx.users().get_display_name(&m.user_id);
-                                let username = ui_ctx.users().get_user_local(&m.user_id)
-                                    .ok().flatten()
+                                let display_name = ui_ctx.display_name(&m.user_id);
+                                let username = ui_ctx.get_user_local(&m.user_id)
                                     .map(|u| u.username.clone())
                                     .unwrap_or_default();
                                 crate::ChannelMemberData {
@@ -670,27 +642,19 @@ fn wire_members_panel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 }
                 ActiveConversation::AnonGroup(group_id) => {
-                    match ui_ctx.anon_groups().get_members(&group_id) {
-                        Ok(members) => {
-                            members.into_iter().map(|m| {
-                                let display_name = m.display_name.clone()
-                                    .filter(|n| !n.is_empty())
-                                    .unwrap_or_else(|| format!("User {}", &m.user_id.to_string()[..8]));
-                                let role = format!("{:?}", m.role).to_lowercase();
-                                crate::ChannelMemberData {
-                                    user_id: m.user_id.to_string().into(),
-                                    display_name: display_name.into(),
-                                    username: "".into(),
-                                    role: role.into(),
-                                    joined_at: "".into(),
-                                }
-                            }).collect::<Vec<_>>()
+                    ui_ctx.get_anon_group_members(&group_id).into_iter().map(|m| {
+                        let display_name = m.display_name.clone()
+                            .filter(|n| !n.is_empty())
+                            .unwrap_or_else(|| format!("User {}", &m.user_id.to_string()[..8]));
+                        let role = format!("{:?}", m.role).to_lowercase();
+                        crate::ChannelMemberData {
+                            user_id: m.user_id.to_string().into(),
+                            display_name: display_name.into(),
+                            username: "".into(),
+                            role: role.into(),
+                            joined_at: "".into(),
                         }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "Failed to load group members");
-                            Vec::new()
-                        }
-                    }
+                    }).collect::<Vec<_>>()
                 }
                 _ => Vec::new(),
             };

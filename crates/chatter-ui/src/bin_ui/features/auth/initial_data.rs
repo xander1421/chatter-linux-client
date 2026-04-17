@@ -18,14 +18,11 @@ use crate::bin_ui::converters::{
 };
 use crate::{ChannelListItemData, DMListItemData, FriendRequestData, MainWindow, PrivateGroupListItemData};
 
-/// Truncate text for sidebar preview (50 chars max, 47 + "...").
+use chatter_core::domain::message::truncate_preview_text;
+
+/// Truncate text for sidebar preview via the shared core helper (50 chars).
 fn truncate_sidebar_preview(text: &str) -> String {
-    if text.chars().count() > 50 {
-        let truncated: String = text.chars().take(47).collect();
-        format!("{}...", truncated)
-    } else {
-        text.to_string()
-    }
+    truncate_preview_text(text, 50)
 }
 
 /// Load initial data after login or on startup.
@@ -33,7 +30,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     tracing::info!("Loading initial data...");
 
     // Sync channels from server first (fetches and upserts to local storage)
-    match ui_ctx.channels().list_channels(100, 0, None).await {
+    match ui_ctx.list_channels_paged(100, 0, None).await {
         Ok(synced_channels) => {
             for ch in &synced_channels {
                 tracing::debug!(
@@ -54,17 +51,18 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         tracing::warn!("Failed to pre-fetch anonymous tokens: {}", e);
     }
 
-    // Now get channels from local storage (which has been synced)
-    let channels = match ui_ctx.channels().get_channels_mru() {
-        Ok(ch) => ch,
-        Err(e) => {
-            tracing::error!(
-                "Failed to load channels from local storage: {} - showing empty channel list",
-                e
-            );
-            Vec::new()
+    // Refresh any anon group mailboxes nearing their 30-day expiry so the
+    // user can continue receiving messages across long offline gaps.
+    match ui_ctx.refresh_expiring_group_mailboxes().await {
+        Ok(refreshed) if !refreshed.is_empty() => {
+            tracing::info!(count = refreshed.len(), "Refreshed expiring anon group mailboxes");
         }
-    };
+        Ok(_) => {}
+        Err(e) => tracing::warn!("Failed to refresh anon group mailboxes: {}", e),
+    }
+
+    // Now get channels from local storage (which has been synced)
+    let channels = ui_ctx.get_channels_mru();
 
     // Get current user ID for DM peer detection
     let current_user_id = ui_ctx.auth_state().get().current_user_id;
@@ -81,14 +79,12 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 // For DMs, we need to find the OTHER user (not ourselves)
                 let other_user_id = if let Some(current_id) = current_user_id {
                     // Get channel members and find the one that's not us
-                    match ui_ctx.channels().list_members_local(&channel.id) {
-                        Ok(members) => members
-                            .iter()
-                            .find(|m| m.user_id != current_id)
-                            .map(|m| m.user_id.to_string())
-                            .unwrap_or_else(|| channel.owner_id.to_string()),
-                        Err(_) => channel.owner_id.to_string(),
-                    }
+                    let members = ui_ctx.list_channel_members_local(&channel.id);
+                    members
+                        .iter()
+                        .find(|m| m.user_id != current_id)
+                        .map(|m| m.user_id.to_string())
+                        .unwrap_or_else(|| channel.owner_id.to_string())
                 } else {
                     // Fallback to owner_id if we don't know our own ID
                     channel.owner_id.to_string()
@@ -98,7 +94,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
                 // Get the most recent message for this DM to populate preview
                 let (last_message, timestamp) =
-                    match ui_ctx.messages().get_messages_local(&channel.id, &ConversationType::ServerDm, None, 1) {
+                    match ui_ctx.get_messages_local(&channel.id, &ConversationType::ServerDm, None, 1) {
                         Ok(messages) if !messages.is_empty() => {
                             let msg = &messages[0];
                             let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
@@ -151,7 +147,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // Load user's own avatar from settings (stored during registration)
     // Pre-decode before entering UI thread to avoid blocking
     let user_avatar_decoded: Option<(Vec<u8>, u32, u32)> =
-        ui_ctx.anon_dms().get_user_avatar().and_then(|bytes| {
+        ui_ctx.my_avatar().and_then(|bytes| {
             image::load_from_memory(&bytes).ok().map(|img| {
                 let rgba = img.to_rgba8();
                 let (w, h) = rgba.dimensions();
@@ -178,7 +174,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
     // Fetch friend requests from server using UserService
     let received_requests = match ui_ctx
-        .users()
         .list_friend_requests(FriendRequestFilter::Received, 50, 0)
         .await
     {
@@ -193,7 +188,6 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     };
 
     let sent_requests = match ui_ctx
-        .users()
         .list_friend_requests(FriendRequestFilter::Sent, 50, 0)
         .await
     {
@@ -215,7 +209,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
         // Try to fetch profile from server
         let (display_name, username, avatar_url) =
-            match ui_ctx.users().get_user_profile(&friend_id).await {
+            match ui_ctx.get_user_profile(&friend_id).await {
                 Ok(profile) => {
                     let name = if profile.display_name.is_empty() {
                         friend_id_str.clone()
@@ -246,7 +240,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
         // Try to fetch profile from server
         let (display_name, username, avatar_url) =
-            match ui_ctx.users().get_user_profile(&friend_id).await {
+            match ui_ctx.get_user_profile(&friend_id).await {
                 Ok(profile) => {
                     let name = if profile.display_name.is_empty() {
                         friend_id_str.clone()
@@ -271,7 +265,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     }
 
     // Load anonymous DMs from local storage and add to DM list
-    match ui_ctx.anon_dms().list_conversations() {
+    match Ok::<_, ()>(ui_ctx.list_anon_dm_conversations()) {
         Ok(anon_dms) => {
             tracing::info!("Loaded {} anonymous DM conversations", anon_dms.len());
             for dm in anon_dms {
@@ -282,8 +276,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 let peer_id_str = dm.peer_id.to_string();
 
                 // Get latest message for preview
-                let (last_message, timestamp) = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
-                    Ok(Some(msg)) => {
+                let (last_message, timestamp) = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
+                    Some(msg) => {
                         let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
                         let preview = msg.as_text()
                             .map(|text| {
@@ -305,10 +299,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     _ => (String::new(), String::new()),
                 };
 
-                // Add to DM list with special prefix to indicate private
-                // Use anon_dm: prefix in channel_id to identify these specially
+                // Anon DMs share the DM model with regular DMs — the
+                // `is_anon` flag is the discriminator.
                 let dm_item = DMListItemSendData {
-                    channel_id: format!("anon_dm:{}", dm.id),
+                    channel_id: dm.id.to_string(),
                     user_id: peer_id_str.clone(),
                     display_name: format!("\u{1F512} {}", peer_name), // Lock emoji prefix
                     avatar_url: String::new(),
@@ -324,6 +318,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     timestamp,
                     unread_count: dm.unread_count,
                     is_typing: false,
+                    is_anon: true,
                 };
                 dm_list.push(dm_item);
             }
@@ -335,7 +330,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
     // Load pending anon DM requests (message requests) - show as pending in sidebar and modal
     let mut private_requests_ui: Vec<FriendRequestSendData> = Vec::new();
-    match ui_ctx.anon_dms().list_message_requests() {
+    match Ok::<_, ()>(ui_ctx.list_anon_dm_message_requests()) {
         Ok(requests) => {
             tracing::info!("Loaded {} pending anon DM requests", requests.len());
             for dm in requests {
@@ -346,14 +341,14 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 let peer_id_str = dm.peer_id.to_string();
 
                 // Get intro message if any
-                let last_message = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
-                    Ok(Some(msg)) => msg.as_text().unwrap_or_default().to_string(),
-                    _ => "Message request".to_string(),
+                let last_message = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
+                    Some(msg) => msg.as_text().unwrap_or_default().to_string(),
+                    None => "Message request".to_string(),
                 };
 
                 // Add to DM sidebar
                 let dm_item = DMListItemSendData {
-                    channel_id: format!("anon_dm:{}", dm.id),
+                    channel_id: dm.id.to_string(),
                     user_id: peer_id_str.clone(),
                     display_name: format!("\u{1F4E9} {}", peer_name), // Envelope emoji for pending
                     avatar_url: String::new(),
@@ -368,6 +363,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                         .to_string(),
                     unread_count: 1,
                     is_typing: false,
+                    is_anon: true,
                 };
                 dm_list.push(dm_item);
 
@@ -389,7 +385,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     }
 
     // Load outgoing pending anon DM requests (requests we sent but haven't been accepted)
-    match ui_ctx.anon_dms().list_outgoing_requests() {
+    match Ok::<_, ()>(ui_ctx.list_anon_dm_outgoing_requests()) {
         Ok(requests) => {
             tracing::info!("Loaded {} outgoing anon DM requests", requests.len());
             for dm in requests {
@@ -399,8 +395,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 let peer_id_str = dm.peer_id.to_string();
 
                 // Get our last sent message for preview
-                let (last_message, timestamp) = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
-                    Ok(Some(msg)) => {
+                let (last_message, timestamp) = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
+                    Some(msg) => {
                         let preview = msg.as_text()
                             .map(|text| format!("You: {}", truncate_sidebar_preview(text)))
                             .unwrap_or_else(|| "Message request sent".to_string());
@@ -415,7 +411,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 
                 // Add to DM sidebar with "Waiting" indicator
                 let dm_item = DMListItemSendData {
-                    channel_id: format!("anon_dm:{}", dm.id),
+                    channel_id: dm.id.to_string(),
                     user_id: peer_id_str.clone(),
                     display_name: format!("\u{1F4EE} {} (pending)", peer_name), // Postbox emoji
                     avatar_url: String::new(),
@@ -427,6 +423,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     timestamp,
                     unread_count: 0,
                     is_typing: false,
+                    is_anon: true,
                 };
                 dm_list.push(dm_item);
             }
@@ -437,19 +434,15 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     }
 
     // Load private groups from local storage
-    let private_groups: Vec<PrivateGroupListItemData> = match ui_ctx.anon_groups().list_groups() {
+    let private_groups: Vec<PrivateGroupListItemData> = match ui_ctx.list_anon_groups() {
         Ok(groups) => groups
             .into_iter()
             .map(|g| {
-                let member_count = ui_ctx
-                    .anon_groups()
-                    .get_members(&g.id)
-                    .map(|m| m.len())
-                    .unwrap_or(0) as i32;
+                let member_count = ui_ctx.get_anon_group_members(&g.id).len() as i32;
 
                 // Get the latest message for preview
-                let (last_message, timestamp) = match ui_ctx.anon_groups().get_latest_message(&g.id) {
-                    Ok(Some(msg)) => {
+                let (last_message, timestamp) = match ui_ctx.get_latest_anon_group_message(&g.id) {
+                    Some(msg) => {
                         let preview = msg.as_text()
                             .map(|text| truncate_sidebar_preview(text))
                             .unwrap_or_default();
@@ -470,6 +463,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                     last_message: last_message.into(),
                     timestamp: timestamp.into(),
                     is_typing: false,
+                    is_selected: false,
                 }
             })
             .collect(),
@@ -482,7 +476,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     tracing::info!("Loaded {} private groups", private_groups.len());
 
     // Load blocked users for the Blocked tab
-    let blocked_users_data: Vec<(String, String)> = match ui_ctx.anon_dms().get_blocked_users() {
+    let blocked_users_data: Vec<(String, String)> = match Ok::<_, ()>(ui_ctx.get_anon_dm_blocked_users()) {
         Ok(users) => {
             tracing::info!("Loaded {} blocked users", users.len());
             users.into_iter()
@@ -512,18 +506,22 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     // Update UI with channels, DMs, private groups, and friend requests
     let window_weak_ui = window_weak.clone();
     let pending_message_requests_count = private_requests_ui.len() as i32;
-    let attachments_for_ui = ui_ctx.attachments().clone();
+    let ui_ctx_for_refresh = ui_ctx.clone();
+    let ui_ctx_for_convert = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = window_weak_ui.upgrade() {
             let channel_list: Vec<ChannelListItemData> = channel_domain_list
                 .iter()
-                .map(|c| channel_to_slint(c, &attachments_for_ui))
+                .map(|c| channel_to_slint(c, &ui_ctx_for_convert))
                 .collect();
             w.set_channels(ModelRc::new(VecModel::from(channel_list)));
             // Convert Send-safe DM data to Slint types inside event loop
             let dm_list_slint: Vec<DMListItemData> = dm_list.into_iter().map(|d| d.to_slint()).collect();
             w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
             w.set_private_groups(ModelRc::new(VecModel::from(private_groups)));
+
+            // Apply selection flags on newly-loaded models.
+            crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_refresh);
 
             // Compute initial total unread count for mobile bottom nav badge
             crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w);
@@ -574,7 +572,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         let window_weak_select = window_weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = window_weak_select.upgrade() {
-                w.set_selected_channel_id(channel_id_str.into());
+                w.invoke_channel_selected(channel_id_str.into());
             }
         });
 
@@ -594,20 +592,10 @@ async fn load_channel_into_ui_from_services(
     current_user_id: Option<String>,
 ) {
     // Get channel info from service
-    let channel = match ui_ctx.channels().get_channel_local(channel_id) {
-        Ok(Some(ch)) => ch,
-        Ok(None) => {
+    let channel = match ui_ctx.get_channel_local(channel_id) {
+        Some(ch) => ch,
+        None => {
             tracing::warn!("Channel {} not found in local storage", channel_id);
-            let weak = window_weak;
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_loading_messages(false);
-                }
-            });
-            return;
-        }
-        Err(e) => {
-            tracing::error!("Failed to get channel {}: {}", channel_id, e);
             let weak = window_weak;
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
@@ -622,7 +610,7 @@ async fn load_channel_into_ui_from_services(
     let conversation_type = channel.conversation_type();
 
     // Fetch recent messages (limit 50)
-    let messages = match ui_ctx.messages().get_messages_local_asc(channel_id, &conversation_type, None, 50) {
+    let messages = match ui_ctx.get_messages_local_asc(channel_id, &conversation_type, None, 50) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to get messages for channel {}: {}", channel_id, e);
@@ -633,8 +621,8 @@ async fn load_channel_into_ui_from_services(
     // Convert messages to display data
     let display_messages = messages_to_display_batch(
         &messages,
-        |uid| ui_ctx.users().get_display_name(uid),
-        |att_id| ui_ctx.attachments().get_metadata(att_id).ok().flatten(),
+        |uid| ui_ctx.display_name(uid),
+        |att_id| ui_ctx.get_attachment_metadata(att_id),
     );
 
     // Get current user ID for is_own calculation in to_slint_with_user
@@ -654,14 +642,14 @@ async fn load_channel_into_ui_from_services(
                 .collect();
 
             w.set_channel_name(channel_name.into());
-            w.set_selected_channel_id(channel_id_str.into());
+            let _ = channel_id_str;
             w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
             w.set_loading_messages(false);
 
             // Auto-register GIF animations for inline playback
             crate::bin_ui::gif_state::auto_register_gifs_from_messages(
                 w.as_weak(),
-                ui_ctx_load.attachments().clone(),
+                ui_ctx_load.clone(),
             );
         }
     });
@@ -677,14 +665,8 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let current_user_id = ui_ctx.auth_state().get().current_user_id;
         
         // Get channels from local storage
-        let channels = match ui_ctx.channels().get_channels_mru() {
-            Ok(ch) => ch,
-            Err(e) => {
-                tracing::error!("Failed to refresh DM list: {}", e);
-                return;
-            }
-        };
-        
+        let channels = ui_ctx.get_channels_mru();
+
         let mut dm_list: Vec<DMListItemSendData> = Vec::new();
 
         // Process regular DMs
@@ -692,14 +674,12 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if channel.channel_type == ChannelType::DirectMessage {
                 // Find the OTHER user (not ourselves)
                 let other_user_id = if let Some(current_id) = current_user_id {
-                    match ui_ctx.channels().list_members_local(&channel.id) {
-                        Ok(members) => members
-                            .iter()
-                            .find(|m| m.user_id != current_id)
-                            .map(|m| m.user_id.to_string())
-                            .unwrap_or_else(|| channel.owner_id.to_string()),
-                        Err(_) => channel.owner_id.to_string(),
-                    }
+                    let members = ui_ctx.list_channel_members_local(&channel.id);
+                    members
+                        .iter()
+                        .find(|m| m.user_id != current_id)
+                        .map(|m| m.user_id.to_string())
+                        .unwrap_or_else(|| channel.owner_id.to_string())
                 } else {
                     channel.owner_id.to_string()
                 };
@@ -708,7 +688,7 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 
                 // Get the most recent message
                 let (last_message, timestamp) = 
-                    match ui_ctx.messages().get_messages_local(&channel.id, &ConversationType::ServerDm, None, 1) {
+                    match ui_ctx.get_messages_local(&channel.id, &ConversationType::ServerDm, None, 1) {
                         Ok(messages) if !messages.is_empty() => {
                             let msg = &messages[0];
                             let is_own = current_user_id.map(|id| msg.sender_id == Some(id)).unwrap_or(false);
@@ -758,6 +738,7 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     timestamp,
                     unread_count: 0,
                     is_typing: false,
+                    is_anon: false,
                 };
                 dm_list.push(dm_item);
             }
@@ -770,6 +751,7 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .map(|d| d.to_slint())
                 .collect();
             w.set_dm_conversations(ModelRc::new(VecModel::from(dm_list_slint)));
+            crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
         }
     });
 }
@@ -778,12 +760,12 @@ pub fn refresh_dm_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 pub fn refresh_anon_groups(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let window_weak = window.as_weak();
-    
+
     tokio::spawn(async move {
         let mut private_group_list: Vec<PrivateGroupListItemData> = Vec::new();
-        
+
         // Load anonymous groups
-        match ui_ctx.anon_groups().list_groups() {
+        match ui_ctx.list_anon_groups() {
             Ok(groups) => {
                 for group in groups {
                     let group_item = PrivateGroupListItemData {
@@ -794,6 +776,7 @@ pub fn refresh_anon_groups(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         last_message: SharedString::from(""),
                         timestamp: SharedString::from(""),
                         is_typing: false,
+                        is_selected: false,
                     };
                     private_group_list.push(group_item);
                 }
@@ -802,11 +785,12 @@ pub fn refresh_anon_groups(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 tracing::warn!("Failed to load anonymous groups: {}", e);
             }
         }
-        
+
         // Update UI on the main thread
         if let Some(w) = window_weak.upgrade() {
             let private_group_model = VecModel::from(private_group_list);
             w.set_private_groups(ModelRc::new(private_group_model));
+            crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
         }
     });
 }
@@ -820,7 +804,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let mut dm_list: Vec<DMListItemSendData> = Vec::new();
         
         // Load active anon DM conversations
-        match ui_ctx.anon_dms().list_conversations() {
+        match Ok::<_, ()>(ui_ctx.list_anon_dm_conversations()) {
             Ok(dms) => {
                 for dm in dms {
                     if dm.status != chatter_core::domain::anon_dm::AnonDmStatus::Pending {
@@ -829,24 +813,24 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let peer_id_str = dm.peer_id.to_string();
                         
                         // Get latest message for preview
-                        let (last_message, timestamp) = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
-                            Ok(Some(msg)) => {
+                        let (last_message, timestamp) = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
+                            Some(msg) => {
                                 let preview = msg.as_text()
                                     .map(|text| truncate_sidebar_preview(text))
                                     .unwrap_or_else(|| "[Attachment]".to_string());
-                                
+
                                 let ts = msg.created_at
                                     .with_timezone(&chrono::Local)
                                     .format("%H:%M")
                                     .to_string();
-                                
+
                                 (preview, ts)
                             }
-                            _ => (String::new(), String::new()),
+                            None => (String::new(), String::new()),
                         };
                         
                         let dm_item = DMListItemSendData {
-                            channel_id: format!("anon_dm:{}", dm.id),
+                            channel_id: dm.id.to_string(),
                             user_id: peer_id_str.clone(),
                             display_name: format!("\u{1F512} {}", peer_name), // Lock emoji prefix
                             avatar_url: String::new(),
@@ -862,6 +846,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             timestamp,
                             unread_count: dm.unread_count,
                             is_typing: false,
+                            is_anon: true,
                         };
                         dm_list.push(dm_item);
                     }
@@ -873,20 +858,20 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
         
         // Also load pending anon DM requests
-        match ui_ctx.anon_dms().list_message_requests() {
+        match Ok::<_, ()>(ui_ctx.list_anon_dm_message_requests()) {
             Ok(requests) => {
                 for dm in requests {
                     let peer_name = dm.peer_display_name.clone()
                         .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
                     let peer_id_str = dm.peer_id.to_string();
                     
-                    let last_message = match ui_ctx.anon_dms().get_latest_message(&dm.id) {
-                        Ok(Some(msg)) => msg.as_text().unwrap_or_default().to_string(),
-                        _ => "Message request".to_string(),
+                    let last_message = match ui_ctx.get_latest_anon_dm_message(&dm.id) {
+                        Some(msg) => msg.as_text().unwrap_or_default().to_string(),
+                        None => "Message request".to_string(),
                     };
 
                     let dm_item = DMListItemSendData {
-                        channel_id: format!("anon_dm:{}", dm.id),
+                        channel_id: dm.id.to_string(),
                         user_id: peer_id_str.clone(),
                         display_name: format!("\u{1F4E9} {}", peer_name), // Envelope emoji for pending
                         avatar_url: String::new(),
@@ -901,6 +886,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             .to_string(),
                         unread_count: 1,
                         is_typing: false,
+                        is_anon: true,
                     };
                     dm_list.push(dm_item);
                 }
@@ -915,12 +901,12 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let existing_dms = w.get_dm_conversations();
             let mut all_dms = Vec::new();
             
-            // Add existing regular DMs (non-anon)
+            // Add existing regular DMs (non-anon) — the is_anon flag is the
+            // only discriminator now.
             let existing_count = existing_dms.iter().count();
             for i in 0..existing_count {
                 if let Some(dm) = existing_dms.iter().nth(i) {
-                    let channel_id = dm.channel_id.to_string();
-                    if !channel_id.starts_with("anon_dm:") {
+                    if !dm.is_anon {
                         all_dms.push(dm);
                     }
                 }
@@ -933,6 +919,7 @@ pub fn refresh_anon_dms(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             
             let dm_model = VecModel::from(all_dms);
             w.set_dm_conversations(ModelRc::new(dm_model));
+            crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
         }
     });
 }

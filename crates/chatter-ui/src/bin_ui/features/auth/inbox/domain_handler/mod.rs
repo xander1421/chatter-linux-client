@@ -217,13 +217,13 @@ pub async fn handle_domain_event(
                 vec![]
             };
             if !downloadable.is_empty() {
-                let att_svc = ui_ctx.attachments().clone();
+                let ui_ctx_dl = ui_ctx.clone();
                 let weak = window.clone();
                 let conv_id = channel_id.to_string();
                 tokio::spawn(async move {
                     super::attachment_download::download_attachments(
                         &downloadable,
-                        att_svc,
+                        ui_ctx_dl,
                         weak,
                         conv_id,
                     ).await;

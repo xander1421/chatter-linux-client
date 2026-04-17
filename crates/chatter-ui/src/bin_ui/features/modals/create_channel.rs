@@ -97,7 +97,6 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Some(PathBuf::from(&icon_path_str))
             };
             tracing::info!(has_icon = pending_icon.is_some(), "[CHANNEL_ICON] on_create_channel entry");
-            let attachment_service = ui_ctx.attachments().clone();
 
             tokio::spawn(async move {
                 let weak_loading = weak.clone();
@@ -116,7 +115,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // Service handles encryption + in-memory pixel cache so sidebar
                 // can render immediately. Returned cdn_key becomes the channel's img_url.
                 let image_url: Option<String> = if let Some(path) = pending_icon {
-                    match attachment_service.upload_channel_icon(&path).await {
+                    match ui_ctx.upload_channel_icon(&path).await {
                         Ok(cdn_key) => {
                             tracing::info!("Uploaded channel icon to CDN: {}", cdn_key);
                             Some(cdn_key)
@@ -164,12 +163,12 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                         let weak_modal = weak.clone();
                         let channel_id_for_ui = channel_id_str.clone();
-                        // Move Channel (Send) + AttachmentService Arc to UI thread;
+                        // Move Channel (Send) + ChatterClient to UI thread;
                         // slint::Image is !Send so conversion happens there.
                         let channel_for_ui = channel.clone();
-                        let attachments_for_ui = attachment_service.clone();
+                        let ui_ctx_convert = ui_ctx.clone();
                         let _ = slint::invoke_from_event_loop(move || {
-                            let slint_channel = channel_to_slint(&channel_for_ui, &attachments_for_ui);
+                            let slint_channel = channel_to_slint(&channel_for_ui, &ui_ctx_convert);
                             if let Some(w) = weak_modal.upgrade() {
                                 w.set_create_channel_loading(false);
                                 w.set_create_channel_name("".into());
@@ -181,7 +180,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 let mut channels: Vec<ChannelListItemData> = (0..current_channels.row_count()).filter_map(|i| current_channels.row_data(i)).collect();
                                 channels.push(slint_channel);
                                 w.set_channels(ModelRc::new(VecModel::from(channels)));
-                                w.set_selected_channel_id(channel_id_for_ui);
+                                w.invoke_channel_selected(channel_id_for_ui);
                             }
                         });
 
@@ -352,21 +351,19 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     let weak_window = window.as_weak();
-    let user_service = ui_ctx.users().clone();
-    let anon_dm_service = ui_ctx.anon_dms().clone();
+    let ui_ctx_tpl = ui_ctx.clone();
     window.on_create_channel_template_selected(move |template: SharedString| {
         if template.as_str() != "private-group" { return; }
         let weak = weak_window.clone();
-        let user_service = user_service.clone();
-        let anon_dm_service = anon_dm_service.clone();
+        let ui_ctx = ui_ctx_tpl.clone();
         tokio::spawn(async move {
             let mut friend_data = Vec::new();
             let mut seen_user_ids = std::collections::HashSet::new();
 
             // Load friends
-            let friends = user_service.list_friends(100, 0).await.unwrap_or_default();
+            let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
             for friendship in &friends {
-                let profile = user_service.get_profile_local(&friendship.friend_id).ok().flatten();
+                let profile = ui_ctx.get_profile_local(&friendship.friend_id);
                 let display_name = profile.as_ref().map(|p| p.display_name.clone()).unwrap_or_else(|| friendship.friend_id.to_string());
                 seen_user_ids.insert(friendship.friend_id);
                 friend_data.push(PrivateGroupFriend {
@@ -380,9 +377,9 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             // Load anon DM peers (ready conversations only)
-            if let Ok(conversations) = anon_dm_service.list_ready_conversations() {
+            {
+                let conversations = ui_ctx.list_anon_dm_ready_conversations();
                 for dm in conversations {
-                    // Skip if already in friends list
                     if seen_user_ids.contains(&dm.peer_id) {
                         continue;
                     }
@@ -391,7 +388,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     friend_data.push(PrivateGroupFriend {
                         user_id: dm.peer_id.to_string().into(),
                         display_name: display_name.into(),
-                        username: "(anonymous)".into(), // Indicate this is an anon DM peer
+                        username: "(anonymous)".into(),
                         avatar_url: "".into(),
                         selected: false,
                         role: "member".into(),

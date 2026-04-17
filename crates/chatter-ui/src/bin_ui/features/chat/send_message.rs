@@ -23,7 +23,6 @@ use crate::{MainWindow, PendingAttachmentData};
 pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let chat_state = ui_ctx.chat_state().clone();
     let auth_state = ui_ctx.auth_state().clone();
-    let attachment_service = ui_ctx.attachments().clone();
     let ui_ctx_jarvis = ui_ctx.clone();
 
     let weak_window = window.as_weak();
@@ -77,7 +76,6 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
 
         let auth_state = auth_state.clone();
-        let attachment_service = attachment_service.clone();
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_jarvis.clone();
 
@@ -193,7 +191,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Resolve attachments by the IDs returned from the gateway (post-upload)
             let mut attachment_display: Vec<_> = result.attachment_ids.iter()
-                .filter_map(|att_id| attachment_service.get(att_id).ok().flatten())
+                .filter_map(|att_id| ui_ctx.get_attachment(att_id))
                 .map(|a| attachment_to_display_data(&a))
                 .collect();
             // Bootstrap sends have no attachments yet (key exchange must complete first)
@@ -204,9 +202,10 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 att.decode_thumbnail();
             }
 
-            let attachment_service_for_gifs = attachment_service.clone();
+            let ui_ctx_for_gifs = ui_ctx.clone();
             let sent_text = text.clone();
             let ts_for_sidebar = timestamp_str.clone();
+            let ui_ctx_for_sidebar = ui_ctx.clone();
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
@@ -223,12 +222,12 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
 
                     crate::bin_ui::features::sidebar::update_sidebar_preview(
-                        &w, conversation, &preview, &ts_for_sidebar, false,
+                        &w, &ui_ctx_for_sidebar, conversation, &preview, &ts_for_sidebar, false,
                     );
 
                     crate::bin_ui::gif_state::auto_register_gifs_from_messages(
                         w.as_weak(),
-                        attachment_service_for_gifs,
+                        ui_ctx_for_gifs,
                     );
                 }
             });
@@ -276,23 +275,23 @@ async fn handle_jarvis_slash_command(
     let (query_display, result) = match cmd {
         JarvisCommand::Ask(query) => {
             ui_ctx.jarvis_state().add_user_message(&query, channel_id.map(|id| id.to_string()).as_deref());
-            let r = ui_ctx.jarvis().ask(&context, &query, author_id.as_ref()).await;
+            let r = ui_ctx.jarvis_ask(&context, &query, author_id.as_ref()).await;
             (format!("/ask {}", query), r)
         }
         JarvisCommand::Summarize => {
             ui_ctx.jarvis_state().add_user_message("/summarize", channel_id.map(|id| id.to_string()).as_deref());
-            let r = ui_ctx.jarvis().summarize_conversation(&context).await;
+            let r = ui_ctx.jarvis_summarize_conversation(&context).await;
             ("/summarize".to_string(), r)
         }
         JarvisCommand::Knowledge(entity) => {
             ui_ctx.jarvis_state().add_user_message(&format!("/knowledge {}", entity), channel_id.map(|id| id.to_string()).as_deref());
             let query = format!("What do you know about {}?", entity);
-            let r = ui_ctx.jarvis().ask(&context, &query, author_id.as_ref()).await;
+            let r = ui_ctx.jarvis_ask(&context, &query, author_id.as_ref()).await;
             (format!("/knowledge {}", entity), r)
         }
         JarvisCommand::Remember(fact) => {
             ui_ctx.jarvis_state().add_user_message(&format!("/remember {}", fact), channel_id.map(|id| id.to_string()).as_deref());
-            let r = ui_ctx.jarvis().ask(&context, &format!("Please remember this fact: {}", fact), author_id.as_ref()).await;
+            let r = ui_ctx.jarvis_ask(&context, &format!("Please remember this fact: {}", fact), author_id.as_ref()).await;
             (format!("/remember {}", fact), r)
         }
     };

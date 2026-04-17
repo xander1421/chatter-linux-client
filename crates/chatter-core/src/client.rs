@@ -36,7 +36,6 @@ use crate::services::gateway::outgoing::{
     OwnedOutgoingServices, OutgoingIntent, QuoteIntent, SendError, SendResult,
     route_outgoing_owned,
 };
-use crate::services::gateway::shared::truncate_preview;
 use crate::services::jarvis::JarvisService;
 use crate::services::ai::LocalAIService;
 use crate::services::mailbox_manager::MailboxManager;
@@ -181,30 +180,34 @@ impl ChatterClient {
 
     // ── Services (return &Arc<T> so .clone() yields Arc<T>) ─────────────
 
-    pub fn auth(&self) -> &Arc<AuthService> { &self.ui.auth_service }
-    pub fn messages(&self) -> &Arc<MessageService> { &self.ui.message_service }
-    pub fn message_gateway(&self) -> &Arc<MessageGateway> { &self.ui.message_gateway }
-    pub fn channels(&self) -> &Arc<ChannelService> { &self.ui.channel_service }
-    pub fn users(&self) -> &Arc<UserService> { &self.ui.user_service }
-    pub fn attachments(&self) -> &Arc<AttachmentService> { &self.ui.attachment_service }
-    pub fn reactions(&self) -> &Arc<ReactionService> { &self.ui.reaction_service }
-    pub fn typing(&self) -> &Arc<TypingService> { &self.ui.typing_service }
-    pub fn pins(&self) -> &Arc<PinService> { &self.ui.pin_service }
-    pub fn drafts(&self) -> &Arc<DraftService> { &self.ui.draft_service }
-    pub fn sessions(&self) -> &Arc<SessionService> { &self.ui.session_service }
-    pub fn anon_dms(&self) -> &Arc<AnonDmService> { &self.ui.anon_dm_service }
-    pub fn anon_groups(&self) -> &Arc<AnonGroupService> { &self.ui.anon_group_service }
-    pub fn signal(&self) -> &Arc<SignalService> { &self.ui.signal_service }
-    pub fn ai(&self) -> &Arc<AIService> { &self.ui.ai_service }
-    pub fn jarvis(&self) -> &Arc<JarvisService> { &self.ui.jarvis_service }
-    pub fn mailbox_manager(&self) -> &Arc<MailboxManager> { &self.ui.mailbox_manager }
-    pub fn local_ai(&self) -> &Arc<LocalAIService> { &self.ui.local_ai_service }
-    pub fn dm_bootstrap(&self) -> &Arc<DmBootstrapService> { &self.ui.dm_bootstrap_service }
-    pub fn channel_events(&self) -> &Arc<ChannelEventService> { &self.ui.channel_event_service }
-    pub fn notifications(&self) -> &Arc<crate::services::notification_service::NotificationService> { &self.ui.notification_service }
-    pub fn sections(&self) -> &Arc<SectionService> { &self.ui.section_service }
-    pub fn devices(&self) -> &Arc<crate::services::device_service::DeviceService> { &self.ui.device_service }
-    pub fn organizations(&self) -> &Arc<crate::services::organization_service::OrganizationService> { &self.ui.organization_service }
+    // Service accessors are `pub(crate)` to enforce the architecture rule:
+    // UI lives in `chatter-ui` and must call façade methods on `ChatterClient`,
+    // not reach into individual services. Adding a new UI feature means adding
+    // a method here, not exposing a service.
+    pub(crate) fn auth(&self) -> &Arc<AuthService> { &self.ui.auth_service }
+    pub(crate) fn messages(&self) -> &Arc<MessageService> { &self.ui.message_service }
+    pub(crate) fn message_gateway(&self) -> &Arc<MessageGateway> { &self.ui.message_gateway }
+    pub(crate) fn channels(&self) -> &Arc<ChannelService> { &self.ui.channel_service }
+    pub(crate) fn users(&self) -> &Arc<UserService> { &self.ui.user_service }
+    pub(crate) fn attachments(&self) -> &Arc<AttachmentService> { &self.ui.attachment_service }
+    pub(crate) fn reactions(&self) -> &Arc<ReactionService> { &self.ui.reaction_service }
+    pub(crate) fn typing(&self) -> &Arc<TypingService> { &self.ui.typing_service }
+    pub(crate) fn pins(&self) -> &Arc<PinService> { &self.ui.pin_service }
+    pub(crate) fn drafts(&self) -> &Arc<DraftService> { &self.ui.draft_service }
+    pub(crate) fn sessions(&self) -> &Arc<SessionService> { &self.ui.session_service }
+    pub(crate) fn anon_dms(&self) -> &Arc<AnonDmService> { &self.ui.anon_dm_service }
+    pub(crate) fn anon_groups(&self) -> &Arc<AnonGroupService> { &self.ui.anon_group_service }
+    pub(crate) fn signal(&self) -> &Arc<SignalService> { &self.ui.signal_service }
+    pub(crate) fn ai(&self) -> &Arc<AIService> { &self.ui.ai_service }
+    pub(crate) fn jarvis(&self) -> &Arc<JarvisService> { &self.ui.jarvis_service }
+    pub(crate) fn mailbox_manager(&self) -> &Arc<MailboxManager> { &self.ui.mailbox_manager }
+    pub(crate) fn local_ai(&self) -> &Arc<LocalAIService> { &self.ui.local_ai_service }
+    pub(crate) fn dm_bootstrap(&self) -> &Arc<DmBootstrapService> { &self.ui.dm_bootstrap_service }
+    pub(crate) fn channel_events(&self) -> &Arc<ChannelEventService> { &self.ui.channel_event_service }
+    pub(crate) fn notifications(&self) -> &Arc<crate::services::notification_service::NotificationService> { &self.ui.notification_service }
+    pub(crate) fn sections(&self) -> &Arc<SectionService> { &self.ui.section_service }
+    pub(crate) fn devices(&self) -> &Arc<crate::services::device_service::DeviceService> { &self.ui.device_service }
+    pub(crate) fn organizations(&self) -> &Arc<crate::services::organization_service::OrganizationService> { &self.ui.organization_service }
 
     /// Get the SVR backup service (lazy-initialized, persistent instance).
     pub fn svr_backup(&self) -> &crate::services::svr_backup_service::SvrBackupService {
@@ -572,7 +575,7 @@ impl ChatterClient {
             is_video,
             livekit_url: join_response.livekit_url,
             livekit_token: join_response.livekit_token,
-            encryption_key: call_key.to_vec(),
+            encryption_key: zeroize::Zeroizing::new(call_key.to_vec()),
         })
     }
 
@@ -636,7 +639,7 @@ impl ChatterClient {
             is_video: false, // caller provides this info via the offer
             livekit_url: join_response.livekit_url,
             livekit_token: join_response.livekit_token,
-            encryption_key: encryption_key.to_vec(),
+            encryption_key: zeroize::Zeroizing::new(encryption_key.to_vec()),
         })
     }
 
@@ -702,7 +705,7 @@ impl ChatterClient {
             is_video: matches!(call_type, crate::domain::call::CallType::Video),
             livekit_url: response.livekit_url,
             livekit_token: response.livekit_token,
-            encryption_key: group_key.to_vec(),
+            encryption_key: zeroize::Zeroizing::new(group_key.to_vec()),
         })
     }
 
@@ -881,7 +884,7 @@ impl ChatterClient {
             is_video: pending.is_video_call,
             livekit_url: room_info.livekit_url,
             livekit_token: room_info.livekit_token,
-            encryption_key: pending.encryption_key.clone(),
+            encryption_key: zeroize::Zeroizing::new(pending.encryption_key.clone()),
         };
 
         // Re-store pending call so end_anon_call can find it
@@ -960,10 +963,941 @@ impl ChatterClient {
         self.ui.event_bus.subscribe_domain()
     }
 
+    /// Spawn the typing-indicator cleanup task (expires stale "typing..." state).
+    pub fn start_typing_cleanup(&self) -> tokio::task::JoinHandle<()> {
+        self.typing().start_cleanup_task()
+    }
+
+    /// Compute the local Signal identity fingerprint (displayed in settings /
+    /// safety-number flows).
+    pub async fn my_identity_fingerprint(
+        &self,
+    ) -> Result<String, crate::error::ServiceError> {
+        self.signal().get_identity_fingerprint().await
+    }
+
+    /// Get the current user's display name from settings (same one used for
+    /// outgoing messages / calls). Falls back to an empty option.
+    pub fn my_display_name(&self) -> Option<String> {
+        self.anon_dms().get_my_display_name()
+    }
+
+    /// Look up an anon DM conversation by id.
+    pub fn get_anon_dm_conversation(
+        &self,
+        id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Option<crate::domain::anon_dm::AnonDm> {
+        self.anon_dms().get_conversation(id).ok().flatten()
+    }
+
+    /// Resolve the peer user id of a regular DM channel (2-member channel).
+    pub fn get_dm_peer_local(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Option<crate::domain::ids::UserId> {
+        self.channels().get_dm_peer_local(channel_id).ok().flatten()
+    }
+
+    // ── Local AI settings façade ─────────────────────────────────────────
+
+    pub fn set_local_ai_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), crate::services::ai::LocalAIError> {
+        self.local_ai().set_enabled(enabled)
+    }
+
+    pub fn set_local_ai_preferred_model(
+        &self,
+        model_id: &str,
+        quantized_file: Option<&str>,
+    ) -> Result<(), crate::services::ai::LocalAIError> {
+        self.local_ai().set_preferred_model(model_id, quantized_file)
+    }
+
+    pub async fn load_local_ai_model(
+        &self,
+        model_id: String,
+        quantized_file: Option<String>,
+    ) -> Result<crate::services::ai::ModelInfo, crate::services::ai::LocalAIError> {
+        self.local_ai().load_model(model_id, quantized_file).await
+    }
+
+    pub async fn unload_local_ai_model(&self) -> Result<(), crate::services::ai::LocalAIError> {
+        self.local_ai().unload_model().await
+    }
+
+    /// Toggle the "send sealed-sender messages unrestricted" privacy setting.
+    pub fn set_sealed_sender_unrestricted(
+        &self,
+        unrestricted: bool,
+    ) -> Result<(), crate::services::session_service::SessionError> {
+        self.sessions()
+            .set_bool_setting("privacy.sealed_sender_unrestricted", unrestricted)
+    }
+
+    /// Session-level current user id (None when logged out).
+    pub fn session_current_user_id(&self) -> Option<crate::domain::ids::UserId> {
+        self.sessions().current_user_id()
+    }
+
+    pub async fn list_sessions(
+        &self,
+    ) -> Result<Vec<crate::services::session_service::Session>, crate::services::session_service::SessionError> {
+        self.sessions().list_sessions().await
+    }
+
+    pub async fn revoke_session(
+        &self,
+        device_id: u32,
+    ) -> Result<(), crate::services::session_service::SessionError> {
+        self.sessions().revoke_session(device_id).await
+    }
+
+    pub async fn revoke_all_other_sessions(
+        &self,
+    ) -> Result<(), crate::services::session_service::SessionError> {
+        self.sessions().revoke_all_other_sessions().await
+    }
+
+    // ── Mailbox / DM bootstrapping façade ────────────────────────────────
+
+    /// Ensure mailbox manager initialized and token pool has capacity.
+    pub async fn ensure_mailbox_ready(
+        &self,
+        min_tokens: usize,
+    ) -> Result<(), crate::services::mailbox_manager::MailboxError> {
+        let mm = self.mailbox_manager();
+        if let Err(e) = mm.initialize().await {
+            tracing::warn!(error = %e, "mailbox_manager initialize failed (may be already initialized)");
+        }
+        if mm.token_count().await < min_tokens {
+            mm.acquire_tokens(min_tokens).await?;
+        }
+        Ok(())
+    }
+
+    /// Get or create a pairwise mailbox for a conversation with the given TTL.
+    pub async fn get_or_create_mailbox(
+        &self,
+        conversation_id: &str,
+        ttl_seconds: u64,
+    ) -> Result<crate::services::mailbox_manager::ActiveMailbox, crate::services::mailbox_manager::MailboxError>
+    {
+        self.mailbox_manager()
+            .get_or_create_mailbox(conversation_id, ttl_seconds)
+            .await
+    }
+
+    /// Local lookup of the DM channel between current user and a peer.
+    pub fn get_dm_channel_for_peer(
+        &self,
+        peer_id: &crate::domain::ids::UserId,
+    ) -> Option<crate::domain::channel::Channel> {
+        self.channels().get_dm_channel_for_peer(peer_id).ok().flatten()
+    }
+
+    /// Flush any pending UI messages for a peer after DM bootstrap completes.
+    pub async fn flush_pending_dm_messages(&self, peer_id: &crate::domain::ids::UserId) {
+        self.dm_bootstrap().flush_pending_ui_messages(peer_id).await;
+    }
+
+    // ── Sidebar sections (custom grouping) façade ────────────────────────
+
+    pub fn list_sections_with_conversations(
+        &self,
+    ) -> Result<Vec<crate::domain::section::CustomSection>, crate::services::section_service::SectionError>
+    {
+        self.sections().list_sections_with_conversations()
+    }
+
+    pub fn create_section(
+        &self,
+        name: &str,
+        emoji: &str,
+    ) -> Result<crate::domain::section::CustomSection, crate::services::section_service::SectionError> {
+        self.sections().create_section(name, emoji)
+    }
+
+    pub fn delete_section(
+        &self,
+        id: &crate::domain::ids::SectionId,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().delete_section(id)
+    }
+
+    pub fn rename_section(
+        &self,
+        id: &crate::domain::ids::SectionId,
+        new_name: &str,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().rename_section(id, new_name)
+    }
+
+    pub fn change_section_icon(
+        &self,
+        id: &crate::domain::ids::SectionId,
+        new_emoji: &str,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().change_icon(id, new_emoji)
+    }
+
+    pub fn toggle_section_expanded(
+        &self,
+        id: &crate::domain::ids::SectionId,
+        expanded: bool,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().toggle_expanded(id, expanded)
+    }
+
+    pub fn move_conversation_to_section(
+        &self,
+        conv_id: &str,
+        conv_type: crate::domain::message::ConversationType,
+        section_id: &crate::domain::ids::SectionId,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections()
+            .move_conversation_to_section(conv_id, conv_type, section_id)
+    }
+
+    pub fn remove_conversation_from_section(
+        &self,
+        conv_id: &str,
+    ) -> Result<(), crate::services::section_service::SectionError> {
+        self.sections().remove_conversation_from_section(conv_id)
+    }
+
+    pub fn get_conversation_metadata(
+        &self,
+        conversation_id: &str,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Option<crate::domain::UnifiedConversation> {
+        self.sections()
+            .get_conversation_metadata(conversation_id, conversation_type)
+            .ok()
+            .flatten()
+    }
+
+    // ── Auth façade ──────────────────────────────────────────────────────
+
+    pub fn endpoint(&self) -> String {
+        self.auth().endpoint()
+    }
+
+    pub fn set_server_url(&self, url: &str) -> Result<(), crate::error::NetworkError> {
+        self.auth().set_server_url(url)
+    }
+
+    pub fn is_logged_in(&self) -> bool {
+        self.auth().is_logged_in()
+    }
+
+    pub fn has_registered_before(&self) -> bool {
+        self.auth().has_registered_before()
+    }
+
+    pub fn current_user(&self) -> Option<(crate::domain::ids::UserId, u32)> {
+        self.auth().current_user()
+    }
+
+    pub fn restore_session(&self) -> bool {
+        self.auth().restore_session()
+    }
+
+    pub async fn cleanup_failed_registration(
+        &self,
+    ) -> Result<(), crate::services::auth_service::AuthError> {
+        self.auth().cleanup_failed_registration().await
+    }
+
+    /// Local logout (best-effort server notify + clear local state).
+    pub async fn do_logout(&self) -> Result<(), crate::services::auth_service::AuthError> {
+        self.auth().do_logout().await
+    }
+
+    // ── Messages façade ──────────────────────────────────────────────────
+
+    pub fn get_messages_local(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+        before: Option<&crate::domain::ids::MessageId>,
+        limit: u32,
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::message::MessageError> {
+        self.messages()
+            .get_messages_local(channel_id, conversation_type, before, limit)
+    }
+
+    pub fn get_messages_local_asc(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+        before: Option<&crate::domain::ids::MessageId>,
+        limit: u32,
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::message::MessageError> {
+        self.messages()
+            .get_messages_local_asc(channel_id, conversation_type, before, limit)
+    }
+
+    pub fn get_message_by_sender_timestamp(
+        &self,
+        sender_id: &crate::domain::ids::UserId,
+        sent_at: u64,
+    ) -> Option<crate::domain::message::Message> {
+        self.messages()
+            .get_by_sender_timestamp(sender_id, sent_at)
+            .ok()
+            .flatten()
+    }
+
+    pub fn mark_conversation_read(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Result<(), crate::services::message::MessageError> {
+        self.messages().mark_conversation_read(conversation_id, conversation_type)
+    }
+
+    pub fn get_message_local(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+    ) -> Option<crate::domain::message::Message> {
+        self.messages().get_message_local(message_id).ok().flatten()
+    }
+
+    pub fn get_channel_local(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Option<crate::domain::channel::Channel> {
+        self.channels().get_channel_local(channel_id).ok().flatten()
+    }
+
+    pub async fn list_channels_paged(
+        &self,
+        limit: u32,
+        offset: u32,
+        archived: Option<bool>,
+    ) -> Result<Vec<crate::domain::channel::Channel>, crate::services::channel::ChannelError> {
+        self.channels().list_channels(limit, offset, archived).await
+    }
+
+    pub fn get_channels_mru(&self) -> Vec<crate::domain::channel::Channel> {
+        self.channels().get_channels_mru().unwrap_or_default()
+    }
+
+    pub fn list_channel_members_local(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Vec<crate::domain::channel::Membership> {
+        self.channels().list_members_local(channel_id).unwrap_or_default()
+    }
+
+    pub async fn get_channel(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<crate::domain::channel::Channel, crate::services::channel::ChannelError> {
+        self.channels().get_channel(channel_id).await
+    }
+
+    pub async fn get_channel_members(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::domain::channel::Membership>, crate::services::channel::ChannelError> {
+        self.channels().get_channel_members(channel_id, limit, offset).await
+    }
+
+    pub async fn update_channel_member_role(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        user_id: &crate::domain::ids::UserId,
+        new_role: crate::domain::channel::MemberRole,
+    ) -> Result<crate::domain::channel::Membership, crate::services::channel::ChannelError> {
+        self.channels().update_member_role(channel_id, user_id, new_role).await
+    }
+
+    pub async fn delete_channel(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        self.channels().delete_channel(channel_id).await
+    }
+
+    pub async fn invite_user_to_channel(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        invitee_id: &crate::domain::ids::UserId,
+        message: Option<&str>,
+    ) -> Result<(), crate::services::channel::ChannelError> {
+        self.channels().invite_user(channel_id, invitee_id, message).await
+    }
+
+    pub async fn get_channel_with_memberships(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> Result<crate::domain::channel::Channel, crate::services::channel::ChannelError> {
+        self.channels().get_channel_with_memberships(channel_id).await
+    }
+
+    pub async fn search_channels_filtered(
+        &self,
+        query: &str,
+        limit: u32,
+        offset: u32,
+        type_filter: Vec<crate::domain::channel::ChannelType>,
+    ) -> Result<Vec<crate::domain::channel::Channel>, crate::services::channel::ChannelError> {
+        self.channels().search_channels(query, limit, offset, type_filter).await
+    }
+
+    pub fn list_thread_replies(
+        &self,
+        thread_root_id: &crate::domain::ids::MessageId,
+        before: Option<&crate::domain::ids::MessageId>,
+        limit: u32,
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::message::MessageError> {
+        self.messages().list_for_thread(thread_root_id, before, limit)
+    }
+
+    pub fn search_messages_local(
+        &self,
+        query: &str,
+        channel_id: Option<&crate::domain::ids::ChannelId>,
+        limit: u32,
+    ) -> Result<Vec<crate::storage::repositories::search_index::SearchResult>, crate::services::message::MessageError> {
+        self.messages().search_local(query, channel_id, limit)
+    }
+
+    /// Send a channel/DM message (convenience façade over `MessageService::send`).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_channel_message(
+        &self,
+        group_fanout: Option<&crate::mailbox::group::GroupFanout>,
+        channel_id: &crate::domain::ids::ChannelId,
+        text: &str,
+        attachment_ids: Vec<crate::domain::ids::AttachmentId>,
+        attachment_pointers: Vec<crate::proto::content_v1::AttachmentPointer>,
+        thread_id: Option<&crate::domain::ids::MessageId>,
+        mentioned_integrations: Vec<crate::domain::ids::IntegrationId>,
+        targets_ai_bot: bool,
+    ) -> Result<crate::domain::message::Message, crate::services::message::MessageError> {
+        self.messages()
+            .send(
+                group_fanout,
+                channel_id,
+                text,
+                attachment_ids,
+                attachment_pointers,
+                thread_id,
+                mentioned_integrations,
+                targets_ai_bot,
+            )
+            .await
+    }
+
+    // ── Display / profile façade ─────────────────────────────────────────
+
+    /// Resolve a user's display name (checks profile → username → anon DM
+    /// peer → anon group member → UUID fallback).
+    pub fn display_name(&self, user_id: &crate::domain::ids::UserId) -> String {
+        self.users().get_display_name(user_id)
+    }
+
+    /// Our own avatar bytes (raw image data stored in settings).
+    pub fn my_avatar(&self) -> Option<Vec<u8>> {
+        self.anon_dms().get_my_avatar()
+    }
+
+    pub async fn list_friends(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::domain::user::Friendship>, crate::services::UserError> {
+        self.users().list_friends(limit, offset).await
+    }
+
+    pub fn get_profile_local(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<crate::domain::user::Profile> {
+        self.users().get_profile_local(user_id).ok().flatten()
+    }
+
+    pub fn get_user_local(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<crate::domain::user::User> {
+        self.users().get_user_local(user_id).ok().flatten()
+    }
+
+    pub fn generate_friend_code(&self) -> Result<String, crate::services::UserError> {
+        self.users().generate_friend_code()
+    }
+
+    pub fn generate_private_friend_code(&self) -> Result<String, crate::services::UserError> {
+        self.users().generate_private_friend_code()
+    }
+
+    pub fn generate_friend_qr(&self, size: u32) -> Result<Vec<u8>, crate::services::UserError> {
+        self.users().generate_friend_qr(size)
+    }
+
+    pub fn generate_private_friend_qr(&self, size: u32) -> Result<Vec<u8>, crate::services::UserError> {
+        self.users().generate_private_friend_qr(size)
+    }
+
+    pub async fn connect_via_friend_code(
+        &self,
+        code: &str,
+        message: Option<&str>,
+    ) -> Result<crate::domain::user::Friendship, crate::services::UserError> {
+        self.users().connect_via_friend_code(code, message).await
+    }
+
+    pub async fn list_friend_requests(
+        &self,
+        filter: crate::services::user::FriendRequestFilter,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<crate::domain::user::Friendship>, crate::services::UserError> {
+        self.users().list_friend_requests(filter, limit, offset).await
+    }
+
+    pub async fn update_user_profile(
+        &self,
+        display_name: Option<&str>,
+        avatar_url: Option<&str>,
+        status_message: Option<&crate::domain::user::StatusMessage>,
+    ) -> Result<crate::domain::user::Profile, crate::services::UserError> {
+        self.users().update_user_profile(display_name, avatar_url, status_message).await
+    }
+
+    pub fn list_anon_dm_conversations(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
+        self.anon_dms().list_conversations().unwrap_or_default()
+    }
+
+    pub fn list_anon_dm_ready_conversations(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
+        self.anon_dms().list_ready_conversations().unwrap_or_default()
+    }
+
+    pub fn list_anon_dm_message_requests(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
+        self.anon_dms().list_message_requests().unwrap_or_default()
+    }
+
+    pub fn list_anon_dm_outgoing_requests(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
+        self.anon_dms().list_outgoing_requests().unwrap_or_default()
+    }
+
+    pub fn get_latest_anon_dm_message(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Option<crate::domain::message::Message> {
+        self.anon_dms().get_latest_message(conversation_id).ok().flatten()
+    }
+
+    pub fn get_anon_dm_blocked_users(&self) -> Vec<crate::domain::ids::UserId> {
+        self.anon_dms().get_blocked_users().unwrap_or_default()
+    }
+
+    pub fn block_anon_dm_conversation(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Result<(), crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().block_conversation(conversation_id)
+    }
+
+    pub fn block_anon_dm_user(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        reason: Option<&str>,
+    ) -> Result<(), crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().block_user(user_id, reason)
+    }
+
+    pub async fn send_anon_dm_presence_update(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        presence: crate::proto::UserPresence,
+    ) -> Result<(), crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().send_presence_update(conversation_id, presence).await
+    }
+
+    pub async fn download_and_store_anon_dm_avatar(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        url: &str,
+    ) -> Result<Vec<u8>, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().download_and_store_avatar(conversation_id, url).await
+    }
+
+    pub async fn send_anon_dm_profile_update(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        display_name: Option<String>,
+        avatar_url: Option<String>,
+        bio: Option<String>,
+    ) -> Result<(), crate::services::anon_dm::AnonDmError> {
+        self.anon_dms()
+            .send_profile_update(conversation_id, display_name, avatar_url, bio)
+            .await
+    }
+
+    pub fn get_anon_dm_messages_asc(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        before_sent_at: Option<u64>,
+        limit: i32,
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().get_messages_asc(conversation_id, before_sent_at, limit)
+    }
+
+    pub fn list_anon_dm_pinned(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Vec<crate::domain::message::Message> {
+        self.anon_dms().list_pinned(conversation_id).unwrap_or_default()
+    }
+
+    /// Look up a single member of an anonymous group.
+    pub fn get_anon_group_member(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<crate::domain::anon_group::AnonGroupMember> {
+        self.anon_groups().get_member(group_id, user_id).ok().flatten()
+    }
+
+    /// Get an attachment record by id (local storage).
+    pub fn get_attachment(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Option<crate::domain::attachment::Attachment> {
+        self.attachments().get(attachment_id).ok().flatten()
+    }
+
+    pub fn get_attachment_metadata(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Option<crate::domain::attachment::Attachment> {
+        self.attachments().get_metadata(attachment_id).ok().flatten()
+    }
+
+    pub fn decrypt_attachment_auto(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Result<crate::crypto::secure_buffer::SecureBuffer, crate::services::attachment::AttachmentError> {
+        self.attachments().decrypt_auto(attachment_id)
+    }
+
+    pub async fn download_attachment_to_filesystem(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Result<(), crate::services::attachment::AttachmentError> {
+        self.attachments().download_to_filesystem(attachment_id).await
+    }
+
+    pub fn decrypt_and_decode_gif_first_frame(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Result<Option<crate::services::attachment::GifDecodeResult>, crate::services::attachment::AttachmentError> {
+        self.attachments().decrypt_and_decode_gif_first_frame(attachment_id)
+    }
+
+    pub fn decrypt_and_get_image_info(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Result<crate::services::attachment::ImageDecodeResult, crate::services::attachment::AttachmentError> {
+        self.attachments().decrypt_and_get_image_info(attachment_id)
+    }
+
+    pub async fn upload_channel_icon(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<String, crate::services::attachment::AttachmentError> {
+        self.attachments().upload_channel_icon(path).await
+    }
+
+    pub fn get_channel_icon_pixels(
+        &self,
+        cdn_key: &str,
+    ) -> Option<crate::services::attachment::DecodedImagePixels> {
+        self.attachments().get_channel_icon_pixels(cdn_key)
+    }
+
+    pub fn update_attachment(
+        &self,
+        attachment: &crate::domain::attachment::Attachment,
+    ) -> Result<(), crate::services::attachment::AttachmentError> {
+        self.attachments().update(attachment)
+    }
+
+    pub fn get_attachment_preview_image(
+        &self,
+        attachment_id: &crate::domain::ids::AttachmentId,
+    ) -> Option<(Vec<u8>, u32, u32)> {
+        self.attachments().get_preview_image(attachment_id)
+    }
+
+    pub async fn upload_attachment_to_cdn_encrypted(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<crate::services::attachment::CdnUploadResult, crate::services::attachment::AttachmentError> {
+        self.attachments().upload_to_cdn_encrypted(path).await
+    }
+
+    pub async fn download_url_bytes(
+        &self,
+        url: &str,
+    ) -> Result<Vec<u8>, crate::services::attachment::AttachmentError> {
+        self.attachments().download_url_bytes(url).await
+    }
+
+    pub async fn download_and_upload_gif(
+        &self,
+        url: &str,
+        gif_id: &str,
+    ) -> Result<crate::services::attachment::CdnUploadResult, crate::services::attachment::AttachmentError> {
+        self.attachments().download_and_upload_gif(url, gif_id).await
+    }
+
+    // ── Pin / pinned messages façade ────────────────────────────────────
+
+    pub async fn load_pinned_for_channel(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Result<Vec<crate::services::pin_service::PinnedMessageData>, crate::services::pin_service::PinError>
+    {
+        self.pins()
+            .load_pinned_for_channel(channel_id, conversation_type)
+            .await
+    }
+
+    pub fn get_pinned_message(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+    ) -> Option<crate::services::pin_service::PinnedMessageData> {
+        self.pins().get_pinned_message(message_id).ok().flatten()
+    }
+
+    /// Look up a stored anon group message by id.
+    pub fn get_anon_group_message(
+        &self,
+        id: &crate::domain::anon_group::AnonGroupMessageId,
+    ) -> Option<crate::domain::message::Message> {
+        self.anon_groups().get_message(id).ok().flatten()
+    }
+
+    // ── Anon group façade ────────────────────────────────────────────────
+
+    pub fn list_anon_groups(
+        &self,
+    ) -> Result<Vec<crate::domain::anon_group::AnonGroup>, crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().list_groups()
+    }
+
+    pub fn get_anon_group(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> Option<crate::domain::anon_group::AnonGroup> {
+        self.anon_groups().get_group(group_id).ok().flatten()
+    }
+
+    pub fn get_anon_group_members(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> Vec<crate::domain::anon_group::AnonGroupMember> {
+        self.anon_groups().get_members(group_id).unwrap_or_default()
+    }
+
+    pub fn get_latest_anon_group_message(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> Option<crate::domain::message::Message> {
+        self.anon_groups().get_latest_message(group_id).ok().flatten()
+    }
+
+    pub fn get_anon_group_messages_asc(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        before: Option<&chrono::DateTime<chrono::Utc>>,
+        limit: i32,
+    ) -> Result<Vec<crate::domain::message::Message>, crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().get_messages_asc(group_id, before, limit)
+    }
+
+    pub fn list_anon_group_pinned(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> Vec<crate::domain::message::Message> {
+        self.anon_groups().list_pinned(group_id).unwrap_or_default()
+    }
+
+    pub fn get_anon_group_reaction_counts(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> std::collections::HashMap<u64, Vec<(String, u32)>> {
+        self.anon_groups().get_all_reaction_counts(group_id).unwrap_or_default()
+    }
+
+    pub async fn refresh_expiring_group_mailboxes(
+        &self,
+    ) -> Result<Vec<crate::domain::anon_group::AnonGroupId>, crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().refresh_expiring_group_mailboxes().await
+    }
+
+    pub async fn broadcast_profile_to_owned_groups(
+        &self,
+    ) -> Result<(), crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().broadcast_profile_to_owned_groups().await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn accept_anon_group_invite(
+        &self,
+        group_id: crate::domain::anon_group::AnonGroupId,
+        group_name: String,
+        owner_id: crate::domain::ids::UserId,
+        inviter_id: crate::domain::ids::UserId,
+        inviter_mailbox_pk: [u8; 32],
+        inviter_profile_key: Option<[u8; 32]>,
+        inviter_display_name: Option<String>,
+        inviter_avatar: Option<Vec<u8>>,
+    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError> {
+        self.anon_groups()
+            .accept_invite(
+                group_id,
+                group_name,
+                owner_id,
+                inviter_id,
+                inviter_mailbox_pk,
+                inviter_profile_key,
+                inviter_display_name,
+                inviter_avatar,
+            )
+            .await
+    }
+
+    // ── Jarvis façade ────────────────────────────────────────────────────
+
+    pub async fn jarvis_ask(
+        &self,
+        context: &crate::domain::jarvis::JarvisContext,
+        query: &str,
+        author_id: Option<&crate::domain::ids::UserId>,
+    ) -> Result<String, crate::services::jarvis::JarvisError> {
+        self.jarvis().ask(context, query, author_id).await
+    }
+
+    pub async fn jarvis_summarize_conversation(
+        &self,
+        context: &crate::domain::jarvis::JarvisContext,
+    ) -> Result<String, crate::services::jarvis::JarvisError> {
+        self.jarvis().summarize_conversation(context).await
+    }
+
+    pub fn jarvis_get_entity_knowledge(
+        &self,
+        entity_name: &str,
+    ) -> Result<crate::domain::jarvis::EntityKnowledge, crate::services::jarvis::JarvisError> {
+        self.jarvis().get_entity_knowledge(entity_name)
+    }
+
+    pub async fn jarvis_observe_message(
+        &self,
+        context: &crate::domain::jarvis::JarvisContext,
+        message: &str,
+        author_id: Option<&crate::domain::ids::UserId>,
+        message_id: Option<&str>,
+    ) -> Result<(), crate::services::jarvis::JarvisError> {
+        self.jarvis()
+            .observe_message(context, message, author_id, message_id)
+            .await
+    }
+
+    /// Spawn a background task that routes domain events to privacy-aware
+    /// desktop notifications. Respects the active conversation (no notifications
+    /// for the channel the user is currently viewing) and skips own messages.
+    ///
+    /// The task runs for the lifetime of the broadcast channel.
+    pub fn start_notification_listener(self: &Arc<Self>) {
+        use crate::domain::notification::NotificationPriority;
+        use crate::inbox::handlers::DomainEvent;
+
+        let ui_ctx = self.clone();
+        let event_bus = self.event_bus().clone();
+        let auth_state = self.auth_state().clone();
+        let chat_state = self.chat_state().clone();
+        let mut domain_rx = event_bus.subscribe_domain();
+
+        tokio::spawn(async move {
+            loop {
+                let event = match domain_rx.recv().await {
+                    Ok(e) => e,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(dropped_count = n, "Notification listener lagged");
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+
+                let auth_data = auth_state.get();
+                let chat_data = chat_state.get();
+
+                match &event {
+                    DomainEvent::MessageReceived { message } => {
+                        if let (Some(sender), Some(current)) =
+                            (&message.sender_id, &auth_data.current_user_id)
+                        {
+                            if sender == current {
+                                continue;
+                            }
+                        }
+                        if chat_data.active_channel_id == Some(message.conversation_id) {
+                            continue;
+                        }
+
+                        let sender_name = message
+                            .sender_id
+                            .map(|id| ui_ctx.users().get_display_name(&id));
+                        let preview = message.as_text();
+
+                        let _ = ui_ctx.notifications().show_message_notification(
+                            sender_name.as_deref(),
+                            preview,
+                            message.is_sealed_sender(),
+                            NotificationPriority::Normal,
+                        );
+                    }
+                    DomainEvent::ReactionAdded { emoji, reactor_id, .. } => {
+                        if Some(*reactor_id) == auth_data.current_user_id {
+                            continue;
+                        }
+                        let _ = ui_ctx.notifications().show_message_notification(
+                            None,
+                            Some(&format!("Reacted {}", emoji)),
+                            false,
+                            NotificationPriority::Low,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+
     // ── State stores ────────────────────────────────────────────────────
 
     pub fn auth_state(&self) -> &AuthState { &self.ui.auth_state }
     pub fn chat_state(&self) -> &ChatState { &self.ui.chat_state }
+
+    /// Shortcut for `chat_state().active_conversation()`. The typed
+    /// `ActiveConversation` is the single source of truth for "which
+    /// conversation is currently being viewed" — use this (or the
+    /// `matches_*` predicates on it) instead of string-comparing UI state.
+    pub fn active_conversation(&self) -> crate::state::ActiveConversation {
+        self.ui.chat_state.active_conversation()
+    }
     pub fn message_state(&self) -> &MessageState { &self.ui.message_state }
     pub fn user_state(&self) -> &UserState { &self.ui.user_state }
     pub fn presence_state(&self) -> &PresenceState { &self.ui.presence_state }
@@ -1199,11 +2133,19 @@ impl ChatterClient {
         let uploaded = upload_attachments(pending_attachments, self.attachments()).await;
         let quote = if let Some(mut q) = quote {
             if q.preview_text.is_none() && !conversation.is_anon() {
+                let attachments_svc = self.attachments();
                 q.preview_text = self.messages()
                     .get_by_sender_timestamp(&q.author_id, q.timestamp)
                     .ok().flatten()
-                    .and_then(|m| m.as_text().map(|t| t.to_string()))
-                    .map(|t| truncate_preview(&t));
+                    .map(|m| {
+                        let atts: Vec<_> = m
+                            .attachments
+                            .iter()
+                            .filter_map(|id| attachments_svc.get(id).ok().flatten())
+                            .collect();
+                        crate::services::gateway::shared::message_reply_preview(&m, &atts)
+                    })
+                    .filter(|t| !t.is_empty());
             }
             Some(q)
         } else { None };
@@ -1503,7 +2445,7 @@ impl ChatterClient {
         };
 
         // 2. Get identity keypair bytes (32 private + 32 public)
-        let private_bytes = match self.signal().actor.get_identity_private_key().await {
+        let mut private_bytes = match self.signal().actor.get_identity_private_key().await {
             Ok(b) => b,
             Err(e) => {
                 svr_secret.zeroize();
@@ -1515,6 +2457,7 @@ impl ChatterClient {
             Ok(b) => b,
             Err(e) => {
                 svr_secret.zeroize();
+                private_bytes.zeroize();
                 tracing::warn!("SVR backup skipped: failed to get identity public key: {}", e);
                 return;
             }
@@ -1523,6 +2466,7 @@ impl ChatterClient {
         let mut identity_keypair = [0u8; 64];
         identity_keypair[..32].copy_from_slice(&private_bytes);
         identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
+        private_bytes.zeroize();
 
         // 3. Get profile key from settings
         let mut profile_key = match self.signal().settings_repo.get_bytes(keys::PROFILE_KEY) {
@@ -1604,7 +2548,7 @@ impl ChatterClient {
             )))?;
 
         // 3. Get identity keypair from signal store
-        let private_bytes = self.signal().actor.get_identity_private_key().await
+        let mut private_bytes = self.signal().actor.get_identity_private_key().await
             .map_err(|e| {
                 profile_key.zeroize();
                 ClientError::Validation(format!("failed to get identity private key: {}", e))
@@ -1612,12 +2556,14 @@ impl ChatterClient {
         let public_bytes_33 = self.signal().actor.get_identity_public_key().await
             .map_err(|e| {
                 profile_key.zeroize();
+                private_bytes.zeroize();
                 ClientError::Validation(format!("failed to get identity public key: {}", e))
             })?;
         // Strip the 0x05 type prefix to get raw 32-byte Curve25519 public key
         let mut identity_keypair = [0u8; 64];
         identity_keypair[..32].copy_from_slice(&private_bytes);
         identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
+        private_bytes.zeroize();
 
         // 4. Derive SVR secret from PIN + username
         let mut svr_secret = derive_svr_secret(pin, username).map_err(|e| {
@@ -1677,14 +2623,18 @@ impl ChatterClient {
         }
 
         // 2. Get identity keypair from signal store (private 32 bytes + public 33 bytes)
-        let private_bytes = self.signal().actor.get_identity_private_key().await
+        let mut private_bytes = self.signal().actor.get_identity_private_key().await
             .map_err(|e| ClientError::Validation(format!("failed to get identity private key: {}", e)))?;
         let public_bytes_33 = self.signal().actor.get_identity_public_key().await
-            .map_err(|e| ClientError::Validation(format!("failed to get identity public key: {}", e)))?;
+            .map_err(|e| {
+                private_bytes.zeroize();
+                ClientError::Validation(format!("failed to get identity public key: {}", e))
+            })?;
         // Strip the 0x05 type prefix to get raw 32-byte Curve25519 public key
         let mut identity_keypair = [0u8; 64];
         identity_keypair[..32].copy_from_slice(&private_bytes);
         identity_keypair[32..].copy_from_slice(&public_bytes_33[1..]);
+        private_bytes.zeroize();
 
         // 3. Get profile key from settings
         let mut profile_key = match self.signal().settings_repo.get_bytes(keys::PROFILE_KEY) {
@@ -2207,11 +3157,6 @@ impl ChatterClient {
         self.anon_dms().list_conversations()
     }
 
-    /// List all anonymous group conversations.
-    pub fn list_anon_groups(&self) -> Result<Vec<crate::domain::anon_group::AnonGroup>, crate::services::anon_group::AnonGroupError> {
-        self.anon_groups().list_groups()
-    }
-
     /// List pending anon DM message requests (incoming).
     pub fn list_anon_dm_requests(&self) -> Result<Vec<crate::domain::anon_dm::AnonDm>, crate::services::anon_dm::AnonDmError> {
         self.anon_dms().list_message_requests()
@@ -2259,11 +3204,6 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
     ) -> Result<(), crate::services::user::UserError> {
         self.users().unblock_user(user_id).await
-    }
-
-    /// List friends.
-    pub async fn list_friends(&self) -> Result<Vec<crate::domain::user::Friendship>, crate::services::user::UserError> {
-        self.users().list_friends(100, 0).await
     }
 
     /// List friends with their profile data (display name, avatar, etc.).
@@ -2735,13 +3675,12 @@ impl ChatterClient {
         };
         let label = if is_outgoing { "Outgoing call" } else { "Incoming call" };
         let text = format!("\u{1F4DE} {} \u{00B7} {}", label, duration_str);
-        let content_json = format!(r#"{{"text":"{}"}}"#, text);
         let sent_at = crate::util::time::TimestampNanos::now().as_u64();
         let user_id = self.auth_state().get().current_user_id
             .unwrap_or_else(crate::domain::ids::UserId::new);
 
-        if let Err(e) = self.anon_dms().store_message(
-            conversation_id, &user_id, 1, &content_json, sent_at,
+        if let Err(e) = self.anon_dms().store_text_message(
+            conversation_id, &user_id, &text, sent_at,
         ) {
             tracing::error!(error = %e, "Failed to store anon call history");
         }
@@ -3039,6 +3978,7 @@ fn build_intent(
             file_paths: vec![], thread_id: options.thread_id,
             mentioned_integrations: options.mentioned_integrations.clone(),
             targets_ai_bot: options.targets_ai_bot,
+            quote,
         }),
         ActiveConversation::Channel(id) => {
             let is_saved = channel_service.get_channel_local(&id).ok().flatten()
@@ -3053,6 +3993,7 @@ fn build_intent(
                     file_paths: vec![], thread_id: options.thread_id,
                     mentioned_integrations: options.mentioned_integrations.clone(),
                     targets_ai_bot: options.targets_ai_bot,
+                    quote,
                 })
             }
         }

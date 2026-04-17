@@ -456,6 +456,41 @@ impl KeyStore {
         Ok(rows > 0)
     }
 
+    /// Delete Kyber pre-keys older than `max_age_days` days.
+    ///
+    /// Retains old Kyber pre-keys for a grace period (typically 30 days)
+    /// so in-flight PQXDH sessions referencing them can still complete.
+    /// After the grace period, they are safe to prune. The most recent
+    /// Kyber pre-key is always kept (it is the one currently published
+    /// on the server for new PQXDH handshakes).
+    pub fn cleanup_expired_kyber_prekeys(&self, max_age_days: u64) -> Result<u32, StorageError> {
+        let conn = self.db.connection()?;
+        let cutoff = (Utc::now() - chrono::Duration::days(max_age_days as i64)).to_rfc3339();
+
+        let max_id: Option<i64> =
+            conn.query_row("SELECT MAX(id) FROM kyber_prekeys", [], |row| row.get(0))?;
+
+        let deleted = if let Some(current_id) = max_id {
+            // Remove usage records for the expired keys first (FK constraint).
+            conn.execute(
+                "DELETE FROM kyber_prekey_usage
+                 WHERE kyber_prekey_id IN (
+                     SELECT id FROM kyber_prekeys WHERE created_at < ?1 AND id != ?2
+                 )",
+                params![cutoff, current_id],
+            )?;
+
+            conn.execute(
+                "DELETE FROM kyber_prekeys WHERE created_at < ?1 AND id != ?2",
+                params![cutoff, current_id],
+            )?
+        } else {
+            0
+        };
+
+        Ok(deleted as u32)
+    }
+
     // ========================================================================
     // Sessions (Double Ratchet)
     // ========================================================================

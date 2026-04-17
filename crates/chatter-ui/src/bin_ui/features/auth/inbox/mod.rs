@@ -15,5 +15,3 @@ pub mod domain_handler;
 pub mod typing;
 pub(crate) mod unified_actions;
 pub mod utils;
-
-pub use utils::update_reaction_summary;

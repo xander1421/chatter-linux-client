@@ -86,9 +86,21 @@ jobs:
       - name: Bundle release artifact
         shell: pwsh
         run: |
-          $ErrorActionPreference = "SilentlyContinue"
+          # Fail the job on any uncaught error (copy failures, missing exe, etc.).
+          # Optional DLL probes below guard with `Test-Path` and do NOT rely on
+          # $ErrorActionPreference to swallow failures.
+          $ErrorActionPreference = "Stop"
           mkdir artifact | Out-Null
-          cp target/release/chatter-linux.exe artifact/chatter-windows.exe
+
+          # The chatter-ui crate produces `chatter-ui.exe` on Windows (crate name
+          # from `[[bin]] name = "chatter-ui"` in Cargo.toml). Rename to the
+          # customer-facing `chatter-windows.exe` for the release artifact.
+          $exePath = "target/release/chatter-ui.exe"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Release binary not found at $exePath — did the build step succeed?"
+            exit 1
+          }
+          Copy-Item $exePath "artifact/chatter-windows.exe"
 
           $gstBin = "$env:GST_ROOT\bin"
           $gstPlugins = "$env:GST_ROOT\lib\gstreamer-1.0"

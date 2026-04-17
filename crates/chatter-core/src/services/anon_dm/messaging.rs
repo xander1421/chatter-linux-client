@@ -50,18 +50,22 @@ impl AnonDmService {
         reply_to_sender: &UserId,
         reply_to_timestamp: u64,
     ) -> Result<(MessageId, u64), AnonDmError> {
-        // Look up the original message to get preview text
-        let preview_text = self.get_message_by_sender_timestamp(
-            conversation_id,
-            reply_to_sender,
-            reply_to_timestamp,
-        )
-        .ok()
-        .flatten()
-        .map(|msg| {
-            crate::services::gateway::shared::truncate_preview(&msg.as_text().unwrap_or_default())
-        })
-        .unwrap_or_default();
+        // Look up the original message to build preview text.
+        // Falls back to "📷 Photo" / "🎬 Video" / etc. for media-only replies
+        // so the receiver sees a non-empty reply bubble on reload.
+        let preview_text = self
+            .get_message_by_sender_timestamp(conversation_id, reply_to_sender, reply_to_timestamp)
+            .ok()
+            .flatten()
+            .map(|msg| {
+                let attachments: Vec<_> = msg
+                    .attachments
+                    .iter()
+                    .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                    .collect();
+                crate::services::gateway::shared::message_reply_preview(&msg, &attachments)
+            })
+            .unwrap_or_default();
 
         let quote = crate::services::gateway::shared::build_quote(
             &reply_to_sender.to_string(),

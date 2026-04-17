@@ -364,6 +364,29 @@ impl AnonGroupRepository {
         Ok(members)
     }
 
+    /// Get members that do NOT yet have a confirmed mailbox key.
+    ///
+    /// These are invitees whose JoinAck has not yet been received. Messages
+    /// destined for them must be queued via `enqueue_pending_message` and
+    /// drained once the JoinAck arrives.
+    pub fn get_members_without_mailbox(&self, group_id: &AnonGroupId) -> Result<Vec<AnonGroupMember>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
+             FROM anon_group_members WHERE group_id = ?1 AND mailbox_pk IS NULL
+             ORDER BY joined_at",
+        )?;
+
+        let mut rows = stmt.query(params![group_id.to_string()])?;
+        let mut members = Vec::new();
+
+        while let Some(row) = rows.next()? {
+            members.push(row_to_member(row)?);
+        }
+
+        Ok(members)
+    }
+
     /// Get a member of a group.
     pub fn get_member(&self, group_id: &AnonGroupId, user_id: &UserId) -> Result<Option<AnonGroupMember>, StorageError> {
         let conn = self.db.read_connection()?;
@@ -421,6 +444,25 @@ impl AnonGroupRepository {
     }
 
     /// Get a member's display name from their profile info in the group.
+    /// Return any non-empty display name recorded for `user_id` across any group.
+    ///
+    /// Used by `UserService::get_display_name` to avoid raw-UUID fallback for
+    /// anon group members who aren't in the main user directory.
+    pub fn find_display_name_for_user(&self, user_id: &UserId) -> Result<Option<String>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let result: Result<Option<String>, _> = conn.query_row(
+            "SELECT display_name FROM anon_group_members \
+             WHERE user_id = ?1 AND display_name IS NOT NULL AND display_name != '' LIMIT 1",
+            params![user_id.to_string()],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(name) => Ok(name),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Database(e)),
+        }
+    }
+
     pub fn get_member_display_name(&self, group_id: &AnonGroupId, user_id: &UserId) -> Result<Option<String>, StorageError> {
         let conn = self.db.read_connection()?;
         let result: Result<Option<String>, _> = conn.query_row(
@@ -732,6 +774,88 @@ impl AnonGroupRepository {
         window_duration: chrono::Duration,
     ) -> Result<u32, StorageError> {
         super::repo_utils::increment_rate_limit(&self.db, "group", group_id.as_bytes().as_slice(), window_duration)
+    }
+
+    // ========================================================================
+    // Pending Outbound Messages (awaiting recipient JoinAck)
+    // ========================================================================
+
+    /// Enqueue an outbound message for a member that does not yet have a
+    /// confirmed mailbox key.
+    ///
+    /// `content_blob` is the encoded `Content` proto (same bytes `send_message`
+    /// would otherwise pass to `send_to_anon_mailbox`). The blob is re-encrypted
+    /// per-recipient when drained (Signal Protocol is pairwise).
+    pub fn enqueue_pending_message(
+        &self,
+        group_id: &AnonGroupId,
+        recipient_user_id: &UserId,
+        content_blob: &[u8],
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO pending_anon_group_messages
+               (group_id, recipient_user_id, encrypted_content_blob, created_at, attempts)
+             VALUES (?1, ?2, ?3, ?4, 0)",
+            params![
+                group_id.to_string(),
+                recipient_user_id.to_string(),
+                content_blob,
+                now,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get all pending messages queued for a specific (group, recipient).
+    ///
+    /// Returns a vector of (row_id, content_blob) pairs ordered by insertion
+    /// order so the drain preserves send order.
+    pub fn get_pending_messages_for_member(
+        &self,
+        group_id: &AnonGroupId,
+        recipient_user_id: &UserId,
+    ) -> Result<Vec<(i64, Vec<u8>)>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, encrypted_content_blob FROM pending_anon_group_messages
+             WHERE group_id = ?1 AND recipient_user_id = ?2
+             ORDER BY id ASC",
+        )?;
+
+        let mut rows = stmt.query(params![
+            group_id.to_string(),
+            recipient_user_id.to_string(),
+        ])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            out.push((id, blob));
+        }
+        Ok(out)
+    }
+
+    /// Delete a single pending message row after successful delivery.
+    pub fn delete_pending_message(&self, row_id: i64) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "DELETE FROM pending_anon_group_messages WHERE id = ?1",
+            params![row_id],
+        )?;
+        Ok(())
+    }
+
+    /// Increment the attempts counter for a pending message row (kept for
+    /// diagnostics / future backoff).
+    pub fn increment_pending_message_attempts(&self, row_id: i64) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE pending_anon_group_messages SET attempts = attempts + 1 WHERE id = ?1",
+            params![row_id],
+        )?;
+        Ok(())
     }
 }
 

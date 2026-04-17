@@ -185,7 +185,8 @@ impl AnonDmService {
         reactor_id: &UserId,
         emoji: &str,
     ) -> Result<bool, AnonDmError> {
-        Ok(self.message_repo.add_reaction(sender_id, sent_at_ns, reactor_id, emoji)?)
+        let current_user_id = self.current_user_id()?;
+        Ok(self.message_repo.add_reaction(sender_id, sent_at_ns, reactor_id, &current_user_id, emoji)?)
     }
 
     /// Remove a reaction from an anon DM message in the DB.
@@ -199,7 +200,8 @@ impl AnonDmService {
         reactor_id: &UserId,
         emoji: &str,
     ) -> Result<bool, AnonDmError> {
-        Ok(self.message_repo.remove_reaction(sender_id, sent_at_ns, reactor_id, emoji)?)
+        let current_user_id = self.current_user_id()?;
+        Ok(self.message_repo.remove_reaction(sender_id, sent_at_ns, reactor_id, &current_user_id, emoji)?)
     }
 
     /// Get all reaction counts for an anon DM conversation's messages.

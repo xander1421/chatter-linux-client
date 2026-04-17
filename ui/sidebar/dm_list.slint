@@ -12,7 +12,7 @@ import { Icons } from "../theme/icons.slint";
 
 // Data struct for DM items (mirrors Rust DMListItemData)
 export struct DMListItemData {
-    channel-id: string,      // The DM channel ID
+    channel-id: string,      // Raw DM channel ID (uuid, no prefix)
     user-id: string,         // The other user's ID
     display-name: string,
     avatar-url: string,
@@ -24,12 +24,13 @@ export struct DMListItemData {
     timestamp: string,
     unread-count: int,
     is-typing: bool,
+    is-anon: bool,           // True for anon (ephemeral) DMs, false for regular
+    is-selected: bool,       // Rust-computed selection flag; drives highlight
 }
 
 export component DMList inherits Rectangle {
     // Properties
     in property <[DMListItemData]> conversations: [];
-    in property <string> selected-conversation-id: "";
     in property <bool> collapsed: false;
     in property <bool> show-header: true;
 
@@ -93,7 +94,7 @@ export component DMList inherits Rectangle {
                     timestamp: item.timestamp;
                     unread-count: item.unread-count;
                     is-typing: item.is-typing;
-                    selected: item.channel-id == root.selected-conversation-id;
+                    selected: item.is-selected;
                     collapsed: root.collapsed;
 
                     clicked => {

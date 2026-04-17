@@ -1,11 +1,9 @@
-use chrono::Utc;
 use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
 use crate::domain::ids::{ChannelId, MessageId};
-use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
+use crate::domain::message::{ConversationType, MessageContent};
 use crate::domain::UserId;
 use crate::proto::content_v1::Content;
 use crate::services::AttachmentService;
-use crate::util::time::TimestampNanos;
 
 use super::{AnonDmError, AnonDmService};
 
@@ -230,12 +228,14 @@ impl AnonDmService {
                     let sent_at = inner_content.timestamp;
 
                     // Store message (with or without quote metadata)
+                    let quote = crate::inbox::handlers::base_anon::QuoteContext::from_content(inner_content);
                     let message_id = self.store_message_with_attachments(
                         conversation_id,
                         sender_id,
                         &data_msg.body,
                         &attachment_ids,
                         sent_at,
+                        quote,
                     )?;
                     tracing::info!(
                         conversation_id = %conversation_id,
@@ -616,49 +616,36 @@ impl AnonDmService {
         Ok(events)
     }
 
-    /// Store a message received from the peer.
+    /// Store a data message received from the peer (wire-format `content_type` + `content_json`).
+    ///
+    /// The `content_json` is the `{"text": "..."}` envelope produced by
+    /// `base_anon::content_to_storage`. `message_content_from_type_and_json`
+    /// unwraps it before persisting so the row stores real `MessageContent`
+    /// (not the raw JSON string).
     pub fn store_message(
         &self,
         conversation_id: &AnonDmId,
         sender_id: &UserId,
-        _content_type: i32,
+        content_type: i32,
         content_json: &str,
         sent_at: u64,
+        quote: Option<crate::inbox::handlers::base_anon::QuoteContext>,
     ) -> Result<AnonDmMessageId, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        let message_id = MessageId::new();
-        let created_at = TimestampNanos::from_nanos(sent_at)
-            .to_datetime()
-            .unwrap_or_else(Utc::now);
-
-        let message = Message {
-            id: message_id,
-            conversation_id: channel_id,
-            conversation_type: ConversationType::AnonDm,
-            sender_id: Some(*sender_id),
-            device_id: None,
-            content: MessageContent::Text(content_json.to_string()),
-            encrypted_content: None,
-            thread_id: None,
-            reply_to: None,
-            reply_to_author_id: None,
-            reply_to_text: None,
-            attachments: Vec::new(),
-            is_pinned: false,
-            is_edited: false,
-            is_deleted: false,
-            is_read: false,
+        let content = crate::services::anon_shared::message_content_from_type_and_json(
+            content_type,
+            content_json,
+        );
+        let message = crate::services::anon_shared::build_anon_message(
+            channel_id,
+            ConversationType::AnonDm,
+            *sender_id,
+            content,
+            Vec::new(),
             sent_at,
-            created_at,
-            updated_at: created_at,
-            edited_at: None,
-            reaction_counts: Vec::new(),
-            current_user_reactions: Vec::new(),
-            mentioned_integrations: Vec::new(),
-            targets_ai_bot: false,
-            delivery_status: String::new(),
-        };
-
+            quote,
+        );
+        let message_id = message.id;
         self.message_repo.insert(&message)?;
         tracing::debug!(
             "Stored message {} in conversation {} with sent_at={}",
@@ -678,39 +665,20 @@ impl AnonDmService {
         sent_at: u64,
     ) -> Result<AnonDmMessageId, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        let message_id = MessageId::new();
-        let created_at = TimestampNanos::from_nanos(sent_at)
-            .to_datetime()
-            .unwrap_or_else(Utc::now);
-
-        let message = Message {
-            id: message_id,
-            conversation_id: channel_id,
-            conversation_type: ConversationType::AnonDm,
-            sender_id: Some(*sender_id),
-            device_id: None,
-            content: MessageContent::Text(text.to_string()),
-            encrypted_content: None,
-            thread_id: None,
-            reply_to: None,
-            reply_to_author_id: None,
-            reply_to_text: None,
-            attachments: Vec::new(),
-            is_pinned: false,
-            is_edited: false,
-            is_deleted: false,
-            is_read: false,
+        let content = crate::services::anon_shared::message_content_from_text_and_attachments(
+            text,
+            &[],
+        );
+        let message = crate::services::anon_shared::build_anon_message(
+            channel_id,
+            ConversationType::AnonDm,
+            *sender_id,
+            content,
+            Vec::new(),
             sent_at,
-            created_at,
-            updated_at: created_at,
-            edited_at: None,
-            reaction_counts: Vec::new(),
-            current_user_reactions: Vec::new(),
-            mentioned_integrations: Vec::new(),
-            targets_ai_bot: false,
-            delivery_status: String::new(),
-        };
-
+            None,
+        );
+        let message_id = message.id;
         self.message_repo.insert(&message)?;
         tracing::debug!(
             "Stored text message {} in conversation {} with sent_at={}",
@@ -722,6 +690,10 @@ impl AnonDmService {
     }
 
     /// Store a message with text and/or attachments.
+    ///
+    /// `quote` carries reply metadata (target message id, author, preview) extracted
+    /// from the inbound Content proto. Persisting it on the row is what keeps reply
+    /// bubbles visible after a channel reload on the receiver side.
     pub fn store_message_with_attachments(
         &self,
         conversation_id: &AnonDmId,
@@ -729,54 +701,24 @@ impl AnonDmService {
         text: &str,
         attachment_ids: &[crate::domain::AttachmentId],
         sent_at: u64,
+        quote: Option<crate::inbox::handlers::base_anon::QuoteContext>,
     ) -> Result<AnonDmMessageId, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        let message_id = MessageId::new();
-        let created_at = TimestampNanos::from_nanos(sent_at)
-            .to_datetime()
-            .unwrap_or_else(Utc::now);
-
-        let has_text = !text.is_empty();
-        let has_attachments = !attachment_ids.is_empty();
-
-        let content = match (has_text, has_attachments) {
-            (true, true) => MessageContent::Mixed(MixedContent::new(
-                text.to_string(),
-                attachment_ids.to_vec(),
-            )),
-            (false, true) => MessageContent::Mixed(MixedContent::attachments_only(
-                attachment_ids.to_vec(),
-            )),
-            _ => MessageContent::Text(text.to_string()),
-        };
-
-        let message = Message {
-            id: message_id,
-            conversation_id: channel_id,
-            conversation_type: ConversationType::AnonDm,
-            sender_id: Some(*sender_id),
-            device_id: None,
+        let content = crate::services::anon_shared::message_content_from_text_and_attachments(
+            text,
+            attachment_ids,
+        );
+        let message = crate::services::anon_shared::build_anon_message(
+            channel_id,
+            ConversationType::AnonDm,
+            *sender_id,
             content,
-            encrypted_content: None,
-            thread_id: None,
-            reply_to: None,
-            reply_to_author_id: None,
-            reply_to_text: None,
-            attachments: attachment_ids.to_vec(),
-            is_pinned: false,
-            is_edited: false,
-            is_deleted: false,
-            is_read: false,
+            attachment_ids.to_vec(),
             sent_at,
-            created_at,
-            updated_at: created_at,
-            edited_at: None,
-            reaction_counts: Vec::new(),
-            current_user_reactions: Vec::new(),
-            mentioned_integrations: Vec::new(),
-            targets_ai_bot: false,
-            delivery_status: String::new(),
-        };
+            quote,
+        );
+        let message_id = message.id;
+        let has_text = !text.is_empty();
 
         self.message_repo.insert(&message)?;
         tracing::debug!(

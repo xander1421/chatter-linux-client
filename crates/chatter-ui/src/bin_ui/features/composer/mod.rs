@@ -29,8 +29,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     gif::wire_gif_search(window, ui_ctx);
     mentions::wire_mention_triggered(
         window,
-        ui_ctx.channels().clone(),
-        ui_ctx.users().clone(),
+        ui_ctx.clone(),
         ui_ctx.chat_state().clone(),
     );
     mentions::wire_mention_selected(window);

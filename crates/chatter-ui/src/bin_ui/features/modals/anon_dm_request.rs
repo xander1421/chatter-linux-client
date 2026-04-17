@@ -25,7 +25,6 @@ pub fn spawn_anon_dm_request_handler(
     weak_window: Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
-    let anon_dm_service = ui_ctx.anon_dms().clone();
     let chat_state = ui_ctx.chat_state().clone();
     let pinned_state = ui_ctx.pinned_state().clone();
     let ui_ctx = ui_ctx.clone();
@@ -170,20 +169,12 @@ pub fn spawn_anon_dm_request_handler(
                     );
 
                     // Get the full conversation to add to sidebar
-                    let dm = match anon_dm_service.get_conversation(&conversation_id) {
-                        Ok(Some(dm)) => dm,
-                        Ok(None) => {
+                    let dm = match ui_ctx.get_anon_dm_conversation(&conversation_id) {
+                        Some(dm) => dm,
+                        None => {
                             tracing::warn!(
                                 conversation_id = %conversation_id,
                                 "Conversation not found after acceptance"
-                            );
-                            continue;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                conversation_id = %conversation_id,
-                                error = %e,
-                                "Failed to get conversation after acceptance"
                             );
                             continue;
                         }
@@ -219,7 +210,7 @@ pub fn spawn_anon_dm_request_handler(
                             // Update existing pending DM or add new active DM
                             let current_dms = w.get_dm_conversations();
                             let mut dm_vec: Vec<DMListItemData> = Vec::new();
-                            let channel_id_str = format!("anon_dm:{}", dm_id);
+                            let channel_id_str = dm_id.to_string();
 
                             // Filter out old pending version and collect others
                             for i in 0..current_dms.row_count() {
@@ -244,6 +235,8 @@ pub fn spawn_anon_dm_request_handler(
                                 timestamp: chrono::Local::now().format("%H:%M").to_string().into(),
                                 unread_count: 0,
                                 is_typing: false,
+                                is_anon: true,
+                                is_selected: false,
                             });
 
                             w.set_dm_conversations(ModelRc::new(VecModel::from(dm_vec)));
@@ -259,11 +252,11 @@ pub fn spawn_anon_dm_request_handler(
                     // Send our profile (avatar + display name) back to the responder.
                     // The responder only received our ECIES init (no avatar due to no PFS).
                     // Now that Double Ratchet is established, share our profile securely.
-                    let profile_service = anon_dm_service.clone();
+                    let ui_ctx_profile = ui_ctx.clone();
                     let profile_conv_id = conversation_id;
                     let our_name = ui_ctx.auth_state().get().display_name.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = profile_service.send_profile_update(
+                        if let Err(e) = ui_ctx_profile.send_anon_dm_profile_update(
                             &profile_conv_id,
                             our_name,
                             None, // avatar_url not used — encrypted_avatar is sent inline
@@ -290,20 +283,21 @@ pub fn spawn_anon_dm_request_handler(
                     let conversation_id = chatter_core::domain::anon_dm::AnonDmId::from_uuid(
                         *message.conversation_id.as_uuid()
                     );
-                    let channel_id_str = format!("anon_dm:{}", conversation_id);
+                    let channel_id_str = conversation_id.to_string();
+                    let _ = &channel_id_str;
                     let receipt_conv_id = conversation_id;
                     let receipt_msg_ts = message.sent_at;
                     let receipt_weak = weak_window.clone();
                     let receipt_client = ui_ctx.clone();
+                    let receipt_active_client = ui_ctx.clone();
 
                     tokio::spawn(async move {
                         let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
                         let _ = slint::invoke_from_event_loop(move || {
-                            let is_selected = if let Some(w) = receipt_weak.upgrade() {
-                                w.get_selected_dm_id().to_string() == channel_id_str
-                            } else {
-                                false
-                            };
+                            let is_selected = receipt_weak.upgrade().is_some()
+                                && receipt_active_client
+                                    .active_conversation()
+                                    .matches_anon_dm(&receipt_conv_id);
                             let _ = tx.send(is_selected);
                         });
                         match rx.await {
@@ -487,23 +481,20 @@ pub fn spawn_anon_dm_request_handler(
                     channel_id,
                     ..
                 } => {
-                    // Use channel_id from event if present, otherwise try to determine from UI
+                    // Use channel_id from event if present, otherwise fall back
+                    // to whatever anon DM is currently active in chat_state.
                     let weak = weak_window.clone();
                     let cs = chat_state.clone();
                     let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            // Use channel_id from event if available
-                            let ch_id = if let Some(id) = channel_id {
-                                Some(id)
-                            } else {
-                                // Fallback: try to determine from selected DM
-                                let selected_dm = w.get_selected_dm_id().to_string();
-                                if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
-                                    anon_dm_id_str.parse::<chatter_core::domain::ChannelId>().ok()
-                                } else {
-                                    None
+                        if weak.upgrade().is_some() {
+                            let ch_id = channel_id.or_else(|| {
+                                match cs.active_conversation() {
+                                    chatter_core::state::ActiveConversation::AnonDm(id) => {
+                                        Some(chatter_core::domain::ids::ChannelId::from(id))
+                                    }
+                                    _ => None,
                                 }
-                            };
+                            });
 
                             if let Some(channel_id) = ch_id {
                                 unified_actions::handle_receipt(
@@ -524,17 +515,17 @@ pub fn spawn_anon_dm_request_handler(
                     let weak = weak_window.clone();
                     let cs = chat_state.clone();
                     let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            let selected_dm = w.get_selected_dm_id().to_string();
-                            if let Some(anon_dm_id_str) = selected_dm.strip_prefix("anon_dm:") {
-                                if let Ok(channel_id) = anon_dm_id_str.parse::<chatter_core::domain::ChannelId>() {
-                                    unified_actions::handle_receipt(
-                                        &weak, &cs,
-                                        EventSource::Channel(channel_id),
-                                        1, // delivered
-                                        message_timestamps.clone(),
-                                    );
-                                }
+                        if weak.upgrade().is_some() {
+                            if let chatter_core::state::ActiveConversation::AnonDm(id) =
+                                cs.active_conversation()
+                            {
+                                let channel_id = chatter_core::domain::ids::ChannelId::from(id);
+                                unified_actions::handle_receipt(
+                                    &weak, &cs,
+                                    EventSource::Channel(channel_id),
+                                    1, // delivered
+                                    message_timestamps.clone(),
+                                );
                             }
                         }
                     });

@@ -658,7 +658,7 @@ impl CallSignalingService {
         let result = AnonCallSetupResult {
             room_name: room_name.to_string(),
             channel_id,
-            encryption_key: pending.encryption_key.clone(),
+            encryption_key: zeroize::Zeroizing::new(pending.encryption_key.clone()),
             verification_emojis,
             is_video: pending.is_video_call,
             peer_display_name: pending.display_name.clone(),
@@ -791,7 +791,7 @@ impl CallSignalingService {
         let result = AnonCallSetupResult {
             room_name: pending.room_name.clone(),
             channel_id,
-            encryption_key: pending.encryption_key.clone(),
+            encryption_key: zeroize::Zeroizing::new(pending.encryption_key.clone()),
             verification_emojis,
             is_video: pending.is_video_call,
             peer_display_name: callee_display_name.to_string(),
@@ -1012,7 +1012,9 @@ impl CallSignalingService {
                 }
             }
 
-            // Store call history
+            // Store call history as plain text (store_text_message wraps in
+            // MessageContent::Text without a JSON envelope, so the bubble renders
+            // correctly after reload via Message::as_text()).
             let duration_str = if duration_secs > 0 {
                 format!("{}:{:02}", duration_secs / 60, duration_secs % 60)
             } else {
@@ -1020,12 +1022,11 @@ impl CallSignalingService {
             };
             let label = if pending.is_outgoing { "Outgoing call" } else { "Incoming call" };
             let text = format!("\u{1F4DE} {} \u{00B7} {}", label, duration_str);
-            let content_json = format!(r#"{{"text":"{}"}}"#, text);
             let sent_at = crate::util::time::TimestampNanos::now().as_u64();
             let user_id = self.channel_service.current_user_id()
                 .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
 
-            if let Err(e) = self.anon_dm_service.store_message(&conversation_id, &user_id, 1, &content_json, sent_at) {
+            if let Err(e) = self.anon_dm_service.store_text_message(&conversation_id, &user_id, &text, sent_at) {
                 tracing::error!(error = %e, "Failed to store anon call history on hangup");
             }
 

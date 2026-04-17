@@ -126,9 +126,6 @@ pub fn open_user_profile(
 }
 
 pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let user_service = ui_ctx.users().clone();
-    let channel_service = ui_ctx.channels().clone();
-    let mailbox_manager = ui_ctx.mailbox_manager().clone();
 
     // Add friend
     let weak_window = window.as_weak();
@@ -176,7 +173,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::info!("Friend request sent to {}", friend_id);
 
                     // Refresh sent requests list via UserService
-                    match ui_ctx.users().list_friend_requests(FriendRequestFilter::Sent, 50, 0).await {
+                    match ui_ctx.list_friend_requests(FriendRequestFilter::Sent, 50, 0).await {
                         Ok(friendships) => {
                             // We need to get the full profile info for each friend
                             // For now, just use friend_id as display info
@@ -449,15 +446,11 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     // Send message (open DM)
     let weak_window = window.as_weak();
-    let mailbox_manager = mailbox_manager.clone();
-    let channel_service = channel_service.clone();
-    let user_service_dm = user_service.clone();
+    let ui_ctx_dm = ui_ctx.clone();
 
     window.on_profile_send_message(move || {
         let weak = weak_window.clone();
-        let mailbox_manager = mailbox_manager.clone();
-        let channel_service = channel_service.clone();
-        let user_service = user_service_dm.clone();
+        let ui_ctx = ui_ctx_dm.clone();
 
         // Get profile user ID synchronously before spawning
         let profile_user_id = weak
@@ -498,27 +491,19 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Use peer_id as conversation_id for 1:1 DMs
             let conversation_id = peer_id.to_string();
 
-            // Initialize mailbox manager if needed
-            if let Err(e) = mailbox_manager.initialize().await {
-                tracing::warn!("Failed to initialize mailbox manager: {} (may already be initialized)", e);
+            // Ensure mailbox manager initialized and token pool populated.
+            if let Err(e) = ui_ctx.ensure_mailbox_ready(5).await {
+                tracing::error!("Failed to prepare mailbox: {}", e);
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_loading_messages(false);
+                    }
+                });
+                return;
             }
 
-            // Ensure we have tokens available
-            if mailbox_manager.token_count().await == 0 {
-                if let Err(e) = mailbox_manager.acquire_tokens(5).await {
-                    tracing::error!("Failed to acquire mailbox tokens: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_loading_messages(false);
-                        }
-                    });
-                    return;
-                }
-            }
-
-            // Get or create mailbox for this DM conversation
-            // TTL: 7 days (604800 seconds)
-            match mailbox_manager.get_or_create_mailbox(&conversation_id, 604800).await {
+            // Get or create mailbox for this DM conversation (TTL: 7 days).
+            match ui_ctx.get_or_create_mailbox(&conversation_id, 604800).await {
                 Ok(mailbox) => {
                     tracing::info!(
                         "DM mailbox ready for conversation with {}: mailbox_id={}",
@@ -526,8 +511,8 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         mailbox.mailbox_id
                     );
 
-                    // Get peer display name via UserService
-                    let peer_name = match user_service.get_user_profile(&peer_id).await {
+                    // Get peer display name via façade
+                    let peer_name = match ui_ctx.get_user_profile(&peer_id).await {
                         Ok(profile) => {
                             if profile.display_name.is_empty() {
                                 peer_id.to_string()
@@ -538,11 +523,8 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         Err(_) => peer_id.to_string(),
                     };
 
-                    // Find the DM channel for this peer using channel service
-                    let dm_channel = channel_service
-                        .get_dm_channel_for_peer(&peer_id)
-                        .ok()
-                        .flatten();
+                    // Find the DM channel for this peer
+                    let dm_channel = ui_ctx.get_dm_channel_for_peer(&peer_id);
 
                     let channel_id_for_ui = dm_channel
                         .as_ref()
@@ -565,6 +547,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         timestamp: String::new(),
                         unread_count: unread as u32,
                         is_typing: false,
+                        is_anon: false,
                     };
 
                     // Update UI to show the DM and add to sidebar
@@ -586,9 +569,9 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
 
                             w.set_loading_messages(false);
-                            // Use channel_id for selection (matching updated dm_list.slint)
-                            w.set_selected_dm_id(channel_id_for_ui.into());
-                            w.set_selected_channel_id("".into());
+                            // Trigger DM selection via the canonical handler so
+                            // chat_state + highlighting stay in sync.
+                            w.invoke_dm_selected(channel_id_for_ui.into());
                             w.set_channel_name(peer_name.into());
                             w.set_channel_type("dm".into());
                             w.set_is_dm(true);
@@ -632,13 +615,9 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     let weak_window = window.as_weak();
-    let user_service_save = user_service.clone();
-    let attachment_service = ui_ctx.attachments().clone();
     let ui_ctx_save = ui_ctx.clone();
     window.on_edit_profile_save(move |display_name: slint::SharedString, bio: slint::SharedString| {
         let weak = weak_window.clone();
-        let user_service = user_service_save.clone();
-        let attachment_service = attachment_service.clone();
         let ui_ctx = ui_ctx_save.clone();
         let display_name = display_name.to_string();
         let bio = bio.to_string();
@@ -659,7 +638,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // 1. Upload avatar if needed
             let mut avatar_url = None;
             if let Some(path) = pending_avatar {
-                match attachment_service.upload_to_cdn_encrypted(&path).await {
+                match ui_ctx.upload_attachment_to_cdn_encrypted(&path).await {
                     Ok(result) => {
                         avatar_url = Some(result.cdn_key);
                         tracing::info!("Uploaded new avatar to CDN: {}", avatar_url.as_ref().unwrap());
@@ -678,8 +657,8 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             } else {
                 // No new avatar, but we should get the existing avatar_url if any
                 // Get current profile to preserve avatar_url
-                if let Ok(current_user_id) = user_service.current_user_id() {
-                    if let Ok(Some(current_profile)) = user_service.get_profile_local(&current_user_id) {
+                if let Some(current_user_id) = ui_ctx.session_current_user_id() {
+                    if let Some(current_profile) = ui_ctx.get_profile_local(&current_user_id) {
                         avatar_url = current_profile.avatar_url;
                         if avatar_url.is_some() {
                             tracing::debug!("Using existing avatar_url: {:?}", avatar_url);
@@ -701,7 +680,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 display_name, avatar_url, status_msg.as_ref().map(|m| &m.text)
             );
             
-            match user_service
+            match ui_ctx
                 .update_user_profile(Some(&display_name), avatar_url.as_deref(), status_msg.as_ref())
                 .await
             {
@@ -903,36 +882,30 @@ async fn broadcast_profile_update(ui_ctx: &Arc<ChatterClient>, profile: &chatter
     );
     
     // Broadcast to all anon DM conversations
-    let conversations = match ui_ctx.anon_dms().list_conversations() {
-        Ok(convs) => convs,
-        Err(e) => {
-            tracing::warn!("Failed to list anon DM conversations for profile broadcast: {}", e);
-            return;
-        }
-    };
-    
+    let conversations = ui_ctx.list_anon_dm_conversations();
+
     for conv in &conversations {
         if !conv.is_ready() {
             continue;
         }
-        
+
         let conv_id = conv.id;
-        let service = ui_ctx.anon_dms().clone();
+        let ui_ctx_profile = ui_ctx.clone();
         let display_name = display_name.clone();
         let avatar_url = avatar_url.clone();
         let bio = bio.clone();
-        
+
         tokio::spawn(async move {
-            if let Err(e) = service.send_profile_update(&conv_id, display_name, avatar_url, bio).await {
+            if let Err(e) = ui_ctx_profile.send_anon_dm_profile_update(&conv_id, display_name, avatar_url, bio).await {
                 tracing::debug!("Failed to send profile update to anon DM: {}", e);
             }
         });
     }
     
     // Broadcast to anon groups where user is owner
-    let anon_group_service = ui_ctx.anon_groups().clone();
+    let ui_ctx_bcast = ui_ctx.clone();
     tokio::spawn(async move {
-        if let Err(e) = anon_group_service.broadcast_profile_to_owned_groups().await {
+        if let Err(e) = ui_ctx_bcast.broadcast_profile_to_owned_groups().await {
             tracing::warn!("Failed to broadcast profile to owned groups: {}", e);
         }
     });

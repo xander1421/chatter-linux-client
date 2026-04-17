@@ -66,6 +66,10 @@ pub enum OutgoingIntent {
         thread_id: Option<MessageId>,
         mentioned_integrations: Vec<IntegrationId>,
         targets_ai_bot: bool,
+        /// Optional quote context for reply messages. When present, the
+        /// stored local message will have `reply_to`, `reply_to_author_id`,
+        /// and `reply_to_text` populated so the quote bubble survives reload.
+        quote: Option<QuoteIntent>,
     },
 
     /// Send a message in an anonymous DM (NDSS '21 pairwise).
@@ -233,6 +237,7 @@ pub async fn route_outgoing(
             thread_id,
             mentioned_integrations,
             targets_ai_bot,
+            quote,
         } => {
             Ok(route_channel(
                 services.message_service,
@@ -244,6 +249,7 @@ pub async fn route_outgoing(
                 thread_id,
                 mentioned_integrations,
                 targets_ai_bot,
+                quote,
             )
             .await?)
         }
@@ -504,6 +510,10 @@ async fn route_channel_dm(
     quote: Option<QuoteIntent>,
 ) -> Result<SendResult, MessageError> {
     // Use pre-uploaded pointers if available, otherwise upload from file paths
+    // NOTE: when `attachment_pointers` is non-empty we still go through the
+    // plain `send_dm_with_pointers` path (no quote-aware variant exists yet),
+    // and patch the stored row below so reply metadata is persisted.
+    let patch_pointer_path = !attachment_pointers.is_empty() && quote.is_some();
     let dm_result = if !attachment_pointers.is_empty() {
         let attachment_ids = attachment_pointers.iter()
             .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key))
@@ -513,7 +523,7 @@ async fn route_channel_dm(
         ).await?
     } else {
         let path_refs: Vec<&std::path::Path> = file_paths.iter().map(|p| p.as_path()).collect();
-        if let Some(q) = quote {
+        if let Some(ref q) = quote {
             message_service.send_dm_with_reply(
                 peer_id, dm_channel_id, text, path_refs,
                 &q.author_id, q.timestamp, q.preview_text.as_deref().unwrap_or(""),
@@ -522,6 +532,30 @@ async fn route_channel_dm(
         } else {
             message_service.send_dm_with_files(peer_id, dm_channel_id, text, path_refs, mailbox_manager).await?
         }
+    };
+
+    // Patch the locally stored message with reply/quote context when the send
+    // path doesn't natively carry it (currently: pointer-based sends). Without
+    // this, navigating away and back would render the reply bubble without
+    // its quote preview.
+    let dm_result = if patch_pointer_path {
+        let mut result = dm_result;
+        if let (Some(msg), Some(q)) = (result.message.take(), quote) {
+            result.message = Some(
+                message_service
+                    .persist_outgoing_reply_context(msg, &q)
+                    .unwrap_or_else(|(m, err)| {
+                        tracing::warn!(
+                            error = %err,
+                            "Failed to persist outgoing DM reply context; quote will be visible this session only"
+                        );
+                        m
+                    }),
+            );
+        }
+        result
+    } else {
+        dm_result
     };
 
     Ok(SendResult {
@@ -549,6 +583,7 @@ async fn route_channel(
     thread_id: Option<MessageId>,
     mentioned_integrations: Vec<IntegrationId>,
     targets_ai_bot: bool,
+    quote: Option<QuoteIntent>,
 ) -> Result<SendResult, MessageError> {
     // Use pre-uploaded pointers if available, otherwise upload from file paths
     let message = if !attachment_pointers.is_empty() {
@@ -565,6 +600,23 @@ async fn route_channel(
             group_fanout, channel_id, text, path_refs,
             thread_id.as_ref(), mentioned_integrations, targets_ai_bot,
         ).await?
+    };
+
+    // Persist quote/reply context so reply bubbles survive a channel reload.
+    // The server doesn't echo reply_to metadata for our own sent messages,
+    // so we patch the local row after the insert performed by the send* method.
+    let message = if let Some(q) = quote {
+        message_service
+            .persist_outgoing_reply_context(message, &q)
+            .unwrap_or_else(|(msg, err)| {
+                tracing::warn!(
+                    error = %err,
+                    "Failed to persist outgoing reply context; quote will be visible this session only"
+                );
+                msg
+            })
+    } else {
+        message
     };
 
     let sent_at = message.sent_at;
@@ -753,6 +805,7 @@ pub fn build_intent(
             thread_id: options.thread_id,
             mentioned_integrations: options.mentioned_integrations.clone(),
             targets_ai_bot: options.targets_ai_bot,
+            quote,
         }),
         ActiveConversation::Channel(id) => {
             let is_saved = channel_service
@@ -780,6 +833,7 @@ pub fn build_intent(
                     thread_id: options.thread_id,
                     mentioned_integrations: options.mentioned_integrations.clone(),
                     targets_ai_bot: options.targets_ai_bot,
+                    quote,
                 })
             }
         }

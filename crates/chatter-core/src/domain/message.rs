@@ -242,6 +242,56 @@ impl Message {
     pub fn total_reactions(&self) -> u32 {
         self.reaction_counts.iter().map(|r| r.count).sum()
     }
+
+    /// Compose a one-line sidebar preview for this message.
+    ///
+    /// - Text messages are truncated to 50 chars.
+    /// - Empty-body messages with attachments render as "📎 N attachment(s)".
+    /// - Empty-body messages with no attachments render as "[Message]".
+    /// - If `current_user_id` is provided and matches this message's sender,
+    ///   the preview is prefixed with "You: " (text messages only).
+    ///
+    /// Lives in core because "how do we describe a message in the sidebar"
+    /// is a domain decision shared by every UI surface, not a presentation
+    /// concern owned by Slint.
+    #[must_use]
+    pub fn sidebar_preview(&self, current_user_id: Option<&crate::domain::ids::UserId>) -> String {
+        let is_own = matches!(
+            (current_user_id, self.sender_id),
+            (Some(u), Some(s)) if *u == s
+        );
+        let text = self.as_text().unwrap_or("");
+        let att_count = self.attachments.len();
+
+        if text.is_empty() && att_count > 0 {
+            let suffix = if att_count == 1 { "" } else { "s" };
+            return format!("\u{1F4CE} {} attachment{}", att_count, suffix);
+        }
+        if text.is_empty() {
+            return "[Message]".to_string();
+        }
+        let truncated = truncate_preview_text(text, 50);
+        if is_own {
+            format!("You: {}", truncated)
+        } else {
+            truncated
+        }
+    }
+}
+
+/// Truncate text for a single-line preview, cutting to `max` chars and
+/// appending `...` when the original overflowed. Counts by chars, not bytes,
+/// so emoji and multibyte glyphs are counted correctly.
+#[must_use]
+pub fn truncate_preview_text(text: &str, max: usize) -> String {
+    if text.chars().count() > max {
+        // Reserve 3 chars for the ellipsis.
+        let head_len = max.saturating_sub(3);
+        let truncated: String = text.chars().take(head_len).collect();
+        format!("{}...", truncated)
+    } else {
+        text.to_string()
+    }
 }
 
 // ============================================================================
@@ -260,6 +310,44 @@ impl ReactionCount {
     #[must_use]
     pub fn new(emoji: String, count: u32) -> Self {
         Self { emoji, count }
+    }
+
+    /// Apply an add/remove to an aggregate reaction-counts vec in place.
+    ///
+    /// - `remove=false`: increment (or insert at count=1).
+    /// - `remove=true`: decrement; drop the entry when the count reaches 0.
+    ///
+    /// Used by the UI to keep a message's `reaction_counts` in sync with
+    /// inbound reaction events without round-tripping through a presentation
+    /// string.
+    pub fn apply(counts: &mut Vec<ReactionCount>, emoji: &str, remove: bool) {
+        if let Some(existing) = counts.iter_mut().find(|r| r.emoji == emoji) {
+            if remove {
+                existing.count = existing.count.saturating_sub(1);
+            } else {
+                existing.count = existing.count.saturating_add(1);
+            }
+        } else if !remove {
+            counts.push(ReactionCount::new(emoji.to_string(), 1));
+        }
+        counts.retain(|r| r.count > 0);
+    }
+
+    /// Format an aggregate reaction-counts vec as a compact summary string
+    /// (e.g. "👍 3  ❤️ 2"). Used for accessibility labels only — never for
+    /// round-tripping state.
+    pub fn summary_string(counts: &[ReactionCount]) -> String {
+        counts
+            .iter()
+            .map(|r| {
+                if r.count == 1 {
+                    r.emoji.clone()
+                } else {
+                    format!("{} {}", r.emoji, r.count)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ")
     }
 }
 

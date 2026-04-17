@@ -106,7 +106,7 @@ pub fn spawn_anon_group_invite_handler(
     weak_window: Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx_handler = ui_ctx.clone();
     let mut event_rx = ui_ctx.event_bus().subscribe_domain();
 
     tokio::spawn(async move {
@@ -130,7 +130,7 @@ pub fn spawn_anon_group_invite_handler(
                     inviter_avatar,
                 } => {
                     let inviter_name = inviter_display_name.clone()
-                        .unwrap_or_else(|| user_service.get_display_name(&inviter_id));
+                        .unwrap_or_else(|| ui_ctx_handler.display_name(&inviter_id));
                     tracing::info!(
                         group_id = %group_id,
                         group_name = %group_name,
@@ -168,11 +168,11 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
     // Accept group invite
     {
         let weak = window.as_weak();
-        let anon_group_service = ui_ctx.anon_groups().clone();
+        let ui_ctx = ui_ctx.clone();
 
         window.on_friends_accept_group_invite(move |group_id_str: SharedString| {
             let weak = weak.clone();
-            let service = anon_group_service.clone();
+            let ui_ctx = ui_ctx.clone();
             let gid_str = group_id_str.to_string();
 
             tokio::spawn(async move {
@@ -187,7 +187,7 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                     return;
                 };
 
-                match service.accept_invite(
+                match ui_ctx.accept_anon_group_invite(
                     invite.group_id,
                     invite.group_name.clone(),
                     invite.inviter_id, // owner_id

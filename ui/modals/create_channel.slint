@@ -1,4 +1,8 @@
-// CreateChannelModal - Two-step wizard for creating new channels
+// CreateChannelModal - Single-page adaptive form.
+//
+// UX: one-step form with access-model pills (Open / Invite-only / Private group),
+// inline reveal for password/TTL/AI, collapsible "More options". Private-group
+// path swaps the main form area in place for the friend picker.
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -8,7 +12,6 @@ import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
-import { ChannelTemplates } from "channel_templates.slint";
 
 // Friend data for private group selection (matches FriendData)
 export struct PrivateGroupFriend {
@@ -17,32 +20,28 @@ export struct PrivateGroupFriend {
     username: string,
     avatar-url: string,
     selected: bool,
-    role: string,  // "member" or "admin" - default is "member"
+    role: string,
 }
 
-// AI provider option
 export struct AIProviderOption {
     id: string,
     name: string,
 }
 
-// AI model option
 export struct AIModelOption {
     id: string,
     name: string,
     provider: string,
 }
 
-// Channel configuration for creation (UI struct, distinct from domain::ChannelConfig)
+// Simplified config. Encryption + friends-only derived from access model.
 export struct CreateChannelConfig {
     is-private: bool,
-    is-encrypted: bool,
     is-ephemeral: bool,
-    ttl-hours: int,        // Message TTL in hours (if ephemeral)
-    max-members: int,      // 0 = unlimited
-    password: string,      // For password-protected channels
-    friends-only: bool,
-    icon-url: string,      // URL for custom channel icon
+    ttl-hours: int,
+    max-members: int,
+    password: string,
+    icon-url: string,
 }
 
 export component CreateChannelModal inherits Rectangle {
@@ -53,19 +52,22 @@ export component CreateChannelModal inherits Rectangle {
     in property <string> error-message: "";
     in property <bool> loading: false;
 
-    // Channel configuration
-    in-out property <bool> is-private: false;
-    in-out property <bool> is-encrypted: true;  // Default: encrypted
-    in-out property <bool> is-ephemeral: false;
-    in-out property <int> ttl-hours: 24;        // Default: 24h
-    in-out property <int> max-members: 0;       // 0 = unlimited
+    // Access mode: "open" | "invite" | "private-group"
+    in-out property <string> access-mode: "open";
+
+    // Advanced toggles
+    in-out property <bool> use-ephemeral: false;
+    in-out property <int> ttl-hours: 24;
+    in-out property <bool> use-ai: false;
+    in-out property <int> max-members: 0;
     in-out property <string> password: "";
-    in-out property <bool> friends-only: false;
-    in-out property <string> icon-url: "";      // Upload cdn_key OR external URL (populated by pick-channel-icon handler after upload)
-    in-out property <image> icon-preview;        // Local preview image (set after file pick, before upload)
+
+    // Icon upload state
+    in-out property <string> icon-url: "";
+    in-out property <image> icon-preview;
     in-out property <bool> has-icon-preview: false;
 
-    // AI configuration (for ai-assistant template)
+    // AI provider/model lists
     in-out property <string> ai-provider: "";
     in-out property <string> ai-model: "";
     in property <[AIProviderOption]> ai-providers: [
@@ -77,391 +79,468 @@ export component CreateChannelModal inherits Rectangle {
     in property <bool> ai-models-loading: false;
     in property <string> ai-models-error: "";
 
-    // Private group configuration (for private-group template)
+    // Private-group friend picker state
     in-out property <[PrivateGroupFriend]> available-friends: [];
-    // Count is updated by Rust when friends are toggled
     in-out property <int> selected-friend-count: 0;
 
     callback close();
     // name, description, template, config, ai_provider, ai_model
     callback create(string, string, string, CreateChannelConfig, string, string);
-    callback provider-selected(string);  // Callback to load models for provider
-    callback pick-channel-icon();        // Open file picker + upload the image
-    callback create-private-group(string, [PrivateGroupFriend]);  // name, selected friends
-    callback toggle-friend-selection(int);  // index to toggle selection
-    callback toggle-friend-role(int);  // index to toggle role (member/admin)
-    callback template-selected(string);  // notify rust when template changes
+    callback provider-selected(string);
+    callback pick-channel-icon();
+    callback create-private-group(string, [PrivateGroupFriend]);
+    callback toggle-friend-selection(int);
+    callback toggle-friend-role(int);
+    callback template-selected(string);  // fires when access-mode becomes "private-group" — used by Rust to preload friends
 
-    // Internal state
-    property <int> current-step: 1;
-    property <bool> is-ai-template: root.selected-template == "ai-assistant";
-    property <bool> is-private-group: root.selected-template == "private-group";
-    property <int> total-steps: is-ai-template ? 3 : 2;
+    // Derived flags
+    property <bool> is-private-group: root.access-mode == "private-group";
+    property <bool> is-invite: root.access-mode == "invite";
+    property <bool> is-open: root.access-mode == "open";
 
-    // Reset state when modal closes
+    // Collapsible "More options"
+    property <bool> more-options-expanded: false;
+
+    // Reset on close
     changed show-modal => {
         if !show-modal {
-            current-step = 1;
             root.channel-name = "";
             root.channel-description = "";
             root.selected-template = "";
-            root.is-private = false;
-            root.is-encrypted = true;
-            root.is-ephemeral = false;
+            root.access-mode = "open";
+            root.use-ephemeral = false;
             root.ttl-hours = 24;
+            root.use-ai = false;
             root.max-members = 0;
             root.password = "";
-            root.friends-only = false;
             root.icon-url = "";
             root.has-icon-preview = false;
             root.ai-provider = "";
             root.ai-model = "";
+            root.more-options-expanded = false;
+        }
+    }
+
+    // Selecting private-group pill loads friend list via Rust.
+    changed access-mode => {
+        if root.access-mode == "private-group" {
+            root.template-selected("private-group");
         }
     }
 
     Modal {
         show: root.show-modal;
-        title: "Create Channel";
+        title: "New channel";
         modal-width: 620px;
-        max-modal-height: 700px;
+        max-modal-height: 720px;
 
-        close => {
-            root.close();
-        }
+        close => { root.close(); }
 
         VerticalLayout {
             spacing: Spacing.lg;
 
-            // Step indicator
+            // ============================================================
+            // Identity row: icon + name + description
+            // ============================================================
             HorizontalLayout {
-                spacing: Spacing.sm;
-                height: 24px;
+                spacing: Spacing.md;
+                alignment: start;
 
-                // Step 1 indicator — Neo pill
-                Rectangle {
-                    width: 24px;
-                    height: 24px;
-                    border-radius: Spacing.radius-full;
-                    background: current-step >= 1 ? Colors.primary : Colors.neo-inset-bg;
-                    border-width: 1px;
-                    border-color: current-step >= 1 ? Colors.glow-primary : Colors.neo-inset-shadow;
+                // Icon upload (64px)
+                VerticalLayout {
+                    horizontal-stretch: 0;
+                    alignment: start;
+                    spacing: Spacing.xs;
+
+                    Rectangle {
+                        width: 64px;
+                        height: 64px;
+                        border-radius: Spacing.radius-md;
+                        background: Colors.neo-inset-bg;
+                        border-width: 1px;
+                        border-color: icon-touch.has-hover ? Colors.glow-primary : Colors.neo-inset-shadow;
+                        clip: true;
+
+                        if root.has-icon-preview: Image {
+                            source: root.icon-preview;
+                            width: 100%;
+                            height: 100%;
+                            image-fit: cover;
+                        }
+
+                        if !root.has-icon-preview: Image {
+                            source: Icons.image;
+                            width: 24px;
+                            height: 24px;
+                            colorize: Colors.text-muted;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                        }
+
+                        icon-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.pick-channel-icon(); }
+                        }
+                    }
 
                     Text {
-                        text: "1";
-                        color: Colors.text-primary;
+                        text: root.has-icon-preview ? "Change" : "Upload";
+                        color: Colors.text-muted;
                         font-size: Typography.xs;
-                        font-weight: Typography.medium;
                         horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                        width: 64px;
                     }
                 }
 
-                Text {
-                    text: "Template";
-                    color: current-step == 1 ? Colors.text-primary : Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-weight: current-step == 1 ? Typography.semibold : Typography.normal;
-                    vertical-alignment: center;
-                }
+                // Name + description stack
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: Spacing.sm;
 
-                // Connector line 1->2
-                Rectangle {
-                    width: 24px;
-                    height: 2px;
-                    background: current-step >= 2 ? Colors.primary : Colors.neo-inset-shadow;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                // Step 2 indicator — Neo pill
-                Rectangle {
-                    width: 24px;
-                    height: 24px;
-                    border-radius: Spacing.radius-full;
-                    background: current-step >= 2 ? Colors.primary : Colors.neo-inset-bg;
-                    border-width: 1px;
-                    border-color: current-step >= 2 ? Colors.glow-primary : Colors.neo-inset-shadow;
-
-                    Text {
-                        text: "2";
-                        color: Colors.text-primary;
-                        font-size: Typography.xs;
-                        font-weight: Typography.medium;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                    Input {
+                        placeholder: root.is-private-group ? "Group name" : "Channel name (e.g. team-updates)";
+                        text <=> root.channel-name;
+                        error: root.error-message != "" && root.channel-name == "";
+                        error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
                     }
-                }
 
-                Text {
-                    text: "Details";
-                    color: current-step == 2 ? Colors.text-primary : Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-weight: current-step == 2 ? Typography.semibold : Typography.normal;
-                    vertical-alignment: center;
-                }
-
-                // Step 3 indicator (AI template only)
-                if root.is-ai-template: Rectangle {
-                    width: 24px;
-                    height: 2px;
-                    background: current-step >= 3 ? Colors.primary : Colors.neo-inset-shadow;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                if root.is-ai-template: Rectangle {
-                    width: 24px;
-                    height: 24px;
-                    border-radius: Spacing.radius-full;
-                    background: current-step >= 3 ? Colors.primary : Colors.neo-inset-bg;
-                    border-width: 1px;
-                    border-color: current-step >= 3 ? Colors.glow-primary : Colors.neo-inset-shadow;
-
-                    Text {
-                        text: "3";
-                        color: Colors.text-primary;
-                        font-size: Typography.xs;
-                        font-weight: Typography.medium;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
+                    if !root.is-private-group: Input {
+                        placeholder: "Description (optional)";
+                        text <=> root.channel-description;
                     }
-                }
-
-                if root.is-ai-template: Text {
-                    text: "AI Config";
-                    color: current-step == 3 ? Colors.text-primary : Colors.text-secondary;
-                    font-size: Typography.sm;
-                    font-weight: current-step == 3 ? Typography.semibold : Typography.normal;
-                    vertical-alignment: center;
                 }
             }
 
-            // Content area - sized to content with reasonable bounds
-            Rectangle {
-                min-height: 350px;
-                max-height: 600px;
+            // ============================================================
+            // Access model — 3 pills
+            // ============================================================
+            VerticalLayout {
+                spacing: Spacing.xs;
 
-                // Step 1: Template selection
-                if current-step == 1: ChannelTemplates {
-                    selected-template <=> root.selected-template;
+                Text {
+                    text: "Who can join?";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                }
 
-                    template-selected(template) => {
-                        // Notify Rust when template is selected (for loading friends list)
-                        root.template-selected(template);
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+
+                    // Open
+                    Rectangle {
+                        height: 80px;
+                        horizontal-stretch: 1;
+                        border-radius: Spacing.radius-md;
+                        border-width: 1px;
+                        border-color: root.is-open ? Colors.glow-cyan.with-alpha(0.5) : Colors.neo-inset-shadow;
+                        background: root.is-open ? Colors.neo-inset-bg : (open-touch.has-hover ? Colors.surface-hover : Colors.surface);
+
+                        VerticalLayout {
+                            padding: Spacing.sm;
+                            spacing: 2px;
+                            alignment: center;
+
+                            HorizontalLayout {
+                                spacing: Spacing.xs;
+                                Image {
+                                    source: Icons.globe;
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: root.is-open ? Colors.primary : Colors.text-secondary;
+                                }
+                                Text {
+                                    text: "Open";
+                                    color: root.is-open ? Colors.primary : Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.semibold;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: "Anyone finds and joins. History visible to joiners.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        open-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.access-mode = "open"; }
+                        }
+                    }
+
+                    // Invite-only
+                    Rectangle {
+                        height: 80px;
+                        horizontal-stretch: 1;
+                        border-radius: Spacing.radius-md;
+                        border-width: 1px;
+                        border-color: root.is-invite ? Colors.glow-cyan.with-alpha(0.5) : Colors.neo-inset-shadow;
+                        background: root.is-invite ? Colors.neo-inset-bg : (invite-touch.has-hover ? Colors.surface-hover : Colors.surface);
+
+                        VerticalLayout {
+                            padding: Spacing.sm;
+                            spacing: 2px;
+                            alignment: center;
+
+                            HorizontalLayout {
+                                spacing: Spacing.xs;
+                                Image {
+                                    source: Icons.lock;
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: root.is-invite ? Colors.primary : Colors.text-secondary;
+                                }
+                                Text {
+                                    text: "Invite-only";
+                                    color: root.is-invite ? Colors.primary : Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.semibold;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: "Hidden from discovery. Invite or password to join.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        invite-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.access-mode = "invite"; }
+                        }
+                    }
+
+                    // Private group
+                    Rectangle {
+                        height: 80px;
+                        horizontal-stretch: 1;
+                        border-radius: Spacing.radius-md;
+                        border-width: 1px;
+                        border-color: root.is-private-group ? Colors.group-accent.with-alpha(0.6) : Colors.neo-inset-shadow;
+                        background: root.is-private-group ? Colors.neo-inset-bg : (pg-touch.has-hover ? Colors.surface-hover : Colors.surface);
+
+                        VerticalLayout {
+                            padding: Spacing.sm;
+                            spacing: 2px;
+                            alignment: center;
+
+                            HorizontalLayout {
+                                spacing: Spacing.xs;
+                                Image {
+                                    source: Icons.shield;
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: root.is-private-group ? Colors.group-accent : Colors.text-secondary;
+                                }
+                                Text {
+                                    text: "Private group";
+                                    color: root.is-private-group ? Colors.group-accent : Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.semibold;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Text {
+                                text: "End-to-end encrypted. Server can't see it exists.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        pg-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.access-mode = "private-group"; }
+                        }
                     }
                 }
 
-                // Step 2: Private Group - Friend selection
-                if current-step == 2 && root.is-private-group: VerticalLayout {
-                    spacing: Spacing.md;
+                // Encryption badge (open = no badge; invite/private-group = encrypted badge)
+                if root.is-invite || root.is-private-group: HorizontalLayout {
+                    spacing: Spacing.xs;
+                    alignment: start;
+                    Image {
+                        source: Icons.shield;
+                        width: 12px;
+                        height: 12px;
+                        colorize: Colors.success;
+                        y: 2px;
+                    }
+                    Text {
+                        text: "End-to-end encrypted";
+                        color: Colors.success;
+                        font-size: Typography.xs;
+                    }
+                }
+            }
 
-                    // Header with privacy info
-                    HorizontalLayout {
-                        spacing: Spacing.sm;
-                        height: 40px;
+            // ============================================================
+            // Invite-only → password reveal
+            // ============================================================
+            if root.is-invite: VerticalLayout {
+                spacing: Spacing.xs;
 
-                        Rectangle {
-                            width: 40px;
-                            height: 40px;
-                            border-radius: Spacing.radius-md;
-                            background: Colors.group-accent.with-alpha(0.15);
+                Text {
+                    text: "Password (optional)";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    font-weight: Typography.medium;
+                }
 
-                            Image {
-                                source: Icons.shield;
-                                width: 20px;
-                                height: 20px;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                colorize: Colors.group-accent;
-                            }
+                Input {
+                    placeholder: "Anyone with password joins without invite";
+                    text <=> root.password;
+                }
+            }
+
+            // ============================================================
+            // Private group → friend picker
+            // ============================================================
+            if root.is-private-group: VerticalLayout {
+                spacing: Spacing.sm;
+
+                HorizontalLayout {
+                    spacing: Spacing.sm;
+
+                    Text {
+                        text: "Select friends to invite";
+                        color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.medium;
+                    }
+
+                    Text {
+                        text: "(" + root.selected-friend-count + " selected)";
+                        color: Colors.primary;
+                        font-size: Typography.sm;
+                    }
+                }
+
+                Rectangle {
+                    min-height: 160px;
+                    max-height: 260px;
+                    vertical-stretch: 1;
+                    background: Colors.neo-inset-bg;
+                    border-radius: Spacing.radius-md;
+                    border-width: 1px;
+                    border-color: Colors.neo-inset-shadow;
+                    clip: true;
+
+                    if root.available-friends.length == 0: VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: "No friends yet";
+                            color: Colors.text-muted;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
                         }
+                        Text {
+                            text: "Add friends first to create a private group";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            horizontal-alignment: center;
+                        }
+                    }
 
-                        VerticalLayout {
-                            alignment: center;
+                    Flickable {
+                        viewport-height: friend-list.preferred-height;
+
+                        friend-list := VerticalLayout {
+                            padding: Spacing.xs;
                             spacing: 2px;
 
-                            Text {
-                                text: "Private Group";
-                                color: Colors.text-primary;
-                                font-size: Typography.base;
-                                font-weight: Typography.semibold;
-                            }
+                            for friend[idx] in root.available-friends: Rectangle {
+                                height: 48px;
+                                border-radius: Spacing.radius-sm;
+                                background: friend.selected ? Colors.neo-inset-bg :
+                                            (friend-touch.has-hover ? Colors.surface-hover : transparent);
+                                border-width: friend.selected || friend-touch.has-hover ? 1px : 0px;
+                                border-color: friend.selected ? Colors.glow-primary : Colors.neo-highlight;
 
-                            Text {
-                                text: "Server cannot see this group exists";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                            }
-                        }
-                    }
+                                friend-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.toggle-friend-selection(idx); }
+                                }
 
-                    // Group name input
-                    VerticalLayout {
-                        spacing: Spacing.xs;
+                                HorizontalLayout {
+                                    padding-left: Spacing.sm;
+                                    padding-right: Spacing.sm;
+                                    spacing: Spacing.sm;
 
-                        Text {
-                            text: "Group Name";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-                        }
+                                    // Checkbox
+                                    Rectangle {
+                                        width: 20px;
+                                        height: 20px;
+                                        border-radius: 4px;
+                                        border-width: 2px;
+                                        border-color: friend.selected ? Colors.primary : Colors.text-muted;
+                                        background: friend.selected ? Colors.primary : transparent;
+                                        y: (parent.height - self.height) / 2;
 
-                        Input {
-                            placeholder: "e.g., Close Friends";
-                            text <=> root.channel-name;
-                            error: root.error-message != "" && root.channel-name == "";
-                            error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
-                        }
-                    }
-
-                    // Friend selection header
-                    HorizontalLayout {
-                        spacing: Spacing.sm;
-
-                        Text {
-                            text: "Select Friends to Invite";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-                        }
-
-                        Text {
-                            text: "(" + root.selected-friend-count + " selected)";
-                            color: Colors.primary;
-                            font-size: Typography.sm;
-                        }
-                    }
-
-                    // Friend list (scrollable) — Neo inset container
-                    Rectangle {
-                        vertical-stretch: 1;
-                        min-height: 150px;
-                        background: Colors.neo-inset-bg;
-                        border-radius: Spacing.radius-md;
-                        border-width: 1px;
-                        border-color: Colors.neo-inset-shadow;
-                        clip: true;
-
-                        if root.available-friends.length == 0: VerticalLayout {
-                            alignment: center;
-                            Text {
-                                text: "No friends yet";
-                                color: Colors.text-muted;
-                                font-size: Typography.sm;
-                                horizontal-alignment: center;
-                            }
-                            Text {
-                                text: "Add friends first to create a private group";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                horizontal-alignment: center;
-                            }
-                        }
-
-                        Flickable {
-                            viewport-height: friend-list.preferred-height;
-
-                            friend-list := VerticalLayout {
-                                padding: Spacing.xs;
-                                spacing: 2px;
-
-                                for friend[idx] in root.available-friends: Rectangle {
-                                    height: 48px;
-                                    border-radius: Spacing.radius-sm;
-                                    background: friend.selected ? Colors.neo-inset-bg :
-                                                (friend-touch.has-hover ? Colors.surface-hover : transparent);
-                                    border-width: friend.selected || friend-touch.has-hover ? 1px : 0px;
-                                    border-color: friend.selected ? Colors.glow-primary : Colors.neo-highlight;
-
-                                    // Friend selection touch area (behind content)
-                                    friend-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.toggle-friend-selection(idx);
+                                        if friend.selected: Image {
+                                            source: Icons.check;
+                                            width: 12px;
+                                            height: 12px;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: Colors.text-primary;
                                         }
                                     }
 
-                                    HorizontalLayout {
-                                        padding-left: Spacing.sm;
-                                        padding-right: Spacing.sm;
-                                        spacing: Spacing.sm;
+                                    Avatar {
+                                        size: 32px;
+                                        fallback-text: friend.display-name;
+                                    }
 
-                                        // Checkbox
-                                        Rectangle {
-                                            width: 20px;
-                                            height: 20px;
-                                            border-radius: 4px;
-                                            border-width: 2px;
-                                            border-color: friend.selected ? Colors.primary : Colors.text-muted;
-                                            background: friend.selected ? Colors.primary : transparent;
-                                            y: (parent.height - self.height) / 2;
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        alignment: center;
+                                        spacing: 2px;
 
-                                            if friend.selected: Image {
-                                                source: Icons.check;
-                                                width: 12px;
-                                                height: 12px;
-                                                x: (parent.width - self.width) / 2;
-                                                y: (parent.height - self.height) / 2;
-                                                colorize: Colors.text-primary;
-                                            }
+                                        Text {
+                                            text: friend.display-name;
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            font-weight: Typography.medium;
+                                            overflow: elide;
                                         }
 
-                                        // Avatar
-                                        Avatar {
-                                            size: 32px;
-                                            fallback-text: friend.display-name;
+                                        Text {
+                                            text: friend.username == "" ? "" : "@" + friend.username;
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            overflow: elide;
+                                        }
+                                    }
+
+                                    if friend.selected: Rectangle {
+                                        width: role-text.width + Spacing.sm * 2;
+                                        height: 24px;
+                                        border-radius: Spacing.radius-sm;
+                                        background: role-touch.has-hover ? (friend.role == "admin" ? Colors.warning.with-alpha(0.3) : Colors.surface) : (friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover);
+                                        border-width: 1px;
+                                        border-color: friend.role == "admin" ? Colors.warning.with-alpha(0.5) : Colors.text-muted.with-alpha(0.3);
+
+                                        role-text := Text {
+                                            text: friend.role == "admin" ? "Admin" : "Member";
+                                            color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
+                                            font-size: Typography.xs;
+                                            font-weight: Typography.medium;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
                                         }
 
-                                        // Name
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            alignment: center;
-                                            spacing: 2px;
-
-                                            Text {
-                                                text: friend.display-name;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                                overflow: elide;
-                                            }
-
-                                            Text {
-                                                text: "@" + friend.username;
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                overflow: elide;
-                                            }
-                                        }
-
-                                        // Role selector (only shown when selected)
-                                        if friend.selected: Rectangle {
-                                            width: role-text.width + Spacing.sm * 2;
-                                            height: 24px;
-                                            border-radius: Spacing.radius-sm;
-                                            background: role-touch.has-hover ? (friend.role == "admin" ? Colors.warning.with-alpha(0.3) : Colors.surface) : (friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover);
-                                            border-width: 1px;
-                                            border-color: friend.role == "admin" ? Colors.warning.with-alpha(0.5) : Colors.text-muted.with-alpha(0.3);
-
-                                            role-text := Text {
-                                                text: friend.role == "admin" ? "Admin" : "Member";
-                                                color: friend.role == "admin" ? Colors.warning : Colors.text-secondary;
-                                                font-size: Typography.xs;
-                                                font-weight: Typography.medium;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                            }
-
-                                            role-touch := TouchArea {
-                                                mouse-cursor: pointer;
-                                                clicked => {
-                                                    root.toggle-friend-role(idx);
-                                                }
-                                            }
+                                        role-touch := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.toggle-friend-role(idx); }
                                         }
                                     }
                                 }
@@ -469,551 +548,315 @@ export component CreateChannelModal inherits Rectangle {
                         }
                     }
                 }
+            }
 
-                // Step 2: Regular channel details form
-                if current-step == 2 && !root.is-private-group: VerticalLayout {
-                    spacing: Spacing.md;
+            // ============================================================
+            // More options (collapsible) — hidden for private-group path
+            // ============================================================
+            if !root.is-private-group: VerticalLayout {
+                spacing: Spacing.xs;
 
-                    // Selected template indicator
+                Rectangle {
+                    height: 28px;
+                    background: transparent;
+
                     HorizontalLayout {
-                        spacing: Spacing.sm;
-                        height: 32px;
+                        spacing: Spacing.xs;
+                        alignment: start;
 
                         Text {
-                            text: "Template:";
+                            text: root.more-options-expanded ? "▾ More options" : "▸ More options";
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
+                            font-weight: Typography.medium;
                             vertical-alignment: center;
                         }
-
-                        Rectangle {
-                            background: Colors.primary.with-alpha(0.2);
-                            border-radius: Spacing.radius-sm;
-                            width: template-label.width + Spacing.md * 2;
-                            height: 24px;
-
-                            template-label := Text {
-                                x: Spacing.md;
-                                text: root.selected-template;
-                                color: Colors.primary;
-                                font-size: Typography.xs;
-                                font-weight: Typography.medium;
-                                vertical-alignment: center;
-                                height: 100%;
-                            }
-                        }
                     }
 
-                    // Channel name input
-                    VerticalLayout {
-                        spacing: Spacing.xs;
-
-                        Text {
-                            text: "Channel Name";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-                        }
-
-                        Input {
-                            placeholder: "e.g., team-updates";
-                            text <=> root.channel-name;
-                            error: root.error-message != "" && root.channel-name == "";
-                            error-message: root.error-message != "" && root.channel-name == "" ? "Name is required" : "";
-                        }
+                    more-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.more-options-expanded = !root.more-options-expanded; }
                     }
+                }
 
-                    // Channel description input
+                if root.more-options-expanded: VerticalLayout {
+                    spacing: Spacing.md;
+                    padding-left: Spacing.sm;
+
+                    // Auto-delete
                     VerticalLayout {
                         spacing: Spacing.xs;
-
-                        Text {
-                            text: "Description (optional)";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-                        }
-
-                        Input {
-                            placeholder: "What's this channel about?";
-                            text <=> root.channel-description;
-                        }
-                    }
-
-                    // Channel icon URL input
-                    VerticalLayout {
-                        spacing: Spacing.xs;
-
-                        HorizontalLayout {
-                            spacing: Spacing.sm;
-                            Image {
-                                source: Icons.image;
-                                width: 16px;
-                                height: 16px;
-                                colorize: Colors.text-secondary;
-                                y: 2px;
-                            }
-                            Text {
-                                text: "Channel Icon (optional)";
-                                color: Colors.text-secondary;
-                                font-size: Typography.sm;
-                                font-weight: Typography.medium;
-                            }
-                        }
 
                         HorizontalLayout {
                             spacing: Spacing.sm;
                             alignment: start;
 
-                            // Preview square (48x48) — shows picked image or placeholder
                             Rectangle {
-                                width: 48px;
-                                height: 48px;
-                                border-radius: Spacing.radius-sm;
-                                background: Colors.surface;
-                                border-width: 1px;
-                                border-color: Colors.neo-highlight;
-                                clip: true;
+                                width: 20px;
+                                height: 20px;
+                                border-radius: 4px;
+                                border-width: 2px;
+                                border-color: root.use-ephemeral ? Colors.primary : Colors.text-muted;
+                                background: root.use-ephemeral ? Colors.primary : transparent;
+                                y: (parent.height - self.height) / 2;
 
-                                if root.has-icon-preview: Image {
-                                    source: root.icon-preview;
-                                    width: 100%;
-                                    height: 100%;
-                                    image-fit: cover;
-                                }
-                                if !root.has-icon-preview: Image {
-                                    source: Icons.image;
-                                    width: 20px;
-                                    height: 20px;
-                                    colorize: Colors.text-muted;
+                                if root.use-ephemeral: Image {
+                                    source: Icons.check;
+                                    width: 12px;
+                                    height: 12px;
                                     x: (parent.width - self.width) / 2;
                                     y: (parent.height - self.height) / 2;
-                                }
-                            }
-
-                            Button {
-                                text: root.has-icon-preview ? "Change image" : "Upload image";
-                                clicked => { root.pick-channel-icon(); }
-                            }
-                        }
-                    }
-
-                    // Visibility toggle (Public / Private)
-                    VerticalLayout {
-                        spacing: Spacing.xs;
-
-                        Text {
-                            text: "Visibility";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-                        }
-
-                        HorizontalLayout {
-                            spacing: Spacing.sm;
-
-                            // Public option — Neo toggle card
-                            Rectangle {
-                                height: 40px;
-                                horizontal-stretch: 1;
-                                border-radius: Spacing.radius-md;
-                                border-width: 1px;
-                                border-color: !root.is-private ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
-                                background: !root.is-private ? Colors.neo-inset-bg : (public-touch.has-hover ? Colors.surface-hover : Colors.surface);
-
-                                HorizontalLayout {
-                                    padding-left: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    Image {
-                                        source: Icons.globe;
-                                        width: 20px;
-                                        height: 20px;
-                                        colorize: !root.is-private ? Colors.primary : Colors.text-secondary;
-                                        y: (parent.height - self.height) / 2;
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        spacing: 2px;
-
-                                        Text {
-                                            text: "Public";
-                                            color: !root.is-private ? Colors.primary : Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Anyone can join";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
+                                    colorize: Colors.text-primary;
                                 }
 
-                                public-touch := TouchArea {
+                                ephemeral-touch := TouchArea {
                                     mouse-cursor: pointer;
-                                    clicked => {
-                                        root.is-private = false;
-                                    }
+                                    clicked => { root.use-ephemeral = !root.use-ephemeral; }
                                 }
                             }
 
-                            // Private option — Neo toggle card
-                            Rectangle {
-                                height: 40px;
-                                horizontal-stretch: 1;
-                                border-radius: Spacing.radius-md;
-                                border-width: 1px;
-                                border-color: root.is-private ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
-                                background: root.is-private ? Colors.neo-inset-bg : (private-touch.has-hover ? Colors.surface-hover : Colors.surface);
-
-                                HorizontalLayout {
-                                    padding-left: Spacing.md;
-                                    spacing: Spacing.sm;
-
-                                    Image {
-                                        source: Icons.lock;
-                                        width: 20px;
-                                        height: 20px;
-                                        colorize: root.is-private ? Colors.primary : Colors.text-secondary;
-                                        y: (parent.height - self.height) / 2;
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        spacing: 2px;
-
-                                        Text {
-                                            text: "Private";
-                                            color: root.is-private ? Colors.primary : Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            font-weight: Typography.medium;
-                                        }
-
-                                        Text {
-                                            text: "Invite only";
-                                            color: Colors.text-muted;
-                                            font-size: Typography.xs;
-                                        }
-                                    }
-                                }
-
-                                private-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.is-private = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Password field (for private channels)
-                    if root.is-private: VerticalLayout {
-                        spacing: Spacing.xs;
-
-                        Text {
-                            text: "Channel Password (optional)";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-                        }
-
-                        Input {
-                            placeholder: "Leave empty for invite-only";
-                            text <=> root.password;
-                        }
-                    }
-
-                    // Advanced settings row
-                    HorizontalLayout {
-                        spacing: Spacing.md;
-
-                        // Encrypted toggle — Neo
-                        Rectangle {
-                            height: 36px;
-                            horizontal-stretch: 1;
-                            border-radius: Spacing.radius-md;
-                            border-width: 1px;
-                            border-color: root.is-encrypted ? Colors.success.with-alpha(0.4) : Colors.neo-inset-shadow;
-                            background: root.is-encrypted ? Colors.neo-inset-bg : (encrypted-touch.has-hover ? Colors.surface-hover : Colors.surface);
-
-                            HorizontalLayout {
-                                padding-left: Spacing.md;
-                                padding-right: Spacing.md;
-                                spacing: Spacing.sm;
-
-                                Image {
-                                    source: root.is-encrypted ? Icons.shield : Icons.unlock;
-                                    width: 16px;
-                                    height: 16px;
-                                    colorize: root.is-encrypted ? Colors.success : Colors.text-secondary;
-                                    y: (parent.height - self.height) / 2;
-                                }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
 
                                 Text {
-                                    text: "Encrypted";
-                                    color: root.is-encrypted ? Colors.success : Colors.text-secondary;
+                                    text: "Auto-delete messages";
+                                    color: Colors.text-primary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            encrypted-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.is-encrypted = !root.is-encrypted;
-                                }
-                            }
-                        }
-
-                        // Friends only toggle — Neo
-                        Rectangle {
-                            height: 36px;
-                            horizontal-stretch: 1;
-                            border-radius: Spacing.radius-md;
-                            border-width: 1px;
-                            border-color: root.friends-only ? Colors.info.with-alpha(0.4) : Colors.neo-inset-shadow;
-                            background: root.friends-only ? Colors.neo-inset-bg : (friends-touch.has-hover ? Colors.surface-hover : Colors.surface);
-
-                            HorizontalLayout {
-                                padding-left: Spacing.md;
-                                padding-right: Spacing.md;
-                                spacing: Spacing.sm;
-
-                                Image {
-                                    source: Icons.users;
-                                    width: 16px;
-                                    height: 16px;
-                                    colorize: root.friends-only ? Colors.info : Colors.text-secondary;
-                                    y: (parent.height - self.height) / 2;
                                 }
 
                                 Text {
-                                    text: "Friends Only";
-                                    color: root.friends-only ? Colors.info : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    font-weight: Typography.medium;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            friends-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.friends-only = !root.friends-only;
+                                    text: "Messages expire after the chosen time.";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
                                 }
                             }
                         }
-                    }
 
-                    // Error message display
-                    if root.error-message != "" && root.channel-name != "": Text {
-                        text: root.error-message;
-                        color: Colors.error;
-                        font-size: Typography.sm;
-                    }
-                }
-
-                // Step 3: AI configuration (only for ai-assistant template)
-                if current-step == 3 && root.is-ai-template: VerticalLayout {
-                    spacing: Spacing.md;
-
-                    // Provider selection
-                    VerticalLayout {
-                        spacing: Spacing.xs;
-
-                        Text {
-                            text: "AI Provider";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-                        }
-
-                        // Provider buttons (simple button selection)
-                        HorizontalLayout {
-                            spacing: Spacing.sm;
-
-                            for provider in root.ai-providers: Rectangle {
-                                height: 36px;
-                                horizontal-stretch: 1;
-                                border-radius: Spacing.radius-md;
-                                border-width: 1px;
-                                border-color: root.ai-provider == provider.id ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
-                                background: root.ai-provider == provider.id ? Colors.neo-inset-bg : (provider-touch.has-hover ? Colors.surface-hover : Colors.surface);
-
-                                Text {
-                                    text: provider.name;
-                                    color: root.ai-provider == provider.id ? Colors.primary : Colors.text-primary;
-                                    font-size: Typography.sm;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                    width: 100%;
-                                    height: 100%;
-                                }
-
-                                provider-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.ai-provider = provider.id;
-                                        root.ai-model = "";
-                                        root.provider-selected(provider.id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Model selection (shown when provider is selected)
-                    if root.ai-provider != "": VerticalLayout {
-                        spacing: Spacing.xs;
-
-                        Text {
-                            text: "Model";
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: Typography.medium;
-                        }
-
-                        // Loading state
-                        if root.ai-models-loading && root.ai-models-error == "": Text {
-                            text: "Loading models...";
-                            color: Colors.text-muted;
-                            font-size: Typography.sm;
-                        }
-
-                        // Error state with retry
-                        if root.ai-models-error != "": VerticalLayout {
+                        if root.use-ephemeral: HorizontalLayout {
                             spacing: Spacing.xs;
+                            padding-left: 32px;
+                            alignment: start;
 
                             Text {
-                                text: root.ai-models-error;
-                                color: Colors.error;
-                                font-size: Typography.sm;
-                                wrap: word-wrap;
+                                text: "After";
+                                color: Colors.text-secondary;
+                                font-size: Typography.xs;
+                                vertical-alignment: center;
                             }
 
-                            Button {
-                                text: "Retry";
-                                variant: "secondary";
-                                clicked => {
-                                    root.provider-selected(root.ai-provider);
+                            Rectangle {
+                                width: 60px;
+                                height: 28px;
+                                Input {
+                                    width: 100%;
+                                    height: 100%;
+                                    placeholder: "24";
+                                    text: root.ttl-hours;
+                                    edited(t) => {
+                                        root.ttl-hours = t.to-float();
+                                    }
                                 }
                             }
-                        }
 
-                        Flickable {
-                            max-height: 150px;
-                            viewport-height: model-layout.preferred-height;
-
-                            model-layout := VerticalLayout {
-                                spacing: Spacing.xs;
-
-                                for model in root.ai-models: Rectangle {
-                                    height: 40px;
-                                    border-radius: Spacing.radius-md;
-                                    border-width: 1px;
-                                    border-color: root.ai-model == model.id ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
-                                    background: root.ai-model == model.id ? Colors.neo-inset-bg : (model-touch.has-hover ? Colors.surface-hover : Colors.surface);
-
-                                    HorizontalLayout {
-                                        padding-left: Spacing.md;
-                                        padding-right: Spacing.md;
-
-                                        Text {
-                                            text: model.name;
-                                            color: root.ai-model == model.id ? Colors.primary : Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            vertical-alignment: center;
-                                        }
-                                    }
-
-                                    model-touch := TouchArea {
-                                        mouse-cursor: pointer;
-                                        clicked => {
-                                            root.ai-model = model.id;
-                                        }
-                                    }
-                                }
+                            Text {
+                                text: "hours";
+                                color: Colors.text-secondary;
+                                font-size: Typography.xs;
+                                vertical-alignment: center;
                             }
                         }
                     }
 
-                    // Error message
-                    if root.error-message != "": Text {
-                        text: root.error-message;
-                        color: Colors.error;
-                        font-size: Typography.sm;
+                    // AI assistant
+                    VerticalLayout {
+                        spacing: Spacing.xs;
+
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 20px;
+                                height: 20px;
+                                border-radius: 4px;
+                                border-width: 2px;
+                                border-color: root.use-ai ? Colors.primary : Colors.text-muted;
+                                background: root.use-ai ? Colors.primary : transparent;
+                                y: (parent.height - self.height) / 2;
+
+                                if root.use-ai: Image {
+                                    source: Icons.check;
+                                    width: 12px;
+                                    height: 12px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: Colors.text-primary;
+                                }
+
+                                ai-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.use-ai = !root.use-ai;
+                                        if root.use-ai && root.ai-provider != "" {
+                                            root.provider-selected(root.ai-provider);
+                                        }
+                                    }
+                                }
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+
+                                Text {
+                                    text: "AI assistant";
+                                    color: Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                }
+
+                                Text {
+                                    text: "Add an AI bot that replies in this channel.";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                }
+                            }
+                        }
+
+                        if root.use-ai: VerticalLayout {
+                            spacing: Spacing.sm;
+                            padding-left: 32px;
+
+                            // Provider
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+
+                                for provider in root.ai-providers: Rectangle {
+                                    height: 32px;
+                                    horizontal-stretch: 1;
+                                    border-radius: Spacing.radius-md;
+                                    border-width: 1px;
+                                    border-color: root.ai-provider == provider.id ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                                    background: root.ai-provider == provider.id ? Colors.neo-inset-bg : (provider-touch.has-hover ? Colors.surface-hover : Colors.surface);
+
+                                    Text {
+                                        text: provider.name;
+                                        color: root.ai-provider == provider.id ? Colors.primary : Colors.text-primary;
+                                        font-size: Typography.xs;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        width: 100%;
+                                        height: 100%;
+                                    }
+
+                                    provider-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.ai-provider = provider.id;
+                                            root.ai-model = "";
+                                            root.provider-selected(provider.id);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Model list
+                            if root.ai-provider != "": VerticalLayout {
+                                spacing: Spacing.xs;
+
+                                if root.ai-models-loading: Text {
+                                    text: "Loading models...";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                }
+
+                                if root.ai-models-error != "": VerticalLayout {
+                                    spacing: 2px;
+                                    Text {
+                                        text: root.ai-models-error;
+                                        color: Colors.error;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                    Button {
+                                        text: "Retry";
+                                        variant: "secondary";
+                                        clicked => { root.provider-selected(root.ai-provider); }
+                                    }
+                                }
+
+                                Flickable {
+                                    max-height: 120px;
+                                    viewport-height: model-layout.preferred-height;
+
+                                    model-layout := VerticalLayout {
+                                        spacing: 2px;
+
+                                        for model in root.ai-models: Rectangle {
+                                            height: 32px;
+                                            border-radius: Spacing.radius-sm;
+                                            border-width: 1px;
+                                            border-color: root.ai-model == model.id ? Colors.glow-cyan.with-alpha(0.4) : Colors.neo-inset-shadow;
+                                            background: root.ai-model == model.id ? Colors.neo-inset-bg : (model-touch.has-hover ? Colors.surface-hover : Colors.surface);
+
+                                            HorizontalLayout {
+                                                padding-left: Spacing.sm;
+                                                padding-right: Spacing.sm;
+
+                                                Text {
+                                                    text: model.name;
+                                                    color: root.ai-model == model.id ? Colors.primary : Colors.text-primary;
+                                                    font-size: Typography.xs;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+
+                                            model-touch := TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => { root.ai-model = model.id; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
-            // Footer with action buttons
+            // ============================================================
+            // Error banner
+            // ============================================================
+            if root.error-message != "" && root.channel-name != "": Text {
+                text: root.error-message;
+                color: Colors.error;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+
+            // ============================================================
+            // Footer
+            // ============================================================
             HorizontalLayout {
                 spacing: Spacing.md;
                 height: 40px;
 
-                // Back button (Step 2 or 3)
-                if current-step > 1: Button {
-                    text: "Back";
-                    variant: "ghost";
+                Rectangle { horizontal-stretch: 1; }
 
-                    clicked => {
-                        current-step = current-step - 1;
-                    }
-                }
-
-                // Spacer
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-
-                // Cancel button
                 Button {
                     text: "Cancel";
                     variant: "secondary";
-
-                    clicked => {
-                        root.close();
-                    }
+                    clicked => { root.close(); }
                 }
 
-                // Next button (Step 1)
-                if current-step == 1: Button {
-                    text: "Next";
-                    variant: "primary";
-                    disabled: root.selected-template == "";
-
-                    clicked => {
-                        if root.selected-template != "" {
-                            current-step = 2;
-                        }
-                    }
-                }
-
-                // Next button (Step 2 for AI template) or Create button (Step 2 for non-AI)
-                if current-step == 2 && root.is-ai-template: Button {
-                    text: "Next";
-                    variant: "primary";
-                    disabled: root.channel-name == "";
-
-                    clicked => {
-                        if root.channel-name != "" {
-                            current-step = 3;
-                        }
-                    }
-                }
-
-                // Create button for private group (uses separate callback)
-                if current-step == 2 && root.is-private-group: Button {
-                    text: root.loading ? "" : "Create Private Group";
+                // Private-group: uses dedicated callback + requires selected friends
+                if root.is-private-group: Button {
+                    text: root.loading ? "" : "Create group";
                     variant: "primary";
                     disabled: root.channel-name == "" || root.selected-friend-count == 0 || root.loading;
                     loading: root.loading;
-
                     clicked => {
                         if root.channel-name != "" && root.selected-friend-count > 0 && !root.loading {
                             root.create-private-group(root.channel-name, root.available-friends);
@@ -1021,61 +864,28 @@ export component CreateChannelModal inherits Rectangle {
                     }
                 }
 
-                // Create button for regular channels
-                if current-step == 2 && !root.is-ai-template && !root.is-private-group: Button {
+                // Regular channel (open/invite): derive template string from state
+                if !root.is-private-group: Button {
                     text: root.loading ? "" : "Create";
                     variant: "primary";
-                    disabled: root.channel-name == "" || root.loading;
+                    disabled: root.channel-name == "" || root.loading || (root.use-ai && (root.ai-provider == "" || root.ai-model == ""));
                     loading: root.loading;
-
                     clicked => {
-                        if root.channel-name != "" && !root.loading {
+                        if root.channel-name != "" && !root.loading && !(root.use-ai && (root.ai-provider == "" || root.ai-model == "")) {
                             root.create(
                                 root.channel-name,
                                 root.channel-description,
-                                root.selected-template,
+                                root.use-ai ? "ai-assistant" : (root.use-ephemeral ? "ephemeral" : "general"),
                                 {
-                                    is-private: root.is-private,
-                                    is-encrypted: root.is-encrypted,
-                                    is-ephemeral: root.is-ephemeral || root.selected-template == "ephemeral",
+                                    is-private: root.is-invite,
+                                    is-ephemeral: root.use-ephemeral,
                                     ttl-hours: root.ttl-hours,
                                     max-members: root.max-members,
                                     password: root.password,
-                                    friends-only: root.friends-only,
                                     icon-url: root.icon-url,
                                 },
-                                "",
-                                ""
-                            );
-                        }
-                    }
-                }
-
-                // Create button (Step 3 for AI template)
-                if current-step == 3: Button {
-                    text: root.loading ? "" : "Create";
-                    variant: "primary";
-                    disabled: root.channel-name == "" || root.ai-provider == "" || root.ai-model == "" || root.loading;
-                    loading: root.loading;
-
-                    clicked => {
-                        if root.channel-name != "" && root.ai-provider != "" && root.ai-model != "" && !root.loading {
-                            root.create(
-                                root.channel-name,
-                                root.channel-description,
-                                root.selected-template,
-                                {
-                                    is-private: root.is-private,
-                                    is-encrypted: root.is-encrypted,
-                                    is-ephemeral: root.is-ephemeral,
-                                    ttl-hours: root.ttl-hours,
-                                    max-members: root.max-members,
-                                    password: root.password,
-                                    friends-only: root.friends-only,
-                                    icon-url: root.icon-url,
-                                },
-                                root.ai-provider,
-                                root.ai-model
+                                root.use-ai ? root.ai-provider : "",
+                                root.use-ai ? root.ai-model : ""
                             );
                         }
                     }

@@ -61,9 +61,43 @@ impl AnonContentService for DmContentBridge<'_> {
         self.0.update_message_text_by_sender(id, sender_id, ts, text).map_err(|e| e.to_string())
     }
 
-    fn store_message(&self, id: &AnonDmId, sender_id: &UserId, content_type: i32, content_json: &str, sent_at: u64) -> Result<String, String> {
-        self.0.store_message(id, sender_id, content_type, content_json, sent_at)
+    fn store_message(
+        &self,
+        id: &AnonDmId,
+        sender_id: &UserId,
+        content_type: i32,
+        content_json: &str,
+        sent_at: u64,
+        quote: Option<super::base_anon::QuoteContext>,
+    ) -> Result<String, String> {
+        self.0.store_message(id, sender_id, content_type, content_json, sent_at, quote)
             .map(|id| id.as_str().to_string())
+            .map_err(|e| e.to_string())
+    }
+
+    fn add_reaction(
+        &self,
+        id: &AnonDmId,
+        target_sender_id: &UserId,
+        target_sent_at_ns: u64,
+        reactor_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, String> {
+        self.0
+            .add_reaction(id, target_sender_id, target_sent_at_ns, reactor_id, emoji)
+            .map_err(|e| e.to_string())
+    }
+
+    fn remove_reaction(
+        &self,
+        id: &AnonDmId,
+        target_sender_id: &UserId,
+        target_sent_at_ns: u64,
+        reactor_id: &UserId,
+        emoji: &str,
+    ) -> Result<bool, String> {
+        self.0
+            .remove_reaction(id, target_sender_id, target_sent_at_ns, reactor_id, emoji)
             .map_err(|e| e.to_string())
     }
 

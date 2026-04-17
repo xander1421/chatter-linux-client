@@ -110,6 +110,29 @@ pub fn proto_to_domain_message_with_sender(
     })
 }
 
+/// Extracted quote context (author display name, preview text) from a
+/// stored `content_json` blob on anonymous DM/group messages.
+///
+/// Lives in core because the JSON schema is part of the anonymous-message
+/// storage contract — not presentation.
+pub fn extract_quote_from_content_json(content_json: &str) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(content_json).ok()?;
+    let quote = v.get("quote")?;
+    // Prefer stored display name, fall back to UUID.
+    let author_name = quote
+        .get("author_name")
+        .and_then(|n| n.as_str())
+        .filter(|n| !n.is_empty())
+        .or_else(|| quote.get("author_id").and_then(|n| n.as_str()))
+        .unwrap_or_default()
+        .to_string();
+    let preview = quote.get("preview")?.as_str().unwrap_or_default().to_string();
+    if author_name.is_empty() && preview.is_empty() {
+        return None;
+    }
+    Some((author_name, preview))
+}
+
 /// Extract attachment IDs from proto message content.
 fn extract_attachment_ids_from_content(
     proto_content: Option<&chat_v1::message::Content>,

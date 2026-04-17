@@ -9,8 +9,6 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let signal_service = ui_ctx.signal().clone();
-    let session_service = ui_ctx.sessions().clone();
 
     // Change password
     let weak_window = window.as_weak();
@@ -70,11 +68,11 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     });
 
     // Copy fingerprint
-    let signal_service_fp = signal_service.clone();
+    let ui_ctx_fp = ui_ctx.clone();
     window.on_settings_copy_fingerprint(move || {
-        let signal_service = signal_service_fp.clone();
+        let ui_ctx = ui_ctx_fp.clone();
         tokio::spawn(async move {
-            let fingerprint = match signal_service.get_identity_fingerprint().await {
+            let fingerprint = match ui_ctx.my_identity_fingerprint().await {
                 Ok(fp) => fp,
                 Err(e) => {
                     tracing::error!("Failed to get identity fingerprint: {}", e);
@@ -104,9 +102,9 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     });
 
     // Sealed sender toggle
-    let session_service_sealed = session_service.clone();
+    let ui_ctx_sealed = ui_ctx.clone();
     window.on_settings_sealed_sender_changed(move |unrestricted: bool| {
-        if let Err(e) = session_service_sealed.set_bool_setting("privacy.sealed_sender_unrestricted", unrestricted) {
+        if let Err(e) = ui_ctx_sealed.set_sealed_sender_unrestricted(unrestricted) {
             tracing::error!("Failed to save sealed sender setting: {}", e);
         } else {
             tracing::debug!(
@@ -331,9 +329,9 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     });
 
     // Local AI enabled toggle
-    let local_ai_service = ui_ctx.local_ai().clone();
+    let ui_ctx_ai = ui_ctx.clone();
     window.on_settings_local_ai_enabled_changed(move |enabled: bool| {
-        if let Err(e) = local_ai_service.set_enabled(enabled) {
+        if let Err(e) = ui_ctx_ai.set_local_ai_enabled(enabled) {
             tracing::error!("Failed to save local AI enabled setting: {}", e);
         } else {
             tracing::debug!("Local AI enabled setting changed to: {}", enabled);
@@ -342,10 +340,10 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Load AI model
     let weak_window = window.as_weak();
-    let local_ai_service = ui_ctx.local_ai().clone();
+    let ui_ctx_load = ui_ctx.clone();
     window.on_settings_local_ai_load_model(move |model_id: SharedString| {
         let weak = weak_window.clone();
-        let local_ai = local_ai_service.clone();
+        let ui_ctx = ui_ctx_load.clone();
         let model_id = model_id.to_string();
 
         tokio::spawn(async move {
@@ -360,7 +358,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             });
 
             // Save model preference first
-            if let Err(e) = local_ai.set_preferred_model(&model_id, None) {
+            if let Err(e) = ui_ctx.set_local_ai_preferred_model(&model_id, None) {
                 let error_msg = e.to_string();
                 tracing::error!("Failed to save model preference: {}", error_msg);
                 let _ = slint::invoke_from_event_loop(move || {
@@ -374,7 +372,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             }
 
             // Load the model
-            match local_ai.load_model(model_id.clone(), None).await {
+            match ui_ctx.load_local_ai_model(model_id.clone(), None).await {
                 Ok(info) => {
                     let status = format!("Loaded: {}", info.model_id);
                     tracing::info!("Local AI model loaded: {}", info.model_id);
@@ -403,13 +401,13 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Unload AI model
     let weak_window = window.as_weak();
-    let local_ai_service = ui_ctx.local_ai().clone();
+    let ui_ctx_unload = ui_ctx.clone();
     window.on_settings_local_ai_unload_model(move || {
         let weak = weak_window.clone();
-        let local_ai = local_ai_service.clone();
+        let ui_ctx = ui_ctx_unload.clone();
 
         tokio::spawn(async move {
-            match local_ai.unload_model().await {
+            match ui_ctx.unload_local_ai_model().await {
                 Ok(()) => {
                     tracing::info!("Local AI model unloaded");
                     let _ = slint::invoke_from_event_loop(move || {

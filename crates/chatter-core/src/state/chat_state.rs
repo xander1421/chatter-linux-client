@@ -99,6 +99,51 @@ impl ActiveConversation {
             Self::None => None,
         }
     }
+
+    // ========================================================================
+    // Selection predicates
+    //
+    // Typed "is this conversation the active one?" checks used by the UI to
+    // highlight sidebar items, gate unread increments, and route receipts
+    // without string-comparing Slint window properties.
+    // ========================================================================
+
+    /// True if the active conversation is the given regular channel.
+    pub fn matches_channel(&self, channel_id: &ChannelId) -> bool {
+        matches!(self, Self::Channel(id) if id == channel_id)
+    }
+
+    /// True if the active conversation is a DM matching either the channel
+    /// or the peer. Used by the DM sidebar where items are identified by
+    /// `channel_id` and the header by `peer_id`.
+    pub fn matches_dm(&self, channel_id: &ChannelId, peer_id: &UserId) -> bool {
+        match self {
+            Self::ServerDm { channel_id: cid, peer_id: pid }
+            | Self::MailboxDm { channel_id: cid, peer_id: pid } => {
+                cid == channel_id || pid == peer_id
+            }
+            _ => false,
+        }
+    }
+
+    /// True if the active conversation is a DM with the given peer.
+    pub fn matches_dm_peer(&self, peer_id: &UserId) -> bool {
+        matches!(
+            self,
+            Self::ServerDm { peer_id: pid, .. } | Self::MailboxDm { peer_id: pid, .. }
+                if pid == peer_id
+        )
+    }
+
+    /// True if the active conversation is the given anonymous DM.
+    pub fn matches_anon_dm(&self, id: &AnonDmId) -> bool {
+        matches!(self, Self::AnonDm(anon) if anon == id)
+    }
+
+    /// True if the active conversation is the given anonymous group.
+    pub fn matches_anon_group(&self, id: &AnonGroupId) -> bool {
+        matches!(self, Self::AnonGroup(g) if g == id)
+    }
 }
 
 /// Maximum number of concurrent thread panels allowed.

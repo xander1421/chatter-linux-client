@@ -31,6 +31,7 @@ export struct SectionConversationData {
     last-message: string,
     timestamp: string,
     unread-count: int,
+    is-selected: bool,           // Rust-computed selection flag; drives highlight
 }
 
 // ── Single conversation item inside a section ───────────────────
@@ -355,7 +356,6 @@ component CustomSectionHeader inherits Rectangle {
 export component CustomSectionList inherits Rectangle {
     in property <[CustomSectionData]> sections: [];
     in property <[SectionConversationData]> section-conversations: [];
-    in property <string> selected-conversation-id: "";
     in property <bool> collapsed: false;
 
     callback create-section-clicked();
@@ -441,7 +441,7 @@ export component CustomSectionList inherits Rectangle {
                     has-avatar: conv.has-avatar;
                     initials: conv.initials;
                     unread-count: conv.unread-count;
-                    selected: conv.conversation-id == root.selected-conversation-id;
+                    selected: conv.is-selected;
                     collapsed: root.collapsed;
 
                     clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }

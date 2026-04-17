@@ -163,8 +163,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             // Update server URL synchronously
-            if ui_ctx.auth().endpoint() != server_url {
-                if let Err(e) = ui_ctx.auth().set_server_url(&server_url) {
+            if ui_ctx.endpoint() != server_url {
+                if let Err(e) = ui_ctx.set_server_url(&server_url) {
                     if let Some(w) = weak.upgrade() {
                         w.set_register_loading(false);
                         w.set_register_error(format!("Invalid Server URL: {}", e).into());
@@ -195,8 +195,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // runtime was dropped.
             crate::rt_handle().spawn(async move {
                 // Connect if needed
-                if !ui_ctx.auth().is_connected() {
-                    if let Err(e) = ui_ctx.auth().connect().await {
+                if !ui_ctx.is_connected() {
+                    if let Err(e) = ui_ctx.connect().await {
                         let error_msg = format!("Failed to connect: {}", e);
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
@@ -273,7 +273,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     Err(e) => {
                         tracing::error!("Registration failed: {}", e);
-                        let _ = ui_ctx.auth().cleanup_failed_registration().await;
+                        let _ = ui_ctx.cleanup_failed_registration().await;
                         let error_msg = e.to_string();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {

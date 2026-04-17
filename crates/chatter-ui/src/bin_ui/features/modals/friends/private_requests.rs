@@ -7,7 +7,6 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::anon_dm::AnonDmService;
 
 use crate::bin_ui::converters::{get_initials, DMListItemExt, DMListItemSendData, FriendRequestExt, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
@@ -64,7 +63,7 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     );
 
                     // Refresh private requests and add to DM sidebar
-                    refresh_private_requests(weak.clone(), ui_ctx.anon_dms().clone()).await;
+                    refresh_private_requests(weak.clone(), &ui_ctx).await;
 
                     // Add to DM sidebar
                     add_anon_dm_to_sidebar(weak.clone(), &dm, &peer_name);
@@ -127,10 +126,10 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
                     tracing::info!("Declined private message request {}", conv_id_str);
 
                     // Refresh private requests list
-                    refresh_private_requests(weak.clone(), ui_ctx.anon_dms().clone()).await;
+                    refresh_private_requests(weak.clone(), &ui_ctx).await;
 
-                    // Remove from DM sidebar
-                    let channel_id = format!("anon_dm:{}", conv_id_str);
+                    // Remove from DM sidebar (raw uuid — no "anon_dm:" prefix)
+                    let channel_id = conv_id_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             remove_dm_from_sidebar(&w, &channel_id);
@@ -156,11 +155,11 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
 /// This blocks the conversation AND the user globally.
 pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_dm_service = ui_ctx.anon_dms().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_friends_block_private_request(move |conversation_id: SharedString| {
         let weak = weak_window.clone();
-        let anon_dm_service = anon_dm_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let conv_id_str = conversation_id.to_string();
 
         tokio::spawn(async move {
@@ -187,19 +186,16 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
             };
 
             // Get the conversation to find the peer ID for global block
-            let peer_id = match anon_dm_service.get_conversation(&conv_id) {
-                Ok(Some(dm)) => Some(dm.peer_id),
-                _ => None,
-            };
+            let peer_id = ui_ctx.get_anon_dm_conversation(&conv_id).map(|dm| dm.peer_id);
 
             // Block the conversation
-            match anon_dm_service.block_conversation(&conv_id) {
+            match ui_ctx.block_anon_dm_conversation(&conv_id) {
                 Ok(_) => {
                     tracing::info!("Blocked private message request {}", conv_id_str);
 
                     // Also block the user globally if we have their ID
                     if let Some(user_id) = peer_id {
-                        if let Err(e) = anon_dm_service.block_user(&user_id, Some("Blocked from request")) {
+                        if let Err(e) = ui_ctx.block_anon_dm_user(&user_id, Some("Blocked from request")) {
                             tracing::warn!("Failed to globally block user: {}", e);
                         } else {
                             tracing::info!("Globally blocked user {} from anonymous DMs", user_id);
@@ -207,11 +203,11 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
                     }
 
                     // Refresh private requests list and blocked users list
-                    refresh_private_requests(weak.clone(), anon_dm_service.clone()).await;
-                    refresh_blocked_users(weak.clone(), anon_dm_service.clone());
+                    refresh_private_requests(weak.clone(), &ui_ctx).await;
+                    refresh_blocked_users(weak.clone(), &ui_ctx);
 
-                    // Remove from DM sidebar
-                    let channel_id = format!("anon_dm:{}", conv_id_str);
+                    // Remove from DM sidebar (raw uuid — no "anon_dm:" prefix)
+                    let channel_id = conv_id_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             remove_dm_from_sidebar(&w, &channel_id);
@@ -235,55 +231,42 @@ pub(crate) fn wire_block_private_request(window: &MainWindow, ui_ctx: &Arc<Chatt
 /// Refresh the private (anon DM) requests list in the UI.
 async fn refresh_private_requests(
     weak_window: slint::Weak<MainWindow>,
-    anon_dm_service: Arc<AnonDmService>,
+    ui_ctx: &Arc<ChatterClient>,
 ) {
-    match anon_dm_service.list_message_requests() {
-        Ok(requests) => {
-            // Use Send-safe type to pass across thread boundary
-            let mut private_requests: Vec<FriendRequestSendData> = Vec::with_capacity(requests.len());
+    let requests = ui_ctx.list_anon_dm_message_requests();
+    let mut private_requests: Vec<FriendRequestSendData> = Vec::with_capacity(requests.len());
 
-            for dm in requests {
-                // Get peer display name from conversation (revealed after ECIES decryption)
-                // Do NOT use user_service - these are strangers
-                let peer_name = dm.peer_display_name.clone()
-                    .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
-                let conv_id_str = dm.id.to_string();
+    for dm in requests {
+        let peer_name = dm.peer_display_name.clone()
+            .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+        let conv_id_str = dm.id.to_string();
 
-                private_requests.push(FriendRequestSendData {
-                    // Use conversation_id as user_id field (for callback)
-                    user_id: conv_id_str,
-                    display_name: peer_name,
-                    username: "Private".to_string(),
-                    avatar_url: String::new(),
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    avatar_decoded: None,
-                    sent_at: dm.created_at
-                        .with_timezone(&chrono::Local)
-                        .format("%b %d, %H:%M")
-                        .to_string(),
-                });
-            }
-
-            // Pre-decode avatars before entering UI thread
-            for req in &mut private_requests {
-                req.pre_decode_avatar();
-            }
-
-            let request_count = private_requests.len() as i32;
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_window.upgrade() {
-                    // Convert Send-safe data to Slint types inside event loop
-                    let private_slint: Vec<FriendRequestData> = private_requests.into_iter().map(|r| r.to_slint()).collect();
-                    w.set_friends_private_requests(ModelRc::new(VecModel::from(private_slint)));
-                    // Update sidebar badge count
-                    w.set_pending_message_requests(request_count);
-                }
-            });
-        }
-        Err(e) => {
-            tracing::debug!("Failed to refresh private requests: {}", e);
-        }
+        private_requests.push(FriendRequestSendData {
+            user_id: conv_id_str,
+            display_name: peer_name,
+            username: "Private".to_string(),
+            avatar_url: String::new(),
+            avatar_bytes: dm.peer_avatar.clone(),
+            avatar_decoded: None,
+            sent_at: dm.created_at
+                .with_timezone(&chrono::Local)
+                .format("%b %d, %H:%M")
+                .to_string(),
+        });
     }
+
+    for req in &mut private_requests {
+        req.pre_decode_avatar();
+    }
+
+    let request_count = private_requests.len() as i32;
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak_window.upgrade() {
+            let private_slint: Vec<FriendRequestData> = private_requests.into_iter().map(|r| r.to_slint()).collect();
+            w.set_friends_private_requests(ModelRc::new(VecModel::from(private_slint)));
+            w.set_pending_message_requests(request_count);
+        }
+    });
 }
 
 /// Add an accepted anonymous DM to the sidebar.
@@ -294,7 +277,7 @@ fn add_anon_dm_to_sidebar(
 ) {
     // Use Send-safe type to pass across thread boundary
     let mut dm_send_data = DMListItemSendData {
-        channel_id: format!("anon_dm:{}", dm.id),
+        channel_id: dm.id.to_string(),
         user_id: dm.peer_id.to_string(),
         display_name: format!("\u{1F512} {}", peer_name), // Lock emoji for private
         avatar_url: String::new(),
@@ -309,6 +292,7 @@ fn add_anon_dm_to_sidebar(
             .to_string(),
         unread_count: 0,
         is_typing: false,
+        is_anon: true,
     };
 
     // Pre-decode avatar before entering UI thread to avoid blocking
@@ -361,29 +345,23 @@ fn remove_dm_from_sidebar(window: &MainWindow, channel_id: &str) {
 /// Refresh the blocked users list in the UI.
 pub(crate) fn refresh_blocked_users(
     weak_window: slint::Weak<MainWindow>,
-    anon_dm_service: Arc<AnonDmService>,
+    ui_ctx: &Arc<ChatterClient>,
 ) {
-    match anon_dm_service.get_blocked_users() {
-        Ok(blocked_users) => {
-            let blocked_data: Vec<crate::BlockedUserData> = blocked_users
-                .into_iter()
-                .map(|user_id| crate::BlockedUserData {
-                    user_id: user_id.to_string().into(),
-                    display_name: format!("User {}", &user_id.to_string()[..8]).into(),
-                    username: "Private".into(),
-                    avatar_url: SharedString::default(),
-                    blocked_at: String::new().into(),
-                })
-                .collect();
+    let blocked_users = ui_ctx.get_anon_dm_blocked_users();
+    let blocked_data: Vec<crate::BlockedUserData> = blocked_users
+        .into_iter()
+        .map(|user_id| crate::BlockedUserData {
+            user_id: user_id.to_string().into(),
+            display_name: format!("User {}", &user_id.to_string()[..8]).into(),
+            username: "Private".into(),
+            avatar_url: SharedString::default(),
+            blocked_at: String::new().into(),
+        })
+        .collect();
 
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_window.upgrade() {
-                    w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_data)));
-                }
-            });
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak_window.upgrade() {
+            w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_data)));
         }
-        Err(e) => {
-            tracing::warn!("Failed to refresh blocked users: {}", e);
-        }
-    }
+    });
 }

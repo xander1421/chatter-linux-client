@@ -32,9 +32,6 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let channel_id_str_for_ui = channel_id_str.clone();
         run_ui!(weak, |w| {
             w.set_loading_messages(true);
-            w.set_selected_channel_id(channel_id.clone());
-            w.set_selected_dm_id("".into());
-            w.set_selected_private_group_id("".into());
 
             // Clear unread count in sidebar
             crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &channel_id_str_for_ui, 0);
@@ -69,6 +66,8 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Update chat state
             ui_ctx.chat_state().set_active_channel(channel_id);
             ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+            let ui_ctx_for_sel = ui_ctx.clone();
+            run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
 
             // Mark as read
             let handle = chatter_core::services::conversation::ConversationHandle::new(
@@ -78,7 +77,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let _ = handle.mark_as_read().await;
 
             // Load pinned messages for this channel from DB
-            let (msg_ids, preview) = match ui_ctx.pins().load_pinned_for_channel(&channel_id, &chatter_core::domain::message::ConversationType::Channel).await {
+            let (msg_ids, preview) = match ui_ctx.load_pinned_for_channel(&channel_id, &chatter_core::domain::message::ConversationType::Channel).await {
                 Ok(pinned) if !pinned.is_empty() => {
                     let ids = pinned.iter().map(|p| p.message_id).collect();
                     let preview = pinned[0].preview.clone();
@@ -103,14 +102,10 @@ pub async fn load_channel_into_ui(
     channel_id: ChannelId,
     ui_ctx: Arc<ChatterClient>,
 ) -> Vec<String> {
-    let channel_service = ui_ctx.channels().clone();
-    let user_service = ui_ctx.users().clone();
-    let attachment_service = ui_ctx.attachments().clone();
-
     // 1. Get channel metadata
-    let channel = match channel_service.get_channel_local(&channel_id) {
-        Ok(Some(c)) => c,
-        _ => {
+    let channel = match ui_ctx.get_channel_local(&channel_id) {
+        Some(c) => c,
+        None => {
             tracing::error!("Channel {} not found locally", channel_id);
             run_ui!(weak, |w| w.set_loading_messages(false));
             return Vec::new();
@@ -118,7 +113,7 @@ pub async fn load_channel_into_ui(
     };
 
     // 2. Load messages
-    let messages = match ui_ctx.messages().get_messages_local_asc(&channel_id, &chatter_core::domain::message::ConversationType::Channel, None, 50) {
+    let messages = match ui_ctx.get_messages_local_asc(&channel_id, &chatter_core::domain::message::ConversationType::Channel, None, 50) {
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to list channel messages: {}", e);
@@ -132,8 +127,8 @@ pub async fn load_channel_into_ui(
     // 3. Convert to display format
     let display_messages = messages_to_display_batch(
         &messages,
-        |uid| user_service.get_display_name(uid),
-        |att_id| attachment_service.get(att_id).ok().flatten(),
+        |uid| ui_ctx.display_name(uid),
+        |att_id| ui_ctx.get_attachment(att_id),
     );
 
     // 4. Update UI
@@ -145,7 +140,8 @@ pub async fn load_channel_into_ui(
         _ => "public",
     };
     let member_count = channel.member_count as i32;
-    let current_user_id = user_service.current_user_id().ok().map(|id| id.to_string()).unwrap_or_default();
+    let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
+    let ui_ctx_gifs = ui_ctx.clone();
 
     run_ui!(weak, |w| {
         w.set_channel_name(group_name.into());
@@ -160,7 +156,7 @@ pub async fn load_channel_into_ui(
         w.set_loading_messages(false);
 
         // Auto-register GIF animations for inline playback
-        crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), attachment_service);
+        crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
     });
 
     message_timestamps

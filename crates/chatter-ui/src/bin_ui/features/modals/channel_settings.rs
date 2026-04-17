@@ -28,8 +28,7 @@ pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Open the channel settings modal with channel data.
 pub fn open_channel_settings(
     weak_window: slint::Weak<MainWindow>,
-    channel_service: Arc<ChannelService>,
-    user_service: Arc<UserService>,
+    ui_ctx: Arc<ChatterClient>,
     channel_id: ChannelId,
 ) {
     tokio::spawn(async move {
@@ -45,9 +44,9 @@ pub fn open_channel_settings(
         }
 
         // Get channel from local storage
-        let channel = match channel_service.get_channel_local(&channel_id) {
-            Ok(Some(c)) => c,
-            _ => {
+        let channel = match ui_ctx.get_channel_local(&channel_id) {
+            Some(c) => c,
+            None => {
                 let weak = weak_window.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
@@ -59,7 +58,7 @@ pub fn open_channel_settings(
             }
         };
 
-        let current_user_id = channel_service.current_user_id().ok();
+        let current_user_id = ui_ctx.session_current_user_id();
         let is_owner = current_user_id.as_ref() == Some(&channel.owner_id);
         let is_dm = channel.channel_type == ChannelType::DirectMessage;
 
@@ -71,12 +70,12 @@ pub fn open_channel_settings(
         let created_at = channel.created_at.with_timezone(&chrono::Local).format("%b %d, %Y").to_string();
 
         let members: Vec<ChannelMemberData> = if !is_dm {
-            match channel_service.get_channel_members(&channel_id, 100, 0).await {
+            match ui_ctx.get_channel_members(&channel_id, 100, 0).await {
                 Ok(memberships) => {
                     let mut data = Vec::new();
                     for m in memberships {
-                        let display = user_service.get_profile_local(&m.user_id).ok().flatten().map(|p| p.display_name).unwrap_or_else(|| "Unknown".to_string());
-                        let uname = user_service.get_user_local(&m.user_id).ok().flatten().map(|u| u.username).unwrap_or_else(|| "unknown".to_string());
+                        let display = ui_ctx.get_profile_local(&m.user_id).map(|p| p.display_name).unwrap_or_else(|| "Unknown".to_string());
+                        let uname = ui_ctx.get_user_local(&m.user_id).map(|u| u.username).unwrap_or_else(|| "unknown".to_string());
                         let role = match m.role {
                             chatter_core::domain::channel::MemberRole::Member => "member",
                             chatter_core::domain::channel::MemberRole::Moderator => "moderator",
@@ -210,11 +209,11 @@ fn wire_notification_settings(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>)
 fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    let channel_service = ui_ctx.channels().clone();
+    let ui_ctx_role = ui_ctx.clone();
 
     window.on_channel_settings_change_member_role(move |user_id, role| {
         let weak = weak_window.clone();
-        let channel_service = channel_service.clone();
+        let ui_ctx = ui_ctx_role.clone();
         let user_id_str = user_id.to_string();
         let role_str = role.to_string();
 
@@ -236,7 +235,7 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 "owner" => chatter_core::domain::channel::MemberRole::Owner,
                 _ => return,
             };
-            let _ = channel_service.update_member_role(&channel_uuid, &user_uuid, new_role).await;
+            let _ = ui_ctx.update_channel_member_role(&channel_uuid, &user_uuid, new_role).await;
         });
     });
 
@@ -302,10 +301,12 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(_) => return,
             };
             if ui_ctx.leave_channel(&channel_uuid).await.is_ok() {
+                let ui_ctx_refresh = ui_ctx.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.set_active_modal("none".into());
-                        w.set_selected_channel_id("".into());
+                        ui_ctx_refresh.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+                        crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_refresh);
                     }
                 });
             }
@@ -313,10 +314,10 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channels().clone();
+    let ui_ctx_delete = ui_ctx.clone();
     window.on_channel_settings_delete(move || {
         let weak = weak_window.clone();
-        let channel_service = channel_service.clone();
+        let ui_ctx = ui_ctx_delete.clone();
         tokio::spawn(async move {
             let channel_id = weak.upgrade().map(|w| w.get_channel_settings_id().to_string()).unwrap_or_default();
             if channel_id.is_empty() { return; }
@@ -324,11 +325,12 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
             };
-            if channel_service.delete_channel(&channel_uuid).await.is_ok() {
+            if ui_ctx.delete_channel(&channel_uuid).await.is_ok() {
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.set_active_modal("none".into());
-                        w.set_selected_channel_id("".into());
+                        ui_ctx.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::None);
+                        crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
                     }
                 });
             }
@@ -338,15 +340,11 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
-    let anon_group_service = ui_ctx.anon_groups().clone();
-    let user_service = ui_ctx.users().clone();
-    let anon_dm_service = ui_ctx.anon_dms().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_channel_settings_invite_members(move || {
         let weak = weak_window.clone();
-        let anon_group_service = anon_group_service.clone();
-        let user_service = user_service.clone();
-        let anon_dm_service = anon_dm_service.clone();
+        let ui_ctx = ui_ctx.clone();
 
         tokio::spawn(async move {
             // Get the private group ID from channel settings
@@ -368,9 +366,8 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
 
             // Get existing members to filter them out
-            let existing_members: HashSet<UserId> = anon_group_service
-                .get_members(&group_id)
-                .unwrap_or_default()
+            let existing_members: HashSet<UserId> = ui_ctx
+                .get_anon_group_members(&group_id)
                 .into_iter()
                 .map(|m| m.user_id)
                 .collect();
@@ -380,7 +377,7 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let mut seen_user_ids: HashSet<UserId> = HashSet::new();
 
             // Load friends
-            let friends = user_service.list_friends(100, 0).await.unwrap_or_default();
+            let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
             for friendship in &friends {
                 // Skip existing members
                 if existing_members.contains(&friendship.friend_id) {
@@ -390,7 +387,7 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     continue;
                 }
 
-                let profile = user_service.get_profile_local(&friendship.friend_id).ok().flatten();
+                let profile = ui_ctx.get_profile_local(&friendship.friend_id);
                 let display_name = profile
                     .as_ref()
                     .map(|p| p.display_name.clone())
@@ -408,7 +405,8 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             // Load anon DM peers (active conversations only)
-            if let Ok(conversations) = anon_dm_service.list_conversations() {
+            {
+                let conversations = ui_ctx.list_anon_dm_conversations();
                 for dm in conversations {
                     // Skip existing members
                     if existing_members.contains(&dm.peer_id) {
@@ -456,13 +454,11 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Open invite modal for regular channels
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channels().clone();
-    let user_service = ui_ctx.users().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_channel_settings_invite_channel_members(move || {
         let weak = weak_window.clone();
-        let channel_service = channel_service.clone();
-        let user_service = user_service.clone();
+        let ui_ctx = ui_ctx.clone();
 
         tokio::spawn(async move {
             // Get the channel ID from channel settings
@@ -484,15 +480,13 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             };
 
             // Get channel name
-            let channel_name = channel_service
+            let channel_name = ui_ctx
                 .get_channel_local(&channel_id)
-                .ok()
-                .flatten()
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
 
             // Get existing members to filter them out
-            let existing_members: HashSet<UserId> = channel_service
+            let existing_members: HashSet<UserId> = ui_ctx
                 .get_channel_members(&channel_id, 100, 0)
                 .await
                 .unwrap_or_default()
@@ -505,15 +499,15 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             let mut seen_user_ids: HashSet<UserId> = HashSet::new();
 
             // Load friends
-            let friends = user_service.list_friends(100, 0).await.unwrap_or_default();
+            let friends = ui_ctx.list_friends(100, 0).await.unwrap_or_default();
             for friendship in &friends {
                 if seen_user_ids.contains(&friendship.friend_id) {
                     continue;
                 }
 
                 let is_member = existing_members.contains(&friendship.friend_id);
-                let profile = user_service.get_profile_local(&friendship.friend_id).ok().flatten();
-                let user = user_service.get_user_local(&friendship.friend_id).ok().flatten();
+                let profile = ui_ctx.get_profile_local(&friendship.friend_id);
+                let user = ui_ctx.get_user_local(&friendship.friend_id);
 
                 let display_name = profile
                     .as_ref()
@@ -575,11 +569,11 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Confirm invite
     let weak_window = window.as_weak();
-    let channel_service = ui_ctx.channels().clone();
+    let ui_ctx_invite = ui_ctx.clone();
 
     window.on_invite_member_confirm(move || {
         let weak = weak_window.clone();
-        let channel_service = channel_service.clone();
+        let ui_ctx = ui_ctx_invite.clone();
 
         tokio::spawn(async move {
             // Get channel ID and selected users
@@ -625,7 +619,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     Err(_) => continue,
                 };
 
-                match channel_service.invite_user(&channel_id, &user_id, None).await {
+                match ui_ctx.invite_user_to_channel(&channel_id, &user_id, None).await {
                     Ok(_) => {
                         success_count += 1;
                         tracing::info!(

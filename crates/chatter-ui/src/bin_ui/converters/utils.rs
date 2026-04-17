@@ -35,47 +35,33 @@ pub(crate) fn insert_word_breaks(text: &str) -> String {
     result
 }
 
-/// Parse a reaction summary string ("👍 3  ❤️ 2") into a vec of ReactionEntry for Slint.
-pub fn parse_reaction_summary_to_entries(summary: &str) -> Vec<ReactionEntry> {
-    if summary.is_empty() {
-        return Vec::new();
-    }
-
-    summary
-        .split("  ")
-        .filter_map(|part| {
-            let part = part.trim();
-            if part.is_empty() {
-                return None;
-            }
-            // Format: "emoji count" or just "emoji" (count=1)
-            let mut emoji_chars = String::new();
-            let mut count_str = String::new();
-            let mut hit_digit = false;
-
-            for c in part.chars() {
-                if !hit_digit && (c.is_ascii_digit() || (c == ' ' && !emoji_chars.is_empty())) {
-                    if c.is_ascii_digit() {
-                        count_str.push(c);
-                        hit_digit = true;
-                    }
-                } else if hit_digit && c.is_ascii_digit() {
-                    count_str.push(c);
-                } else if !hit_digit {
-                    emoji_chars.push(c);
-                }
-            }
-
-            if emoji_chars.is_empty() {
-                return None;
-            }
-
-            let count = count_str.parse::<i32>().unwrap_or(1);
-            Some(ReactionEntry {
-                emoji: emoji_chars.into(),
-                count,
-            })
+/// Convert typed reaction counts into Slint `ReactionEntry` pills for
+/// rendering. This is the only direction: `ReactionCount` (core, source of
+/// truth) → `ReactionEntry` (Slint view). No string round-trips.
+pub fn reaction_counts_to_entries(
+    counts: &[chatter_core::domain::message::ReactionCount],
+) -> Vec<ReactionEntry> {
+    counts
+        .iter()
+        .map(|r| ReactionEntry {
+            emoji: r.emoji.clone().into(),
+            count: r.count as i32,
         })
+        .collect()
+}
+
+/// Read a Slint `ReactionEntry` model back into typed `ReactionCount`s so the
+/// UI can mutate the aggregate via `ReactionCount::apply` and re-render.
+pub fn reactions_model_to_counts(
+    model: &slint::ModelRc<ReactionEntry>,
+) -> Vec<chatter_core::domain::message::ReactionCount> {
+    use slint::Model;
+    (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .map(|entry| chatter_core::domain::message::ReactionCount::new(
+            entry.emoji.to_string(),
+            entry.count.max(0) as u32,
+        ))
         .collect()
 }
 
@@ -188,20 +174,4 @@ pub(crate) fn format_count(count: i32, singular: &str, plural: &str) -> String {
     }
 }
 
-/// Extract quote metadata (sender_display_name, preview_text) from content_json.
-pub(crate) fn extract_quote_from_content_json(content_json: &str) -> Option<(String, String)> {
-    let v: serde_json::Value = serde_json::from_str(content_json).ok()?;
-    let quote = v.get("quote")?;
-    // Prefer stored display name, fall back to UUID
-    let author_name = quote.get("author_name")
-        .and_then(|n| n.as_str())
-        .filter(|n| !n.is_empty())
-        .or_else(|| quote.get("author_id").and_then(|n| n.as_str()))
-        .unwrap_or_default()
-        .to_string();
-    let preview = quote.get("preview")?.as_str().unwrap_or_default().to_string();
-    if author_name.is_empty() && preview.is_empty() {
-        return None;
-    }
-    Some((author_name, preview))
-}
+pub(crate) use chatter_core::services::message::conversion::extract_quote_from_content_json;

@@ -1,38 +1,20 @@
 //! Helper functions for chat UI operations.
 
+use std::str::FromStr;
+use std::sync::Arc;
+
 use slint::Model;
+use chatter_core::client::ChatterClient;
 use chatter_core::domain::UserId;
 use crate::MainWindow;
 
-/// Look up the DM channel_id from a peer's user_id using the conversations model.
-pub fn get_dm_channel_from_peer(window: &MainWindow, peer_id: &str) -> Option<String> {
-    let conversations = window.get_dm_conversations();
-    let count = conversations.row_count();
-    tracing::debug!(
-        peer_id = %peer_id,
-        conversation_count = count,
-        "get_dm_channel_from_peer: Looking up channel"
-    );
-
-    for i in 0..count {
-        if let Some(item) = conversations.row_data(i) {
-            let item_user_id = item.user_id.as_str();
-            let item_channel_id = item.channel_id.as_str();
-            if item_user_id == peer_id {
-                tracing::debug!(
-                    found_channel_id = %item_channel_id,
-                    "get_dm_channel_from_peer: Found matching channel"
-                );
-                return Some(item_channel_id.to_string());
-            }
-        }
-    }
-
-    tracing::debug!(
-        peer_id = %peer_id,
-        "get_dm_channel_from_peer: No matching channel found"
-    );
-    None
+/// Look up the DM channel_id for a peer via the core channel service.
+///
+/// Replaces an old implementation that iterated the Slint sidebar model.
+/// The authoritative source is the local channel database.
+pub fn get_dm_channel_from_peer(ui_ctx: &Arc<ChatterClient>, peer_id: &str) -> Option<String> {
+    let peer: UserId = UserId::from_str(peer_id).ok()?;
+    ui_ctx.get_dm_channel_for_peer(&peer).map(|c| c.id.to_string())
 }
 
 /// Parsed reply context from UI strings.
@@ -158,8 +140,8 @@ pub(crate) fn update_reaction_in_ui(
     emoji: &str,
     remove: bool,
 ) {
-    use crate::bin_ui::converters::parse_reaction_summary_to_entries;
-    use crate::bin_ui::features::auth::update_reaction_summary;
+    use chatter_core::domain::message::ReactionCount;
+    use crate::bin_ui::converters::{reaction_counts_to_entries, reactions_model_to_counts};
 
     let current_model = window.get_messages();
     let messages: Vec<_> = (0..current_model.row_count())
@@ -168,10 +150,11 @@ pub(crate) fn update_reaction_in_ui(
             if m.sender_id.as_str() == sender_id
                 && m.timestamp_ns.as_str() == timestamp_ns
             {
-                let new_summary = update_reaction_summary(&m.reaction_summary.to_string(), emoji, remove);
-                m.reaction_summary = new_summary.clone().into();
-                m.has_reactions = !new_summary.is_empty();
-                m.reactions = slint::ModelRc::new(slint::VecModel::from(parse_reaction_summary_to_entries(&new_summary)));
+                let mut counts = reactions_model_to_counts(&m.reactions);
+                ReactionCount::apply(&mut counts, emoji, remove);
+                m.has_reactions = !counts.is_empty();
+                m.reaction_summary = ReactionCount::summary_string(&counts).into();
+                m.reactions = slint::ModelRc::new(slint::VecModel::from(reaction_counts_to_entries(&counts)));
             }
             m
         })

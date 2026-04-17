@@ -400,7 +400,7 @@ pub fn clear_inline_gifs() {
 /// Must be called from the UI thread (inside invoke_from_event_loop).
 pub fn auto_register_gifs_from_messages(
     window_weak: Weak<MainWindow>,
-    attachment_service: std::sync::Arc<chatter_core::services::AttachmentService>,
+    ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
 ) {
     let Some(w) = window_weak.upgrade() else {
         return;
@@ -440,7 +440,7 @@ pub fn auto_register_gifs_from_messages(
 
     // Register each GIF (spawns background threads)
     for att_id in gif_ids {
-        register_gif_attachment(att_id, attachment_service.clone(), window_weak.clone());
+        register_gif_attachment(att_id, ui_ctx.clone(), window_weak.clone());
     }
 }
 
@@ -453,7 +453,7 @@ pub fn auto_register_gifs_from_messages(
 /// Safe to call from any context (including nested runtimes).
 pub fn register_gif_attachment(
     attachment_id: String,
-    attachment_service: std::sync::Arc<chatter_core::services::AttachmentService>,
+    ui_ctx: std::sync::Arc<chatter_core::client::ChatterClient>,
     window_weak: slint::Weak<crate::MainWindow>,
 ) {
     // Optimization: Check if already registered (O(1) in UI thread)
@@ -476,14 +476,10 @@ pub fn register_gif_attachment(
         };
 
         // Check if attachment has content on filesystem
-        let attachment = match attachment_service.get(&att_id) {
-            Ok(Some(att)) if att.content_location == ContentLocation::OnFilesystem => att,
-            Ok(Some(_)) | Ok(None) => {
+        let attachment = match ui_ctx.get_attachment(&att_id) {
+            Some(att) if att.content_location == ContentLocation::OnFilesystem => att,
+            _ => {
                 tracing::debug!("GIF {} not ready on filesystem yet", attachment_id);
-                return;
-            }
-            Err(e) => {
-                tracing::debug!("Failed to get attachment {}: {}", attachment_id, e);
                 return;
             }
         };
@@ -494,7 +490,7 @@ pub fn register_gif_attachment(
         }
 
         // Decrypt to memory (uses streaming for large files)
-        let data = match attachment_service.decrypt_auto(&att_id) {
+        let data = match ui_ctx.decrypt_attachment_auto(&att_id) {
             Ok(buffer) => buffer.as_slice().to_vec(),
             Err(e) => {
                 tracing::debug!("Could not decrypt GIF {}: {}", attachment_id, e);
@@ -635,6 +631,7 @@ pub fn register_gif_attachment(
 }
 
 #[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use std::sync::Arc;

@@ -355,6 +355,18 @@ impl MessageService {
     }
 
     /// Set the pinned status of a message in local storage.
+    /// Mark all unread messages in a conversation as read (sets is_read=1).
+    /// Callers use this when the user is actively viewing a conversation so new
+    /// incoming messages don't bump the unread badge.
+    pub fn mark_conversation_read(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> Result<(), MessageError> {
+        self.message_repo.mark_conversation_read(conversation_id, conversation_type)?;
+        Ok(())
+    }
+
     pub fn set_message_pinned(
         &self,
         message_id: &crate::domain::ids::MessageId,
@@ -507,6 +519,62 @@ impl MessageService {
         self.settings_repo
             .current_user_id()
             .map_err(|_| MessageError::NotLoggedIn)
+    }
+
+    /// Classify a raw `(channel_id, conversation_type, peer_id)` triple into
+    /// the typed `ActiveConversation` variant it represents.
+    ///
+    /// - AnonDm/AnonGroup `ConversationType`s map straight to their variants.
+    /// - ChannelId + DirectMessage channel_type + known peer → MailboxDm.
+    /// - Otherwise → Channel (fallback when channel type is unknown or
+    ///   the channel is not a DM).
+    ///
+    /// Lives here because the decision reads the channel DB. UI callers
+    /// used to inline this across multiple feature handlers.
+    pub fn classify_active_conversation(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+        peer_id: Option<crate::domain::ids::UserId>,
+    ) -> crate::state::ActiveConversation {
+        use crate::domain::channel::ChannelType;
+        use crate::domain::message::ConversationType;
+        use crate::state::ActiveConversation;
+
+        match conversation_type {
+            ConversationType::AnonDm => {
+                ActiveConversation::AnonDm(crate::domain::anon_dm::AnonDmId::from_uuid(*channel_id.as_uuid()))
+            }
+            ConversationType::AnonGroup => {
+                ActiveConversation::AnonGroup(crate::domain::anon_group::AnonGroupId::from_uuid(*channel_id.as_uuid()))
+            }
+            _ => {
+                let is_dm = matches!(
+                    self.channel_repo.get(channel_id),
+                    Ok(Some(ref channel)) if channel.channel_type == ChannelType::DirectMessage
+                );
+                match (is_dm, peer_id) {
+                    (true, Some(p)) => ActiveConversation::MailboxDm { channel_id: *channel_id, peer_id: p },
+                    _ => ActiveConversation::Channel(*channel_id),
+                }
+            }
+        }
+    }
+
+    /// Check if the locally-logged-in user has reacted with an emoji on a message.
+    ///
+    /// Signal-style message identification via (sender_id, sent_at_ns). Reads
+    /// the per-user blob cache on the message row — authoritative for both
+    /// anon (rebuilt locally) and regular (delivered from server) paths.
+    pub fn user_has_reacted(
+        &self,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        emoji: &str,
+    ) -> Result<bool, MessageError> {
+        self.message_repo
+            .user_has_reacted(sender_id, sent_at_ns, emoji)
+            .map_err(MessageError::from)
     }
 
     /// Get encryption settings for a channel.

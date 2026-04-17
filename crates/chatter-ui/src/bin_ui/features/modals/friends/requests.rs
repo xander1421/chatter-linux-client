@@ -6,7 +6,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::services::channel::ChannelService;
-use chatter_core::services::user::{FriendRequestFilter, UserService};
+use chatter_core::services::user::FriendRequestFilter;
 
 use crate::bin_ui::converters::{get_initials, FriendRequestExt, FriendRequestSendData};
 use crate::{DMListItemData, FriendRequestData, MainWindow};
@@ -47,7 +47,7 @@ pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                     tracing::info!("Friend request sent to {}", user_id_str);
 
                     // Refresh sent requests list
-                    refresh_sent_requests(weak.clone(), ui_ctx.users().clone()).await;
+                    refresh_sent_requests(weak.clone(), ui_ctx.clone()).await;
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -76,9 +76,9 @@ pub(crate) fn wire_send_request(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 /// Refresh the sent friend requests list in the UI.
 pub(crate) async fn refresh_sent_requests(
     weak_window: slint::Weak<MainWindow>,
-    user_service: Arc<UserService>,
+    ui_ctx: Arc<ChatterClient>,
 ) {
-    match user_service
+    match ui_ctx
         .list_friend_requests(FriendRequestFilter::Sent, 50, 0)
         .await
     {
@@ -92,7 +92,7 @@ pub(crate) async fn refresh_sent_requests(
                 let friend_id_str = friend_id.to_string();
 
                 // Try to fetch profile from server
-                let (display_name, username, avatar_url) = match user_service.get_user_profile(&friend_id).await {
+                let (display_name, username, avatar_url) = match ui_ctx.get_user_profile(&friend_id).await {
                     Ok(profile) => {
                         let name = if profile.display_name.is_empty() {
                             friend_id_str.clone()
@@ -174,8 +174,7 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                         // Add the DM to the sidebar using services
                         add_dm_to_sidebar(
                             weak.clone(),
-                            ui_ctx.channels().clone(),
-                            ui_ctx.users().clone(),
+                            ui_ctx.clone(),
                             channel_id,
                             &user_id_str,
                         )
@@ -185,7 +184,7 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                     }
 
                     // Refresh friend requests list to remove the accepted request
-                    refresh_received_requests(weak.clone(), ui_ctx.users().clone()).await;
+                    refresh_received_requests(weak.clone(), ui_ctx.clone()).await;
 
                     let weak_done = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
@@ -210,8 +209,7 @@ pub(crate) fn wire_accept_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 /// Add a DM channel to the sidebar after friend request acceptance.
 async fn add_dm_to_sidebar(
     weak_window: slint::Weak<MainWindow>,
-    channel_service: Arc<ChannelService>,
-    user_service: Arc<UserService>,
+    ui_ctx: Arc<ChatterClient>,
     channel_id: &str,
     other_user_id: &str,
 ) {
@@ -233,14 +231,14 @@ async fn add_dm_to_sidebar(
         }
     };
 
-    // Fetch channel and sync memberships using ChannelService
-    match channel_service
+    // Fetch channel and sync memberships
+    match ui_ctx
         .get_channel_with_memberships(&channel_id_parsed)
         .await
     {
         Ok(_channel) => {
-            // Fetch the OTHER user's profile to get their display name using UserService
-            let other_user_name = match user_service.get_user_profile(&other_user_id_parsed).await {
+            // Fetch the OTHER user's profile to get their display name
+            let other_user_name = match ui_ctx.get_user_profile(&other_user_id_parsed).await {
                 Ok(profile) => {
                     if profile.display_name.is_empty() {
                         other_user_id.to_string()
@@ -287,6 +285,8 @@ async fn add_dm_to_sidebar(
                         timestamp: SharedString::default(),
                         unread_count: 0,
                         is_typing: false,
+                        is_anon: false,
+                        is_selected: false,
                     };
                     dm_vec.push(dm_item);
 
@@ -305,9 +305,9 @@ async fn add_dm_to_sidebar(
 /// Refresh the received friend requests list in the UI.
 pub(crate) async fn refresh_received_requests(
     weak_window: slint::Weak<MainWindow>,
-    user_service: Arc<UserService>,
+    ui_ctx: Arc<ChatterClient>,
 ) {
-    match user_service
+    match ui_ctx
         .list_friend_requests(FriendRequestFilter::Received, 50, 0)
         .await
     {
@@ -321,7 +321,7 @@ pub(crate) async fn refresh_received_requests(
                 let friend_id_str = friend_id.to_string();
 
                 // Try to fetch profile from server
-                let (display_name, username, avatar_url) = match user_service.get_user_profile(&friend_id).await {
+                let (display_name, username, avatar_url) = match ui_ctx.get_user_profile(&friend_id).await {
                     Ok(profile) => {
                         let name = if profile.display_name.is_empty() {
                             friend_id_str.clone()
@@ -398,7 +398,7 @@ pub(crate) fn wire_decline_request(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                     tracing::info!("Declined friend request from {}", user_id_str);
 
                     // Refresh received requests to remove the declined one
-                    refresh_received_requests(weak.clone(), ui_ctx.users().clone()).await;
+                    refresh_received_requests(weak.clone(), ui_ctx.clone()).await;
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -456,7 +456,7 @@ pub(crate) fn wire_cancel_request(window: &MainWindow, ui_ctx: &Arc<ChatterClien
                     tracing::info!("Cancelled friend request to {}", user_id_str);
 
                     // Refresh sent requests to remove the cancelled one
-                    refresh_sent_requests(weak.clone(), ui_ctx.users().clone()).await;
+                    refresh_sent_requests(weak.clone(), ui_ctx.clone()).await;
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {

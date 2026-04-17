@@ -178,9 +178,9 @@ pub async fn app_init() -> AppState {
     };
     let ui_ctx = client.clone();
 
-    ui_ctx.auth().restore_session();
+    ui_ctx.restore_session();
 
-    let _typing_cleanup = ui_ctx.typing().start_cleanup_task();
+    let _typing_cleanup = ui_ctx.start_typing_cleanup();
     tracing::info!("Typing indicator cleanup task started");
 
     // Connect to server (reactor is active here inside block_on)
@@ -222,9 +222,9 @@ pub async fn app_init() -> AppState {
         tracing::info!("Using software video rendering");
     }
 
-    if ui_ctx.auth().is_logged_in() {
-        if let Some((user_id, device_id)) = ui_ctx.auth().current_user() {
-            let display_name = ui_ctx.users().get_display_name(&user_id);
+    if ui_ctx.is_logged_in() {
+        if let Some((user_id, device_id)) = ui_ctx.current_user() {
+            let display_name = ui_ctx.display_name(&user_id);
             ui_ctx.auth_state().set_logged_in(user_id, device_id, display_name);
             tracing::info!("Restored auth state for user {}", user_id);
         }
@@ -270,7 +270,7 @@ pub async fn app_init() -> AppState {
             });
         }
     } else {
-        let has_registered_before = ui_ctx.auth().has_registered_before();
+        let has_registered_before = ui_ctx.has_registered_before();
         if has_registered_before {
             window.set_current_view("login".into());
         } else {
@@ -352,7 +352,7 @@ pub async fn app_init() -> AppState {
 
     // Dev mode auto-register (desktop: CHATTER_DEV=1, Android: always in dev builds)
     let dev_mode = std::env::var("CHATTER_DEV").is_ok() || cfg!(target_os = "android");
-    if dev_mode && !ui_ctx.auth().is_logged_in() && !ui_ctx.auth().has_registered_before() {
+    if dev_mode && !ui_ctx.is_logged_in() && !ui_ctx.has_registered_before() {
         let suffix: u16 = rand::random();
         let username = format!("dev{}", suffix);
         let display_name = format!("Dev User {}", suffix);

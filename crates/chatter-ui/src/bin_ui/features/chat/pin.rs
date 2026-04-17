@@ -6,7 +6,6 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::{Attachment, FileCategory, Message};
-use chatter_core::services::attachment::AttachmentService;
 use chatter_core::services::conversation::ConversationHandle;
 use chatter_core::state::ActiveConversation;
 
@@ -35,8 +34,8 @@ fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> Str
     String::new()
 }
 
-fn resolve_attachments(message: &Message, attachment_service: &AttachmentService) -> Vec<Attachment> {
-    message.attachments.iter().filter_map(|id| attachment_service.get(id).ok().flatten()).collect()
+fn resolve_attachments(message: &Message, ui_ctx: &ChatterClient) -> Vec<Attachment> {
+    message.attachments.iter().filter_map(|id| ui_ctx.get_attachment(id)).collect()
 }
 
 /// Generate preview from Slint UI message model (used for anon DM/group sender-side).
@@ -110,8 +109,8 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let preview_text = match handle.conversation() {
                 ActiveConversation::MailboxDm { .. } | ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
                     if let Ok(sender_id) = sender_id_str.parse::<chatter_core::domain::UserId>() {
-                        if let Ok(Some(message)) = ui_ctx.messages().get_by_sender_timestamp(&sender_id, target_sent_timestamp) {
-                            let attachments = resolve_attachments(&message, &ui_ctx.attachments());
+                        if let Some(message) = ui_ctx.get_message_by_sender_timestamp(&sender_id, target_sent_timestamp) {
+                            let attachments = resolve_attachments(&message, &ui_ctx);
                             generate_pinned_preview(&message, &attachments)
                         } else {
                             preview_text
