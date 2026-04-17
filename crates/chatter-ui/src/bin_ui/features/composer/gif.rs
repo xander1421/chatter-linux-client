@@ -26,9 +26,8 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     let weak_load = weak.clone();
                     let ui_ctx_load = ui_ctx.clone();
                     tokio::spawn(async move {
-                        let att_svc = ui_ctx_load.attachments().clone();
                         let raw_gifs = fetch_trending_gifs_raw(&ui_ctx_load).await;
-                        load_gif_previews(raw_gifs, weak_load, att_svc);
+                        load_gif_previews(raw_gifs, weak_load, ui_ctx_load);
                     });
                 } else {
                     // Stop animations when picker is hidden

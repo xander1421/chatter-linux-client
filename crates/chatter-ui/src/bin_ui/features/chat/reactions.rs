@@ -35,10 +35,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             Ok(id) => id,
             Err(_) => return,
         };
-        let already_reacted = ui_ctx
-            .messages()
-            .user_has_reacted(&sender_user_id, target_sent_timestamp, &emoji_str)
-            .unwrap_or(false);
+        let already_reacted = ui_ctx.user_has_reacted(&sender_user_id, target_sent_timestamp, &emoji_str);
 
         let remove = already_reacted;
 

@@ -17,8 +17,6 @@
 //! 3. Handler parses plaintext, validates, emits `DomainEvent`
 //! 4. Events flow to UI/storage via broadcast channel
 
-pub mod anon_dm;
-pub mod anon_group;
 pub mod base_anon;
 pub mod attachment;
 pub mod chat;
@@ -47,8 +45,6 @@ use crate::inbox::processor::{ContentType, ProcessedMessage};
 use std::sync::Arc;
 
 // Re-export handlers
-pub use anon_dm::AnonDmHandler;
-pub use anon_group::AnonGroupHandler;
 pub use attachment::AttachmentHandler;
 pub use chat::ChatHandler;
 pub use key_exchange::KeyExchangeHandler;

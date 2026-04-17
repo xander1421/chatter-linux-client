@@ -716,7 +716,7 @@ fn handle_download_attachment(
                 });
 
                 // Now decrypt to memory and display
-                let secure_buffer = match attachment_service_for_task.decrypt_auto(&att_id) {
+                let secure_buffer = match ui_ctx_for_task.decrypt_attachment_auto(&att_id) {
                     Ok(buffer) => buffer,
                     Err(e) => {
                         tracing::error!("Failed to decrypt downloaded attachment: {}", e);
@@ -741,9 +741,9 @@ fn handle_download_attachment(
                 );
 
                 // Mark as failed so it can be retried
-                if let Ok(Some(mut att)) = attachment_service_for_task.get(&att_id) {
+                if let Some(mut att) = ui_ctx_for_task.get_attachment(&att_id) {
                     att.status = AttachmentStatus::Failed;
-                    let _ = attachment_service_for_task.update(&att);
+                    let _ = ui_ctx_for_task.update_attachment(&att);
                 }
 
                 // Update UI to clear downloading state

@@ -16,10 +16,7 @@ pub(super) fn get_anon_member_name(
     user_id: &UserId,
 ) -> String {
     ui_ctx
-        .anon_groups()
-        .get_member_display_name(group_id, user_id)
-        .ok()
-        .flatten()
+        .get_anon_group_member_display_name(group_id, user_id)
         .unwrap_or_else(|| format!("Member {}", &user_id.to_string()[..8]))
 }
 

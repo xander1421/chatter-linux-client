@@ -618,10 +618,9 @@ impl AnonDmService {
 
     /// Store a data message received from the peer (wire-format `content_type` + `content_json`).
     ///
-    /// The `content_json` is the `{"text": "..."}` envelope produced by
-    /// `base_anon::content_to_storage`. `message_content_from_type_and_json`
-    /// unwraps it before persisting so the row stores real `MessageContent`
-    /// (not the raw JSON string).
+    /// `content_json` is the `{"text": "..."}` envelope produced by the caller.
+    /// `message_content_from_type_and_json` unwraps it before persisting so the
+    /// row stores real `MessageContent` (not the raw JSON string).
     pub fn store_message(
         &self,
         conversation_id: &AnonDmId,

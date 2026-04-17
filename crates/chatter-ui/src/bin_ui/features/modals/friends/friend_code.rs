@@ -242,11 +242,12 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
 pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let auth_state = ui_ctx.auth_state().clone();
-    let _ = ui_ctx;
+    let ui_ctx_private = ui_ctx.clone();
 
     window.on_friends_connect_private(move |code: SharedString| {
         let weak = weak_window.clone();
         let auth_state = auth_state.clone();
+        let ui_ctx = ui_ctx_private.clone();
         let code_str = code.to_string();
 
         if code_str.trim().is_empty() {
@@ -285,8 +286,8 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 let my_display_name = auth_state.get().display_name;
 
                 // Start NDSS'21 compliant conversation (NO prekey fetch, full privacy)
-                match anon_dm_service
-                    .start_conversation_private(&friend_code, Some("Hello!"), my_display_name.as_deref())
+                match ui_ctx
+                    .start_anon_dm_conversation_private(&friend_code, Some("Hello!"), my_display_name.as_deref())
                     .await
                 {
                     Ok(dm) => {

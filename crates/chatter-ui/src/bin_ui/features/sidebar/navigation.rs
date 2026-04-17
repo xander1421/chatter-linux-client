@@ -219,60 +219,52 @@ pub(crate) fn load_sidebar_collapsed_state(window: &MainWindow, ui_ctx: &Arc<Cha
 /// Opens the friends modal with the "requests" tab and "private" sub-tab selected.
 /// Refreshes both the badge count and the private requests list in the modal.
 pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let anon_dm_service = ui_ctx.anon_dms().clone();
+    let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
     window.on_message_requests_clicked(move || {
-        let anon_dm_service = anon_dm_service.clone();
+        let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
         // Refresh the pending requests list and count when clicked
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                // Get fresh requests from service
-                match anon_dm_service.list_message_requests() {
-                    Ok(requests) => {
-                        let count = requests.len() as i32;
+                let requests = ui_ctx.list_anon_dm_message_requests();
+                let count = requests.len() as i32;
 
-                        // Build UI data for private requests
-                        let private_requests: Vec<crate::FriendRequestData> = requests
-                            .iter()
-                            .map(|dm| {
-                                // Use stored display name, not user_service (strangers)
-                                let peer_name = dm.peer_display_name.clone()
-                                    .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
+                // Build UI data for private requests
+                let private_requests: Vec<crate::FriendRequestData> = requests
+                    .iter()
+                    .map(|dm| {
+                        // Use stored display name, not user_service (strangers)
+                        let peer_name = dm.peer_display_name.clone()
+                            .unwrap_or_else(|| format!("User {}", &dm.peer_id.to_string()[..8]));
 
-                                crate::FriendRequestData {
-                                    user_id: dm.id.to_string().into(),
-                                    display_name: peer_name.into(),
-                                    username: "Private".into(),
-                                    avatar_url: "".into(),
-                                    avatar_source: slint::Image::default(),
-                                    has_avatar: false,
-                                    sent_at: dm.created_at
-                                        .with_timezone(&chrono::Local)
-                                        .format("%b %d, %H:%M")
-                                        .to_string()
-                                        .into(),
-                                }
-                            })
-                            .collect();
+                        crate::FriendRequestData {
+                            user_id: dm.id.to_string().into(),
+                            display_name: peer_name.into(),
+                            username: "Private".into(),
+                            avatar_url: "".into(),
+                            avatar_source: slint::Image::default(),
+                            has_avatar: false,
+                            sent_at: dm.created_at
+                                .with_timezone(&chrono::Local)
+                                .format("%b %d, %H:%M")
+                                .to_string()
+                                .into(),
+                        }
+                    })
+                    .collect();
 
-                        tracing::info!(
-                            count = count,
-                            "Message requests clicked - refreshed {} requests",
-                            count
-                        );
+                tracing::info!(
+                    count = count,
+                    "Message requests clicked - refreshed {} requests",
+                    count
+                );
 
-                        // Update both the badge count and the requests list
-                        w.set_pending_message_requests(count);
-                        w.set_friends_private_requests(slint::ModelRc::new(slint::VecModel::from(private_requests)));
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to refresh message requests: {}", e);
-                        w.set_pending_message_requests(0);
-                    }
-                }
+                // Update both the badge count and the requests list
+                w.set_pending_message_requests(count);
+                w.set_friends_private_requests(slint::ModelRc::new(slint::VecModel::from(private_requests)));
             }
         });
     });
@@ -280,8 +272,8 @@ pub(crate) fn wire_message_requests_clicked(window: &MainWindow, ui_ctx: &Arc<Ch
 
 /// Load pending message requests count and list into the sidebar.
 pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    match ui_ctx.anon_dms().list_message_requests() {
-        Ok(requests) => {
+    let requests = ui_ctx.list_anon_dm_message_requests();
+    {
             let count = requests.len() as i32;
 
             // Build UI data for private requests
@@ -316,11 +308,6 @@ pub(crate) fn load_pending_message_requests_count(window: &MainWindow, ui_ctx: &
 
             window.set_pending_message_requests(count);
             window.set_friends_private_requests(slint::ModelRc::new(slint::VecModel::from(private_requests)));
-        }
-        Err(e) => {
-            tracing::warn!("Failed to load message requests: {}", e);
-            window.set_pending_message_requests(0);
-        }
     }
 }
 

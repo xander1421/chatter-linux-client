@@ -1258,6 +1258,24 @@ impl ChatterClient {
         self.messages().mark_conversation_read(conversation_id, conversation_type)
     }
 
+    pub fn classify_active_conversation(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+        peer_id: Option<crate::domain::ids::UserId>,
+    ) -> crate::state::ActiveConversation {
+        self.messages().classify_active_conversation(channel_id, conversation_type, peer_id)
+    }
+
+    pub fn user_has_reacted(
+        &self,
+        sender_id: &crate::domain::ids::UserId,
+        sent_at_ns: u64,
+        emoji: &str,
+    ) -> bool {
+        self.messages().user_has_reacted(sender_id, sent_at_ns, emoji).unwrap_or(false)
+    }
+
     pub fn get_message_local(
         &self,
         message_id: &crate::domain::ids::MessageId,
@@ -1474,6 +1492,15 @@ impl ChatterClient {
 
     pub fn list_anon_dm_conversations(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
         self.anon_dms().list_conversations().unwrap_or_default()
+    }
+
+    pub async fn start_anon_dm_conversation_private(
+        &self,
+        friend_code: &crate::domain::PrivateFriendCode,
+        intro_message: Option<&str>,
+        sender_display_name: Option<&str>,
+    ) -> Result<crate::domain::anon_dm::AnonDm, crate::services::anon_dm::AnonDmError> {
+        self.anon_dms().start_conversation_private(friend_code, intro_message, sender_display_name).await
     }
 
     pub fn list_anon_dm_ready_conversations(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
@@ -1708,6 +1735,14 @@ impl ChatterClient {
         group_id: &crate::domain::anon_group::AnonGroupId,
     ) -> Vec<crate::domain::anon_group::AnonGroupMember> {
         self.anon_groups().get_members(group_id).unwrap_or_default()
+    }
+
+    pub fn get_anon_group_member_display_name(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<String> {
+        self.anon_groups().get_member_display_name(group_id, user_id).ok().flatten()
     }
 
     pub fn get_latest_anon_group_message(

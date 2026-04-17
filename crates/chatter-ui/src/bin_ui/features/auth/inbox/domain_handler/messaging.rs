@@ -98,9 +98,7 @@ pub(super) fn handle_message_received(
     }
 
     // Classify into the typed ActiveConversation via the core helper.
-    let sidebar_conversation = ui_ctx
-        .messages()
-        .classify_active_conversation(&conversation_id, &conv_type, sender_id);
+    let sidebar_conversation = ui_ctx.classify_active_conversation(&conversation_id, &conv_type, sender_id);
 
     // Trigger attachment auto-download in background
     let downloadable: Vec<_> = resolved_attachments.iter()

@@ -419,9 +419,6 @@ pub fn spawn_anon_dm_request_handler(
                 }
                 // =============================================================
                 // Anonymous DM Action Events (typing, reactions, pins, etc.)
-                // These events are emitted by AnonDmHandler with channel_id
-                // derived from AnonDmId. We check if the channel_id is an
-                // anon DM by checking if our selected_dm_id matches.
                 // =============================================================
                 DomainEvent::TypingStarted { channel_id, user_id: _ } => {
                     unified_actions::handle_typing(&weak_window, &chat_state, EventSource::Channel(channel_id), true);

@@ -100,7 +100,7 @@ async fn start_call_impl(
     ui_ctx: Arc<ChatterClient>,
 ) {
     // Get current user ID and display name
-    let user_id = match session_service.current_user_id() {
+    let user_id = match ui_ctx.session_current_user_id() {
         Some(id) => id,
         None => {
             tracing::error!("No user ID available");
