@@ -21,6 +21,8 @@ jobs:
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
+        with:
+          key: crt-static-v1
 
       - name: Install GStreamer
         uses: blinemedical/setup-gstreamer@v1
@@ -68,8 +70,8 @@ jobs:
       - name: Install OpenSSL (vcpkg)
         shell: pwsh
         run: |
-          vcpkg install openssl:x64-windows-static-md
-          $opensslDir = "C:\vcpkg\installed\x64-windows-static-md"
+          vcpkg install openssl:x64-windows-static
+          $opensslDir = "C:\vcpkg\installed\x64-windows-static"
           echo "OPENSSL_DIR=$opensslDir" >> $env:GITHUB_ENV
           echo "OPENSSL_LIB_DIR=$opensslDir\lib" >> $env:GITHUB_ENV
           echo "OPENSSL_INCLUDE_DIR=$opensslDir\include" >> $env:GITHUB_ENV
@@ -78,6 +80,7 @@ jobs:
       - name: Build (no local-ai)
         env:
           RUSTC_WRAPPER: ""
+          RUSTFLAGS: "-Ctarget-feature=+crt-static"
         run: cargo build --release
 
       - name: Bundle release artifact
